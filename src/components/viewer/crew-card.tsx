@@ -29,7 +29,7 @@ import {
   type ChildGroup,
   type Rollup,
 } from "@mako/host/contracts/children"
-import { APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
+import { APEX_WORD, FIN_WORD, finsWord, type ChildState } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { FinMark } from "@/components/stage/child-tabs"
 import { LiveMark } from "@/components/ui/live-mark"
@@ -90,7 +90,7 @@ function buildRows(children: readonly NativeAgent[], settledOpen: boolean): Crew
   for (const agent of children) {
     const state = childStateOf(agent)
     const next = childGroup(state)
-    const out = SETTLED.has(next) && !openAsk(state) ? settled : live
+    const out = SETTLED.has(next) && !openAsk(state) && !waitsOutside(state) ? settled : live
     if (out === settled && (next === "done" || next === "idle")) counts[next] += 1
     let heading = headings.get(out)
     if (heading?.group !== next) {
@@ -103,6 +103,11 @@ function buildRows(children: readonly NativeAgent[], settledOpen: boolean): Crew
   }
   if (!settled.length) return live
   return [...live, { kind: "settled", ...counts, open: settledOpen }, ...(settledOpen ? settled : [])]
+}
+
+/** An idle Fin waiting on what its report named, such as a pull request's checks, which Mako wakes it on: listed, never folded. */
+function waitsOutside(state: ChildState): boolean {
+  return state.kind === "idle" && Boolean(state.waitingOn?.length)
 }
 
 /** An Apex's name as its Thread's title, read the same way the Agents panel does. */
@@ -363,7 +368,10 @@ const CrewLineRow = memo(function CrewLineRow({
   useHarnessIdentity()
   const state = childStateOf(agent)
   const group = childGroup(state)
-  const line = childLine(state)
+  const waiting = waitsOutside(state)
+  // "Waiting on acme/app#371 checks · 12m": the same string for a whole minute, so the row repaints once a minute.
+  const waited = useTickingText(waiting, (now) => (waiting ? childLine(state, now) ?? "" : ""))
+  const line = waiting ? waited : childLine(state)
   const live = state.kind === "working" || state.kind === "starting"
   const lead = openAsk(state)?.on === "lead"
   // `childState()` keeps a reason for a failed Fin but drops it for one that succeeded (`agents.ts`, not this
@@ -414,10 +422,12 @@ const CrewLineRow = memo(function CrewLineRow({
           )}
         </span>
       </span>
-      <CrewElapsed
-        agent={agent}
-        className="min-w-8 shrink-0 text-right text-label text-faint"
-      />
+      {waiting ? null : (
+        <CrewElapsed
+          agent={agent}
+          className="min-w-8 shrink-0 text-right text-label text-faint"
+        />
+      )}
     </button>
   )
 })

@@ -26,8 +26,9 @@ const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 300))
 
 const owned: ChildProcess[] = []
 try {
-  // An earlier host (pid 4242) records two children and dies without cleanup.
-  const earlier = new ProviderChildren(dir, 4242)
+  // An earlier host records two children and dies without cleanup. Its pid is past any system's, so no process has it.
+  const goneHost = 9_999_999
+  const earlier = new ProviderChildren(dir, goneHost)
   const orphan = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
   owned.push(orphan)
   orphan.unref()
@@ -129,7 +130,7 @@ try {
     executable: "sleep",
     kind: "acp:test",
     owner: "gone",
-    host: 4242,
+    host: goneHost,
   })
   await rm(join(dir, "runtime", "provider-children.json"))
   await writeFile(
@@ -211,6 +212,9 @@ try {
     ),
     "tracking new children retains unresolved foreign ownership"
   )
+  // This host stops writing before the test edits its registry, as the abandoned host did above: the first
+  // identity read of `mine` can land while the edit is half written, read no records and replace the file.
+  next.untrackPid(mine.pid!)
   const retry = JSON.parse(await readFile(next.path, "utf8"))
   retry.children.find((entry: { owner: string }) => entry.owner === "uncertain-image").executableIdentity = wrappedExecutable
   await writeFile(next.path, JSON.stringify(retry))

@@ -1,6 +1,8 @@
 import type { LiveRequest, LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
 import type { Entry } from "@mako/sessions/entries"
-import { childEntry, type ChildJournal, type ChildState, type ChildThread, type ThreadParent } from "@mako/host/contracts/agents"
+import { childEntry, type ChildJournal, type ChildState, type ChildThread, type FinRerouted, type ThreadParent } from "@mako/host/contracts/agents"
+import { movedLine, type FallbackStep } from "@mako/host/contracts/fin-fallback"
+import { harnessLabel } from "@/lib/harness-label"
 import type { FinTuningWords } from "@mako/host/contracts/fin-tuning"
 import { BRIEF_CLOSE, briefIntro, fromAgent, FROM_AGENTS, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
 import { appendFinReports } from "@mako/host/contracts/fin-reports"
@@ -132,6 +134,15 @@ const RULES = new Map<string, { n?: number; when: string }>([
   ["share-sheet", { n: 3, when: "Quick lookups, renames and one-line fixes" }],
   ["haptics", { when: "No rule fit" }],
 ])
+/** A Fin whose Claude account ran out mid-turn and went on in the same session on the person's next one. */
+const MOVED = new Map<string, FinRerouted>([["composer-chips", movedTo({ why: "account", harness: "claude", account: "work", label: "work" }, "personal")]])
+function movedTo(step: FallbackStep, account: string): FinRerouted {
+  const now = Date.now()
+  const until = now + 40 * 60_000
+  // As the host words a harness, before a window has read the harnesses' names.
+  const line = movedLine({ step, from: { harness: step.harness, account }, until }, (harness) => (harness === "claude" ? "Claude Code" : harnessLabel(harness)), now)
+  return { from: step.harness, account, until, to: step, at: now - 4 * 60_000, line }
+}
 const PASSED_OVER = new Map([["token-refresh", "Your Fins default for Grok, grok-4.6-mini, isn't listed by Grok anymore: it runs on Grok 4.7 instead."]])
 
 /** One Fin's roster entry, made by `childEntry` from its edge and what its Thread shows, as the host makes it. */
@@ -152,7 +163,7 @@ export function apexFin(index: number, state: ChildState = CHILDREN[index]!.stat
     op: `start:${APEX_SESSION}:${fixture.name}`,
     startedBy: { kind: "agent", session: apex },
     createdAt,
-    tuned: { source: PASSED_OVER.has(fixture.name) ? "used" : "apex", ...(PASSED_OVER.has(fixture.name) && { note: PASSED_OVER.get(fixture.name) }), ...(RULES.has(fixture.name) && { rule: RULES.get(fixture.name) }) },
+    tuned: { source: PASSED_OVER.has(fixture.name) ? "used" : "apex", ...(PASSED_OVER.has(fixture.name) && { note: PASSED_OVER.get(fixture.name) }), ...(RULES.has(fixture.name) && { rule: RULES.get(fixture.name) }), ...(MOVED.has(fixture.name) && { rerouted: MOVED.get(fixture.name) }) },
   }
   const { thread, journal } = shown(state, child, now - 60_000)
   return childEntry(

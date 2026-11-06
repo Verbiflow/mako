@@ -4,6 +4,7 @@ import { ASK_OPTIONS, AskOptionSchema, CHILDREN_BINDING, WAITING_ON_LIMIT, Waiti
 import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"
 import { ActorSchema, SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId } from "./thread-identity.js"
 import { FinTuningSourceSchema, type FinTuningWords } from "./fin-tuning.js"
+import type { FallbackStep } from "./fin-fallback.js"
 
 export { CHILDREN_BINDING, WAITING_ON_LIMIT, WaitingOnSchema, type WaitingOn }
 
@@ -176,6 +177,34 @@ export function waitingWords(items: readonly WaitingOn[] | undefined): string | 
 }
 
 /**
+ * A waiting Fin's state words, where its row and strip say how it stands: "Waiting on acme/app#371 checks · 12m". A
+ * pull request is named by its repository whenever its report gave one, since the row stands apart from its siblings.
+ */
+export function waitingStateWords(items: readonly WaitingOn[], since: number | undefined, now: number | undefined): string {
+  const words = items.map((item) => {
+    if (item.kind === "other") return item.text.trim()
+    if (item.kind === "person") return `the person to ${item.what.trim()}`
+    const pull = pullRef(item.ref)
+    const repository = item.repository ?? pull?.repository
+    const number = item.number ?? pull?.number
+    const ref = number === undefined ? item.ref.trim() : `${repository ?? ""}#${number}`
+    return item.until ? `${ref} ${item.until}` : ref
+  })
+  const line = `Waiting on ${words.join(", ")}`
+  return since !== undefined && now !== undefined ? `${line} · ${waitedWords(now - since)}` : line
+}
+
+/** How long a Fin has waited, as its row says it: "<1m", "12m", "2h 5m", "3d". */
+function waitedWords(ms: number): string {
+  const minutes = Math.floor(Math.max(0, ms) / 60_000)
+  if (minutes < 1) return "<1m"
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 48) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+/**
  * One of a Fin's open pull requests, from what its host already holds: its branch's, as the worktree summaries last
  * read them from GitHub (`open` or `draft`), and any its reports name (`reported`, read nowhere else). Nothing polls.
  * `repository` is `owner/name`, absent only for a bare `#12` a report named in a Thread of no one known repository.
@@ -249,6 +278,42 @@ export const FollowedRunSchema = z.object({
 })
 export type FollowedRun = z.infer<typeof FollowedRunSchema>
 
+const HarnessName = z.string().min(1).max(64)
+/** A step of a Fin's fallback order it took (`fallbackOrder`): another account of its harness, a connection's model on it, or the next harness. */
+export const FinStepSchema = z.discriminatedUnion("why", [
+  z.object({ why: z.literal("account"), harness: HarnessName, account: z.string().min(1).max(320), label: z.string().max(320) }),
+  z.object({ why: z.literal("connection"), harness: HarnessName, connection: z.string().min(1).max(64), connectionName: z.string().max(120), model: z.string().min(1).max(300) }),
+  z.object({ why: z.literal("harness"), harness: HarnessName }),
+]) satisfies z.ZodType<FallbackStep>
+
+/**
+ * It was meant for a harness whose account was at its limit, and started or went on elsewhere: the harness it left
+ * (`from`), until when, another account the person could switch to (`instead`), and from this build the account at
+ * its limit, the step it took (`to`), when it moved mid-run (`at`, absent at its start) and its row's words (`line`).
+ */
+export const FinReroutedSchema = z.object({
+  from: HarnessName,
+  until: z.number().optional(),
+  instead: z.string().max(320).optional(),
+  account: z.string().max(320).optional(),
+  to: FinStepSchema.optional(),
+  at: z.number().optional(),
+  line: z.string().max(512).optional(),
+})
+export type FinRerouted = z.infer<typeof FinReroutedSchema>
+
+/**
+ * A Fin's logical turn as its fallback reads it (`fin_moves`, beside its edge), so it never loops across a restart:
+ * the places it ran on (`placeKey`), the waits for a limit it already moved for, and the host generation taking a
+ * move now and for which wait. It's cleared once a turn of the Fin ends without a limit.
+ */
+export const FinTurnSchema = z.object({
+  visited: z.array(z.string().min(1).max(400)).max(64),
+  handled: z.array(z.string().min(1).max(600)).max(64),
+  moving: z.object({ owner: z.number(), wait: z.string().min(1).max(600), at: z.number() }).optional(),
+})
+export type FinTurn = z.infer<typeof FinTurnSchema>
+
 /**
  * The edge: one row of `thread_parents`, keyed by the child Thread, written
  * by the child's owner. It holds only what nothing else does; the child's
@@ -283,8 +348,8 @@ export const ThreadParentSchema = z.object({
     .object({
       source: FinTuningSourceSchema,
       note: z.string().max(2_000).optional(),
-      /** It was meant for its Apex's harness, whose account was at its limit, and started on the person's next one. */
-      rerouted: z.object({ from: z.string().min(1).max(64), until: z.number().optional(), instead: z.string().max(320).optional() }).optional(),
+      /** Its harness's account was at its limit, so it started or went on on the next step of its order (`FinRerouted`). */
+      rerouted: FinReroutedSchema.optional(),
       /** The person's rule it was started by, as it read then (`n` absent: their choice for work no rule fits). */
       rule: z.object({ n: z.number().int().positive().optional(), when: z.string().max(400) }).optional(),
     })
@@ -320,7 +385,10 @@ export const ReportSchema = z.object({
   question: z.string().max(4_000).optional(),
   /** Who decides a done report's question (`decisionOn`): its Apex when absent, or the person. */
   decides: z.enum(["apex", "person"]).optional(),
-  /** What it waits on outside its tree, for a question it asks: "#412 checks", the person's merge. Nothing watches it. */
+  /**
+   * What it waits on outside its tree: "#412 checks", the person's merge. With a question, on the state that asks it;
+   * on a progress report, its idle state's words. A pull request's outcome wakes it (`PullWatch`).
+   */
   waitingOn: z.array(WaitingOnSchema).max(WAITING_ON_LIMIT).optional(),
   /** The answers its question offers, each a tap on the person's phone. */
   options: z.array(AskOptionSchema).max(ASK_OPTIONS).optional(),
@@ -470,6 +538,7 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
     ? { kind: "ended", outcome: "done" }
     : { kind: "ended", outcome: ended.outcome === "unknown" ? "failed" : ended.outcome, ...(ended.reason && { reason: ended.reason }) }
   if (edge.closedAt) return { kind: "ended", outcome: "stopped" }
+  if (latest?.status === "progress" && latest.waitingOn?.length) return { kind: "idle", waitingOn: latest.waitingOn, since: latest.at }
   return { kind: "idle" }
 }
 
@@ -516,7 +585,7 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
     provider: thread.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown",
     observedAt: thread.updatedAt ?? edge.createdAt,
     startedAt: thread.startedAt ?? edge.createdAt,
-    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state) },
+    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }) },
   }
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
@@ -570,7 +639,7 @@ function entryState(state: ChildState): NativeAgent["state"] {
     case "working":
       return { kind: "working", ...((state.phase ?? state.step) && { activity: state.phase ?? state.step }) }
     case "idle":
-      return { kind: "waiting", reason: "Idle: a message gives it its next turn" }
+      return { kind: "waiting", reason: state.waitingOn?.length ? waitingStateWords(state.waitingOn, undefined, undefined) : "Idle: a message gives it its next turn" }
     case "blocked":
       return { kind: "waiting", reason: state.question }
     case "ended":

@@ -13,7 +13,7 @@ import type {
 } from "../contracts/conversation-control.js"
 import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
-import type { TurnContinuation, LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
+import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
 import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { arriving, departing } from "../contracts/request-hold.js"
@@ -21,13 +21,22 @@ import { SessionHeldError } from "../threads/index.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { prepareLiveContext } from "./live-context.js"
-import { bindingPath, launchCalls, launchRouting, noteCarriedFolders } from "./live-runtime.js"
+import { bindingPath, launchAccount, launchCalls, launchRouting, noteCarriedFolders } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import type {
   LiveAccess,
   Resident,
   ProviderConnection,
 } from "./live-runtime.js"
+
+/**
+ * The queue as a switch lands: its message goes ahead of what's queued, which waited behind it or came after it, so the
+ * hand-over's context reaches the harness first. Only the row `ahead` goes before it (`arriving`), and carries that context.
+ */
+function arrival(requests: readonly LiveRequest[], arrived: LiveRequest, ahead: string | undefined): LiveRequest[] {
+  const at = arrived.continues?.brief ? -1 : requests.findIndex((request) => request.status === "queued" && request.id !== ahead)
+  return at < 0 ? admittedInPlace(requests, arrived) : [...requests.slice(0, at), arrived, ...requests.slice(at)]
+}
 
 /** Why a reconnect could not go on from the saved session; the reason is the verdict's own. */
 /** The refusal a resume that can't go raises: `SessionBusyError` while a process has the session open. */
@@ -284,6 +293,8 @@ export class LiveTransfers {
       const currentBinding = control.bindings.find((binding) => binding.id === control.activeBindingId)
       // Another account of its harness, where the session can't go on: a session of its own, handed the conversation.
       const anew = quietSwitch(transfer) && currentBinding?.provider === transfer.input.provider
+      // The same, going back: a session another account made goes on under this one only where its harness can.
+      const goesOn = (binding: { account?: string | undefined }) => !transfer.input.account || binding.account === transfer.input.account || this.host.dependencies.driver(transfer.input.provider)?.accountContinuation?.kind === "resumes"
       reconnect = (!target || target === control.activeBindingId) && !resident.driver && !anew && currentBinding?.provider === transfer.input.provider && Boolean(currentBinding?.nativeId)
       const bindings = control.bindings.map((binding) =>
         binding.id === control.activeBindingId && resident.driver
@@ -306,6 +317,7 @@ export class LiveTransfers {
         (binding) =>
           (!target || binding.id === target) &&
           binding.provider === transfer.input.provider &&
+          goesOn(binding) &&
           resident.connections.get(binding.id)?.session.status === "ready"
       )
       // A reconnect goes on from the session as it is: a record that moved past
@@ -322,6 +334,7 @@ export class LiveTransfers {
           if (
             (target && binding.id !== target) ||
             binding.provider !== transfer.input.provider ||
+            !goesOn(binding) ||
             (!target && reconnect && binding.id !== control.activeBindingId)
           )
             continue
@@ -449,6 +462,8 @@ export class LiveTransfers {
           threadEnvironment,
           nativeRouting: launchRouting(this.host.dependencies, source.session.id, conversationTools),
           nativeCalls: launchCalls(this.host.dependencies, source.session.id, source.session.cwd, conversationTools, threadEnvironment),
+          // A hand-over to another account: the binding that will name it isn't active yet.
+          pinnedAccount: transfer.input.account ? () => transfer.input.account : launchAccount(this.host.dependencies, source.session.id, transfer.input.provider),
           title: source.session.title,
           tuning,
           modeId,
@@ -529,7 +544,6 @@ export class LiveTransfers {
           coveredBlocks: 0,
           includesBase: false,
           path: bindingPath(this.host.dependencies, prepared.session, prepared.session.nativePath),
-          ...transfer.input.account && { account: transfer.input.account },
         }),
         nativeId: prepared.session.nativeId,
         tuning: appliedTuning,
@@ -572,7 +586,9 @@ export class LiveTransfers {
         ? arriving(previous.requests, { harness: transfer.input.provider, account: transfer.input.account, tuning: transfer.input.tuning }, leaving, transfer.first)
         : previous.requests
       // The transcript goes with the first to go: this switch's message, unless a row goes ahead of it.
-      const followsRow = staying.find((request) => request.status === "queued")?.id !== own?.id || (!own && staying.some((request) => request.status === "queued"))
+      const lead = staying.find((request) => request.status === "queued")
+      const ahead = lead && lead.id !== own?.id && (lead.digest || lead.id === transfer.first) ? lead.id : undefined
+      const followsRow = own ? lead !== undefined && lead.id !== own.id : ahead !== undefined
       const transcript = manifest.includesBase || manifest.toBlock > manifest.fromBlock ? [manifest] : []
       const merged = quiet || (leaving && followsRow)
       const carries = {
@@ -593,7 +609,7 @@ export class LiveTransfers {
         permissions: [],
         requests: own
           ? staying.map((request) => (request.id === own.id ? { ...request, ...carries } : request))
-          : quiet ? staying : admittedInPlace(staying, messageOf(transfer, Date.now(), { ...carries, status: "queued" })),
+          : quiet ? staying : arrival(staying, messageOf(transfer, Date.now(), { ...carries, status: "queued" }), ahead),
         control: {
           ...this.host.control(resident),
           // Its history goes with whichever goes next.
@@ -604,6 +620,7 @@ export class LiveTransfers {
               candidate.id === bindingId
                 ? {
                     ...candidate,
+                    ...transfer.input.account && { account: transfer.input.account },
                     includesBase: true,
                     tuning: appliedTuning,
                     modeId: binding.modeId,

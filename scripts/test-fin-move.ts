@@ -9,7 +9,7 @@ import { threadReferenceId, threadToken, writeReference } from "@mako/sessions/t
 import type { AgentCaller } from "@mako/host/contracts/agents"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { AgentMoved, AgentsMoveInput, AgentsMoveResult } from "@mako/host/contracts/agent-tools"
-import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { ActorSchema, SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { arriving } from "@mako/host/contracts/request-hold"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
@@ -314,7 +314,7 @@ async function landing(): Promise<void> {
     await f.world.close()
   }
   {
-    // The person's switch lands the same way: what waited out the limit goes first, carrying the transcript, then their words.
+    // The person's switch lands the same way: what waited out the limit goes on the target, behind their words, which carry the transcript.
     let out = false
     const f = await fixture("codex", { refusePrompt: (_conversation, harness) => (out && harness === "codex" ? "You've hit your usage limit." : undefined) })
     await f.world.settle(40, 20_000)
@@ -327,9 +327,29 @@ async function landing(): Promise<void> {
     await f.world.continueOn(conversation, { kind: "words", input: { id, provider: "claude", text: "row-words", attachments: [] } })
     await until("both", () => ["row-waited", "row-words"].every((words) => f.prompts().some((prompt) => prompt.text.includes(words))))
     await f.world.settle(40, 20_000)
-    assert.deepEqual(f.prompts().filter((prompt) => prompt.text.includes("row-")).map((prompt) => (prompt.text.includes("row-words") ? "row-words" : "row-waited")), ["row-waited", "row-words"])
+    assert.deepEqual(f.prompts().filter((prompt) => prompt.text.includes("row-")).map((prompt) => (prompt.text.includes("row-words") ? "row-words" : "row-waited")), ["row-words", "row-waited"])
     const requests = f.world.live.snapshot(conversation)!.requests
-    assert.equal(requests.find((request) => request.id === row)?.context?.length, 1, "the transcript goes with the first to go")
+    assert.equal(requests.find((request) => request.id === id)?.context?.length, 1, "the transcript goes with the first to go")
+    assert.ok(!requests.find((request) => request.id === row)?.context?.length)
+    await f.world.close()
+  }
+  {
+    // A digest held with the limit goes ahead of the person's words, and the transcript goes with it.
+    let out = false
+    const f = await fixture("codex", { refusePrompt: (_conversation, harness) => (out && harness === "codex" ? "You've hit your usage limit." : undefined) })
+    await f.world.settle(40, 20_000)
+    const { conversation } = f.fin()
+    out = true
+    const digest = randomUUID()
+    f.world.live.submit(conversation, digest, "row-digest", [], undefined, undefined, undefined, ActorSchema.parse(f.world.caller(conversation)), { digest: { notices: [] } })
+    await until("it to wait", () => f.world.live.snapshot(conversation)!.requests.some((request) => request.id === digest && request.retry))
+    const id = randomUUID()
+    await f.world.continueOn(conversation, { kind: "words", input: { id, provider: "claude", text: "row-words", attachments: [] } })
+    await until("both", () => ["row-digest", "row-words"].every((words) => f.prompts().some((prompt) => prompt.text.includes(words))))
+    await f.world.settle(40, 20_000)
+    assert.deepEqual(f.prompts().filter((prompt) => prompt.text.includes("row-")).map((prompt) => (prompt.text.includes("row-words") ? "row-words" : "row-digest")), ["row-digest", "row-words"])
+    const requests = f.world.live.snapshot(conversation)!.requests
+    assert.equal(requests.find((request) => request.id === digest)?.context?.length, 1, "the transcript goes with it")
     assert.ok(!requests.find((request) => request.id === id)?.context?.length)
     await f.world.close()
   }
@@ -475,7 +495,8 @@ async function landing(): Promise<void> {
     assert.equal(f.world.live.pinnedAccount(conversation, "claude"), "spare")
     assert.equal(f.world.live.pinnedAccount(conversation, "codex"), undefined)
     await f.world.close()
-    const g = await fixture("codex")
+    const launched: (string | undefined)[] = []
+    const g = await fixture("codex", { launchedOn: (_harness, account) => void launched.push(account) })
     await g.world.settle(40, 20_000)
     const handed = g.fin().conversation
     const was = g.world.live.snapshot(handed)!.control!
@@ -486,6 +507,8 @@ async function landing(): Promise<void> {
     const now = g.world.live.snapshot(handed)!.control!
     assert.notEqual(now.activeBindingId, was.activeBindingId, "a harness that can't go on hands over to a session of its own")
     assert.equal(g.world.live.pinnedAccount(handed, "codex"), "spare")
+    assert.equal(g.world.agents.pinnedAccount(handed, "codex"), "spare", "every later launch reads it")
+    assert.ok(launched.includes("spare"), "and the hand-over's own launch runs on it")
     assert.equal(now.merges.filter((merge) => merge.status === "pending").length, 1, "with the conversation")
     await g.world.close()
   }
@@ -915,6 +938,37 @@ async function grantsAndQuestions(): Promise<void> {
     await f.world.close()
   }
   {
+    // Who sent it decides, never how it reads: a person's words that begin as a digest does are the person's.
+    const f = await fixture("codex", { script: async (turn) => (turn.text.includes("digest-lookalike") ? turn.world.hold(turn.conversation).then(() => "Done.") : "Done.") })
+    await f.world.settle(40, 20_000, "ignore")
+    const conversation = f.world.live.summaries().find((summary) => summary.session.harness === "codex")!.session.id
+    await f.world.agents.report(f.world.caller(conversation), { status: "needs-input", summary: "Choose", question: "Which one?", options: [{ label: "late-answer" }], clientKey: "ask" })
+    await f.world.settle(40, 20_000, "ignore")
+    f.world.say(conversation, `${FROM_AGENTS}\ndigest-lookalike`)
+    await until("their turn", () => f.world.live.session(conversation)?.status === "running")
+    const late = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "late-answer", clientKey: "late" })
+    assert.ok("refused" in late && late.refused === "conflict", JSON.stringify(late))
+    f.world.release(conversation)
+    await f.world.settle(40, 20_000, "ignore")
+    await f.world.close()
+  }
+  {
+    // And a digest steered into a Fin's running turn is Mako's: it answers nothing, so its question stays open.
+    const f = await fixture("claude", { hold: true, apex: "codex" })
+    await until("its turn", () => f.world.live.session(f.fin().conversation)?.status === "running")
+    const { conversation } = f.fin()
+    const fin = f.world.caller(conversation)
+    await f.world.agents.report(fin, { status: "needs-input", summary: "Choose", question: "Which one?", options: [{ label: "still-open" }], clientKey: "ask" })
+    const below = await f.world.agents.start(fin, { brief: { objective: "Below" }, name: "below", harness: "codex", cwd: f.world.root, clientKey: "below" })
+    assert.ok(!("refused" in below), JSON.stringify(below))
+    await until("its digest to reach its running turn", () => f.world.steers.some((steer) => steer.conversation === conversation && steer.text.startsWith(FROM_AGENTS)))
+    const answer = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "still-open", clientKey: "open" })
+    assert.ok(!("refused" in answer), JSON.stringify(answer))
+    f.world.release(conversation)
+    await f.world.settle(40, 20_000, "ignore")
+    await f.world.close()
+  }
+  {
     // Queueing isn't delivery: a message removed unheard leaves the question open, and its answer goes.
     const f = await fixture("codex", { hold: true })
     await until("its turn", () => f.world.live.session(f.fin().conversation)?.status === "running")
@@ -947,6 +1001,91 @@ async function grantsAndQuestions(): Promise<void> {
   }
 }
 
+/** What the fifth review reproduced, and what reading it turned up beside it. */
+async function pinsAndStops(): Promise<void> {
+  const moveTo = async (world: AgentsWorld, conversation: string, to: { harness: string; account?: string }) => {
+    const id = randomUUID()
+    const settled = world.live.switchSettled(id)
+    await world.continueOn(conversation, { kind: "move", move: { id, to } }, { kind: "service", name: "auto-continue" })
+    assert.equal((await settled).state.kind, "accepted")
+    await world.settle(40, 20_000, "ignore")
+  }
+  {
+    // Back to a binding it left, the move's account is the one it runs on: now, and on every launch after a restart.
+    const launches: { harness: string; account: string | undefined }[] = []
+    const world = new AgentsWorld({ root: join(root, "reused-pin"), script: () => "Done", resumesUnderAccount: ["claude"], launchedOn: (harness, account) => void launches.push({ harness, account }) })
+    const { conversation } = await world.apex("codex", "full")
+    await moveTo(world, conversation, { harness: "claude", account: "spare" })
+    await moveTo(world, conversation, { harness: "codex" })
+    await moveTo(world, conversation, { harness: "claude", account: "other" })
+    assert.equal(world.live.pinnedAccount(conversation, "claude"), "other", "the account asked for last")
+    assert.equal(world.live.snapshot(conversation)!.control!.bindings.filter((binding) => binding.provider === "claude").length, 1, "a harness that goes on under another account keeps its session")
+    await world.restart()
+    world.say(conversation, "After restart")
+    await until("its next launch", () => world.prompts.some((prompt) => prompt.text.includes("After restart")))
+    assert.equal(launches.at(-1)?.account, "other", "a restart launches where it was moved, not where it had been")
+    await moveTo(world, conversation, { harness: "codex" })
+    await moveTo(world, conversation, { harness: "claude" })
+    assert.equal(world.live.pinnedAccount(conversation, "claude"), "other", "a move naming no account goes back to the session on the account it runs on")
+    await world.close()
+  }
+  {
+    // A harness that can't go on under another account hands over, whichever way it got back there.
+    const world = new AgentsWorld({ root: join(root, "reused-handover"), script: () => "Done" })
+    const { conversation } = await world.apex("codex", "full")
+    await moveTo(world, conversation, { harness: "grok", account: "spare" })
+    const first = world.live.snapshot(conversation)!.control!.activeBindingId
+    await moveTo(world, conversation, { harness: "codex" })
+    await moveTo(world, conversation, { harness: "grok", account: "other" })
+    const control = world.live.snapshot(conversation)!.control!
+    assert.notEqual(control.activeBindingId, first, "a session of its own, not the one the other account made")
+    assert.equal(world.live.pinnedAccount(conversation, "grok"), "other")
+    await moveTo(world, conversation, { harness: "codex" })
+    await moveTo(world, conversation, { harness: "grok", account: "other" })
+    assert.equal(world.live.snapshot(conversation)!.control!.activeBindingId, control.activeBindingId, "its own account's session is the one it goes back to")
+    // A message that names another account, on the session running under this one, is a hand-over too.
+    const words = randomUUID()
+    const settled = world.live.switchSettled(words)
+    await world.continueOn(conversation, { kind: "words", input: { id: words, provider: "grok", text: "Carry on", attachments: [], account: "third" } }, { kind: "service", name: "auto-continue" })
+    assert.equal((await settled).state.kind, "accepted")
+    await world.settle(40, 20_000, "ignore")
+    assert.notEqual(world.live.snapshot(conversation)!.control!.activeBindingId, control.activeBindingId, "not the session a running process has under another account")
+    assert.equal(world.live.pinnedAccount(conversation, "grok"), "third")
+    await world.close()
+  }
+  for (const harness of HARNESSES) {
+    // A Stop while a message reads what it attaches holds the message, and its grant stays with it.
+    const rows: ThreadRef[] = []
+    let reading = false
+    let release = () => {}
+    const gate = new Promise<void>((done) => { release = done })
+    const artifact = { kind: "file" as const, file: "/tmp/t/transcript.md", note: "Bundle", title: "Elsewhere", harness: "grok", turns: 1, digest: "d", losses: [] }
+    const f = await fixture(harness, { references: { list: () => rows, transcriptArtifact: async () => {
+      reading = true
+      await gate
+      return artifact
+    } } })
+    await f.world.settle(40, 20_000, "ignore")
+    rows.push({ harness: "grok", nativeId: "elsewhere", path: join(root, "elsewhere"), title: "Elsewhere" })
+    const ref = threadToken("grok", "elsewhere").slice(1)
+    const sent = f.world.agents.send(f.apex.caller, { to: "labels", text: "Read this", clientKey: "attach", context: [{ thread: ref }] })
+    await until("it to read the attachment", () => reading)
+    await f.world.agents.stop(f.apex.caller, { child: "labels", reason: "not now" })
+    release()
+    assert.ok(!("refused" in await sent))
+    const { conversation } = f.fin()
+    const row = f.world.live.snapshot(conversation)!.requests.find((request) => request.text.includes("Read this"))
+    assert.equal(row?.pause, "stop", "the Stop holds it")
+    assert.deepEqual(row?.grants, [ref], `${harness}: and its grant is still its own`)
+    f.world.live.editQueued(conversation, { requestId: row!.id, expectedText: row!.text, change: { kind: "resume" } })
+    await f.world.settle(40, 20_000, "ignore")
+    assert.ok(f.prompts().some((prompt) => prompt.text.includes("Read this")), "Resume sends it")
+    const found = await f.world.agents.list(f.world.caller(conversation), { scope: "threads", query: "Elsewhere" })
+    assert.ok("threads" in found && found.threads.length === 1, `${harness}: its receiver finds what it was given`)
+    await f.world.close()
+  }
+}
+
 /** Only `continueOn` reaches a switch to another harness: a new caller of `transfer` fails here. */
 function onePath(): void {
   const host = join(repo, "packages/host/src")
@@ -959,10 +1098,10 @@ function onePath(): void {
     }
   }
   walk(host)
-  /** Who may call it, each for what it is: `continueOn` itself, and reconnects, which stay on their own harness. */
+  /** Who may call it, each for what it is: `continueOn` itself, reconnects, which stay on their own harness, and #398's `moveWaiting`, until it retires into `continueOn`. */
   const allowed = new Map([
     ["conversations/continue-on.ts", /live\.transfer\(id, \{ \.\.\.continuation\.input/],
-    ["conversations/live-conversations.ts", /this\.transfer\(id, input, actor, continues\)|this\.transfer\(id, \{\s+id: requestId,\s+provider: resident\.snapshot\.session\.harness|this\.transfer\(id, \{ id: requestId, bindingId, provider: binding\.provider/],
+    ["conversations/live-conversations.ts", /this\.transfer\(id, \{ id: to\.id, provider: to\.provider|this\.transfer\(id, input, actor, continues\)|this\.transfer\(id, \{\s+id: requestId,\s+provider: resident\.snapshot\.session\.harness|this\.transfer\(id, \{ id: requestId, bindingId, provider: binding\.provider/],
     ["conversations/live-auto-continue.ts", /this\.access\.transfer\(id, \{ id: request\.id, provider: reconnect\.provider/],
   ])
   for (const path of files) {
@@ -974,8 +1113,8 @@ function onePath(): void {
       assert.ok(allow.test(text.slice(call.index, call.index + 200)), `${file} calls transfer with something new: ${text.slice(call.index, call.index + 80)}`)
     }
     // A reply to a binding can become a switch at its admission, so it has no way around either.
-    for (const call of text.matchAll(/\.(?:moveOn|continueBinding)\(/g)) {
-      const answers = file === "conversations/live-conversations.ts" && text.startsWith(".continueBinding(id, bindingId, requestId, text, [], undefined, displayText)", call.index) && text.slice(call.index - 180, call.index).includes("activeBindingId !== bindingId")
+    for (const call of text.matchAll(/(?:live\.(?:moveOn|continueBinding)|this\.continueBinding)\(/g)) {
+      const answers = file === "conversations/live-conversations.ts" && text.startsWith("this.continueBinding(id, bindingId, requestId, text, [], undefined, displayText)", call.index) && text.slice(call.index - 180, call.index).includes("activeBindingId !== bindingId")
       assert.ok(file === "conversations/continue-on.ts" || answers, `${file} goes beside continueOn: ${text.slice(call.index, call.index + 60)}`)
     }
   }
@@ -1096,6 +1235,7 @@ try {
   await landing()
   await reviewed()
   await grantsAndQuestions()
+  await pinsAndStops()
   await callersShareIt()
   await attaching()
   await reading()

@@ -6,7 +6,7 @@ says why a held message waits (`holdOf`) and what goes next (`nextInLine`). This
 note holds the rules a change to the queue must keep. A provider switch
 (`ContextTransfer`) is queued work too, so the same rules cover it. A Thread moved
 by an agent or by Mako (`continueOn`, `agents_move`) goes through the same switch,
-with no message of its own: rules 9 to 11 are what's different about it. Rule 12 is how the queue closes what a Fin asked.
+with no message of its own: rules 10 to 12 are what's different about it. Rule 13 is how the queue closes what a Fin asked.
 `npm run test:switch-interleavings` checks them after every step of generated
 schedules, and a failing schedule is pinned there.
 
@@ -27,7 +27,7 @@ schedules, and a failing schedule is pinned there.
    That's read at every write (`withdrawGone`, in `LiveConversations.flush`), so
    a new path can't leave a switch pending behind a row that will never go. While
    a switch's row is held, the switch holds nothing else up: a new message, or a
-   new switch, goes ahead of it. A move is the exception: rule 11.
+   new switch, goes ahead of it. A move is the exception: rule 12.
 
 3. **A committed switch completes, a Stop or not.** Once the journal names the
    destination as the binding, the conversation is on it. The Stop pauses the
@@ -64,29 +64,39 @@ schedules, and a failing schedule is pinned there.
    always one of its bindings. A failed destination leaves the source as it was,
    and a failed close puts it back.
 
-9. **A move goes ahead of what's queued.** A move is a quiet switch: it has no
+9. **A turn a usage limit cut gives up its place, and takes one to go on.** Its wait
+   can last days, so it holds no place and the Fin reads as its failure says. When
+   its time comes it takes a place by the same limits as a start (`Agents.mayWake`).
+   With no room it stays held, doesn't fail, and goes ahead of what's queued when one
+   frees. A Stop while it waits stands.
+
+10. **A move goes ahead of what's queued.** A move is a quiet switch: it has no
    message and no row, and nothing is taken over. What's queued is meant for its
    destination, so the switch doesn't wait for it (rule 7's order is for a switch
    with a message of its own), and no row goes on the source meanwhile. Every row
    goes on the target once it commits, in its order, the transcript with the first
    to go (a pending merge). `ThreadMove.first` names a row that goes ahead of what
    waited longer, as a held digest does. A move that fails leaves every row where
-   it was, on the source.
+   it was, on the source. A move naming an account pins its binding there, a session
+   it goes back to as much as a new one, and every later launch reads that pin. It
+   goes back to a session another account made only where its harness goes on under
+   another account (`accountContinuation`); elsewhere it takes a session of its own.
+   A move naming none goes back to that session on the account it has.
 
-10. **A hold about the source's account goes with the switch; a hold about the
+11. **A hold about the source's account goes with the switch; a hold about the
     person doesn't.** A retry on its limit and a sign-out's hold belong to the
     account the Thread is leaving, and mean nothing on the target. So when any
     switch lands on another harness or account, a person's or a move, those rows
-    go, in their order, and the sign-in notice with them. A digest that was held
-    with them goes first. The transcript goes with the first row to go, not
-    with the switch's message when one goes ahead of it. Landing on the very
+    go, and the sign-in notice with them. A switch's message goes ahead of them
+    with the transcript, and a digest that was held with them goes ahead of that,
+    taking the transcript with it. Landing on the very
     account that signed out changes nothing, and its hold stays. A Stop and a
     person's edit stay whatever the switch: a row a Stop paused while it waited on
     a sign-in stops waiting on the sign-in and goes on waiting for its Resume
     (`arriving`). A close that fails puts back what it freed, but only rows still
     as the landing left them: a Resume, an edit or a Stop since stands (`departing`).
 
-11. **A Stop retires a move not yet committed.** This is the one exception to
+12. **A Stop retires a move not yet committed.** This is the one exception to
     rule 2. A move has no row to be held in and never owns one, so it can't wait
     with a message: it goes no further, no binding comes after the Stop, and
     whoever asked is told, and can ask again. That holds from the moment it's asked,
@@ -100,12 +110,12 @@ schedules, and a failing schedule is pinned there.
     (`stillDecided`). A restart retires one too, since what it was decided on went
     with the last host, and whoever asked hears.
 
-12. **A Fin's question closes when input reaches it.** When its harness takes a
+13. **A Fin's question closes when input reaches it.** When its harness takes a
     message or a steer after the Fin asked, from anyone, an Apex's or the person's,
     its question is answered, whatever the words, and an answer sent after that is
     refused as answered. Queueing isn't delivery: a message removed unheard leaves
     the question open. What Mako sends by itself (a digest, a continuation, a goal's
-    step) answers nothing. An answer still on its way that fails doesn't reopen a
+    step) answers nothing, known by where it came from, never by its words. An answer still on its way that fails doesn't reopen a
     question something else closed (`Agents.inputDelivered`).
 
 ## What each failure leaves

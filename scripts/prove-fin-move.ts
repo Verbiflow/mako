@@ -18,7 +18,10 @@ import { scratchHostHome } from "./scratch-harness-home.ts"
  * `agents_move` for real, on a host of its own in a scratch home: real Codex, Cursor and Claude Code, signed in as the
  * person, on a scratch project. Spends a few model calls.
  *
- *   npx tsx scripts/prove-fin-move.ts --out <folder> [--app <Mako.app's executable>]
+ *   npx tsx scripts/prove-fin-move.ts --out <folder> [--app <Mako.app's executable>] [--direct]
+ *
+ * It needs Cursor's plan really out, and sends Cursor real prompts: with room on the plan, Cursor answers and it times
+ * out waiting for the refusal. `--direct` leaves Cursor out of it, moving the Fin from Codex to Claude Code.
  *
  * A Fin does a turn on Codex and is told a code word. It moves to Cursor, whose plan is genuinely out, and a message to
  * it is refused there, as a second is, which is Cursor really running out: each is tried, fails, and leaves a turn to go on. `mako agents move` takes it to Claude Code: the same
@@ -26,7 +29,7 @@ import { scratchHostHome } from "./scratch-harness-home.ts"
  * never saw; and its report reaches its Apex. Nothing runs on the Fin's first harness or on Cursor after the move, and everything each step
  * answered is written to `--out`, with the Fin's transcript.
  */
-const { values } = parseArgs({ options: { out: { type: "string" }, app: { type: "string" } } })
+const { values } = parseArgs({ options: { out: { type: "string" }, app: { type: "string" }, direct: { type: "boolean" } } })
 if (!values.out) throw new Error("--out <folder> says where the proof's files go")
 const out = resolve(values.out)
 const repo = resolve(import.meta.dirname, "..")
@@ -140,29 +143,42 @@ try {
   const branch = async () => (await run("git", ["-C", before.cwd, "branch", "--show-current"], { env })).stdout.trim()
   const onBranch = await branch()
 
-  const toCursor = await agents("move", "proof", "cursor", "--key", "to-cursor")
-  await note("move to Cursor", Json.parse(toCursor))
-  assert.equal(toCursor.moved?.[0]?.state, "moved", JSON.stringify(toCursor))
-  assert.equal((await state()).harness, "cursor")
-
   const asked = "What was your code word? Reply with it and nothing else, then call agents_report with status done and that word."
-  const sent = await agents("send", "proof", asked, "--key", "asked")
-  await note("message to the Fin on Cursor", Json.parse(sent))
-  const refusal = await until("Cursor to refuse it", async () => {
-    const held = Snapshot.parse(await call("mako:live-snapshot", [conversation]))
-    const row = held.requests.find((request) => request.text.includes("code word") && (request.status === "failed" || (request.status === "held" && request.retry)))
-    return row && { status: row.status, error: row.error ?? "", failure: row.failure ?? "", evidence: row.nativeDelivery?.evidence.kind ?? "", session: held.session.status }
-  }, 120_000)
-  await note("Cursor refused it, for real", refusal)
-  assert.match(JSON.stringify(refusal), /usage limit/i)
+  const second = "Then write queued-once.txt saying done, with no reply of your own about it."
+  if (!values.direct) {
+    const toCursor = await agents("move", "proof", "cursor", "--key", "to-cursor")
+    await note("move to Cursor", Json.parse(toCursor))
+    assert.equal(toCursor.moved?.[0]?.state, "moved", JSON.stringify(toCursor))
+    assert.equal((await state()).harness, "cursor")
 
-  // Mako has no message to hold back: a harness out of usage says so only when it's asked.
-  const queued = await agents("send", "proof", "Then write queued-once.txt saying done, with no reply of your own about it.", "--key", "queued")
-  await note("a second message", Json.parse(queued))
+    const sent = await agents("send", "proof", asked, "--key", "asked")
+    await note("message to the Fin on Cursor", Json.parse(sent))
+    const refusal = await until("Cursor to refuse it, which it does only while its plan is out", async () => {
+      const held = Snapshot.parse(await call("mako:live-snapshot", [conversation]))
+      const row = held.requests.find((request) => request.text.includes("code word") && (request.status === "failed" || (request.status === "held" && request.retry)))
+      return row && { status: row.status, error: row.error ?? "", failure: row.failure ?? "", evidence: row.nativeDelivery?.evidence.kind ?? "", session: held.session.status }
+    }, 120_000)
+    await note("Cursor refused it, for real", refusal)
+    assert.match(JSON.stringify(refusal), /usage limit/i)
+
+    // Mako has no message to hold back: a harness out of usage says so only when it's asked.
+    const queued = await agents("send", "proof", second, "--key", "queued")
+    await note("a second message", Json.parse(queued))
+    // A Fin at work doesn't move, so its turn on Cursor has to end first, which it does the moment Cursor refuses it.
+    await until("Cursor to refuse the second", async () => {
+      const held = Snapshot.parse(await call("mako:live-snapshot", [conversation]))
+      return held.requests.some((request) => request.text.includes("queued-once.txt") && request.status === "failed") && held.session.status !== "running"
+    }, 120_000)
+
+  }
 
   const toClaude = await agents("move", "proof", "claude", "--key", "to-claude")
   await note("move to Claude Code", Json.parse(toClaude))
   assert.equal(toClaude.moved?.[0]?.state, "moved", JSON.stringify(toClaude))
+  if (values.direct) {
+    await note("message after the move", Json.parse(await agents("send", "proof", asked, "--key", "asked")))
+    await note("a second message", Json.parse(await agents("send", "proof", second, "--key", "queued")))
+  }
   const after = await state()
   await note("after the move", { harness: after.harness, cwd: after.cwd })
   assert.equal(after.harness, "claude")
@@ -194,7 +210,7 @@ try {
   await writeFile(join(out, "fin-history.jsonl"), (await mako("history", conversation)).map((line) => JSON.stringify(line)).join("\n"))
   const read = await agents("read", "proof", "--transcript")
   await note("agents_read", { whole: read.whole ?? "", truncated: read.truncated ?? false })
-  console.log(`PROVED: ${child} went Codex → Cursor (out) → Claude Code, answered ${word} and reported to its Apex`)
+  console.log(`PROVED: ${child} went ${values.direct ? "Codex → Claude Code" : "Codex → Cursor (out) → Claude Code"}, answered ${word} and reported to its Apex`)
 } finally {
   await cp(join(dataRoot, "logs"), join(out, "logs"), { recursive: true }).catch(() => undefined)
   host?.kill("SIGTERM")

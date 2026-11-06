@@ -1,4 +1,6 @@
 import type { LiveRequest } from "./live-conversations.js"
+import { resetWords } from "./account-usage.js"
+import { limitReset } from "./limit-reset.js"
 import { permanentFailure, type ProviderFailureKind } from "./provider-failure.js"
 
 /**
@@ -19,9 +21,11 @@ export interface RequestRetry {
   cause: RetryCause
   /** The harness's own words for the last failure, for Details. */
   reason: string
+  /** When its usage limit says it resets: it goes then, not on the steps, however many days off that is. */
+  until?: number
 }
 
-/** The waits between attempts, the last repeating: a usage limit that resets in hours is tried every ten minutes until it does. */
+/** The waits between attempts, the last repeating: a limit that names no reset is tried every ten minutes until it clears. */
 export const RETRY_STEPS_MS = [10_000, 30_000, 60_000, 120_000, 300_000, 600_000] as const
 
 /**
@@ -60,13 +64,23 @@ export function transientCause(message: string, kind: ProviderFailureKind, busy:
   return permanentFailure(message) ? undefined : retryCause(kind, false)
 }
 
-/** The attempt after `previous` for `cause`, or undefined when Mako stops waiting (`GIVE_UP_MS`) and the message fails. */
+/** Past a limit's reset by this much: its clock is the harness's, and the first try after it shouldn't race it. */
+export const RESET_MARGIN_MS = 30_000
+
+/**
+ * The attempt after `previous` for `cause`, or undefined when Mako stops waiting (`GIVE_UP_MS`) and the message fails.
+ * A limit whose words say when it resets (`limitReset`) goes once, then, rather than knocking until it does. That reset
+ * is read once and stands for the whole wait: words such as "Try again in 3 hours" read later every time, so reading
+ * them again would renew it forever. The bound then counts from the reset, so one three days off is no failure, and
+ * one that never lifts ends.
+ */
 export function nextRetry(previous: RequestRetry | undefined, cause: RetryCause, reason: string, now: number): RequestRetry | undefined {
   const since = previous?.since ?? now
-  if (now - since >= GIVE_UP_MS[cause]) return undefined
+  const reset = previous?.until ?? (cause === "rate-limited" ? limitReset(reason, now) : undefined)
+  if (now - (reset ?? since) >= GIVE_UP_MS[cause]) return undefined
   const attempt = (previous?.attempt ?? 0) + 1
   const wait = RETRY_STEPS_MS[Math.min(attempt, RETRY_STEPS_MS.length) - 1]!
-  return { at: now + wait, attempt, since, cause, reason: reason.slice(0, 2_000) }
+  return { at: cause === "rate-limited" && reset !== undefined && reset > now ? reset + RESET_MARGIN_MS : now + wait, attempt, since, cause, reason: reason.slice(0, 2_000), ...(reset !== undefined && { until: reset }) }
 }
 
 /** A digest of Fins' news no model answered: only an answer proves it was heard, and its reports already read as heard. */
@@ -120,11 +134,16 @@ export function retriesBegun(before: readonly LiveRequest[], after: readonly Liv
   return after.some((request) => queued.has(request.id) && request.status === "held" && request.retry !== undefined)
 }
 
+/** Whether its next attempt is the one its reset was waited for; past that, it goes on the steps, each with its own time. */
+export function waitsForReset(retry: Pick<RequestRetry, "at" | "until">): boolean {
+  return retry.until !== undefined && retry.at <= retry.until + RESET_MARGIN_MS
+}
+
 /** The queue row's line for a message that goes again by itself: what holds it, in the harness's name. */
-export function retryWords(retry: Pick<RequestRetry, "cause">, harness: string): string {
+export function retryWords(retry: Pick<RequestRetry, "cause" | "until">, harness: string, now = Date.now()): string {
   switch (retry.cause) {
     case "rate-limited":
-      return `${harness} is at capacity or its usage limit`
+      return retry.until === undefined || retry.until <= now ? `${harness} is at capacity or its usage limit` : `${harness} is at its usage limit until ${resetWords(retry.until, now)}`
     case "provider-unavailable":
       return `${harness}'s service failed on its side`
     case "network":

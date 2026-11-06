@@ -10,6 +10,7 @@ import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
 import type { LiveHistoryWindow } from "@mako/host/contracts/live-history"
 import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
+import { pullWakeWords } from "@mako/host/contracts/pull-waits"
 
 export { continueTurnPrompt }
 
@@ -76,6 +77,8 @@ export type MakoPrompt =
   | { kind: "moved" }
   | { kind: "goal"; step: NonNullable<LiveRequest["goal"]> }
   | { kind: "review"; target: NonNullable<LiveRequest["review"]> }
+  /** A pull request the Fin waits on came to an outcome (`pullWakeNote`): its line, and the pull request's link. */
+  | { kind: "pull"; line: string; url?: string }
 
 /**
  * The prompts Mako sent itself, keyed by their request id, so the transcript
@@ -87,6 +90,10 @@ export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoP
     if (request.actor?.kind === "service" && request.actor.name === "workspace") prompts.set(request.id, { kind: "moved" })
     else if (request.actor?.kind === "service" && request.actor.name === "goal" && request.goal) prompts.set(request.id, { kind: "goal", step: request.goal })
     else if (request.review) prompts.set(request.id, { kind: "review", target: request.review })
+    else if (request.actor?.kind === "service" && request.actor.name === "pull-watch") {
+      const pull = pullWakeWords(request.text)
+      if (pull) prompts.set(request.id, { kind: "pull", ...pull })
+    }
   }
   return prompts
 }
@@ -116,12 +123,15 @@ export function carriedHistories(requests: readonly LiveRequest[]): Map<string, 
 }
 
 /**
- * A goal's prompt, known by its words: a store keeps no request to say who
- * sent it. The words are compared whole with what `goalStartPrompt` or
- * `goalContinuePrompt` writes for the objective they carry. Anything else,
- * a fragment or an edit included, is the user's.
+ * A goal's prompt, or a pull request's outcome Mako woke a Fin with, known by
+ * its words: a store keeps no request to say who sent it. A goal's words are
+ * compared whole with what `goalStartPrompt` or `goalContinuePrompt` writes
+ * for the objective they carry, a wake's with `pullWakeNote`'s one line.
+ * Anything else, a fragment or an edit included, is the user's.
  */
 export function savedMakoPrompt(text: string): MakoPrompt | undefined {
+  const pull = pullWakeWords(text)
+  if (pull) return { kind: "pull", ...pull }
   const objective = /\n<objective>\n([\s\S]*?)\n<\/objective>\n/.exec(text)?.[1]
   if (objective === undefined) return undefined
   const words = text.trim()

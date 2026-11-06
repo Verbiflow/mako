@@ -51,15 +51,26 @@ async function timersScheduledBy(run: () => Promise<void>): Promise<number> {
 }
 
 {
-  const loop = new EventLoopWatch({ resolutionMs: 10, heldMs: 60, lingerMs: 80 })
+  // A linger no stalled runner outlasts, for what it keeps watched.
+  const loop = new EventLoopWatch({ resolutionMs: 10, heldMs: 60, lingerMs: 60_000 })
   loop.touch()
   await sleep(40)
   assert.equal(loop.snapshot().watching, true, "An event sent keeps the loop watched for the linger")
   hold(90)
   await sleep(20)
   assert.deepEqual(loop.snapshot().holds.longest?.during, [], "A hold with no named work running names none")
-  await sleep(120)
-  assert.equal(loop.snapshot().watching, false, "The linger ends")
+  loop.stop()
+}
+
+{
+  const loop = new EventLoopWatch({ resolutionMs: 10, heldMs: 60, lingerMs: 80 })
+  loop.touch()
+  assert.equal(loop.snapshot().watching, true)
+  const hung = performance.now() + 10_000
+  while (loop.snapshot().watching) {
+    assert.ok(performance.now() < hung, "The linger ends")
+    await sleep(10)
+  }
   loop.stop()
 }
 

@@ -86,7 +86,7 @@ assert.equal(restoreGate({ record: [], observed: [], evidence: { source: "range"
 const git = new Git()
 const repository = join(import.meta.dirname, "..")
 const pinned = new Map<string, string>()
-const commits = (await git.text({ cwd: repository, args: ["log", "--all", "--reverse", "--format=%H %cI", "-G\"@cursor/sdk\": \"", "--", "package.json", "packages/*/package.json"] })).split("\n").filter(Boolean)
+const commits = (await git.text({ cwd: repository, args: ["log", "HEAD", "--reverse", "--format=%H %cI", "-G\"@cursor/sdk\": \"", "--", "package.json", "packages/*/package.json"] })).split("\n").filter(Boolean)
 for (const line of commits) {
   const [commit, at] = line.split(" ")
   const diff = await git.text({ cwd: repository, args: ["show", "--format=", commit!, "--", "package.json", "packages/*/package.json"] })

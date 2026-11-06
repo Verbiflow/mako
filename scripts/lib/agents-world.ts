@@ -5,6 +5,10 @@ import { EntrySchema, type Entry } from "@mako/sessions/entries"
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import type { HarnessLimit } from "@mako/host/contracts/account-usage"
+import type { AccountContinuation, FallbackConnection } from "@mako/host/contracts/fin-fallback"
+import type { UsageLimit } from "@mako/sessions/events"
+import { ExecutionAccountChanged, ExecutionIdentityMismatch } from "@mako/host/harnesses/accounts"
+import { withExecutionAdmission, type AccountAdmission } from "@mako/host/harnesses/execution-admission"
 import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
 import type { LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import { HostJobs } from "@mako/host/base/host-jobs"
@@ -19,7 +23,7 @@ import type { ProcessReads } from "@mako/host/conversations/agent-runs"
 import { Agents, ROOM_WATCH_JOB, type AgentsDeps } from "@mako/host/conversations/agents"
 import { continueOn, type ContinueOn } from "@mako/host/conversations/continue-on"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
-import type { ProviderLiveDriver, ProviderSteerResult, SteerCapability } from "@mako/host/harnesses/live-driver"
+import type { AdmittedLiveDriver, ProviderLiveDriver, ProviderSteerResult, SteerCapability } from "@mako/host/harnesses/live-driver"
 import { handOff } from "@mako/host/harnesses/prompt-dispatch"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import { ThreadStore } from "@mako/host/threads/store"
@@ -54,8 +58,32 @@ export interface ScriptedTurn {
   caller: AgentCaller
 }
 
+/**
+ * How a scripted turn ends besides its reply (`AgentsWorld.endWith`): `limit`, its harness's own word that a usage
+ * limit refused it (a marker, as a decoder reads one from the native message's fields); `fail`, the turn failed with
+ * these words.
+ */
+export interface ScriptedEnd {
+  limit?: UsageLimit
+  fail?: string
+}
+
 /** What a scripted model does with a turn: its reply, once whatever it calls has answered. `hold` keeps the turn running until it resolves. */
 export type Script = (turn: ScriptedTurn) => Promise<string> | string
+
+/** One of a harness's accounts as the world's person keeps it: at its limit until `spentUntil` (null: no reset named). */
+export interface WorldAccount {
+  name: string
+  spentUntil?: number | null
+}
+
+/** One launch of a harness's session as admission resolved it: the account it ran on, and the native session it resumed. */
+export interface WorldLaunch {
+  conversation: string
+  harness: string
+  account: string
+  resume?: string
+}
 
 export interface WorldOptions {
   root: string
@@ -135,12 +163,33 @@ export interface WorldOptions {
   now?: () => number
   /** Whether a session may be resumed, as its harness's ownership check says; resumable without it. */
   resumeVerdict?: (binding: ProviderBinding) => Promise<ResumeVerdict>
+  /** Hears the account each launch runs on, when it's pinned to one. */
+  launchedOn?: (harness: string, account: string | undefined) => void
   /** The harnesses whose session goes on under another account (`ProviderLiveDriver.accountContinuation`). */
   resumesUnderAccount?: readonly string[]
   /** The conversations an `@` picker offers and their transcripts (`AgentsDeps.references`). */
   references?: AgentsDeps["references"]
   /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
   refusePrompt?: (conversation: string, harness: string) => string | undefined | Promise<string | undefined>
+  /**
+   * Each harness's accounts in the person's order, read as they stand (change one to spend it), and which is
+   * selected: with them a Fin whose account runs out moves (`AgentsDeps.accounts`), and every launch goes through
+   * execution admission on the account it runs on (`launches`).
+   */
+  accounts?: Partial<Record<string, WorldAccount[]>>
+  selected?: Partial<Record<string, string>>
+  /** What each harness declares of going on under another account; absent, `resumes`. */
+  continuation?: Partial<Record<string, AccountContinuation>>
+  /** The person's model connections as each harness's routes take them. */
+  connections?: Partial<Record<string, FallbackConnection[]>>
+  /** Settings › Fins' switch, as it stands when read; absent, on. */
+  moveOnLimit?: () => boolean
+  /** Runs as a harness's catalog is read for a Fin, before it answers: a hand-off's preparation reads it. */
+  readingChoices?: (harness: string) => Promise<void> | void
+  /** Runs as a harness's accounts are read, before they answer: `all` is a move's read of every one. */
+  readingAccounts?: (harness: string, all: boolean) => Promise<void> | void
+  /** A pull request as GitHub would say it stands (`AgentsDeps.readPull`): a stub, never the network. */
+  readPull?: AgentsDeps["readPull"]
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -169,6 +218,8 @@ export class AgentsWorld {
   /** Every answer to an approval a driver was sent: its conversation, its harness's request, and the answer. */
   readonly answers: { conversation: string; request: string; response: LivePermissionResponse; at: number }[] = []
   readonly events: HostEvent[] = []
+  /** Every launch admission resolved, in order, with the account it ran on (`WorldOptions.accounts`). */
+  readonly launches: WorldLaunch[] = []
   /** When each of `events` was emitted, by its place. */
   readonly eventAt: number[] = []
   private asking = new Map<string, { observationId: string; answered: (response: LivePermissionResponse) => void }>()
@@ -182,12 +233,8 @@ export class AgentsWorld {
   jobs!: HostJobs
   private running = new Set<Promise<unknown>>()
   private holds = new Map<string, () => void>()
+  private ends = new Map<string, ScriptedEnd>()
   private heldSteers = new Map<string, (answer: ProviderSteerResult) => void>()
-  /** The conversation a binding of it is, its first one's id being the conversation's own. */
-  private conversationOfBinding(binding: string): string {
-    if (this.live.snapshot(binding)) return binding
-    return this.live.summaries().find((summary) => this.live.snapshot(summary.session.id)?.control?.bindings.some((candidate) => candidate.id === binding))?.session.id ?? binding
-  }
 
   /** Each conversation's driver callback, from its latest start. */
   private emits = new Map<string, (event: LiveDriverEvent) => void>()
@@ -203,7 +250,11 @@ export class AgentsWorld {
   open(): void {
     this.store = new ThreadStore(join(this.root, "threads.sqlite"), { now: () => Date.now() })
     this.jobs = this.options.noRoomWatch ? new WithoutRoomWatch() : new HostJobs()
-    const drivers = new Map<string, ProviderLiveDriver>(HARNESSES.map((harness) => [harness, this.driver(harness)]))
+    const admission = this.options.accounts ? this.admission() : undefined
+    const drivers = new Map<string, AdmittedLiveDriver>(HARNESSES.map((harness) => {
+      const driver = this.driver(harness)
+      return [harness, admission ? withExecutionAdmission(driver, admission) : driver]
+    }))
     const live = new LiveConversations({
       appPath: this.root,
       root: join(this.root, "journals"),
@@ -256,13 +307,29 @@ export class AgentsWorld {
       harnessLabel: (harness) => harness[0]!.toUpperCase() + harness.slice(1),
       modes: (harness) => drivers.get(harness)?.modes,
       finChoices: async (harness) => {
+        await this.options.readingChoices?.(harness)
         const recommended = this.options.defaults?.[harness]
         const chosen = this.options.fins?.chosen?.[harness]
         const used = this.options.fins?.used?.[harness]
         return { models: this.options.catalogs?.[harness] ?? [], ...(recommended && { recommended }), ...(chosen && { chosen }), ...(used && { used }) }
       },
       catalogOf: (harness) => this.options.catalogs?.[harness],
-      ...(this.options.limits && { limited: async (harness: string) => this.options.limits?.[harness] }),
+      ...((this.options.limits || this.options.accounts) && { limited: async (harness: string) => this.options.limits?.[harness] ?? this.selectedLimit(harness) }),
+      ...(this.options.accounts && {
+        accounts: async (harness: string, _on?: string, all = false) => {
+          await this.options.readingAccounts?.(harness, all)
+          return (this.options.accounts?.[harness] ?? []).map((account) => ({
+          name: account.name,
+          label: account.name,
+          active: account.name === (this.options.selected?.[harness] ?? "default"),
+          ...(account.spentUntil !== undefined && { spent: { until: account.spentUntil } }),
+          }))
+        },
+        connections: async (harness: string) => this.options.connections?.[harness] ?? [],
+        accountContinuation: (harness: string) => this.options.continuation?.[harness] ?? { kind: "resumes" as const, via: "Scripted model" },
+        ...(this.options.moveOnLimit && { moveOnLimit: this.options.moveOnLimit }),
+      }),
+      ...(this.options.now && { now: this.options.now }),
       ...(this.options.order && { harnessOrder: async () => this.options.order! }),
       ...(this.options.policy && { finPolicy: this.options.policy }),
       ...(this.options.movePending && { movePending: this.options.movePending }),
@@ -275,6 +342,7 @@ export class AgentsWorld {
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
       ...(this.options.later && { later: this.options.later }),
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
+      ...(this.options.readPull && { readPull: this.options.readPull }),
       ...(this.options.now && { now: this.options.now }),
       archived: (conversation) => this.archived.has(conversation),
     }
@@ -285,6 +353,30 @@ export class AgentsWorld {
     this.agents.resume()
     // As the host's start arms it: held messages' times (`LiveConversations.armWakes`).
     this.live.armWakes()
+  }
+
+  /** The selected account of `harness` when it's at its limit, as `HarnessAccounts.limited` reads it. */
+  private selectedLimit(harness: string): HarnessLimit | undefined {
+    const name = this.options.selected?.[harness] ?? "default"
+    const account = this.options.accounts?.[harness]?.find((each) => each.name === name)
+    return account?.spentUntil !== undefined ? { account: name, until: account.spentUntil } : undefined
+  }
+
+  /** Execution admission as the host's accounts decide it, on the world's: the pin, else the selected account. */
+  private admission(): AccountAdmission {
+    const wanted = (provider: string, pinned?: string) => pinned ?? this.options.selected?.[provider] ?? "default"
+    return {
+      resolve: async (provider, _binding, pinned) => {
+        const name = wanted(provider, pinned)
+        return { env: {}, account: { name }, selection: { kind: "selectable", name, ...(pinned !== undefined && { pinned: true as const }) } }
+      },
+      assertCurrent: async (provider, launch, pinned) => {
+        if (launch.selection.kind === "selectable" && launch.selection.name !== wanted(provider, pinned)) throw new ExecutionAccountChanged("selection")
+      },
+      principal: async () => undefined,
+      mismatch: (principal, expected) => new ExecutionIdentityMismatch(principal, expected),
+      observeUsage: () => {},
+    }
   }
 
   /** Closes the host as Mako's exit does: running turns are cut short and left for the next host, their scripts never answering. */
@@ -338,6 +430,11 @@ export class AgentsWorld {
     })
   }
 
+  /** The conversation's running turn ends this way once its script replies: refused by a usage limit, or failed. */
+  endWith(conversation: string, end: ScriptedEnd): void {
+    this.ends.set(conversation, end)
+  }
+
   /** Lets a held turn end (`hold`). */
   release(conversation: string): void {
     this.holds.get(conversation)?.()
@@ -385,7 +482,7 @@ export class AgentsWorld {
       ...noCapabilities,
       modes,
       approvalEvidence: { kind: "submission-only", reason: "Scripted model" },
-      launchEnvironment: { kind: "unavailable", reason: "Scripted model" },
+      launchEnvironment: this.options.accounts ? { kind: "prepared", via: "Scripted model" } : { kind: "unavailable", reason: "Scripted model" },
       nativeIdentity: { kind: "unavailable", reason: "Scripted model" },
       nativeExclusion: NO_NATIVE_EXCLUSION,
       nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
@@ -411,38 +508,47 @@ export class AgentsWorld {
           },
         },
       }),
+      ...(this.options.resumesUnderAccount?.includes(harness) && { accountContinuation: { kind: "resumes" as const, via: "Scripted model" } }),
       provider: harness,
       available: () => true,
       start: async (_cwd, options) => {
+        // Admission hands every launch its account; a world without accounts runs none through it.
+        const launched = this.options.accounts ? options.accountLaunch : undefined
+        if (launched) this.launches.push({ conversation: this.live.ownerOf(options.conversationId), harness, account: launched.account.name, ...(options.resume && { resume: options.resume }) })
         await this.options.starting?.(options.conversationId, harness)
+        this.options.launchedOn?.(harness, options.pinnedAccount?.())
         // What the harness says goes through the callback its start was given, fenced as a real driver's is (`driverEvents`).
         this.emits.set(options.conversationId, options.emit)
         return state(options.conversationId, options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {})
       },
-      prompt: async (id, text, _attachments, _settings, dispatch) => {
+      prompt: async (binding, text, _attachments, _settings, dispatch) => {
+        const id = this.live.ownerOf(binding)
         const refused = await this.options.refusePrompt?.(id, harness)
         if (refused) {
           dispatch.report({ kind: "not-accepted", source: "preflight", reason: refused })
           throw new Error(refused)
         }
         handOff(dispatch, { kind: "submitted", source: "transport-call" })
-        // A switch's destination is sent to under its own binding: the turn is its conversation's.
-        const conversation = this.conversationOfBinding(id)
         const path = this.live.snapshot(id)?.session.nativePath ?? state(id).nativePath!
         // A session another program runs (a linked CLI's) keeps its own transcript, which the catalog reads.
         if (this.options.transcripts && path.startsWith(this.root)) {
           mkdirSync(dirname(path), { recursive: true })
           appendFileSync(path, `${JSON.stringify({ type: "user", text, messageId: dispatch.attemptId } satisfies Entry)}\n`)
         }
-        this.prompts.push({ conversation, harness, text, at: Date.now() })
-        this.options.heard?.({ kind: "prompt", conversation, harness, text })
-        const session = this.live.snapshot(id)?.session ?? state(id)
-        const emit = this.emits.get(id) ?? ((event: LiveDriverEvent) => this.live.observe(event))
+        this.prompts.push({ conversation: id, harness, text, at: Date.now() })
+        this.options.heard?.({ kind: "prompt", conversation: id, harness, text })
+        // A hand-off's new session reports under its own binding, through the callback its start was given, fenced as a real driver's is.
+        const session = { ...(this.live.snapshot(id)?.session ?? state(binding)), id: binding }
+        const emit = this.emits.get(binding) ?? ((event: LiveDriverEvent) => this.live.observe(event))
         emit({ type: "live-session", session: { ...session, status: "running", nativeRunId: `run-${this.prompts.length}` } })
         const turn = (async () => {
-          const reply = await this.options.script({ world: this, conversation, harness, text, caller: this.caller(conversation) })
-          emit({ type: "live-update", id, update: { kind: "text", text: reply } })
-          emit({ type: "live-session", session: { ...(this.live.snapshot(id)?.session ?? session), status: "ready" } })
+          const reply = await this.options.script({ world: this, conversation: id, harness, text, caller: this.caller(id) })
+          const end = this.ends.get(id) ?? {}
+          this.ends.delete(id)
+          emit({ type: "live-update", id: binding, update: { kind: "text", text: reply } })
+          if (end.limit) emit({ type: "live-update", id: binding, update: { kind: "event", label: "Rate limited", detail: "Reached your usage limit", tone: "warning", limit: end.limit } })
+          const ended = { ...(this.live.snapshot(id)?.session ?? session), id: binding }
+          emit({ type: "live-session", session: end.fail ? { ...ended, status: "failed", lastStop: "failed", error: end.fail } : { ...ended, status: "ready" } })
         })()
         this.running.add(turn)
         void turn.finally(() => this.running.delete(turn))
@@ -486,9 +592,9 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
     throw new Error("There's no conversation here")
   }
   return {
-    session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, submit: none,
-    act: async () => none(), cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
-    turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false,
+    session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, wakeDue: () => [], snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, pinnedAccount: () => undefined, submit: none,
+    act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
+    turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false, recordNote: () => false, moveWaiting: () => false,
   }
 }
 
