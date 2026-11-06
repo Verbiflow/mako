@@ -126,7 +126,8 @@ async function run(name: string, options: Partial<WorldOptions> & { fin: FinScri
       turns += 1
       return options.fin(turns, (how) => turn.world.endWith(turn.conversation, how))
     }
-    if (turn.text.startsWith(FROM_AGENTS)) wakes.push(turn.text)
+    // An Apex that went with its tree hears them with the conversation handed over above them.
+    if (turn.text.includes(FROM_AGENTS)) wakes.push(turn.text)
     return "ok"
   }
   const world = new AgentsWorld({ root: join(root, name), script, now: clock, catalogs: CATALOGS, order: ["claude", "cursor", "codex", "grok", "opencode", "devin"], ladders: { cursor: [{ id: "full", name: "Full", access: "full" }] }, ...options })
@@ -235,6 +236,7 @@ try {
     const thread = edgeOf(r).child
     assert.deepEqual(r.world.store.reportsOf(thread, 0).map((report) => [report.status, report.summary]), [["done", "Labelled all 120."]], "one report, the turn that finished the work: no failure for a limit it moved past")
     await until("its Apex to hear", () => r.wakes.length === 1)
+    assert.ok(r.wakes[0]!.includes('"labels" (Codex)'), `it's named for the harness it's on: ${r.wakes[0]!.slice(0, 200)}`)
     assert.ok(r.wakes[0]!.includes(`"labels" moved to Claude (work): personal is at its limit`), r.wakes[0])
     assert.ok(r.wakes[0]!.includes(`"labels" moved to Codex: Claude (work) is at its limit`), r.wakes[0])
     assert.equal(r.wakes.length, 1, "the moves never woke the Apex by themselves")
@@ -389,7 +391,7 @@ try {
     out()
     await until("the notice", () => r.world.agents.personAsk(r.apex.conversation) !== undefined, 8_000)
     const said = r.world.agents.personAsk(r.apex.conversation)!
-    assert.equal(said.line, `Claude (personal) ran out until ${resetWords(RESET, clock())}. 2 Fins moved to Codex.`, "what ran out, until when and what moved where, in one line")
+    assert.equal(said.line, `Claude (personal) ran out until ${resetWords(RESET, clock())}. This Thread and 2 Fins moved to Codex.`, "what ran out, until when and what moved where, in one line")
     assert.deepEqual(said.ask.options?.map((option) => option.label), ["Got it"])
     assert.equal(r.world.agents.roster(r.apex.conversation).find((agent) => agent.child?.limitNotice)?.child?.limitNotice?.harness, "claude", "it names the harness that ran out, though the Fin carrying it has left")
     const carrying = r.world.agents.roster(r.apex.conversation).filter((agent) => agent.child?.limitNotice)
@@ -463,7 +465,8 @@ try {
     assert.ok(!("refused" in r))
     held.claude[0]!.spentUntil = reset
     spent()
-    const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length
+    // A quiet Thread may be unloaded by then, with no roster at all: which says no notice as well as an empty one does.
+    const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length ?? 0
     await until("the notice on the Apex's snapshot", () => shown() === 1, 6_000)
     await until("its reset, with nobody reading", () => shown() === 0, 12_000)
     await r.world.close()
@@ -584,6 +587,8 @@ try {
     const heard: string[] = []
     const r = await run("moved-failed", {
       apexOn: "codex",
+      // Claude spent, the Apex at a limit has nowhere to go, or it would move on with its digest.
+      catalogs: { claude: CATALOGS.claude!, codex: CATALOGS.codex! },
       accounts: held,
       selected: { claude: "personal" },
       start: { harness: "claude" },
@@ -628,6 +633,24 @@ try {
     const person = r.world.say(apex, "After the limit.")
     await until("their message", () => r.world.live.snapshot(apex)!.requests.find((request) => request.id === person)?.status === "completed")
     assert.equal(heard.filter((text) => text.includes(MOVED_LINE)).length, 1, "the Apex hears it, once")
+    await r.world.close()
+  }
+  // A Fin placed on another account before the binding kept the pin has it on its edge alone: it comes onto the binding.
+  {
+    const held = accounts()
+    held.claude[0]!.spentUntil = RESET
+    const r = await run("old-edge-pin", { accounts: held, selected: { claude: "personal" }, start: { harness: "claude" }, fin: () => "Done." })
+    assert.ok(!("refused" in r))
+    await until("its first turn", () => r.world.live.session(r.fin())?.status === "ready")
+    const control = r.world.live.snapshot(r.fin())!.control!
+    for (const binding of control.bindings) delete binding.account
+    delete held.claude[0]!.spentUntil
+    await r.world.restart()
+    await until("the pin back on its binding", () => r.world.live.pinnedAccount(r.fin(), "claude") === "work")
+    const sent = await r.world.agents.send(r.world.caller(r.apex.conversation), { to: "labels", text: "After the upgrade.", clientKey: "after" })
+    assert.ok(!("refused" in sent))
+    await until("the message", () => r.world.prompts.some((prompt) => prompt.conversation === r.fin() && prompt.text.includes("After the upgrade.")))
+    assert.equal(r.world.launches.filter((launch) => launch.conversation === r.fin()).at(-1)?.account, "work", "the account it was placed on, though the selected one has room again")
     await r.world.close()
   }
   console.log("a limit's notice: kept before it gathers, said once after a restart, and over at its reset on every surface")

@@ -6,6 +6,7 @@ import type { AccountLimitOffer } from "@mako/host/contracts/account-usage"
 import { usageWindowName } from "@/lib/usage-window"
 import { accounts, useAccounts, type ProviderAccount } from "@/state/accounts"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
+import { useLimitContinue, type LimitContinue } from "@/state/limit-continue"
 import { loadFinDefaults, useFinDefaults } from "@/state/fin-defaults"
 import { shallowEqual } from "@/state/store"
 import type { ComposerNotice, ComposerNoticeAction } from "@/extend/notices"
@@ -50,6 +51,27 @@ export function useAccountSwitchNotice(): ComposerNotice | null {
     actions,
     data: { "data-account-notice": reading.kind },
   }
+}
+
+/** The card of a Thread a limit holds, with somewhere to go: only the choice, as its queue row says what holds it. */
+export function limitContinueNotice(offer: LimitContinue): ComposerNotice {
+  return {
+    id: "limit-continue",
+    tone: "info",
+    icon: <HarnessIcon harness={offer.harness} />,
+    title: `${offer.to} can take this`,
+    actions: [
+      { label: `Continue on ${offer.to}`, primary: true, disabled: offer.busy, title: "This Thread goes on there with its whole conversation, and what waits goes with it", onClick: offer.go },
+      { label: "Not now", onClick: offer.notNow },
+    ],
+    data: { "data-limit-continue": offer.to },
+  }
+}
+
+/** A notice producer (`registerNotice`). */
+export function useLimitContinueNotice(): ComposerNotice | null {
+  const offer = useLimitContinue()
+  return offer && limitContinueNotice(offer)
 }
 
 /** A notice's words: what holds, then what follows from it. */

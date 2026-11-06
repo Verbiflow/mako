@@ -56,3 +56,21 @@ export async function answerFin(apexConversation: string, ask: PersonAsk, answer
     return false
   }
 }
+
+/** Where a Thread a limit holds could go on, as its card says it; undefined with nowhere, or with no host to ask. */
+export async function nextPlace(conversation: string): Promise<{ label: string; harness: string } | undefined> {
+  if (!hasBridge()) return undefined
+  return getMako().agentsNextPlace(conversation).then((next) => next ?? undefined, () => undefined)
+}
+
+/** The person pressed that card. False when it didn't go, with a toast that says so. */
+export async function continueNext(conversation: string): Promise<boolean> {
+  try {
+    const went = await getMako().agentsContinueNext(conversation, crypto.randomUUID())
+    if (!went) toast("This Thread can't go on there now")
+    return went
+  } catch (error) {
+    toast.error("This Thread didn't move", { description: error instanceof Error ? error.message : String(error) })
+    return false
+  }
+}
