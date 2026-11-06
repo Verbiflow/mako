@@ -1,3 +1,4 @@
+import { z } from "zod"
 import type { MethodTable } from "../base/methods.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
@@ -16,6 +17,8 @@ export interface AutomationToolDeps {
 
 type Change = "run" | "on" | "off"
 
+const AutomationIds = z.array(z.object({ id: z.string() }).loose())
+
 /** An agent's or a shell's look at the person's automations, and Run now and the switch on each, through Settings' calls. */
 export class AutomationTool {
   readonly #deps: AutomationToolDeps
@@ -29,6 +32,9 @@ export class AutomationTool {
     const own = caller.kind === "agent" ? this.#deps.conversationOf(caller.session) : undefined
     if (caller.kind === "agent" && !own) return { refused: "no-thread", why: "No conversation here has that Session. Call it from a Thread's mako tools, or its shell, where MAKO_SESSION_ID names it." }
     if (!input.id) return { refused: "no-automation", why: "Name the automation: list gives each one's id." }
+    // Run now and the switch say nothing of an id they don't find, so it's read first: a call that did nothing never says done.
+    const known = AutomationIds.safeParse(await this.#deps.invoke("mako:automations", []).catch(() => undefined)).data
+    if (!known?.some((each) => each.id === input.id)) return { refused: "no-automation", why: `No automation here has the id ${input.id}: list gives each one's id.` }
     if (own && this.#deps.tier(own) !== "full") {
       const ask = this.#deps.gate.ask(own, { kind: "automation", action: input.action, id: input.id })
       return { outcome: "asked", ask: ask.id, next: AFTER_ACT.asked }

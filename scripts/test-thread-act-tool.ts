@@ -244,21 +244,22 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
     tier: () => tier,
     invoke: async (channel, args) => {
       calls.push([channel, ...args])
-      return []
+      return channel === "mako:automations" ? [{ id: "nightly" }] : []
     },
     gate,
   })
   gate.runs = { automation: async (_id, want) => void (await tool.run(want.action, want.id)) }
-  assert.deepEqual(await tool.act(agent("s-mine"), { action: "list", clientKey: "k" }), { outcome: "listed", automations: [] })
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "list", clientKey: "k" }), { outcome: "listed", automations: [{ id: "nightly" }] })
   const asked = await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "k" })
   assert.equal("outcome" in asked && asked.outcome, "asked")
-  assert.equal(calls.length, 1, "nothing ran on the agent's word alone")
+  assert.ok(calls.every(([channel]) => channel === "mako:automations"), "nothing ran on the agent's word alone")
   await gate.answer("mine", "ask" in asked ? asked.ask : "", true)
   assert.deepEqual(calls.at(-1), ["mako:run-automation", "nightly"])
   tier = "full"
   assert.deepEqual(await tool.act(agent("s-mine"), { action: "off", id: "nightly", clientKey: "k" }), { outcome: "done", action: "off", id: "nightly" })
   assert.deepEqual(calls.at(-1), ["mako:automation-enabled", "nightly", false])
   assert.equal(await tool.act(agent("s-mine"), { action: "on", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-automation")
+  assert.equal(await tool.act(agent("s-mine"), { action: "run", id: "gone", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-automation", "a run of nothing never says done")
   assert.equal(hostCallReplay(AUTOMATION_TOOL.channel), AUTOMATION_TOOL.replay)
   assert.ok(AUTOMATION_TOOL.mcp.description.length < 700, "its description stays short")
 }
