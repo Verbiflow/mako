@@ -10,7 +10,6 @@ import { SimulatorPanel } from "@/components/inspector/simulator-panel"
 import { simulatorSetupStore } from "@/state/simulator-setup"
 import { simulators, simulatorsRunnable, simulatorsStore } from "@/state/simulators"
 import {
-  GitBranchIcon,
   MonitorIcon,
   FilesIcon,
   GitCompareIcon,
@@ -25,6 +24,9 @@ import { quoteSelectionCommand } from "@/components/transcript/quote-reply-selec
 import { registerSurface } from "@/extend/surfaces"
 import { IdentityRow } from "@/components/identity/identity-row"
 import { ChangesPanel } from "@/components/inspector/changes-lazy"
+import { AgentsReading, ChangesReading, ControlReading } from "@/components/stage/side-readings"
+import { useAgentsOffered } from "@/state/agents-offered"
+import { ApexMark } from "@/components/ui/apex-mark"
 import { FileTree } from "@/components/rail/file-tree"
 import { TerminalPanel } from "@/components/inspector/terminal-lazy"
 import {
@@ -57,7 +59,7 @@ export function installBuiltins(): () => void {
       icon: GitCompareIcon,
       render: ChangesPanel,
       order: 0,
-      minWidth: 400,
+      reading: ChangesReading,
     }),
     registerSurface({
       id: "files",
@@ -81,9 +83,9 @@ export function installBuiltins(): () => void {
       icon: MonitorIcon,
       render: ControlPreviewPanel,
       order: 3,
-      minWidth: 360,
+      reading: ControlReading,
     }),
-    registerSurface({ id: "agents", label: "Agents", icon: GitBranchIcon, render: AgentsPanel, order: 4, minWidth: 360 }),
+    registerSurface({ id: "agents", label: "Agents", icon: ApexMark, render: AgentsPanel, order: 4, reading: AgentsReading, useOffered: useAgentsOffered }),
     installSimulatorSurface(),
     // Identity, through the same slots a plugin would use. It lives in the
     // rail's footer and only there: the titlebar carried the same avatar six
@@ -160,7 +162,7 @@ function installSimulatorSurface(): () => void {
   let unregister: (() => void) | undefined
   const sync = () => {
     const runnable = simulatorsRunnable(simulatorsStore.get().listed)
-    if (runnable && !unregister) unregister = registerSurface({ id: "simulator", label: "Simulator", icon: SmartphoneIcon, render: SimulatorPanel, order: 5, minWidth: 360 })
+    if (runnable && !unregister) unregister = registerSurface({ id: "simulator", label: "Simulator", icon: SmartphoneIcon, render: SimulatorPanel, order: 5 })
     else if (!runnable && unregister) {
       unregister()
       unregister = undefined

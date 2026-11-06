@@ -41,7 +41,7 @@ export interface Prefs {
   /** Dragged companion-card widths, per surface id — a spatial habit. */
   surfaceWidths: SurfaceWidthMap
   surfaceHeights: SurfaceWidthMap
-  /** What the right-sidebar toggle reopens. Tab ids don't survive a relaunch. */
+  /** What the right rail's toggle reopens. Tab ids don't survive a relaunch. */
   lastCompanion: string | null
   /** `provider/id` keys, most recent first. */
   favoriteModels: string[]
@@ -73,7 +73,7 @@ export interface Prefs {
   openDirs: string[]
   autoOpenDiff: boolean
   /** Changes as one scrolling review of every file, or a staging tree with one file's diff. */
-  changesLayout: "review" | "files"
+  changesView: "review" | "files"
   diffStyle: "unified" | "split"
   wrapDiff: boolean
   /** How Files lists changes: the folded tree, or one row per folder with its files under it. */
@@ -170,7 +170,7 @@ const defaults: Prefs = {
   collapsedDirs: [],
   openDirs: [],
   autoOpenDiff: true,
-  changesLayout: "review",
+  changesView: "files",
   diffStyle: "unified",
   wrapDiff: false,
   filesView: "tree",
@@ -400,7 +400,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     autoOpenDiff: readBoolean(value.autoOpenDiff, defaults.autoOpenDiff),
     // Review is the default for new installs; an install from before the
     // choice existed keeps the staging tree it already knows.
-    changesLayout: readChoice(value.changesLayout, ["review", "files"], "files"),
+    changesView: readChoice(value.changesView, ["review", "files"], "files"),
     diffStyle: readChoice(value.diffStyle, ["unified", "split"], defaults.diffStyle),
     wrapDiff: readBoolean(value.wrapDiff, defaults.wrapDiff),
     filesView: readChoice(value.filesView, ["tree", "folders"], defaults.filesView),

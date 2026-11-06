@@ -7,10 +7,13 @@
   .rv-layer {
     @apply absolute inset-0 z-40 flex flex-col bg-surface;
   }
-  /* A laptop's desk: the desktop's own review, a pane beside the transcript, edge to edge, as its Changes panel sits. */
+  /* A laptop's desk: the desktop's own review, the right rail beside the transcript past the shell's gutter, as its Changes panel sits. */
   .rv-layer[data-form="desk"] {
-    @apply relative inset-auto z-auto min-w-0 border-l border-hairline;
-    flex: 0 1 clamp(440px, 50%, 820px);
+    @apply relative inset-auto z-auto ml-1.5 min-w-0 bg-shell;
+    flex: 0 1 clamp(420px, 40%, 640px);
+  }
+  .rv-layer[data-form="desk"] .rv-screen {
+    @apply bg-shell;
   }
   .rv-screen {
     @apply relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface;
