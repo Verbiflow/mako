@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { isAbsolute, join, relative } from "node:path"
 import { z } from "zod"
 import type { ThreadRef } from "./format.js"
@@ -181,10 +181,13 @@ export class RecordReads {
     return work
   }
 
-  /** Writes a home's mark with its children's transcripts still to write, after any mark before it. */
+  /** Writes a home's mark with its children's transcripts still to write, after any mark before it, and whole by a rename: a child read alongside reads it. */
   private mark(home: string, capturedAt: number): Promise<void> {
-    const write = (this.marking.get(home) ?? Promise.resolve()).then(() =>
-      writeFile(join(home, MARK), JSON.stringify({ capturedAt, deferred: [...(this.deferred.get(home) ?? [])].map((target) => relative(home, target)) })))
+    const write = (this.marking.get(home) ?? Promise.resolve()).then(async () => {
+      const temporary = `${join(home, MARK)}.${process.pid}.${Date.now()}`
+      await writeFile(temporary, JSON.stringify({ capturedAt, deferred: [...(this.deferred.get(home) ?? [])].map((target) => relative(home, target)) }))
+      await rename(temporary, join(home, MARK))
+    })
     this.marking.set(home, write.catch(() => undefined))
     return write
   }

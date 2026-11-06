@@ -2,6 +2,7 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { stampFile } from "./lib/file-stamp.ts"
 import { tmpdir } from "node:os"
 import { setFlagsFromString } from "node:v8"
 import { runInNewContext } from "node:vm"
@@ -85,7 +86,7 @@ async function world(
     const absolute = join(repo, path)
     mkdirSync(join(absolute, ".."), { recursive: true })
     writeFileSync(absolute, text)
-    utimesSync(absolute, clock.now() / 1000, clock.now() / 1000)
+    stampFile(absolute, clock.now())
     events.changed(absolute)
   }
   const mark = (kind: ActivityMark["kind"], thread: string, id: string, edge: "start" | "end", extra: Partial<ActivityMark> = {}) =>
@@ -703,7 +704,7 @@ test("what a rescan finds after a long gap is put on a Thread only by when its f
   w.clock.advance(5 * 60_000)
   // Nothing runs when this one is written.
   writeFileSync(join(w.repo, "shots/new.png"), image("mid-gap"))
-  utimesSync(join(w.repo, "shots/new.png"), w.clock.now() / 1000, w.clock.now() / 1000)
+  stampFile(join(w.repo, "shots/new.png"), w.clock.now())
   w.clock.advance(5 * 60_000)
   w.mark("turn", "T1", "t1", "start")
   w.mark("call", "T1", "c1", "start", { turn: "t1" })
@@ -843,11 +844,12 @@ test("rescans of different roots take turns, each next one resting while it's be
   const [first, second] = walks.sort((a, b) => a.start - b.start)
   assert.ok(second!.start - first!.end >= 15 * (first!.end - first!.start), `the second waited out a rest (${second!.start - first!.end} ms after a ${first!.end - first!.start} ms walk)`)
   walks.length = 0
-  const settling = Date.now()
   w.events.restore()
   await w.tracker.settled()
   assert.equal(walks.length, 2)
-  assert.ok(Date.now() - settling < 15 * 60, "settled rescans both without resting between them")
+  const [settledFirst, settledSecond] = walks.sort((a, b) => a.start - b.start)
+  const walked = settledFirst!.end - settledFirst!.start
+  assert.ok(settledSecond!.start - settledFirst!.end < 15 * walked, `settled rescans both without resting between them (${settledSecond!.start - settledFirst!.end} ms after a ${walked} ms walk)`)
   await w.tracker.close()
 })
 
@@ -858,7 +860,7 @@ test("a write heard as late as the watcher now delivers is dated by when it was 
   w.clock.advance(500)
   const path = join(w.repo, "a.ts")
   writeFileSync(path, "export const a = 2\n")
-  utimesSync(path, w.clock.now() / 1000, w.clock.now() / 1000)
+  stampFile(path, w.clock.now())
   const written = w.clock.now()
   w.clock.advance(500)
   w.mark("call", "T1", "c1", "end", { turn: "t1" })
@@ -991,7 +993,7 @@ test("the journal opens before its roots catch up, and a turn while one catches 
   const started = clock.now()
   tracker.activity({ kind: "call", id: "c1", edge: "start", at: started, ...thread })
   writeFileSync(join(repo, "a.ts"), "export const a = 2\n")
-  utimesSync(join(repo, "a.ts"), clock.now() / 1000, clock.now() / 1000)
+  stampFile(join(repo, "a.ts"), clock.now())
   events.changed(join(repo, "a.ts"))
   clock.advance(100)
   tracker.reported({ thread: "T1", session: "T1-session", call: "c1", status: "completed", startedAt: started, endedAt: clock.now(), checkout: project, effects: [{ kind: "modify", path: join(repo, "a.ts"), edits: [{ old: "export const a = 1\n", new: "export const a = 2\n" }] }] })
@@ -1215,7 +1217,7 @@ test("in a project folder of several repositories, a Thread counts for a change 
   const writeBackend = (text: string) => {
     const absolute = join(backend, "app.py")
     writeFileSync(absolute, text)
-    utimesSync(absolute, w.clock.now() / 1000, w.clock.now() / 1000)
+    stampFile(absolute, w.clock.now())
     w.events.changed(absolute)
   }
   w.mark("turn", "T1", "t1", "start")
@@ -1308,7 +1310,7 @@ test("files a command's own text spells out are its turn's; a new file it doesn'
   const make = (path: string, bytes: string | Uint8Array) => {
     const absolute = join(w.repo, path)
     writeFileSync(absolute, bytes)
-    utimesSync(absolute, w.clock.now() / 1000, w.clock.now() / 1000)
+    stampFile(absolute, w.clock.now())
     w.events.changed(absolute)
   }
   // As the live stream reports a call: under its turn.
@@ -1441,7 +1443,7 @@ async function scripted(files: Record<string, string>) {
     const absolute = path.startsWith("/") ? path : join(w.repo, path)
     mkdirSync(join(absolute, ".."), { recursive: true })
     writeFileSync(absolute, content)
-    utimesSync(absolute, w.clock.now() / 1000, w.clock.now() / 1000)
+    stampFile(absolute, w.clock.now())
     w.events.changed(absolute)
   }
   /** One call of `thread`'s turn: it starts, `act` writes as it runs, then its effects are reported and it ends. */

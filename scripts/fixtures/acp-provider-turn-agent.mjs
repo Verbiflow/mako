@@ -193,6 +193,11 @@ new AgentSideConnection((connection) => {
       await connection.extNotification("_cognition.ai/turn_stats", { sessionId, turnClientMessageId: "m1" })
       await connection.extNotification("_cognition.ai/agent_stopped", { sessionId, cause: "quota_exhausted", errorMessage: "You have used all of your credits.", stats: {} })
     },
+    async "native-devin-gave-up"() {
+      await connection.extNotification("_cognition.ai/connection_retry", { sessionId, attempt: 1, maxAttempts: 5, isStreamRetry: true })
+      await connection.extNotification("_cognition.ai/turn_stats", { sessionId, turnClientMessageId: "m2" })
+      await connection.extNotification("_cognition.ai/agent_stopped", { sessionId, cause: "quota_exhausted", errorMessage: "You have used all of your credits.", stats: {} })
+    },
   }
   return {
     async initialize() {

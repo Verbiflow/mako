@@ -102,6 +102,7 @@ import {
   FileTextIcon,
   GitBranchIcon,
   GitForkIcon,
+  GitPullRequestIcon,
   HistoryIcon,
   LayersIcon,
   PencilLineIcon,
@@ -299,6 +300,8 @@ function TurnExchange({
             <GoalNote step={mako.step} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "review" ? (
             <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
+          ) : mako?.kind === "pull" ? (
+            <PullWakeNote line={mako.line} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : fromAgent && promptText ? (
             <AgentWordsCard words={fromAgent} raw={promptText} timestamp={exchange.prompt.timestamp} />
           ) : (
@@ -516,6 +519,11 @@ function MovedNote({ timestamp, origin }: { timestamp?: number; origin?: Message
   return (
     <EventLine align="end" icon={GitBranchIcon} time={timestamp} data-turn-moved words={{ title: "Mako moved this session onto its own branch" }} action={<ShowOriginal origins={[origin]} />} />
   )
+}
+
+/** Mako woke this Fin with an outcome of the pull request its report said it waits on: the note's own words. */
+function PullWakeNote({ line, timestamp, origin }: { line: string; timestamp?: number; origin?: MessageOrigin }) {
+  return <EventLine align="end" icon={GitPullRequestIcon} time={timestamp} data-pull-wake words={{ title: line }} action={<ShowOriginal origins={[origin]} />} />
 }
 
 const GOAL_NOTES = {

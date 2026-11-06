@@ -69,6 +69,9 @@ export interface ProcessReads {
   matches?(pid: number, startedAt: number, signal: AbortSignal): Promise<boolean>
 }
 
+/** How many times a link reads a running process's start before it says it can't. */
+const PROCESS_READ_TRIES = 3
+
 export const PROCESS_READS: ProcessReads = {
   marked: markedProcesses,
   holding: processesHolding,
@@ -111,6 +114,8 @@ interface Followed {
   checked: boolean
   /** When its process was first seen gone and when its Session was last written then, while its end waits to be confirmed by a quiet Session. */
   gone?: { at: number; written: number }
+  /** This host saw its process run: one gone before that ended while no host watched. */
+  seenAlive?: true
 }
 
 /** What a link or a discovery takes in. */
@@ -256,6 +261,7 @@ export class AgentRuns {
     this.deps.catalog.announce(ref.path)
     if (input.process) {
       followed.checked = true
+      followed.seenAlive = true
       followed.reading = { ...followed.reading, alive: true }
       void this.read(followed)
     } else await this.settle(followed)
@@ -294,10 +300,21 @@ export class AgentRuns {
     this.deps.changed(edge, false)
   }
 
-  /** The pid a link names, checked to run on this device now. */
+  /**
+   * The pid a link names, checked to run on this device now: nothing once it's gone. A read that fails while the
+   * process runs says nothing of the process (`ps` ran past its limit at load 15), so it's read again, and what it
+   * can't be read after `PROCESS_READ_TRIES` is thrown, for the link to say.
+   */
   async processOf(pid: number): Promise<FollowedRun["process"] | undefined> {
-    const startedAt = await processStartedAt(pid, this.abort.signal).catch(() => undefined)
-    return startedAt === undefined ? undefined : { pid, startedAt }
+    const reads = this.deps.processes ?? PROCESS_READS
+    for (let tries = 1; ; tries++) {
+      try {
+        return { pid, startedAt: await reads.startedAt(pid, this.abort.signal) }
+      } catch (error) {
+        if (!signalable(pid)) return undefined
+        if (tries === PROCESS_READ_TRIES) throw error
+      }
+    }
   }
 
   /** Stops a followed run on this device: its whole process group, killed after `STOP_GRACE_MS`. */
@@ -339,6 +356,8 @@ export class AgentRuns {
     let unconfirmed = kept?.unconfirmed === true
     while (!this.stopped) {
       const identity = await this.identity(process)
+      // A host that shut down during that read leaves the stop to the next one, its store closed with it.
+      if (this.stopped) return
       // Another process's pid now: a pid isn't reused while its group lives, so the group under that id is the new one's.
       // Gone: only once nothing of its group is left either.
       if (identity === "other" && (signalable(process.pid) || !groupRuns(process.pid))) break
@@ -545,7 +564,10 @@ export class AgentRuns {
       const run = followed.edge.run
       if (!run || run.ended || !run.process || run.device !== device) continue
       const alive = await this.alive(followed, run.process).catch(() => true)
-      if (alive) followed.gone = undefined
+      if (alive) {
+        followed.gone = undefined
+        followed.seenAlive = true
+      }
       else if (!(await this.endConfirmed(followed))) continue
       if (alive !== followed.reading.alive) {
         followed.reading = { ...followed.reading, alive }
@@ -620,7 +642,8 @@ export class AgentRuns {
       return this.end(followed, { at, kind: "failed", detail: `It exited with code ${status}${error ? `: ${error}` : "."}`, ...counted })
     }
     if (summary && last.at(-1)?.type === "text") return this.end(followed, { at, kind: "done", detail: summary, ...counted })
-    this.end(followed, { at, kind: "unknown", detail: "Its process ended without saying how it went.", ...counted })
+    const detail = followed.seenAlive ? "Its process ended without saying how it went." : "Its process ended while Mako wasn't running: a quit, a crash, or this Mac shutting down or restarting."
+    this.end(followed, { at, kind: "unknown", detail, ...counted })
   }
 
   private async lastEntries(followed: Followed): Promise<readonly Entry[]> {

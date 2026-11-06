@@ -1,9 +1,11 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { GIVE_UP_MS, nextRetry, RETRY_STEPS_MS, transientCause, type RetryCause } from "@mako/host/contracts/delivery-retry"
 import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
+import { describeTransferRecovery } from "@mako/host/contracts/operation-recovery"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
@@ -196,7 +198,7 @@ try {
       await until("the Apex to sleep", () => world.live.session(apex.conversation)?.connection === "hibernated")
       faults.start.set(apex.conversation, "[unavailable] Server at capacity")
       world.release(fin)
-      await until(`${harness} apex: the wake for the report to wait`, () => requestOf(world, apex.conversation, FROM_AGENTS)?.status === "held", 10_000)
+      await until(`${harness} apex: the wake for the report to wait`, () => requestOf(world, apex.conversation, FROM_AGENTS)?.retry?.cause === "rate-limited", 10_000)
       waits(world, apex.conversation, FROM_AGENTS, "rate-limited", `${harness} apex`)
       await goesOnce(world, apex.conversation, FROM_AGENTS, `${harness} apex`)
       await world.close()
@@ -241,6 +243,273 @@ try {
       const failed = requestOf(world, conversation, "Stall.")!
       world.live.wakeDue(Date.now() + LATER)
       await until(`${harness} mid-turn alone: it to continue`, () => world.live.snapshot(conversation)!.requests.some((request) => request.continues?.requestId === failed.id && request.status === "completed"))
+      await world.close()
+    }
+
+    // A first start that fails at capacity, with nothing yet to resume (a Fin's brief): it starts again by itself, once.
+    {
+      const { world, faults } = worldOf(`${harness}-first-start`)
+      const conversation = randomUUID()
+      faults.start.set(conversation, "[unavailable] Server at capacity")
+      await world.live.start(harness, world.root, { conversationId: conversation, initialRequest: { id: randomUUID(), text: "Brief.", attachments: [] } })
+      await until(`${harness} first start: it to wait`, () => requestOf(world, conversation, "Brief.")?.status === "held")
+      waits(world, conversation, "Brief.", "rate-limited", `${harness} first start`)
+      await goesOnce(world, conversation, "Brief.", `${harness} first start`)
+      await world.close()
+    }
+
+    // A Stop during a switch to another harness holds the switch alone: the source session stays the conversation's,
+    // and a fresh message on it goes and its reply and end are heard, through its driver's own callback.
+    {
+      const to = HARNESSES[(HARNESSES.indexOf(harness) + 1) % HARNESSES.length]!
+      let opened: (() => void) | undefined
+      const world = new AgentsWorld({
+        root: join(root, `${harness}-switch-stop`),
+        script,
+        starting: (_conversation, starting) => (starting === to ? new Promise<void>((resolve) => { opened = resolve }) : undefined),
+      })
+      const label = `${harness} switch Stop`
+      const { conversation } = await world.apex(harness, "full")
+      world.live.transfer(conversation, { id: randomUUID(), provider: to, text: "Switch.", attachments: [] })
+      await until(`${label}: the switch under way`, () => opened !== undefined)
+      await world.live.cancel(conversation)
+      opened!()
+      await pause(200)
+      assert.equal(world.live.snapshot(conversation)?.control?.transfers.at(-1)?.state.kind, "queued", label)
+      assert.equal(requestOf(world, conversation, "Switch.")?.status, "held", `${label}: its message waits, held`)
+      world.say(conversation, "Fresh message.")
+      await until(`${label}: the fresh message to complete on the source`, () => requestOf(world, conversation, "Fresh message.")?.status === "completed")
+      assert.equal(world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Fresh message.")).map((prompt) => prompt.harness).join(), harness, `${label}: it went on the source, once`)
+      assert.equal(sentTimes(world, conversation, "Switch."), 0, `${label}: the switch's message never went`)
+      await world.close()
+    }
+
+    // A switch whose destination is committed completes, a Stop or not, and what the person does to the queue while
+    // its source closes stands: a Stop pauses the switch's message, unsent, with what waited; an edit, a Resume or a
+    // removal after it is kept as they did it. The destination is the binding, and the next message goes on it.
+    for (const during of ["control", "stop", "stop, edit", "stop, resume", "stop, remove"] as const) {
+      const to = HARNESSES[(HARNESSES.indexOf(harness) + 1) % HARNESSES.length]!
+      let gate: (() => void) | undefined
+      let gating = false
+      const world = new AgentsWorld({
+        root: join(root, `${harness}-switch-retire-${during.replaceAll(", ", "-")}`),
+        script,
+        closing: (_binding, closing) => (gating && closing === harness ? new Promise<void>((resolve) => { gate = resolve }) : undefined),
+      })
+      const label = `${harness} switch retiring its source (${during})`
+      const { conversation } = await world.apex(harness, "full")
+      // A message waiting for its time, which the switch carries over.
+      const later = randomUUID()
+      world.live.submit(conversation, later, "Later.", [], undefined, undefined, undefined, undefined, { wake: { at: Date.now() + 60 * 60_000, after: "earlier" } })
+      gating = true
+      world.live.transfer(conversation, { id: randomUUID(), provider: to, text: "Switch.", attachments: [] })
+      await until(`${label}: the source closing`, () => gate !== undefined)
+      if (during !== "control") await world.live.cancel(conversation)
+      if (during === "stop, edit") world.live.editQueued(conversation, { requestId: later, expectedText: "Later.", change: { kind: "edit", text: "Edited." } })
+      if (during === "stop, resume") world.live.editQueued(conversation, { requestId: later, expectedText: "Later.", change: { kind: "resume" } })
+      if (during === "stop, remove") world.live.editQueued(conversation, { requestId: later, expectedText: "Later.", change: { kind: "remove" } })
+      gate!()
+      gating = false
+      await until(`${label}: the switch done`, () => world.live.snapshot(conversation)?.control?.transfers.at(-1)?.state.kind === "accepted" && world.live.snapshot(conversation)?.session.harness === to)
+      const own = () => requestOf(world, conversation, "Switch.")
+      const waiting = () => world.live.snapshot(conversation)?.requests.find((request) => request.id === later)
+      if (during === "control") await until(`${label}: its message to go`, () => own()?.status === "completed")
+      else {
+        await pause(200)
+        assert.deepEqual([own()?.status, own()?.pause, sentTimes(world, conversation, "Switch.")], ["held", "stop", 0], `${label}: its message is the Stop's, unsent`)
+      }
+      if (during === "stop" || during === "control") assert.equal(waiting()?.status, "held", `${label}: what waited still waits`)
+      if (during === "stop") assert.equal(waiting()?.pause, "stop", `${label}: paused by the Stop`)
+      if (during === "stop, edit") {
+        // Saving an edit isn't a resume: the person's words stand, under the Stop's hold, until Resume sends them.
+        assert.deepEqual([requestOf(world, conversation, "Edited.")?.status, requestOf(world, conversation, "Edited.")?.pause, sentTimes(world, conversation, "Edited.")], ["held", "stop", 0], `${label}: the edit stands, held`)
+        world.live.editQueued(conversation, { requestId: later, expectedText: "Edited.", change: { kind: "resume" } })
+        await until(`${label}: Resume to send the edit`, () => requestOf(world, conversation, "Edited.")?.status === "completed")
+        assert.deepEqual([sentTimes(world, conversation, "Edited."), sentTimes(world, conversation, "Later.")], [1, 0], `${label}: the person's words went, once, and the old ones never`)
+      }
+      if (during === "stop, resume") await until(`${label}: the resumed message to go`, () => waiting()?.status === "completed")
+      if (during === "stop, remove") {
+        await pause(200)
+        assert.ok(waiting() === undefined || waiting()?.status === "canceled", `${label}: removed stays removed (${waiting()?.status})`)
+        assert.equal(sentTimes(world, conversation, "Later."), 0, `${label}: and never goes`)
+      }
+      world.say(conversation, "Fresh message.")
+      await until(`${label}: the next message to complete`, () => requestOf(world, conversation, "Fresh message.")?.status === "completed")
+      assert.equal(world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Fresh message.")).map((prompt) => prompt.harness).join(), to, `${label}: on the destination, once`)
+      await world.restart()
+      assert.equal(requestOf(world, conversation, "Switch.")?.pause, during === "control" ? undefined : "stop", `${label}: the Stop's mark survives a restart`)
+      if (during === "stop, edit") assert.equal(requestOf(world, conversation, "Later."), undefined, `${label}: and the edit does`)
+      await world.close()
+    }
+
+    // One switch at a time: a second asked for while the first opens is refused; one asked for while the first is
+    // committed and closing its source waits behind it, durable and saying so, and runs after it and its message,
+    // whether the first completes or its close fails and takes it back, a Stop first or not, and across a restart.
+    for (const [when, first] of [["opening", "succeeds"], ["opening", "fails"], ["closing", "succeeds"], ["closing", "fails"], ["closing", "stopped, fails"], ["closing", "restart"]] as const) {
+      const one = HARNESSES[(HARNESSES.indexOf(harness) + 1) % HARNESSES.length]!
+      const two = HARNESSES[(HARNESSES.indexOf(harness) + 2) % HARNESSES.length]!
+      let gate: (() => void) | undefined
+      let gating = false
+      const fails = first === "fails" || first === "stopped, fails"
+      const held = (reason: string) => new Promise<void>((resolve, reject) => { gate = () => (fails ? reject(new Error(reason)) : resolve()) })
+      const world = new AgentsWorld({
+        root: join(root, `${harness}-second-switch-${when}-${first.replaceAll(", ", "-")}`),
+        script: (turn) => (first === "restart" && turn.text.includes("First switch.") ? turn.world.hold(turn.conversation).then(() => "Done.") : script(turn)),
+        starting: (_conversation, starting) => (gating && when === "opening" && starting === one ? held("The model API refused the request: encrypted_content could not be verified") : undefined),
+        closing: (_binding, closing) => (gating && when === "closing" && closing === harness ? held("The source session did not close") : undefined),
+      })
+      const label = `${harness} a second switch while the first is ${when} (${first})`
+      const { conversation } = await world.apex(harness, "full")
+      const transfers = () => world.live.snapshot(conversation)?.control?.transfers ?? []
+      const firstId = randomUUID()
+      const secondId = randomUUID()
+      gating = true
+      world.live.transfer(conversation, { id: firstId, provider: one, text: "First switch.", attachments: [] })
+      await until(`${label}: the first ${when}`, () => gate !== undefined)
+      if (first === "stopped, fails") await world.live.cancel(conversation)
+      let refused = ""
+      try {
+        world.live.transfer(conversation, { id: secondId, provider: two, text: "Second switch.", attachments: [] })
+      } catch (error) {
+        refused = error instanceof Error ? error.message : String(error)
+      }
+      const waiting = transfers().find((transfer) => transfer.input.id === secondId)
+      if (when === "opening") assert.match(refused, /already pending/, `${label}: refused while the first opens`)
+      else {
+        assert.deepEqual([refused, waiting?.state.kind, waiting?.behind], ["", "queued", firstId], `${label}: it waits behind the first`)
+        assert.equal(describeTransferRecovery(waiting!, two).title, "Waiting for the current switch to finish", label)
+      }
+      gating = false
+      gate!()
+      const ends = when === "opening" ? (fails ? harness : one) : two
+      if (first === "restart") {
+        await until(`${label}: the first's message to run`, () => requestOf(world, conversation, "First switch.")?.status === "dispatching")
+        assert.equal(transfers().find((transfer) => transfer.input.id === secondId)?.state.kind, "queued", `${label}: the second waits for the first's message`)
+        await world.restart()
+      }
+      // A switch a Stop reached waits with its message, held, for its Resume; the rest settle.
+      const stopped = first === "stopped, fails" ? firstId : undefined
+      await until(`${label}: it to settle on ${ends}`, () => world.live.snapshot(conversation)?.session.harness === ends && !transfers().some((transfer) => transfer.input.id !== stopped && (transfer.state.kind === "queued" || transfer.state.kind === "preparing")), 15_000)
+      if (when !== "opening") {
+        await until(`${label}: the second's message to go`, () => requestOf(world, conversation, "Second switch.")?.status === "completed")
+        assert.equal(sentTimes(world, conversation, "Second switch."), 1, `${label}: the second went once`)
+        const order = world.prompts.filter((prompt) => prompt.conversation === conversation && /First switch\.|Second switch\./.test(prompt.text)).map((prompt) => `${/First/.test(prompt.text) ? "first" : "second"}@${prompt.harness}`)
+        assert.deepEqual(order, fails ? [`second@${two}`] : [`first@${one}`, `second@${two}`], `${label}: in order, each on its own harness`)
+      }
+      world.say(conversation, "Fresh message.")
+      await until(`${label}: the next message to complete`, () => requestOf(world, conversation, "Fresh message.")?.status === "completed")
+      assert.equal(world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Fresh message.")).map((prompt) => prompt.harness).join(), ends, `${label}: on ${ends}, once`)
+      if (stopped) {
+        assert.deepEqual([requestOf(world, conversation, "First switch.")?.status, requestOf(world, conversation, "First switch.")?.pause, sentTimes(world, conversation, "First switch.")], ["held", "stop", 0], `${label}: the first waits for its Resume, unsent`)
+        world.live.editQueued(conversation, { requestId: stopped, expectedText: "First switch.", change: { kind: "resume" } })
+        await until(`${label}: Resume to send it on its destination`, () => requestOf(world, conversation, "First switch.")?.status === "completed" && world.live.snapshot(conversation)?.session.harness === one, 15_000)
+        assert.equal(sentTimes(world, conversation, "First switch."), 1, `${label}: once`)
+      }
+      await world.close()
+    }
+
+    // The person's Stop ends a turn that fails partway on capacity as it lands, and a first start waiting to go again or
+    // under way that comes back at capacity: nothing continues, starts or sends after it, nor after a restart.
+    for (const under of ["mid-turn", "first start waiting", "first start late"] as const) {
+      let fail: ((words: string) => void) | undefined
+      const world = new AgentsWorld({
+        root: join(root, `${harness}-stop-${under.replaceAll(" ", "-")}`),
+        script,
+        starting: (conversation) => {
+          if (under === "mid-turn" || world.live.snapshot(conversation)?.requests.some((request) => request.pause === "stop")) return
+          if (under === "first start waiting") throw new Error("[unavailable] Server at capacity")
+          return new Promise<void>((_resolve, reject) => { fail = (words) => reject(new Error(words)) })
+        },
+      })
+      const label = `${harness} Stop (${under})`
+      let conversation: string
+      if (under === "mid-turn") {
+        conversation = (await world.apex(harness, "full")).conversation
+        world.say(conversation, "Stall later.")
+        await until(`${label}: the turn`, () => world.live.session(conversation)?.status === "running")
+      } else {
+        conversation = randomUUID()
+        void world.live.start(harness, world.root, { conversationId: conversation, initialRequest: { id: randomUUID(), text: "Stall later.", attachments: [] } })
+        if (under === "first start waiting") await until(`${label}: it to wait`, () => requestOf(world, conversation, "Stall later.")?.retry !== undefined)
+        else await until(`${label}: the start under way`, () => fail !== undefined)
+      }
+      await world.live.cancel(conversation)
+      fail?.("[unavailable] Server at capacity")
+      await pause(200)
+      const made = () => world.live.snapshot(conversation)!.requests
+      assert.ok(!made().some((request) => request.retry !== undefined || (request.continues && request.status !== "canceled")), `${label}: nothing waits to go by itself (${JSON.stringify(made().map((request) => [request.status, request.retry?.cause, request.continues?.reason]))})`)
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(300)
+      const sentAt = sentTimes(world, conversation, "Stall later.")
+      const continued = () => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.startsWith("Continue where you left off")).length
+      assert.deepEqual([sentAt, continued()], [under === "mid-turn" ? 1 : 0, 0], `${label}: nothing goes after the Stop`)
+      await world.restart()
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(500)
+      assert.deepEqual([sentTimes(world, conversation, "Stall later."), continued()], [sentAt, 0], `${label}: nor after a restart`)
+      await world.close()
+    }
+
+    // A message that starts its session through a transfer (no driver, nothing to wake), at capacity: the transfer goes again by itself, once.
+    {
+      const { world, faults } = worldOf(`${harness}-transfer`)
+      const conversation = randomUUID()
+      faults.start.set(conversation, "[unavailable] Server at capacity")
+      await world.live.start(harness, world.root, { conversationId: conversation })
+      await until("its start to fail", () => world.live.session(conversation)?.status === "failed")
+      faults.start.set(conversation, "[unavailable] Server at capacity")
+      world.say(conversation, "Hello.")
+      await until(`${harness} transfer: it to wait`, () => world.live.snapshot(conversation)?.control?.transfers.some((transfer) => transfer.retry?.cause === "rate-limited") === true)
+      const transfers = () => world.live.snapshot(conversation)?.control?.transfers ?? []
+      assert.ok(!transfers().some((transfer) => transfer.state.kind === "failed"), `${harness}: no failed transfer`)
+      world.live.wakeDue(Date.now() + LATER)
+      await until(`${harness} transfer: it to go`, () => requestOf(world, conversation, "Hello.")?.status === "completed")
+      assert.equal(sentTimes(world, conversation, "Hello."), 1, `${harness} transfer: once`)
+      await world.close()
+    }
+
+    // The person's Stop holds a transfer waiting to go again, or one under way whatever its open comes back with: it
+    // never goes by itself, nor after a restart, and reads as paused, not failed. Resume sends it once.
+    for (const under of ["waiting", "late capacity", "late open"] as const) {
+      let opens = 0
+      let open: ((fails: boolean) => void) | undefined
+      const world = new AgentsWorld({
+        root: join(root, `${harness}-transfer-stop-${under}`),
+        script,
+        starting: (_conversation) => {
+          opens += 1
+          if (opens === 1 || (opens === 2 && under === "waiting")) throw new Error("[unavailable] Server at capacity")
+          if (opens > 2) return
+          return new Promise<void>((resolve, reject) => { open = (fails) => (fails ? reject(new Error("[unavailable] Server at capacity")) : resolve()) })
+        },
+      })
+      const label = `${harness} transfer Stop (${under})`
+      const conversation = randomUUID()
+      await world.live.start(harness, world.root, { conversationId: conversation })
+      await until("its start to fail", () => world.live.session(conversation)?.status === "failed")
+      world.say(conversation, "Hello.")
+      const transfer = () => world.live.snapshot(conversation)?.control?.transfers.at(-1)
+      if (under === "waiting") await until(`${label}: it to wait`, () => transfer()?.retry !== undefined)
+      else await until(`${label}: it under way`, () => transfer()?.state.kind === "preparing" && open !== undefined)
+      await world.live.cancel(conversation)
+      open?.(under === "late capacity")
+      await pause(200)
+      // Held like any message: its words wait in the queue under the Stop, and the switch waits with them.
+      const stopped = transfer()
+      assert.deepEqual([stopped?.state.kind, stopped?.retry], ["queued", undefined], `${label}: held, not going again by itself`)
+      assert.deepEqual([requestOf(world, conversation, "Hello.")?.status, requestOf(world, conversation, "Hello.")?.pause], ["held", "stop"], `${label}: its message is the Stop's`)
+      assert.match(describeTransferRecovery(stopped!, harness, requestOf(world, conversation, "Hello.")).title, /is paused$/, label)
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(300)
+      assert.equal(sentTimes(world, conversation, "Hello."), 0, `${label}: nothing sends after the Stop`)
+      await world.restart()
+      world.live.wakeDue(Date.now() + LATER)
+      await pause(500)
+      assert.equal(sentTimes(world, conversation, "Hello."), 0, `${label}: nor after a restart`)
+      const held = requestOf(world, conversation, "Hello.")
+      assert.equal(held?.status, "held", `${label}: still held`)
+      world.live.editQueued(conversation, { requestId: held!.id, expectedText: held!.text, change: { kind: "resume" } })
+      await until(`${label}: Resume to send it`, () => sentTimes(world, conversation, "Hello.") === 1)
       await world.close()
     }
 
@@ -416,7 +685,7 @@ try {
       assert.equal(requestOf(world, conversation, "Second.")?.retry, undefined)
       await world.close()
     }
-    console.log(`${harness}: a wake on capacity, the service, the network, a stalled start or a session open elsewhere waited and went once; an Apex woken for a Fin's report too; a refused prompt went again; a turn failed partway continued by itself or gave way to a new message; a permanent failure failed at once`)
+    console.log(`${harness}: a wake on capacity, the service, the network, a stalled start or a session open elsewhere waited and went once; an Apex woken for a Fin's report too; a refused prompt went again; a turn failed partway continued by itself or gave way to a new message; a first start and a transfer at capacity went again once; a permanent failure, wrapped or not, failed at once; the person's order held; a retry survived a restart and stopped at the person's close`)
   }
 } finally {
   rmSync(root, { recursive: true, force: true })

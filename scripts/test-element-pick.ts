@@ -17,6 +17,7 @@ import { z } from "zod"
 import { installElementPicker, pageFunctionSource } from "@mako/control/browser"
 import { BrowserService, startElementPick, type BorrowedTab, type ElementPickSession } from "@mako/control-runtime/browser"
 import { BrowserCommandSchema, type ElementPickOutcome } from "@mako/control-runtime/contracts"
+import { HEADLESS_CHROME_ARGS } from "./lib/headless-chrome.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const shots = process.argv.includes("--screenshots") ? resolve(process.argv[process.argv.indexOf("--screenshots") + 1] ?? "") : undefined
@@ -48,7 +49,7 @@ const origin = `http://127.0.0.1:${z.object({ port: z.number() }).parse(address)
 
 const chromium = spawn(
   executable,
-  ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${join(root, "profile")}`, "--no-first-run", "--no-default-browser-check", "--window-size=1200,820", "--hide-scrollbars", "--force-device-scale-factor=2", "about:blank"],
+  [...HEADLESS_CHROME_ARGS, "--remote-debugging-port=0", `--user-data-dir=${join(root, "profile")}`, "--no-first-run", "--no-default-browser-check", "--window-size=1200,820", "--hide-scrollbars", "--force-device-scale-factor=2", "about:blank"],
   { stdio: ["ignore", "ignore", "pipe"] }
 )
 const endpoint = await new Promise<string>((done, fail) => {

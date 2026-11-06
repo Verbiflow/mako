@@ -27,6 +27,7 @@ import { Shimmer } from "@/components/ui/shimmer"
 import type { NativeAgent, NativeAgentRoster } from "@/lib/types"
 import { finTuningLine } from "@mako/host/contracts/fin-tuning"
 import { SignpostIcon } from "lucide-react"
+import { FinMovedLine } from "./fin-moved-line"
 
 const labels = {
   working: "Running",
@@ -373,6 +374,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
               <span className="truncate">{agent.runsOn.rule}</span>
             </span>
           ) : null}
+          <FinMovedLine agent={agent} />
           {agent.runsOn?.note ? (
             <span data-fin-fell-back className="line-clamp-2 text-label text-caution" title={agent.runsOn.note}>
               {agent.runsOn.note}

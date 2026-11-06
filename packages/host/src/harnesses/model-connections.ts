@@ -1,9 +1,10 @@
-import { randomBytes, randomUUID } from "node:crypto"
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { randomBytes } from "node:crypto"
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
 import { z } from "zod"
 import type { Secrets } from "../base/secrets.js"
 import { GrantedSecrets } from "../base/secret-grants.js"
+import { publishFile } from "../base/published-files.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import {
   MODEL_CONNECTION_PROVIDERS,
@@ -371,14 +372,7 @@ export class ModelConnections {
   private change<T>(edit: (connections: ModelConnection[]) => Promise<{ next: ModelConnection[]; result: T }>): Promise<T> {
     const write = this.writes.then(async () => {
       const { next, result } = await edit(await this.read())
-      await mkdir(dirname(this.path), { recursive: true, mode: 0o700 })
-      const temporary = `${this.path}.${randomUUID()}.tmp`
-      try {
-        await writeFile(temporary, JSON.stringify({ connections: next }), { mode: 0o600, flag: "wx" })
-        await rename(temporary, this.path)
-      } finally {
-        await rm(temporary, { force: true })
-      }
+      await publishFile(this.path, JSON.stringify({ connections: next }), { mode: 0o600, dirMode: 0o700 })
       return result
     })
     this.writes = write.catch(() => {})

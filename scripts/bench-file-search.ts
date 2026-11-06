@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process"
 import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import { Git, listFiles } from "@mako/git"
+import { Git, GitError, listFiles } from "@mako/git"
 import { FileIndexCore } from "@mako/host/contracts/file-index"
 import type { WorkspaceFile } from "@mako/host/contracts/git-workspace-search"
 import { WorkspaceGit } from "@mako/host/git/index"
@@ -22,9 +22,10 @@ import { rank } from "../src/lib/fuzzy.ts"
  * it (narrowing from the last one), lists a folder at a time and stops a text search once it has a screenful.
  *
  * Every number is printed (and written to the job summary on CI). It fails only on a gross regression, judged
- * against the old way in the same run rather than a fixed number of milliseconds: a keystroke slower than ranking
- * the whole list in the window (at the median), a first text result slower than twice the whole old search, or a
- * change not seen within five seconds.
+ * against the old way measured in turns with it in the same run rather than a fixed number of milliseconds: a
+ * keystroke slower than twice ranking the whole list in the window (at the median), a first text result slower than
+ * twice the whole old search (the quickest of three each), or a change not seen within five seconds or twice the
+ * index's own build.
  *
  *   npx tsx --tsconfig tsconfig.scripts.json scripts/bench-file-search.ts [--files 100000] [--folder <path>] [--keep]
  */
@@ -79,38 +80,38 @@ async function oldList(git: Git, folder: string): Promise<WorkspaceFile[]> {
 /** `scratch`: the folder is the bench's own, so a file may be written into it to time a change being seen. */
 async function measure(label: string, folder: string, git: Git, scratch: boolean): Promise<void> {
   console.log(`\n${label}: ${folder}`)
-  // Before.
   const [listMs, files] = await time(() => oldList(git, folder))
-  const oldKeys: number[] = []
-  for (const word of TYPED)
-    for (let end = 1; end <= word.length; end += 1) {
-      const [took] = await time(() => rank(files, word.slice(0, end), (file) => file.path).slice(0, 400))
-      oldKeys.push(took)
-    }
   const workspaceGit = new WorkspaceGit(git, folder)
-  const oldText: Record<string, number> = {}
-  for (const [kind, term] of Object.entries(TEXT)) {
-    const [took] = await time(() => searchWorkspace(folder, workspaceGit, async () => [], term, {}))
-    oldText[kind] = took
-  }
-
-  // After.
   const index = new FolderIndex({ folder, git, changed: () => workspaceGit.status() })
   index.feed(true)
   const [buildMs, rootListing] = await time(() => index.folders([""]))
+
+  // Before and after in turns, each keystroke and search both ways, so a busy moment of the machine falls on both.
+  const oldKeys: number[] = []
   const newKeys: number[] = []
   for (const word of TYPED)
     for (let end = 1; end <= word.length; end += 1) {
-      const [took] = await time(() => index.find(word.slice(0, end)))
-      newKeys.push(took)
+      oldKeys.push((await time(() => rank(files, word.slice(0, end), (file) => file.path).slice(0, 400)))[0])
+      newKeys.push((await time(() => index.find(word.slice(0, end))))[0])
     }
   const [firstNameMs] = await time(() => index.find("fileviewer"))
+  // The quickest of three: one search caught behind a collection or a busy machine says nothing about either way.
+  const oldText: Record<string, number> = {}
   const newFirst: Record<string, number> = {}
   const newAll: Record<string, number> = {}
-  for (const [kind, term] of Object.entries(TEXT)) {
-    newFirst[kind] = (await time(() => index.grep(term, { limit: 200 })))[0]
-    newAll[kind] = (await time(() => index.grep(term, { limit: 5_000 })))[0]
-  }
+  for (const [kind, term] of Object.entries(TEXT))
+    for (let round = 0; round < 3; round += 1) {
+      // The old search stops itself after 15 s: on a machine that slow the old way took that long.
+      const old = (await time(() => searchWorkspace(folder, workspaceGit, async () => [], term, {}).catch((error: Error) => {
+        if (error instanceof GitError && error.kind === "timeout") return undefined
+        throw error
+      })))[0]
+      const first = (await time(() => index.grep(term, { limit: 200 })))[0]
+      const all = (await time(() => index.grep(term, { limit: 5_000 })))[0]
+      oldText[kind] = Math.min(oldText[kind] ?? Infinity, old)
+      newFirst[kind] = Math.min(newFirst[kind] ?? Infinity, first)
+      newAll[kind] = Math.min(newAll[kind] ?? Infinity, all)
+    }
   const biggest = rootListing.folders[0]?.folders.reduce((best, folder) => (folder.files > best.files ? folder : best), { path: "", files: 0, name: "", changed: false })
   const [openMs, opened] = await time(() => index.folders([biggest?.path ?? ""]))
 
@@ -153,7 +154,9 @@ async function measure(label: string, folder: string, git: Git, scratch: boolean
   if (median(newKeys) > Math.max(median(oldKeys), 5) * 2) failures.push(`${label}: a keystroke took ${ms(median(newKeys))} at the median, past twice ranking the whole list in the window (${ms(median(oldKeys))})`)
   for (const kind of Object.keys(TEXT))
     if ((newFirst[kind] ?? 0) > Math.max(oldText[kind] ?? 0, 50) * 2) failures.push(`${label}: the first "${kind}" text result took ${ms(newFirst[kind] ?? 0)}, past twice the whole old search`)
-  if (seenMs > 5_000 || goneMs > 5_000) failures.push(`${label}: a change took ${ms(Math.max(seenMs, goneMs))} to be seen`)
+  // A change is applied a moment after it's heard; five seconds, or twice what building the whole index took here, is it missed.
+  const seenLimit = Math.max(5_000, 2 * buildMs)
+  if (seenMs > seenLimit || goneMs > seenLimit) failures.push(`${label}: a change took ${ms(Math.max(seenMs, goneMs))} to be seen, past ${ms(seenLimit)}`)
 }
 
 /** A repository shaped like a large monorepo: packages of nested source, tests and docs, and one folder of generated files. */

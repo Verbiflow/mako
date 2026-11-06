@@ -98,7 +98,7 @@ export class Lending {
     if (!live) return
     const device = await this.#deps.device()
     const mine = live.filter((lease) => lease.device === device && lease.session)
-    for (const id of [...this.#served.keys()]) if (!mine.some((lease) => lease.id === id)) this.ended(id, "lost")
+    for (const id of this.#served.keys()) if (!mine.some((lease) => lease.id === id)) this.ended(id, "lost")
     for (const lease of mine) await this.lent(lease)
   }
 

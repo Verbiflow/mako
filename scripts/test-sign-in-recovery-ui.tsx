@@ -126,7 +126,7 @@ acpStore.set({ activeKey: undefined, conversations: { paused: signedOut } })
 syncThreadStatus(signedOut, "running")
 syncThreadStatus({ ...signedOut, revision: 2 }, "failed")
 const outcomes = notificationsStore.get().items.filter((item) => item.subject.id === "thread:/sessions/paused.jsonl")
-assert.deepEqual(outcomes.map((item) => [item.kind, item.body]), [["ask", "Claude Code signed out. Sign in again, then Resume."]], "announced once, as needing you, never as failed")
+assert.deepEqual(outcomes.map((item) => [item.kind, item.body]), [["needs-you", "Claude Code signed out. Sign in again, then Resume."]], "announced once, as needing you, never as failed")
 assert.deepEqual(threadsStore.get().attention["/sessions/paused.jsonl"], { kind: "needs-permission", since: hold.at, detail: "Claude Code signed out. Sign in again, then Resume." })
 assert.equal(selectAcpPresence(acpStore.get()).find((presence) => presence.key === "paused")?.status, "needs-permission", "an unbound session's row needs input too")
 
