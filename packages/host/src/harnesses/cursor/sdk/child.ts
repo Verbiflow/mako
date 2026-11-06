@@ -71,6 +71,8 @@ import {
 } from "./wire.js"
 import { adoptedEnvironment } from "./adopt.js"
 import { CURSOR_SDK_RESUME_HOOK, RunCallLog, resumedCalls, resumeWords, type LoggedCall, type ResumeAnswer, type ResumeQuestion } from "./resumed-calls.js"
+import { cursorTranscriptFolder, repairCursorTranscripts, transcriptLock } from "./transcript-tails.js"
+import { CURSOR_TRANSCRIPT_LOCK } from "./transcript-lock.js"
 import { resumeAccountText } from "../../../contracts/resume-account.js"
 import { checkoutSince } from "../../../base/checkout-since.js"
 
@@ -402,7 +404,12 @@ async function discardFork(store: SqliteLocalAgentStore, params: OpenParams): Pr
 async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   if (agent) throw new ConfigurationError("This child already has an agent open")
   const stores = new NativeStores(params.strictStores)
+  // Each phase writes a line, so the host's silence watch measures a phase that
+  // stopped, not an open that is still moving. One open held the store, the
+  // resume and the checkpoint read in a single 20 s.
+  log("info", "opening the store")
   const store = await SqliteLocalAgentStore.open({ workspaceRef: params.cwd, stateRoot: params.stateRoot })
+  log("info", "store opened")
   // `send` persists the active run before loading its checkpoint, and can
   // die during that load before returning a Run. Record its owner before
   // the SDK writes the run, so a crash there is recoverable too.
@@ -437,17 +444,34 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   let importRevision: string | undefined
   try {
     if (!params.create && params.importFrom) {
+      log("info", "importing")
       const result = await importLegacyStore(stores, store, params, params.importFrom)
       agentId = result.agentId
       imported = result.imported
       importRevision = result.revision
+      log("info", "imported")
     }
-    if (!params.create && params.forkFrom) await forkAgent(stores, store, params, params.forkFrom)
+    if (!params.create && params.forkFrom) {
+      log("info", "forking")
+      await forkAgent(stores, store, params, params.forkFrom)
+      log("info", "forked")
+    }
     if (!params.create) await relocateCursorAgent(store.agents, agentId, params.cwd)
   } catch (cause) {
     await store.dispose().catch(() => undefined)
     if (cause instanceof CursorImportError || cause instanceof CursorForkError) throw new ConfigurationError(cause.message)
     throw cause
+  }
+  // Before the SDK reads or writes this agent's transcripts, and only this agent's: each file under the lock its
+  // writers take, so a child still writing it is waited for. A file that stays locked is left as it is.
+  if (!params.create) {
+    log("info", "checking the transcripts")
+    try {
+      for (const path of await repairCursorTranscripts(cursorTranscriptFolder(params.cwd, agentId)))
+        log("warn", `cut a torn last line from ${path}`)
+    } catch (cause) {
+      log("warn", `the transcripts were not repaired: ${cursorSdkWireError(cause).message}`)
+    }
   }
   const base: Omit<OpenAgent, "handle"> = {
     agentId,
@@ -466,10 +490,12 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
     base.sourceImport = { path: params.importFrom.path, nativeId: params.agentId, revision: importRevision }
   const options = handleOptions(base)
   let handle: SDKAgent
+  log("info", params.create ? "creating" : "resuming")
   try {
     handle = params.create
       ? await Agent.create({ ...options, agentId, name: params.name })
       : await Agent.resume(agentId, options)
+    log("info", params.create ? "created" : "resumed")
   } catch (cause) {
     if (params.forkFrom) await discardFork(store, params)
     await store.dispose().catch(() => undefined)
@@ -480,8 +506,10 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   // or forked agent's meter starts from its own latest checkpoint.
   const latest = await store.agents.get({ agentId: handle.agentId }).catch(() => null)
   if (latest?.latestCheckpoint) {
+    log("info", "reading the last checkpoint")
     reportPendingCompaction(agent)
     await reportContext(agent, latest.latestCheckpoint.rootBlobId, undefined, true)
+    log("info", "checkpoint read")
   }
   return { agentId: handle.agentId, model: handle.model, importRevision, imported: imported || undefined, importSource: !params.create ? params.importFrom?.path : undefined }
 }
@@ -1313,6 +1341,7 @@ function main(): void {
   console.log = (...args) => console.error(...args)
   console.info = (...args) => console.error(...args)
   console.debug = (...args) => console.error(...args)
+  Object.assign(globalThis, { [CURSOR_TRANSCRIPT_LOCK]: transcriptLock })
   if (process.argv[2] === CURSOR_SDK_HEADLESS) return headlessMain(process.argv[3])
   Object.assign(globalThis, { [CURSOR_SDK_RESUME_HOOK]: resumeHook })
   process.on(CURSOR_SDK_LOG_EVENT, (...args: unknown[]) => {

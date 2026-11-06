@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react"
 import { CheckIcon, CopyIcon, TriangleAlertIcon } from "lucide-react"
 import type { KeptLines, TurnUndoFile, TurnUndoKept, TurnUndoLeft, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "@mako/host/contracts/turn-review"
 import { LineCounts } from "@/components/inspector/change-marks"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action, IconAction } from "@/components/ui/kit"
 import { UNSURE } from "@/lib/turn-changes"
@@ -156,7 +156,7 @@ function Path({ path, suffix }: { path: string; suffix?: string }) {
   const slash = path.lastIndexOf("/")
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2">
-      <FileTypeIcon path={path} className="size-3.5 shrink-0 text-faint/80" />
+      <FileIcon path={path} className="size-3.5 shrink-0 text-faint/80" />
       <span className="min-w-0 truncate text-ui" title={path}>
         <span className="text-faint">{slash > 0 ? path.slice(0, slash + 1) : ""}</span>
         <span className="text-foreground">{path.slice(slash + 1)}</span>

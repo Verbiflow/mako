@@ -2,6 +2,8 @@ import { z } from "zod"
 
 export const NATIVE_AGENT_LIMIT = 256
 const note = z.string().max(8192)
+/** The most Fins one start waits on (`agents_start` `after`): admission refuses more, so a queued state never carries more. */
+export const AFTER_LIMIT = 20
 /**
  * What a roster entry is: a subagent, a workflow, a command the agent left
  * running, a monitor that watches a command and wakes the agent on its
@@ -46,17 +48,65 @@ export const FinAskSchema = z.object({
 export type FinAsk = z.infer<typeof FinAskSchema>
 
 /**
+ * What a Fin that finished leaves for someone to decide (a merge, a choice
+ * between results), from the question its done report asks: its Apex's
+ * (`lead`) or the person's, and the ask that answers it.
+ */
+export const FinDecisionSchema = z.object({ question: note, on: z.enum(["lead", "person"]), ask: FinAskSchema })
+export type FinDecision = z.infer<typeof FinDecisionSchema>
+
+/**
+ * One thing a Fin waits on outside its tree, as its report names it: a pull request until its checks, a review or a
+ * merge, whose outcome Mako wakes it with (`contracts/pull-waits.ts`); the person, for what they do ("merge"); or
+ * anything else in a few words (`other`).
+ */
+export const WaitingOnSchema = z.union([
+  z.object({
+    kind: z.literal("pull-request"),
+    /** As the report named it: its URL, `owner/name#412` or `#412`. */
+    ref: z.string().min(1).max(400),
+    /** `owner/name` and the number, read from `ref` as the report is kept (`pullRef`); absent for a bare `#412`. */
+    repository: z.string().min(1).max(200).optional(),
+    number: z.number().int().positive().optional(),
+    until: z.enum(["checks", "review", "merge"]).optional(),
+  }),
+  z.object({ kind: z.literal("person"), what: z.string().min(1).max(200) }),
+  z.object({ kind: z.literal("other"), text: z.string().min(1).max(200) }),
+])
+export type WaitingOn = z.infer<typeof WaitingOnSchema>
+/** The most a report names. */
+export const WAITING_ON_LIMIT = 8
+const waitingOn = z.array(WaitingOnSchema).max(WAITING_ON_LIMIT)
+
+/** Who answered a Fin's question, and with what, while it works on the answer. */
+export const FinAnsweredSchema = z.object({ by: z.enum(["lead", "person"]), answer: z.string().max(400) })
+export type FinAnswered = z.infer<typeof FinAnsweredSchema>
+
+/**
  * A child's state as `childState` computes it (`contracts/agents.ts`), carried
  * on its entry so every surface (the rail's badge, the strip, the panel, the
  * phone) reads that one computation and never infers it from `state`'s words.
  */
 export const ChildStateSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("queued"), reason: z.enum(["tree-running", "place-full", "device-offline"]), ahead: z.number().int().nonnegative() }),
+  z.object({
+    kind: z.literal("queued"),
+    reason: z.enum(["tree-running", "place-full", "device-offline"]),
+    ahead: z.number().int().nonnegative(),
+    /** The Fins it starts after that haven't finished, by name: while any is listed, `reason` is what it waits for next. */
+    after: z.array(note).max(AFTER_LIMIT).optional(),
+    /** The one of them that failed or was stopped: it won't start, and its Apex is told to decide. */
+    held: note.optional(),
+    /** Why it couldn't start once released: it stays, saying so, until its Apex has heard. */
+    refused: note.optional(),
+    /** Its Apex is a Fin that was stopped: it waits, whatever room there is, until that Fin resumes. */
+    apexStopped: z.literal(true).optional(),
+  }),
   z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }),
-  z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional() }),
-  z.object({ kind: z.literal("idle") }),
-  z.object({ kind: z.literal("blocked"), question: note, on: z.enum(["lead", "person", "approval"]), ask: FinAskSchema.optional() }),
-  z.object({ kind: z.literal("ended"), outcome: z.enum(["done", "failed", "stopped"]), reason: note.optional() }),
+  z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional(), answered: FinAnsweredSchema.optional() }),
+  /** `waitingOn`: what its last report said it waits on, since `since`, the report's time; Mako wakes it on a pull request's outcome. */
+  z.object({ kind: z.literal("idle"), waitingOn: waitingOn.optional(), since: z.number().optional() }),
+  z.object({ kind: z.literal("blocked"), question: note, on: z.enum(["lead", "person", "approval"]), ask: FinAskSchema.optional(), waitingOn: waitingOn.optional() }),
+  z.object({ kind: z.literal("ended"), outcome: z.enum(["done", "failed", "stopped"]), reason: note.optional(), unfinished: z.literal(true).optional(), decision: FinDecisionSchema.optional(), waitingOn: waitingOn.optional() }),
 ])
 export type ChildStateReading = z.infer<typeof ChildStateSchema>
 export const NativeAgentObservationSchema = z.object({
@@ -112,6 +162,10 @@ export const NativeAgentObservationSchema = z.object({
       path: z.string().min(1).max(4096).optional(),
       conversation: z.string().min(1).max(512).optional(),
       state: ChildStateSchema.optional(),
+      /** Where it went on when its harness's account ran out, and why: "Moved to Claude (work): personal is at its limit until 3:10 PM PST". */
+      moved: z.string().max(512).optional(),
+      /** The one notice of a limit its tree hit, on the first Fin it touched, until the person has seen it (`limitNoticeLine`). */
+      limitNotice: z.object({ id: z.string().min(1).max(600), line: z.string().max(512), harness: z.string().min(1).max(100) }).optional(),
     })
     .optional(),
   state: NativeAgentStateSchema,

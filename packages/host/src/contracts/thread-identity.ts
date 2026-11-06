@@ -29,6 +29,8 @@ export const SERVICE_ACTORS = [
   "handoff",
   /** Mako carrying a Session onto its Thread's own branch, which the agent asked for. */
   "workspace",
+  /** Mako waking a Fin on the pull request its report said it waits on (`contracts/pull-waits.ts`). */
+  "pull-watch",
 ] as const
 
 /**

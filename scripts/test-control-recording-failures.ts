@@ -372,7 +372,7 @@ exec ${quote(ffmpeg)} "$@"
     assert.equal(sustainedResult.status, "finished", sustainedResult.error)
     const timeline = JSON.parse(await readFile(sustainedResult.timeline!, "utf8"))
     assert.ok(timeline.encodingTiming.maxScheduleLagMs > 1900,
-      "This test must fill the retained encoder history")
+      `This test must fill the retained encoder history: ${JSON.stringify(timeline.encodingTiming)}`)
     const packets = z.array(z.object({ pts_time: z.string(), duration_time: z.string() }))
       .parse(JSON.parse((await execute(ffprobe, ["-v", "error", "-show_packets",
         "-show_entries", "packet=pts_time,duration_time", "-of", "json",

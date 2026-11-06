@@ -25,7 +25,7 @@ const MORE_PX = 40
  */
 export function FinMark({ agent, state, read, lit, cut, size }: { agent: NativeAgent; state: ChildState; read?: boolean; lit?: boolean; cut?: string; size?: number }) {
   const line = childLine(state)
-  const unread = state.kind === "ended" && state.outcome === "done" && !read
+  const unread = state.kind === "ended" && state.outcome === "done" && state.decision?.on !== "person" && !read
   return (
     <LiveMark kind="fin" state={unread ? "unread" : finMarkState(state)} motion={motionOf(line)} lit={lit} cut={cut} size={size} label={line ? `${childWord(state)}: ${line}` : childWord(state)}>
       <HarnessIcon harness={agent.provider} />

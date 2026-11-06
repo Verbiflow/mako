@@ -1,5 +1,6 @@
+import type { ChildProcess } from "node:child_process"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
-import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
+import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
 import { ClaudeAgents } from "./sdk-agents.js"
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
@@ -39,6 +40,7 @@ import { deliverDecoded, type DecodedSink } from "../../contracts/native-decodin
 import type { SelectedAccount } from "../../contracts/accounts.js"
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
+import { closeProviderProcess } from "../provider-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
@@ -150,6 +152,8 @@ interface Live {
   /** The running goal's condition, as Mako set it or last read it; its Stop hook's feedback names it. */
   goalCondition?: string
   exited(): Promise<void>
+  /** Ends its process, SIGKILL if it must: resolves once it's gone, rejects if it outlives that (`closeProviderProcess`). */
+  end(): Promise<void>
 }
 export interface ClaudeSdkConfiguration {
   options: Options
@@ -588,6 +592,7 @@ export function createClaudeSdkDriver(
     nativeRouting: { kind: "per-call", via: "The PreToolUse callback Mako registers denies a routed `Agent` or `Workflow` call with a message naming `agents_start`; SubagentStart adds the native-child paragraph.", verified: { version: "2.1.314", how: "test:native-routing-live (2026-11-01): as a lead the scripted model's `Agent` call was denied and the model read the message next, no subagent observed; as an ordinary Thread the child ran, was observed and heard the paragraph" } },
     layer: claudeLayer.capabilities,
     modelRoutes: { kind: "planned", wires: ["anthropic"], via: "`ANTHROPIC_BASE_URL` and a key in one launch's environment, the account profile's own sign-in left as it is; no adapter uses it yet." },
+    accountContinuation: { kind: "resumes", via: "Every account's profile links the CLI's own `projects` store, so `resume` under another account opens the same session file, and its next turn sends the transcript to the API on that account's credentials; nothing of the session is kept on Anthropic's side." },
     modeSwitching: { kind: "native", via: "Claude Code's permission modes, set on the running query with `setPermissionMode`." },
     backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. One task stops alone through the SDK's `stopTask`, from its row in the Agents panel." },
     stopNativeAgent: async (id, nativeId) => {
@@ -686,6 +691,7 @@ export function createClaudeSdkDriver(
       )
       if (options.modeId === "plan") permissions.planReturn = ClaudeModeSchema.safeParse(options.launchModeId).data
       let exited = Promise.resolve()
+      let claudeChild: ChildProcess | undefined
       let disposedApprovals: Promise<void> | undefined
       const disposeApprovals = () => disposedApprovals ??= exited.then(() => toolApprovals?.dispose()).then(() => {}, () => {
         hostWarn("claude-sdk", "Approval observation cleanup failed", { conversation: conversationId })
@@ -734,6 +740,7 @@ export function createClaudeSdkDriver(
           },
           spawnClaudeCodeProcess: (options) => {
             const { child, stderr } = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))
+            claudeChild = child
             if (!startupFinished) {
               startupWatch = new ProviderStartupWatch(child, { harness: "Claude", stderr })
               startupStderr = stderr
@@ -769,6 +776,7 @@ export function createClaudeSdkDriver(
         observeUsage: options.observeUsage,
         query,
         exited: () => exited,
+        end: () => (claudeChild ? closeProviderProcess(claudeChild) : exited),
         input,
         permissions,
         approvals,
@@ -826,7 +834,7 @@ export function createClaudeSdkDriver(
           throw new Error("Claude disconnected during initialization")
         // A resumed session's hooks have not reported its transcript yet, and
         // recovery refuses a reopened session that names no source.
-        if (options.resume) await transcript.locate(live.state.nativeId)
+        if (options.resume) await trace.step("session-resume", () => transcript.locate(live.state.nativeId))
         if (live.closed)
           throw new Error("Claude disconnected during initialization")
         transcriptTail(live)
@@ -879,6 +887,8 @@ export function createClaudeSdkDriver(
         if (current.state.status === "running") throw new TurnInProgressError("Claude")
       })
       const uuid = dispatch.attemptId
+      // Before the input queue holds it: its consumer takes what it holds even if the prompt then fails.
+      handOff(dispatch, { kind: "submitted", source: "sdk-input", correlationId: uuid })
       live.promptReceipt = { id: uuid, dispatch }
       live.awaitingTurn = uuid
       // The input queue refuses before holding the message, so a refusal
@@ -915,7 +925,6 @@ export function createClaudeSdkDriver(
         error: undefined,
       })
       engine.emitUpdate(live, { kind: "user", text })
-      dispatch.report({ kind: "submitted", source: "sdk-input", correlationId: uuid })
     },
     // Seen with the Agent SDK 0.3.314 (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command, the model
     // heard it in the request after the command returned, and a Stop ended the turn in 0.2 s. Measured again
@@ -1035,7 +1044,7 @@ export function createClaudeSdkDriver(
         // Query.interrupt can leave SDK-queued input behind. Closing its process
         // makes Stop definitive; the next prompt resumes the same native session.
         stop(live)
-        await live.exited()
+        await live.end()
         // A first turn stopped early has no hook-reported transcript; the next prompt resumes from this one.
         const nativePath = await live.transcript.locate(live.state.nativeId)
         // The interrupt's own `error_during_execution` result may have settled
@@ -1055,8 +1064,9 @@ export function createClaudeSdkDriver(
       const live = sessions.get(id)
       if (!live) return
       stop(live)
-      sessions.delete(id)
-      await live.exited()
+      // Kept until its process is gone: a close that can't say so rejects, and the next one tries again.
+      await live.end()
+      if (sessions.get(id) === live) sessions.delete(id)
       await live.disposeApprovals()
     },
   }

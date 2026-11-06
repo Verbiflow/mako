@@ -1,7 +1,10 @@
 import { z } from "zod"
-import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, type ChildState } from "./agents.js"
+import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, waitingStateWords, type Brief, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
-import { isProviderWork, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
+import { isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
+import type { Waiting } from "@mako/protocol/attention"
+import { isLimitAsk } from "./fin-fallback.js"
+import { readFinReports, type FinReportCard } from "./fin-reports.js"
 
 /** Who an agent's words in a Thread are from, as their header names them: a Fin's Apex, or an Apex's Fins (a digest of their reports). */
 export const YOUR_APEX = `your ${APEX_WORD}`
@@ -10,7 +13,17 @@ export const YOUR_FINS = `your ${FIN_WORD}s`
 const LEGACY_FROM: ReadonlyMap<string, string> = new Map([[`your ${LEGACY_APEX_WORD}`, YOUR_APEX], ["your agents", YOUR_FINS]])
 
 /** The header every delivery an agent wrote starts with: the model reads it as an agent's words, never the person's. */
+/** What a digest's hold for its burst's window names as the message it follows (`RequestWake.after`): none, it's Mako's. */
+export const DIGEST_WAITS = "digest"
+/** Digests an Apex takes in a minute, counted as they're sent; one past them waits for the next slot (`LiveDispatch`). */
+export const WAKES_PER_MINUTE = 6
+
 export const FROM_AGENTS = `[mako · from ${YOUR_FINS}, not the person]`
+/**
+ * What opens a Fin's brief sent again after Mako closed unexpectedly while sending it, with nothing to say its harness
+ * had it: one that did carries on, one that didn't starts from it.
+ */
+export const BRIEF_AGAIN = "Your brief again, in case it didn't reach you: Mako closed unexpectedly while sending it. If you already have it and started on it, carry on where you are; otherwise start from it."
 export function fromAgent(name: string): string {
   return `[mako · from ${name} (agent), not the person]`
 }
@@ -76,6 +89,21 @@ export const BRIEF_CLOSE = `When you finish, are blocked, or need a decision, ca
 const LEGACY_INTRO = { head: "You're child:", tail: ", a Thread another Thread started to do one piece of work. It reads your reports, not this conversation." }
 const LEGACY_BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells your ${LEGACY_APEX_WORD} how it ended.`
 
+/** What a Fin's first turn reads: who asked, as an agent's words, and everything it knows of the work. */
+export function briefText(brief: Brief, name: string): string {
+  const lines = [
+    fromAgent(YOUR_APEX),
+    briefIntro(name),
+    "",
+    brief.objective,
+  ]
+  if (brief.doneWhen?.length) lines.push("", "Done when:", ...brief.doneWhen.map((item) => `- ${item}`))
+  if (brief.boundaries?.length) lines.push("", "Boundaries:", ...brief.boundaries.map((item) => `- ${item}`))
+  if (brief.output) lines.push("", `Your report carries: ${brief.output}`)
+  lines.push("", BRIEF_CLOSE)
+  return lines.join("\n")
+}
+
 /** Whether `text` is a brief: it carries the line every brief ends on, as this build or an earlier one wrote it. */
 export function isBrief(text: string): boolean {
   return text.includes(BRIEF_CLOSE) || text.includes(LEGACY_BRIEF_CLOSE)
@@ -94,6 +122,8 @@ export interface AgentWords {
   from: string
   body: string
   passedOn?: { added?: string }
+  /** A wake's reports as data (`readFinReports`), each drawn as a message from its Fin; the body is then the Apex's alone. */
+  reports?: FinReportCard[]
 }
 
 export function agentWords(text: string): AgentWords | undefined {
@@ -106,13 +136,14 @@ export function agentWords(text: string): AgentWords | undefined {
   }
   const header = AGENT_HEADER.exec(text)
   if (!header) return undefined
-  const body = text
+  const { text: words, reports } = readFinReports(text)
+  const body = words
     .slice(header[0].length)
     .split("\n")
     .filter((line) => line !== BRIEF_CLOSE && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && line.endsWith(APEX_NOTE_TAIL)))
     .join("\n")
     .trim()
-  return { from: spoken(header[1]!), body }
+  return { from: spoken(header[1]!), body, ...(reports.length && { reports }) }
 }
 
 function spoken(from: string): string {
@@ -207,9 +238,10 @@ export function childStateOf(agent: NativeAgent): ChildState {
 
 /**
  * Where a Fin stands for the person. A question on its Apex is the Apex's
- * to answer, so that Fin is still at work as far as the person goes. An
- * idle one has nothing running and nothing asked, and is open for a next
- * message, so it is neither working nor done.
+ * to answer, so that Fin is still at work as far as the person goes, and one
+ * that finished with a decision its Apex makes is done. An idle one has
+ * nothing running and nothing asked, and is open for a next message, so it
+ * is neither working nor done.
  */
 export function childGroup(state: ChildState): ChildGroup {
   switch (state.kind) {
@@ -223,8 +255,45 @@ export function childGroup(state: ChildState): ChildGroup {
     case "idle":
       return "idle"
     case "ended":
-      return state.outcome === "failed" ? "failed" : "done"
+      return state.outcome === "failed" || state.unfinished ? "failed" : state.decision?.on === "person" ? "needs" : "done"
   }
+}
+
+/** What a Fin waits on someone to answer, whatever its state: a blocked Fin's question or approval, or the decision a done one leaves. */
+export interface OpenAsk {
+  question: string
+  on: "lead" | "person" | "approval"
+  ask?: FinAsk
+  /** It finished: what's asked is a decision its work leaves, not what it waits on to go on. */
+  done?: true
+}
+
+export function openAsk(state: ChildState): OpenAsk | undefined {
+  if (state.kind === "blocked") return { question: state.question, on: state.on, ...(state.ask && { ask: state.ask }) }
+  if (state.kind === "ended" && state.decision) return { ...state.decision, done: true }
+  return undefined
+}
+
+/** How a done Fin's decision for the person reads, before its question: "Done · needs you: Merge #371?". */
+export const DONE_NEEDS_YOU = "Done · needs you"
+
+/** An open ask's words where the person reads it: its question, after `DONE_NEEDS_YOU` for a decision. */
+export function askWords(ask: Pick<OpenAsk, "question" | "done">): string {
+  return ask.done ? `${DONE_NEEDS_YOU}: ${ask.question}` : ask.question
+}
+
+/**
+ * What a Fin's ask of the person makes its Apex's row, banner and mark say: the Fin's name before its line. A limit's
+ * notice asks nothing and is no Fin's: it needs the person, and its line already says what ran out.
+ */
+export function finAskWaiting(ask: Pick<FinAsk, "id" | "kind">, name: string, line: string): Waiting {
+  if (isLimitAsk(ask.id)) return { for: "needs-you", line }
+  return { for: ask.kind === "approval" ? "approval" : "question", line: `${name}: ${line}` }
+}
+
+/** Who answered a Fin's question, while it works on the answer: "You answered: Merge", "Apex answered: Merge". */
+export function answeredWords(answered: FinAnswered): string {
+  return `${answered.by === "person" ? "You" : APEX_WORD} answered: ${answered.answer}`
 }
 
 const NO_CHILDREN: readonly NativeAgent[] = []
@@ -359,21 +428,27 @@ export function readableStep(step: string | undefined): string | undefined {
   return phrase.length > STEP_CHARS ? `${phrase.slice(0, STEP_CHARS - 1).trimEnd()}…` : phrase
 }
 
-/** What a child's state says in a line: its question, its phase or step, why it waits, or how it ended. */
-export function childLine(state: ChildState): string | undefined {
+/**
+ * What a child's state says in a line: its question, its phase or step, why it waits, or how it ended. With `now`, a
+ * Fin waiting on what its report named says for how long: "Waiting on acme/app#371 checks · 12m".
+ */
+export function childLine(state: ChildState, now?: number): string | undefined {
   switch (state.kind) {
     case "queued":
+      if (state.refused) return "Not started: it couldn't start"
+      if (state.held) return `Not started: ${state.held} didn't finish`
+      if (state.after?.length) return `Starts after ${state.after.join(", ")}`
       return state.ahead ? `Queued: ${state.ahead} ahead` : "Queued: next to start"
     case "starting":
       return "Starting"
     case "working":
-      return state.phase ?? readableStep(state.step)
+      return state.phase ?? (state.answered && answeredWords(state.answered)) ?? readableStep(state.step)
     case "blocked":
       return state.question
     case "idle":
-      return "Idle: a message gives it its next turn"
+      return state.waitingOn?.length ? waitingStateWords(state.waitingOn, state.since, now) : "Idle: a message gives it its next turn"
     case "ended":
-      return state.reason
+      return state.decision?.question ?? state.reason
   }
 }
 
@@ -389,8 +464,8 @@ export function childWord(state: ChildState): string {
     case "blocked":
       return state.on === "lead" ? `Asks its ${APEX_WORD}` : state.on === "approval" ? "Needs approval" : "Needs your answer"
     case "idle":
-      return "Idle"
+      return state.waitingOn?.length ? "Waiting" : "Idle"
     case "ended":
-      return state.outcome === "done" ? "Done" : state.outcome === "failed" ? "Failed" : "Stopped"
+      return state.outcome === "done" ? (state.decision?.on === "person" ? DONE_NEEDS_YOU : "Done") : state.outcome === "failed" ? "Failed" : "Stopped"
   }
 }

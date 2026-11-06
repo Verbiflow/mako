@@ -4,7 +4,7 @@ r=Path(__file__).parent
 out=r/'visual'
 a=out/'assets'
 a.mkdir(exist_ok=True)
-fonts=[('/Users/kashyab/pi-ui/node_modules/@fontsource-variable/geist','geist-latin-wght-normal.woff2','geist.woff2'),(str(r/'probe/node_modules/@fontsource/instrument-serif'),'instrument-serif-latin-400-normal.woff2','serif.woff2'),(str(r/'probe/node_modules/@fontsource-variable/instrument-sans'),'instrument-sans-latin-wght-normal.woff2','sans.woff2')]
+fonts=[(str(r.parents[4]/'node_modules/@fontsource-variable/geist'),'geist-latin-wght-normal.woff2','geist.woff2'),(str(r/'probe/node_modules/@fontsource/instrument-serif'),'instrument-serif-latin-400-normal.woff2','serif.woff2'),(str(r/'probe/node_modules/@fontsource-variable/instrument-sans'),'instrument-sans-latin-wght-normal.woff2','sans.woff2')]
 for base,file,name in fonts:
  shutil.copy(Path(base)/'files'/file,a/name)
  shutil.copy(Path(base)/'LICENSE',a/(name+'.LICENSE.txt'))

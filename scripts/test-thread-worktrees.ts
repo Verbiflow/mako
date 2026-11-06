@@ -1,11 +1,12 @@
 import "./lib/scratch-git.mjs"
 import { Git } from "@mako/git"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import type { Actor } from "@mako/host/contracts/thread-identity"
 import type { Prepared } from "@mako/host/workspaces/thread-processes"
@@ -13,6 +14,7 @@ import { inputsDigest, mirroredProject, projectRoot, recipePath, RecipeSchema, t
 import { projectRepositories } from "@mako/host/git/repository-discovery"
 import { ThreadStore } from "@mako/host/threads/store"
 import { worktreeCheckout, worktreeSlug } from "@mako/host/contracts/thread-worktrees"
+import { openWorkspaces } from "@mako/host/workspaces"
 import { ThreadWorktreeService, type CheckoutConversations } from "@mako/host/workspaces/thread-worktrees"
 import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "@mako/host/workspaces/worktree-carry"
 
@@ -855,6 +857,77 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   git(summed, "merge", "-q", "--no-edit", made.branch)
   summary = await read()
   assert.deepEqual([summary.landing.kind, summary.ahead], ["merged", 0], "a merge into main lands it")
+  await worktrees.abandon(id).catch(() => undefined)
+}
+
+// Windows ask every half minute: a worktree nothing changes in is read less and less, while one with a conversation
+// at work, a new index or a changed status is read as often as they ask, and one asked of alone is read then.
+{
+  const quiet = repository("quiet")
+  const id = randomUUID()
+  started(id)
+  const made = await worktrees.prepare(id, quiet, "Quiet work")
+  let now = Date.now()
+  let at: string[] = []
+  const real = { now: Date.now, readOutput: gitRunner.readOutput }
+  let reads = 0
+  let closing = () => {}
+  Date.now = () => now
+  gitRunner.readOutput = function (this: typeof gitRunner, cwd, args) {
+    if (args[0] === "status" && cwd === made.path) reads++
+    return real.readOutput.call(this, cwd, args)
+  }
+  try {
+    // As the host makes it: what's at work reaches the worktrees only through this.
+    const workspaces = openWorkspaces({
+      git: gitRunner,
+      dataRoot: join(root, "composed"),
+      readOnly: false,
+      store: threads,
+      jobs: new HostJobs(),
+      emit: () => {},
+      inUse: async () => [],
+      working: async () => [],
+      workingFolders: async () => at,
+      conversations: { holding: async () => [], leave: async () => [] },
+      cleanup: () => undefined,
+    })
+    closing = () => workspaces.close()
+    const watched = workspaces.worktrees!
+    const changes = async () => (await watched.summaries()).find((summary) => summary.path === made.path)?.changes
+    const passes = async (count: number) => {
+      const before = reads
+      for (let pass = 0; pass < count; pass++) {
+        now += 30_000
+        await changes()
+      }
+      return reads - before
+    }
+    await passes(1)
+    assert.ok(await passes(40) <= 10, "twenty quiet minutes read it a handful of times, not forty")
+    assert.ok(await passes(40) >= 4, "a quiet worktree is still read, every few minutes")
+    at = [made.path]
+    assert.equal(await passes(4), 4, "a conversation at work there keeps it current")
+    at = [join(made.path, "packages")]
+    assert.equal(await passes(2), 2, "so does one in a folder inside it")
+    at = [dirname(made.path)]
+    assert.equal(await passes(2), 2, "and one in the project folder around it")
+    at = []
+    await passes(20)
+    writeFileSync(join(made.path, "new.txt"), "new\n")
+    git(made.path, "add", "new.txt")
+    now += 1
+    assert.equal(await changes(), 1, "a new index asks again at once")
+    await passes(20)
+    const before = reads
+    now += 16_000
+    assert.equal((await watched.summary(made.path))?.changes, 1, "one worktree asked of alone")
+    assert.equal(reads - before, 1, "reads past the short wait whatever its quiet")
+  } finally {
+    Date.now = real.now
+    gitRunner.readOutput = real.readOutput
+    closing()
+  }
   await worktrees.abandon(id).catch(() => undefined)
 }
 

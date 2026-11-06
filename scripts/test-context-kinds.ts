@@ -60,7 +60,7 @@ const pull: ContextDetail = {
   draft: true,
   head: "context-chips",
   base: "main",
-  author: "kashyab",
+  author: "ana",
   repository: "Verbiflow/mako",
 }
 

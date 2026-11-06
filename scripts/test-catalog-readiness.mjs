@@ -121,6 +121,7 @@ const mocks = {
     export const PROTOCOL_VERSION = 31; export const threadIdentity = ref => ref.path;
     export const connectDaemon = () => s.connect();
     export const daemonMemoryUnsafe = () => false;
+    export const MAX_DAEMON_RSS = 1024 * 1024 * 1024;
     export { buildTranscript, transcriptNote, writeTranscript } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/transcript-builder.js", import.meta.url)))};
     export const makoViews = () => '';
     export { VIEWER_PAGE, contextFreeTitle } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/format.js", import.meta.url)))};

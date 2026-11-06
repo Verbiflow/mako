@@ -8,7 +8,9 @@ import {
   type ReactNode,
 } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { finMoved } from "@/state/fin-moved"
 import {
+  ArrowRightLeftIcon,
   CheckIcon,
   ChevronRightIcon,
   CornerUpLeftIcon,
@@ -18,16 +20,19 @@ import {
 } from "lucide-react"
 import {
   CHILD_GROUPS,
+  askWords,
   childGroup,
   childLine,
   childStateOf,
+  openAsk,
   rollup,
   rollupLabel,
   rollupLine,
   type ChildGroup,
   type Rollup,
 } from "@mako/host/contracts/children"
-import { APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
+import { APEX_WORD, FIN_WORD, finsWord, type ChildState } from "@mako/host/contracts/agents"
+import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { FinMark } from "@/components/stage/child-tabs"
 import { LiveMark } from "@/components/ui/live-mark"
@@ -43,9 +48,10 @@ import {
   apexConversation,
   openFinInApex,
   threadChildren,
+  useThreadAsks,
   useThreadChildren,
 } from "@/state/apex-fins"
-import { answerFin, type FinAnswer } from "@/state/fin-asks"
+import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { mountCrewCard, unmountCrewCard } from "@/state/crew-card-view"
 
 const HEADINGS = {
@@ -77,28 +83,35 @@ const SETTLED: ReadonlySet<ChildGroup> = new Set(["idle", "done"])
 
 /**
  * What needs the person and what's live (needs you, working, queued, failed) as headed groups, then the settled ones
- * as one "24 done · 1 idle" line, their groups under it once it's open.
+ * as one "24 done · 1 idle" line, their groups under it once it's open. A done Fin with a decision still open, its
+ * Apex's to make, is never folded: it stays listed under its own Done heading.
  */
 function buildRows(children: readonly NativeAgent[], settledOpen: boolean): CrewRow[] {
   const live: CrewRow[] = []
   const settled: CrewRow[] = []
   const counts = { done: 0, idle: 0 }
-  let group: ChildGroup | undefined
-  let heading: Extract<CrewRow, { kind: "heading" }> | undefined
+  const headings = new Map<CrewRow[], Extract<CrewRow, { kind: "heading" }>>()
   for (const agent of children) {
-    const next = childGroup(childStateOf(agent))
-    const out = SETTLED.has(next) ? settled : live
-    if (next === "done" || next === "idle") counts[next] += 1
-    if (next !== group) {
-      group = next
+    const state = childStateOf(agent)
+    const next = childGroup(state)
+    const out = SETTLED.has(next) && !openAsk(state) && !waitsOutside(state) ? settled : live
+    if (out === settled && (next === "done" || next === "idle")) counts[next] += 1
+    let heading = headings.get(out)
+    if (heading?.group !== next) {
       heading = { kind: "heading", group: next, count: 0 }
+      headings.set(out, heading)
       out.push(heading)
     }
-    heading!.count += 1
+    heading.count += 1
     out.push({ kind: "child", agent, group: next })
   }
   if (!settled.length) return live
   return [...live, { kind: "settled", ...counts, open: settledOpen }, ...(settledOpen ? settled : [])]
+}
+
+/** An idle Fin waiting on what its report named, such as a pull request's checks, which Mako wakes it on: listed, never folded. */
+function waitsOutside(state: ChildState): boolean {
+  return state.kind === "idle" && Boolean(state.waitingOn?.length)
 }
 
 /** An Apex's name as its Thread's title, read the same way the Agents panel does. */
@@ -169,8 +182,9 @@ const NeedsRow = memo(function NeedsRow({
   useHarnessIdentity()
   const [sent, setSent] = useState<FinAnswer | undefined>(undefined)
   const state = childStateOf(agent)
-  if (state.kind !== "blocked" || !agent.child) return null
-  const ask = state.ask
+  const open = openAsk(state)
+  if (!open || !agent.child) return null
+  const ask = open.ask
   const approval = ask?.kind === "approval"
   const options = ask?.options ?? []
   const order = options
@@ -187,8 +201,9 @@ const NeedsRow = memo(function NeedsRow({
         fin: agent.child.thread,
         title: agent.title,
         harness: agent.provider,
-        question: state.question,
+        question: open.question,
         ask,
+        ...(open.done && { done: true as const }),
       },
       answer
     ).then((answered) => {
@@ -200,6 +215,7 @@ const NeedsRow = memo(function NeedsRow({
       data-crew-row={agent.child.thread}
       data-child-group="needs"
       data-fin-ask={ask?.kind}
+      data-fin-decision={open.done || undefined}
       data-fin={agent.child.thread}
       aria-busy={sent ? true : undefined}
       className="bg-[color-mix(in_oklab,var(--attention)_8%,var(--raised))] px-3 py-2.5 shadow-[inset_2px_0_0_var(--attention)]"
@@ -224,7 +240,7 @@ const NeedsRow = memo(function NeedsRow({
         <span className="flex-1" />
         <CrewElapsed agent={agent} className="text-label text-faint" />
       </div>
-      <p className="mt-1.5 pl-7 text-ui text-foreground/90">{state.question}</p>
+      <p className="mt-1.5 pl-7 text-ui text-foreground/90">{askWords(open)}</p>
       {ask ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-7">
           {approval ? (
@@ -356,9 +372,13 @@ const CrewLineRow = memo(function CrewLineRow({
   useHarnessIdentity()
   const state = childStateOf(agent)
   const group = childGroup(state)
-  const line = childLine(state)
+  const waiting = waitsOutside(state)
+  // "Waiting on acme/app#371 checks · 12m": the same string for a whole minute, so the row repaints once a minute.
+  const waited = useTickingText(waiting, (now) => (waiting ? childLine(state, now) ?? "" : ""))
+  const line = waiting ? waited : childLine(state)
   const live = state.kind === "working" || state.kind === "starting"
-  const lead = state.kind === "blocked" && state.on === "lead"
+  const lead = openAsk(state)?.on === "lead"
+  const moved = finMoved(agent)
   // `childState()` keeps a reason for a failed Fin but drops it for one that succeeded (`agents.ts`, not this
   // card's own), so the glyph only ever has a failure's line to read on real data today.
   const pr =
@@ -379,7 +399,7 @@ const CrewLineRow = memo(function CrewLineRow({
       <span
         className={cn(
           "flex min-w-0 flex-1",
-          compact ? "flex-col items-start" : "items-center gap-2"
+          compact ? "flex-col" : "items-center gap-2"
         )}
       >
         <span
@@ -395,25 +415,67 @@ const CrewLineRow = memo(function CrewLineRow({
           {lead ? (
             <CornerUpLeftIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
+          {moved ? (
+            <span data-fin-moved title={moved} className="flex shrink-0 items-center gap-1">
+              <ArrowRightLeftIcon className="size-3 shrink-0" aria-hidden />
+              {moved.split(":")[0]}
+              {line ? " ·" : null}
+            </span>
+          ) : null}
           {pr ? (
             <GitPullRequestIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
           {live && line ? (
             <Shimmer text={line} className="min-w-0 truncate" />
           ) : (
-            <span className="min-w-0 truncate">
+            <span className="min-w-0 truncate" title={line}>
               {lead ? `Asking its Apex: ${line}` : line}
             </span>
           )}
         </span>
       </span>
-      <CrewElapsed
-        agent={agent}
-        className="min-w-8 shrink-0 text-right text-label text-faint"
-      />
+      {waiting ? null : (
+        <CrewElapsed
+          agent={agent}
+          className="min-w-8 shrink-0 text-right text-label text-faint"
+        />
+      )}
     </button>
   )
 })
+
+/** A limit's one notice, heading its tree's card: the tree's, so no Fin's row, and "Got it" ends it everywhere. */
+function LimitNoticeRow({ apex, ask, compact }: { apex: string; ask: PersonAsk; compact: boolean }) {
+  const [sent, setSent] = useState(false)
+  const seen = () => {
+    if (sent) return
+    setSent(true)
+    void answerFin(apex, ask, { option: 0 }).then((answered) => {
+      if (!answered) setSent(false)
+    })
+  }
+  return (
+    <div
+      data-limit-notice={ask.ask.id}
+      aria-busy={sent || undefined}
+      className="mb-1.5 bg-[color-mix(in_oklab,var(--attention)_8%,var(--raised))] px-3 py-2.5 shadow-[inset_2px_0_0_var(--attention)]"
+    >
+      <p className="text-ui text-foreground/90">{ask.question}</p>
+      <button
+        type="button"
+        data-limit-seen
+        disabled={sent}
+        onClick={seen}
+        className={cn(
+          "pressable mt-2 flex items-center bg-foreground px-2.5 text-label font-medium text-background hover:bg-foreground/90 disabled:opacity-50",
+          compact ? "h-9" : "h-7"
+        )}
+      >
+        {ask.ask.options?.[0]?.label ?? "Got it"}
+      </button>
+    </div>
+  )
+}
 
 /** The settled Fins, folded: "24 done · 1 idle", which opens their list and closes it again. */
 function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled" }>; onToggle: () => void }) {
@@ -459,6 +521,7 @@ export function CrewCard({
   )
   const apexTitle = useApexCardTitle(thread)
   const children = useThreadChildren(thread)
+  const notice = useThreadAsks(thread).find((ask) => isLimitAsk(ask.ask.id))
   const scroller = useRef<HTMLDivElement>(null)
   const card = useRef<HTMLElement>(null)
   // In view until the observer says otherwise, so the dock doesn't also draw the asks for the frame before it reports.
@@ -546,6 +609,7 @@ export function CrewCard({
           </button>
         ) : null}
       </header>
+      {notice && conversation ? <LimitNoticeRow key={notice.ask.id} apex={conversation} ask={notice} compact={compact} /> : null}
       <div
         ref={scroller}
         data-crew-scroller

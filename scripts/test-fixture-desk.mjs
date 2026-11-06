@@ -21,8 +21,9 @@ import { desktopLaunchEnvironment } from "@mako/host/application/local-update-in
 
 for (const channel of fixtureDeskHostCalls) {
   assert.ok(isHostChannel(channel), `${channel} is a host call`)
-  // Boot builds the provider-free workspace shell, which is state, so it is not replay-safe.
-  assert.ok(readOnlyHostCalls.has(channel) || channel === "mako:boot", `${channel} is a read`)
+  // Boot builds the provider-free workspace shell, which is state, so it is not replay-safe. A Mac's leaving notice
+  // writes nothing, and isn't a read because replayed after a wake it would close the runtime's link again.
+  assert.ok(readOnlyHostCalls.has(channel) || channel === "mako:boot" || channel === "mako:machine-leaving", `${channel} is a read`)
   assert.ok(!replayableHostCalls.has(channel), `${channel} is not a replayed mutation`)
 }
 // The Mako account reaches only a cloud on loopback from a fixture desk; `CloudAccounts` enforces that.

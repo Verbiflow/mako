@@ -9,6 +9,7 @@
  */
 import assert from "node:assert/strict"
 import { execFile, spawn, type ChildProcess } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -17,8 +18,9 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import { AFTER_START } from "@mako/host/contracts/agent-tools"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
+import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { GROK_VERSIONS } from "@mako/host/harnesses/grok/versions"
-import { probeRuntime } from "@mako/host/transport/connection"
+import { invokeRuntime, probeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { removeScratch } from "./lib/scratch-processes.mjs"
 
@@ -105,13 +107,27 @@ exit 2
   const read = await agents(session, "read", started.child)
   assert.ok(read.text.length > 0, "its transcript reads back")
 
+  // The person's switch comes through the one operation too: the host says who asked, for this and for a move.
+  await invokeRuntime(location.socket, randomUUID(), "mako:live-transfer", [apex, { id: randomUUID(), provider: "grok", text: "Go on", attachments: [] }]).catch(() => undefined)
+  for (const deadline = Date.now() + 10_000; !/a Thread continues on a harness .* by=person/.test(await readFile(join(dataRoot, "logs/host.log"), "utf8")); await new Promise((settle) => setTimeout(settle, 50)))
+    assert.ok(Date.now() < deadline, "the person's switch reached continueOn")
+
+  // `mako agents move` is the same host call from a shell: to where it is, it answers so; a harness that isn't here is refused.
+  const here = await agents(session, "move", started.child, "grok")
+  assert.equal(here.moved?.[0]?.state, "here", JSON.stringify(here))
+  const nowhere = await agents(session, "move", started.child, "no-such-harness").catch((error: Error & { stdout?: string; stderr?: string }) => `${error.stdout}${error.stderr}`)
+  assert.match(JSON.stringify(nowhere), /unknown-harness/)
+
   const names: string[] = listed.children.map((child: { name: string }) => child.name)
   for (const deadline = Date.now() + 30_000; ; ) {
     const history = await mako("history", apex)
     const digests = history.flatMap((line) => (line.kind === "user" && line.text?.startsWith(FROM_AGENTS) ? [line.text] : []))
-    const heard = names.map((name) => digests.join("\n").split(`"${name}"`).length - 1)
+    // The words name each report once; the same report rides after them as data, for the person's card of it.
+    const read = digests.map(readFinReports)
+    const heard = names.map((name) => read.map((each) => each.text).join("\n").split(`"${name}"`).length - 1)
     if (heard.every((count) => count > 0)) {
       assert.deepEqual(heard, names.map(() => 1), "each child's report reaches the Apex once")
+      assert.deepEqual(names.map((name) => read.flatMap((each) => each.reports).filter((card) => card.name === name).length), names.map(() => 1), "and once as data")
       assert.ok(digests.length <= names.length, "in at most a wake a burst")
       break
     }
