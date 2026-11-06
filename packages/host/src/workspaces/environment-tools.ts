@@ -1067,7 +1067,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       }
     }
   }
-  /** Holds a survivor's slot until it exits, and through any run a caller was starting as it did: that run holds it on. */
+  /**
+   * Holds a survivor's slot until it exits as any run's does (`ThreadProcesses.whenGone`), and through any run a caller
+   * was starting as it did: that run holds it on. Nothing of a survivor is ended for finding it: only a stop does that.
+   */
   const holdThrough = async (app: AppKey, tier: CheckTier, ticket: BuildTicket): Promise<void> => {
     for (;;) {
       await untilExited(app, tier)

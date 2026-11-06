@@ -321,6 +321,8 @@ export class ThreadProcesses {
   private readonly exitListeners = new Set<(app: AppKey, key: string) => void>()
   /** By `runTag`: a run's process that SIGKILL didn't end (`unending`). */
   private readonly unended = new Map<string, string>()
+  /** By `runTag`: runs being stopped, whose detached children end with them (`untilGone`). */
+  private readonly stopping = new Set<string>()
 
   constructor(dependencies: ThreadProcessDependencies) {
     this.dependencies = dependencies
@@ -378,9 +380,11 @@ export class ThreadProcesses {
     return this.locked(app, async () => {
       const runs = await this.runs(app)
       const chosen = Object.entries(runs).filter(([key]) => !keys || keys.includes(key))
+      for (const [key] of chosen) this.stopping.add(runTag(app, key))
       const stopping = chosen.map(([key, record]) => stopTree(record, this.graceMs, record.kind === "check" ? (rows) => this.strays(app, key, record, rows) : undefined))
       await Promise.all(stopping).finally(() => this.tableChanged())
       for (const [key] of chosen) {
+        this.stopping.delete(runTag(app, key))
         delete runs[key]
         await rm(this.file(app, key, "exit"), { force: true })
         await rm(this.file(app, key, "ready"), { force: true })
@@ -1036,18 +1040,22 @@ export class ThreadProcesses {
   }
 
   /**
-   * Until a run's processes are gone. A run reads as running while its tree does (`state`), and a look that fails says
-   * nothing, so it looks again. A check's detached children are out of that tree once reparented, and a daemon left
-   * that way would hold a build slot for hours, so they're ended here. One that can't be ended is said (`unending`),
-   * and the wait goes on: what can't be proved gone keeps its slot.
+   * Until a run is over: its tree gone, as a run reads as running while its tree does (`state`), and a look that fails
+   * says nothing, so it looks again. A finished check's detached children are left alone: it didn't ask for its daemon
+   * to die, and nobody else did. Being stopped is being asked: then nothing of the run is over until its mark finds none
+   * left. One that outlives SIGKILL is said (`unending`) and the wait goes on, since what can't be proved gone keeps its slot.
    */
   private async untilGone(app: AppKey, key: string, run: Run): Promise<void> {
     const tag = runTag(app, key)
     for (let wait = POLL_MS; ; wait = Math.min(wait * 2, GONE_POLL_MOST_MS)) {
       const rows = await processTable().catch(() => undefined)
       if (rows && !members(rows, run).length) {
-        const left = run.kind === "check" ? await this.strays(app, key, run, rows).catch(() => undefined) : []
-        if (left && !left.length) return void this.unended.delete(tag)
+        const left = run.kind === "check" && this.stopping.has(tag) ? await this.strays(app, key, run, rows).catch(() => undefined) : []
+        if (left && !left.length) {
+          this.stopping.delete(tag)
+          this.unended.delete(tag)
+          return
+        }
         if (left) await stopTree(run, this.graceMs, (now) => this.strays(app, key, run, now)).then(
           () => this.unended.delete(tag),
           () => this.unended.set(tag, `${run.name} check's process ${left[0]!.pid} (${left[0]!.command.slice(0, 80)}) won't end`),
@@ -1088,6 +1096,7 @@ export class ThreadProcesses {
   private async spawn(app: AppKey, spec: RunSpec, record: (run: Run) => Promise<void>): Promise<void> {
     this.tableChanged()
     const key = runKey(spec.kind, spec.name)
+    this.stopping.delete(runTag(app, key))
     const log = this.file(app, key, "log")
     const exit = this.file(app, key, "exit")
     await rm(exit, { force: true })

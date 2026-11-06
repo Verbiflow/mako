@@ -238,14 +238,15 @@ async function until(check: () => boolean | Promise<boolean>, what: string): Pro
 }
 
 /** A check of app one still running from a host that's gone, until `release(b.one.folder)`, and a new host's processes over its records. */
-async function survivor(name: string, command = heldUntil("go")) {
-  const b = bench(name, () => new BuildSlots(() => 1))
+async function survivor(name: string, command = heldUntil("go"), stopGraceMs?: number, files: Record<string, string> = {}) {
+  const b = bench(name, () => new BuildSlots(() => 1), stopGraceMs)
+  for (const [file, text] of Object.entries(files)) writeFileSync(join(b.one.folder, file), text)
   const first = b.host()
   for (const app of [b.one, b.two]) await first.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === b.one ? command : "echo second finished" } }), "A check")
   await first.check(b.one.conversation, "quick")
   const check = (app: { environment: ThreadEnvironment }, processes = b.processes) => processes.status(app.environment.app).then((runs) => runs.find((run) => run.name === "quick")?.state.kind)
   await until(async () => await check(b.one) === "running", "the first check to run")
-  const processes = new ThreadProcesses({ root: b.records, listening: portListening })
+  const processes = new ThreadProcesses({ root: b.records, listening: portListening, ...(stopGraceMs !== undefined && { stopGraceMs }) })
   const slots = new BuildSlots(() => 1)
   const done = async () => {
     for (const app of [b.one, b.two]) await b.processes.stop(app.environment.app)
@@ -526,7 +527,7 @@ const pidIn = (folder: string, file: string) => Number(readFileSync(join(folder,
   }
 }
 
-// ── A check that ends and leaves one behind: it's ended with the check, and the slot goes after it, not before.
+// ── A check that finishes and leaves one behind: nobody asked for it to die, so it lives and the slot frees. A stop ends it.
 {
   const slots = new BuildSlots(() => 1)
   const b = bench("detached-end", () => slots, 300)
@@ -538,14 +539,19 @@ const pidIn = (folder: string, file: string) => Number(readFileSync(join(folder,
     await until(() => existsSync(join(b.one.folder, "child-pid")), "the detached child")
     const child = pidIn(b.one.folder, "child-pid")
     await until(() => !slots.reading().holders.length, "the slot to free")
-    assert.equal(alive(child), false, "it went before the slot did")
+    assert.equal(alive(child), true, "the daemon outlives the check that finished")
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    assert.equal(alive(child), true, "and goes on")
+    assert.deepEqual(b.processes.unending(), [], "and nothing calls it stuck")
+    await b.processes.stop(b.one.environment.app)
+    assert.equal(alive(child), false, "a stop of that check is asked for, and ends it")
   } finally {
     await b.processes.stop(b.one.environment.app)
     rmSync(b.root, { recursive: true, force: true })
   }
 }
 
-// ── One that can't be ended: the slot stays held, and a check waiting on it says why.
+// ── One a stop can't end: the slot stays held, and a check waiting on it says why.
 {
   const slots = new BuildSlots(() => 1)
   const b = bench("unending", () => slots, 100)
@@ -553,14 +559,14 @@ const pidIn = (folder: string, file: string) => Number(readFileSync(join(folder,
   let child = 0
   try {
     const tools = b.host()
-    writeFileSync(join(b.one.folder, "parent.cjs"), detached("child-pid"))
+    writeFileSync(join(b.one.folder, "parent.cjs"), `${detached("child-pid")}setInterval(()=>{},1000)`)
     for (const app of [b.one, b.two]) await tools.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === b.one ? `"${process.execPath}" parent.cjs` : "echo second finished" } }), "A check")
-    const said = join(b.one.folder, "child-pid")
-    process.kill = (pid, signal) => (existsSync(said) && pid === Number(readFileSync(said, "utf8")) && signal !== 0 ? true : kill(pid, signal))
     await tools.check(b.one.conversation, "quick")
-    await until(() => existsSync(said), "the detached child")
-    await until(() => b.processes.unending().length === 1, "it to outlive SIGKILL")
+    await until(() => existsSync(join(b.one.folder, "child-pid")), "the detached child")
     child = pidIn(b.one.folder, "child-pid")
+    process.kill = (pid, signal) => (pid === child && signal !== 0 ? true : kill(pid, signal))
+    await assert.rejects(b.processes.stop(b.one.environment.app), /after SIGKILL/)
+    await until(() => b.processes.unending().length === 1, "it to be said")
     assert.equal(slots.reading().holders.length, 1, "its slot stays held")
     b.wait.ms = 1_000
     assert.match(await tools.check(b.two.conversation, "quick"), new RegExp(`waits for a build slot: 1 of 1 in use \\(.*process ${child} .* won't end\\)`))
@@ -578,7 +584,51 @@ const pidIn = (folder: string, file: string) => Number(readFileSync(join(folder,
   }
 }
 
-// ── A survivor's slot waits for all of it too, not only the tree the new host can see.
+// ── What the last host left runs by the same two rules, and finding it ends nothing: it finishes, and its daemon lives.
+const leavesDaemon = `${detached("child-pid")}setInterval(()=>{if(require("node:fs").existsSync("go"))process.exit(0)},20)`
+{
+  const { b, processes, slots, done } = await survivor("survivor-finishes", `"${process.execPath}" parent.cjs`, 300, { "parent.cjs": leavesDaemon })
+  try {
+    await until(() => existsSync(join(b.one.folder, "child-pid")), "the detached child")
+    const child = pidIn(b.one.folder, "child-pid")
+    b.hostOver(processes, slots)
+    await until(() => slots.reading().holders.length === 1, "the survivor to be counted")
+    assert.equal(alive(child), true, "finding a survivor ends nothing of it")
+    release(b.one.folder)
+    await until(() => !slots.reading().holders.length, "the slot to free as it finishes")
+    assert.equal(alive(child), true, "and its daemon lives on, as any finished check's does")
+  } finally {
+    await done()
+  }
+}
+
+// ── And a stop of one is asked for: the slot waits for its daemon, as for any stopped check.
+{
+  const { b, processes, slots, check, done } = await survivor("survivor-stopped", `"${process.execPath}" parent.cjs`, 300, { "parent.cjs": leavesDaemon })
+  try {
+    await until(() => existsSync(join(b.one.folder, "child-pid")), "the detached child")
+    const child = pidIn(b.one.folder, "child-pid")
+    const next = b.hostOver(processes, slots)
+    await until(() => slots.reading().holders.length === 1, "the survivor to be counted")
+    assert.match(await next.check(b.two.conversation, "quick"), /waits for a build slot: 1 of 1 in use/)
+    const start = processes.start.bind(processes)
+    let aliveAtStart: boolean | undefined
+    processes.start = (app, specs) => {
+      aliveAtStart ??= alive(child)
+      return start(app, specs)
+    }
+    await processes.stop(b.one.environment.app)
+    assert.equal(alive(child), false, "the stop ended it")
+    b.wait.ms = 10_000
+    assert.match(await next.check(b.two.conversation, "quick"), /passed/)
+    assert.equal(aliveAtStart, false, "and the next check started only once it was gone")
+    assert.notEqual(await check(b.one), "running")
+  } finally {
+    await done()
+  }
+}
+
+// ── A survivor's slot waits on the rules a run ends by, not only its status.
 {
   const { b, processes, slots, check, done } = await survivor("survivor-footprint")
   try {
@@ -591,7 +641,7 @@ const pidIn = (folder: string, file: string) => Number(readFileSync(join(folder,
     release(b.one.folder)
     await until(async () => await check(b.one) === "exited", "its tree to end")
     await new Promise((resolve) => setTimeout(resolve, 600))
-    assert.equal(slots.reading().holders.length, 1, "its slot waits for what's left of it")
+    assert.equal(slots.reading().holders.length, 1, "its slot waits for its run to be over")
     gone()
     b.wait.ms = 10_000
     assert.match(await next.check(b.two.conversation, "quick"), /passed/)
