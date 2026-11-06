@@ -2,7 +2,7 @@ import "./lib/scratch-git.mjs"
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CHECKOUT_GRANTS, CHECKOUT_SOURCES, CheckoutBorrowing, LOCAL_ACCOUNT, LOCAL_DEVICE } from "@mako/host/workspaces/checkout-borrowing"
@@ -199,6 +199,100 @@ assert.equal((await lapsing.borrowing.leases()).length, 0)
   assert.deepEqual(JSON.parse(readFileSync(join(folder, "placed.json"), "utf8")), [])
 }
 
+// A revoke always wins over a placement: one that falls after a placement is staged and before it lands stops it
+// landing, and one that falls after it landed takes it away. Nothing is left that the index doesn't know.
+{
+  const person = { kind: "person", account: LOCAL_ACCOUNT } as const
+  const opened = (name: string, beforeLanding?: (broker: CheckoutBorrowing) => Promise<void>) => {
+    const broker: CheckoutBorrowing = new CheckoutBorrowing({
+      git,
+      borrowing: new LocalBorrowing({ device: LOCAL_DEVICE, account: LOCAL_ACCOUNT, sources: CHECKOUT_SOURCES, folder: join(root, name) }),
+      ...(beforeLanding && { beforeLanding: () => beforeLanding(broker) }),
+    })
+    return broker
+  }
+  const indexOf = (name: string) => JSON.parse(readFileSync(join(root, name, "placed.json"), "utf8"))
+  const staging = () => readdirSync(join(root, "worktrees")).filter((name) => name.startsWith("."))
+  const emptied = () => staging().every((name) => readdirSync(join(root, "worktrees", name)).length === 0)
+
+  // A copy: the revoke and its removal finish while the destination is still free.
+  const copied = join(root, "worktrees", "shop-revoked-copy")
+  run(main, "worktree", "add", "-q", "-b", "mako/revoked-copy", copied)
+  const copying = opened("borrowing-revoked-copy", async (broker) => {
+    await broker.borrowing.revoke(CHECKOUT_GRANTS.copy, person)
+    await broker.keep()
+  })
+  const report = await copying.bring("thread-revoked", main, copied, [{ path: ".env" }])
+  assert.deepEqual(report.copied, [], "a revoked placement isn't reported as placed")
+  assert.deepEqual(report.existing, [])
+  assert.deepEqual(report.refused, [".env: the grant for it was revoked"])
+  assert.ok(!existsSync(join(copied, ".env")), "and it never landed")
+  await opened("borrowing-revoked-copy").keep()
+  assert.ok(!existsSync(join(copied, ".env")), "nor does it after a restart")
+  assert.deepEqual(indexOf("borrowing-revoked-copy"), [])
+
+  // A folder and a link, revoked by another broker over the same folder, which this one only sees on disk.
+  const linked = join(root, "worktrees", "shop-revoked-link")
+  run(main, "worktree", "add", "-q", "-b", "mako/revoked-link", linked)
+  const linking = opened("borrowing-revoked-link", async () => {
+    const other = opened("borrowing-revoked-link")
+    await other.borrowing.revoke(CHECKOUT_GRANTS.live, person)
+    await other.keep()
+  })
+  const carried = await linking.carry("thread-revoked", main, linked, [{ path: "models", link: true }])
+  assert.equal(carried.copied, 0)
+  assert.deepEqual(carried.refused, ["models: the grant for it was revoked"])
+  assert.ok(!existsSync(join(linked, "models")))
+  assert.deepEqual(indexOf("borrowing-revoked-link"), [])
+
+  // A copy made over a link: the clone goes, and the link is as it was.
+  const owning = join(root, "worktrees", "shop-revoked-own")
+  run(main, "worktree", "add", "-q", "-b", "mako/revoked-own", owning)
+  const linkedFirst = opened("borrowing-revoked-own", async (broker) => {
+    if (!existsSync(join(owning, "models"))) return
+    await broker.borrowing.revoke(CHECKOUT_GRANTS.copy, person)
+    await broker.keep()
+  })
+  await linkedFirst.bring("thread-revoked", main, owning, [{ path: "models", link: true }])
+  const own = await linkedFirst.bring("thread-revoked", main, owning, [{ path: "models" }])
+  assert.deepEqual([own.owned, own.existing, own.refused], [[], [], ["models: the grant for it was revoked"]])
+  assert.ok(lstatSync(join(owning, "models", "weights.bin")).isSymbolicLink(), "the link stays under its own grant")
+  assert.ok(emptied(), "and nothing is left staged")
+
+  // Just after it landed, before the broker has finished with it: the removal takes it, however the placement ends.
+  const landed = join(root, "worktrees", "shop-revoked-landed")
+  run(main, "worktree", "add", "-q", "-b", "mako/revoked-landed", landed)
+  const landing: CheckoutBorrowing = CheckoutBorrowing.open(git, join(root, "borrowing-revoked-landed"), {}, undefined, async () => {
+    await landing.borrowing.revoke(CHECKOUT_GRANTS.copy, person)
+    await landing.keep()
+  })
+  await landing.bring("thread-revoked", main, landed, [{ path: ".env" }])
+  assert.ok(!existsSync(join(landed, ".env")))
+  await opened("borrowing-revoked-landed").keep()
+  assert.ok(!existsSync(join(landed, ".env")))
+  assert.deepEqual(indexOf("borrowing-revoked-landed"), [])
+}
+
+// A lease taken again keeps what its placement made: a revoke after it removes the copy, in memory, on disk, and on
+// a host opened after the lease moved.
+for (const kept of ["memory", "disk", "restart"] as const) {
+  let at = Date.now()
+  const lapsed = join(root, "worktrees", `shop-retaken-${kept}`)
+  run(main, "worktree", "add", "-q", "-b", `mako/retaken-${kept}`, lapsed)
+  const options = { device: LOCAL_DEVICE, account: LOCAL_ACCOUNT, sources: CHECKOUT_SOURCES, now: () => at }
+  const place = () => new CheckoutBorrowing({ git, borrowing: new LocalBorrowing(kept === "memory" ? options : { ...options, folder: join(root, `borrowing-retaken-${kept}`) }) })
+  const held = place()
+  await held.bring("thread-retaken", main, lapsed, [{ path: ".env" }, { path: "models" }])
+  at += 25 * 60 * 60_000
+  await held.keep()
+  const broker = kept === "restart" ? place() : held
+  await broker.borrowing.revoke(CHECKOUT_GRANTS.copy, { kind: "person", account: LOCAL_ACCOUNT })
+  await broker.keep()
+  assert.ok(!existsSync(join(lapsed, ".env")), `a copy taken again goes with the revoke (${kept})`)
+  assert.ok(!existsSync(join(lapsed, "models")), `and a folder (${kept})`)
+  if (kept !== "memory") assert.deepEqual(JSON.parse(readFileSync(join(root, `borrowing-retaken-${kept}`, "placed.json"), "utf8")), [])
+}
+
 // A removal that fails, or that a crash cuts short, is written down and finished by the next keep.
 {
   const flaky = join(root, "worktrees", "shop-flaky")
@@ -260,4 +354,4 @@ assert.equal((await lapsing.borrowing.leases()).length, 0)
   assert.deepEqual(linked.refused, ["models: the grant for it was revoked"], "a revoke from another process stands")
 }
 
-console.log("checkout borrowing: carry and bring as leases, one lease per need, no value on disk, the device's grants keep to it, state kept across hosts, revocation removes links and copies but not the worktree's own files, refusals in words, revoked stays revoked, lapsed leases taken again, removal releases, nothing Mako didn't make is removed, not even inside a folder it copied, nor one made as the copy landed, a refused removal stays written down until it's done, a failed or interrupted removal is finished, two brokers and two processes over one folder are one broker")
+console.log("checkout borrowing: carry and bring as leases, one lease per need, no value on disk, the device's grants keep to it, state kept across hosts, revocation removes links and copies but not the worktree's own files, refusals in words, revoked stays revoked, lapsed leases taken again, removal releases, nothing Mako didn't make is removed, not even inside a folder it copied, nor one made as the copy landed, a refused removal stays written down until it's done, a revoke stops a placement before it lands and takes it after, a lease taken again keeps what it placed, a failed or interrupted removal is finished, two brokers and two processes over one folder are one broker")

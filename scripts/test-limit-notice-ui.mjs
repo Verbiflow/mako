@@ -264,6 +264,15 @@ async function check() {
   assert.ok((await evaluate("window.apexScene.responds()")).some((respond) => respond.ask.startsWith("limit:")), "and telling the host")
   console.log("PASS: the Thread holds the notice, whatever else needs the person")
 
+  // 7. A Thread Mako doesn't move by itself: one card, saying what holds it, and one press.
+  await evaluate(`import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => { const state = acpStore.get(); const current = activeAcp(state); const at = Date.now() + 3 * 60 * 60_000; acpStore.set({ conversations: { ...state.conversations, [current.key]: { ...current, requests: [...(current.requests ?? []), { id: 'held-at-limit', text: 'Keep going.', attachments: [], status: 'held', retry: { at, until: at, attempt: 1, since: Date.now(), cause: 'rate-limited', reason: "You've hit your usage limit" } }] } } }) })`)
+  await until("Boolean(document.querySelector('[data-limit-continue]'))", "the card")
+  assert.match(await text("[data-limit-continue]"), /usage limit.*Continue on Claude Code/, "what holds it, and where it would go")
+  assert.equal(await evaluate("document.querySelectorAll('[data-limit-continue]').length"), 1, "one card")
+  await shoot("continue-card", "[data-limit-continue]")
+  await evaluate("[...document.querySelectorAll('[data-limit-continue] button')].find((each) => each.innerText.includes('Continue on')).click(); true")
+  console.log("PASS: a Thread a limit holds gets one card")
+
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])
   console.log("Limit notice UI: passed")
   app.exit(0)

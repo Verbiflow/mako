@@ -496,7 +496,7 @@ async function landing(): Promise<void> {
     assert.equal(f.world.live.pinnedAccount(conversation, "codex"), undefined)
     await f.world.close()
     const launched: (string | undefined)[] = []
-    const g = await fixture("codex", { launchedOn: (_harness, account) => void launched.push(account) })
+    const g = await fixture("codex", { resumesUnderAccount: [], launchedOn: (_harness, account) => void launched.push(account) })
     await g.world.settle(40, 20_000)
     const handed = g.fin().conversation
     const was = g.world.live.snapshot(handed)!.control!
@@ -506,8 +506,7 @@ async function landing(): Promise<void> {
     assert.equal((await settled).state.kind, "accepted")
     const now = g.world.live.snapshot(handed)!.control!
     assert.notEqual(now.activeBindingId, was.activeBindingId, "a harness that can't go on hands over to a session of its own")
-    assert.equal(g.world.live.pinnedAccount(handed, "codex"), "spare")
-    assert.equal(g.world.agents.pinnedAccount(handed, "codex"), "spare", "every later launch reads it")
+    assert.equal(g.world.live.pinnedAccount(handed, "codex"), "spare", "every later launch reads it")
     assert.ok(launched.includes("spare"), "and the hand-over's own launch runs on it")
     assert.equal(now.merges.filter((merge) => merge.status === "pending").length, 1, "with the conversation")
     await g.world.close()
@@ -1098,10 +1097,10 @@ function onePath(): void {
     }
   }
   walk(host)
-  /** Who may call it, each for what it is: `continueOn` itself, reconnects, which stay on their own harness, and #398's `moveWaiting`, until it retires into `continueOn`. */
+  /** Who may call it, each for what it is: `continueOn` itself, and reconnects, which stay on their own harness. */
   const allowed = new Map([
     ["conversations/continue-on.ts", /live\.transfer\(id, \{ \.\.\.continuation\.input/],
-    ["conversations/live-conversations.ts", /this\.transfer\(id, \{ id: to\.id, provider: to\.provider|this\.transfer\(id, input, actor, continues\)|this\.transfer\(id, \{\s+id: requestId,\s+provider: resident\.snapshot\.session\.harness|this\.transfer\(id, \{ id: requestId, bindingId, provider: binding\.provider/],
+    ["conversations/live-conversations.ts", /this\.transfer\(id, input, actor, continues\)|this\.transfer\(id, \{\s+id: requestId,\s+provider: resident\.snapshot\.session\.harness|this\.transfer\(id, \{ id: requestId, bindingId, provider: binding\.provider/],
     ["conversations/live-auto-continue.ts", /this\.access\.transfer\(id, \{ id: request\.id, provider: reconnect\.provider/],
   ])
   for (const path of files) {

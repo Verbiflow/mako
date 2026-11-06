@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { mock } from "node:test"
 import { join } from "node:path"
-import { holdForRetry } from "@mako/host/contracts/delivery-retry"
+import { holdForRetry, RESET_MARGIN_MS } from "@mako/host/contracts/delivery-retry"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { holdDue, holdOf } from "@mako/host/contracts/request-hold"
 import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
@@ -44,7 +44,7 @@ interface Limits {
   knocks: string[]
 }
 
-function worldOf(name: string) {
+function worldOf(name: string, words = LIMIT) {
   const limits: Limits = { refused: new Set(), failing: new Set(), speaking: new Set(), knocks: [] }
   const script: Script = async (turn) => {
     if (turn.text.includes("You're fin:")) return turn.world.hold(turn.conversation).then(() => "Labels finished.")
@@ -61,7 +61,7 @@ function worldOf(name: string) {
     refusePrompt: (conversation, harness) => {
       if (!limits.refused.has(conversation) || (limits.on && harness !== limits.on)) return undefined
       limits.knocks.push(conversation)
-      return LIMIT
+      return words
     },
   })
   return { world, limits }
@@ -278,6 +278,28 @@ try {
       assert.equal(world.store.undeliveredReports().filter(({ report: kept }) => kept.status !== "progress").length, 0, `${harness} ${failures} failures: nothing left unheard`)
       await world.close()
       time.mock.restore()
+    }
+
+    // A limit that says when it lifts: the digest goes then, not before, whatever comes round, and once.
+    {
+      const { world, limits } = worldOf(`${harness}-reset`, "You've hit your usage limit. Try again in 3 hours.")
+      const { conversation, fins } = await apexWithFins(world, harness, names)
+      limits.refused.add(conversation)
+      await report(world, conversation, fins, names)
+      // Its gathering window over, it knocks, and the refusal names the reset.
+      world.live.wakeDue(Date.now() + 60_000)
+      await until(`${harness} reset: the refusal`, () => rows(world, conversation).some((request) => request.digest && request.retry))
+      const held = rows(world, conversation).find((request) => request.digest && request.retry)!
+      assert.equal(held.retry!.at, held.retry!.until! + RESET_MARGIN_MS, `${harness} reset: it goes just past the reset`)
+      assert.ok(Math.abs(held.retry!.until! - (held.retry!.since + 3 * 60 * 60_000)) < 1_000, `${harness} reset: read from its words`)
+      world.live.wakeDue(held.retry!.at - 1)
+      await pause(60)
+      assert.equal(limits.knocks.length, 1, `${harness} reset: nothing knocks before it, for however many reports`)
+      waitsAsOne(world, conversation, names, `${harness} reset`)
+      limits.refused.clear()
+      world.live.wakeDue(held.retry!.at + 1)
+      await goesAsOne(world, conversation, names, `${harness} reset`)
+      await world.close()
     }
 
     // Giving up stops the retrying, never the reports: past the budget nothing knocks, and a digest no model heard rests,

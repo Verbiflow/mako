@@ -62,7 +62,7 @@ try {
     const read: string[] = []
     const working = workingThreads({
       live: {
-        summaries: () => [...byId.values()].map((each) => each.summary),
+        listed: () => [...byId.values()].map((each) => each.summary),
         loaded: (id) => id !== unloaded.summary.session.id,
         snapshot: (id) => (read.push(id), byId.get(id)?.snapshot ?? null),
       },
