@@ -1,7 +1,7 @@
 import type { PromptDelivery } from "./prompt-delivery.js"
 import type { RequestRetry } from "./delivery-retry.js"
 import type { Notice } from "./agents.js"
-import type { ReportedSession } from "@mako/protocol/thread-listing"
+import type { ListedFin, ReportedSession } from "@mako/protocol/thread-listing"
 import { TRACE_PREFIX } from "@mako/protocol/live-tail"
 import { COMPACT_LIVE_FORM } from "@mako/protocol/live-form"
 import type { AttentionKind, WaitingFor } from "@mako/protocol/attention"
@@ -507,6 +507,12 @@ export interface LiveSummary {
    * batch brings it, says the same. Absent from a conversation with no Fins.
    */
   children?: Rollup
+  /**
+   * An Apex's Fins as another device's row lists them (`ListedFin`, link version 19 on), for a window that holds no
+   * roster of it: `finsAsChildren` makes them the entries its roster would be, so every selector reads them the same.
+   * Absent from this host's own conversations, whose roster says them.
+   */
+  fins?: readonly ListedFin[]
   /**
    * Its Thread's name, for a conversation listed from another device: the name the person or Mako gave the Thread
    * there, which titles the Thread's row as this Mac's own Threads' names title theirs.

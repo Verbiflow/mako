@@ -8,12 +8,16 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { MAX_EVENT_BYTES, NUMBERED_LIVE_VERSION, serveRuntime, type Payload } from "@mako/protocol"
-import { rowsForLink, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
+import { LISTED_FINS, ListedSessionSchema, ReportedSessionSchema, rowsForLink, type ListedFin, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
+import { randomUUID } from "node:crypto"
+import { entryState, type ChildState } from "@mako/host/contracts/agents"
+import { childLine, childStateOf, childWord, finsAsChildren, listedFins, orderedChildren, rollup } from "@mako/host/contracts/children"
+import { CHILDREN_BINDING, type NativeAgent } from "@mako/host/contracts/native-agents"
 import { AccountSessions } from "@mako/protocol/account-sessions"
 import { MovesUnderWay } from "@mako/host/conversations/moves-under-way"
 import { SENT_EVERY_MS, SentProgress } from "@mako/host/conversations/cloud-moves"
 import type { MoveSent } from "@mako/host/contracts/cloud-threads"
-import { ACTIVITY_REPORT_MS, conversationShown, finAsking, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
+import { ACTIVITY_REPORT_MS, conversationShown, FINS_COALESCE_MS, finAsking, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
 import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
@@ -622,6 +626,79 @@ test("a batch that moves what a list shows of its conversation is reported on th
   const later = new SessionPublisher({ rows: () => rows, shown: () => ({ state: "working" }), now: () => now, reportNow: () => {}, schedule: (run, afterMs) => { soon.push({ run, afterMs }) } })
   later.own(batch())
   assert.equal(soon.length, 0, "no link yet: nothing to report on")
+})
+
+test("an Apex's row says its Fins; a change to them alone waits a quarter second for the others with it, and anything else still goes at once", async () => {
+  let rows = [row(1)]
+  const fin = (name: string, state: ListedFin["state"]): ListedFin => ({ thread: ThreadIdSchema.parse(randomUUID()), name, harness: "cursor", state, startedAt: new Date(NOW).toISOString() })
+  let shown: ConversationShown = { state: "working", fins: [fin("one", { kind: "working", step: "Reading a" })] }
+  const sent: SessionsReport[] = []
+  const soon: Array<{ run: () => void; afterMs: number }> = []
+  let serving: SessionLink | undefined
+  const publisher = new SessionPublisher({
+    rows: () => rows,
+    shown: (conversation) => (conversation === "c-1" ? shown : undefined),
+    now: () => NOW,
+    reportNow: () => publisher.report(serving),
+    schedule: (run, afterMs) => { soon.push({ run, afterMs }) },
+  })
+  serving = { link: await newLink(), served: { version: 19, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  publisher.report(serving)
+  // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
+  const batch = () => ({ type: "live-batch", batch: { id: "c-1", revision: 3, updates: [] } }) as never
+  publisher.own(batch())
+  soon.shift()?.run()
+  for (const step of ["Reading b", "Reading c", "Editing d"]) {
+    shown = { ...shown, fins: [fin("one", { kind: "working", step })] }
+    publisher.own(batch())
+  }
+  assert.deepEqual(soon.map((each) => each.afterMs), [FINS_COALESCE_MS], "three steps of a Fin: one report, a quarter second on")
+  rows = [{ ...row(1), fins: shown.fins }]
+  soon.shift()?.run()
+  assert.deepEqual(soon.map((each) => each.afterMs), [0], "then on the next turn, as any change")
+  soon.shift()?.run()
+  assert.deepEqual(sent.at(-1)?.listed.map((each) => each.fins?.[0]?.state), [{ kind: "working", step: "Editing d" }], "what stands when it goes is what's said")
+  shown = { state: "waiting", waitingOn: "Approve: git push", fins: shown.fins }
+  publisher.own(batch())
+  assert.deepEqual(soon.map((each) => each.afterMs), [0], "the Apex's own change goes on the next turn, its Fins with it")
+  assert.deepEqual(conversationShown({ session: { id: "apex", status: "running" }, working: "running", waitingOn: () => undefined, fins: () => shown.fins }).fins, shown.fins, "the row says the Fins its roster lists")
+  assert.equal(conversationShown({ session: { id: "apex", status: "running" }, working: "running", waitingOn: () => undefined, fins: () => undefined }).fins, undefined)
+})
+
+test("a row's Fins read on another device count, order and say each Fin as its owner's roster does, for any roster", () => {
+  const cut = (line: string | undefined) => line?.slice(0, 100)
+  // SAFETY: a blocked Fin's ask, filled only as far as `listedFinState` reads it (it drops the ask whole).
+  const states: ChildState[] = [
+    { kind: "queued", reason: "place-full", ahead: 3 }, { kind: "queued", reason: "tree-running", ahead: 0 }, { kind: "starting", step: "launching" },
+    { kind: "working", step: `Running ${"x".repeat(400)}` }, { kind: "working", phase: "Reading the brief" }, { kind: "working" }, { kind: "idle" },
+    { kind: "blocked", question: "Which branch?", on: "person", ask: { id: "a-1", kind: "question" } as never }, { kind: "blocked", question: "Plain or friendly?", on: "lead" },
+    { kind: "blocked", question: "Approve: npm ci", on: "approval" }, { kind: "ended", outcome: "done" }, { kind: "ended", outcome: "failed", reason: "exit 1" }, { kind: "ended", outcome: "stopped" },
+    { kind: "queued", reason: "tree-running", ahead: 0, after: ["li-protocol", "x".repeat(300)] }, { kind: "queued", reason: "tree-running", ahead: 1, after: ["li-flage"], held: "li-flage" },
+    { kind: "queued", reason: "place-full", ahead: 0, refused: `It didn't start: ${"x".repeat(300)}` }, { kind: "queued", reason: "tree-running", ahead: 0, apexStopped: true },
+    { kind: "ended", outcome: "done", decision: { question: "Merge #371?", on: "person", ask: { id: "d-1", kind: "question" } } }, { kind: "ended", outcome: "done", decision: { question: "Pick one", on: "lead", ask: { id: "d-2", kind: "question" } } },
+    { kind: "ended", outcome: "stopped", reason: "out of usage", unfinished: true }, { kind: "working", answered: { by: "person", answer: `Merge ${"x".repeat(390)}` } },
+    { kind: "idle", waitingOn: [{ kind: "pull-request", ref: "Verbiflow/mako#386", repository: "Verbiflow/mako", number: 386, until: "checks" }, { kind: "person", what: "merge" }, { kind: "other", text: "the deploy" }], since: NOW - 60_000 },
+    // What a roster says that no selector reads: it stays with the owner.
+    { kind: "blocked", question: "Which?", on: "person", waitingOn: [{ kind: "person", what: "merge" }] }, { kind: "ended", outcome: "done", waitingOn: [{ kind: "other", text: "the deploy" }] },
+  ]
+  let seed = 7
+  const next = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2 ** 31), seed % n)
+  for (let run = 0; run < 300; run++) {
+    const roster: NativeAgent[] = Array.from({ length: next(LISTED_FINS) + 1 }, (_, index) => {
+      const state = states[next(states.length)]!
+      const at = NOW - next(10_000) * 1_000
+      return { nativeId: `mako-child:${index}`, title: `fin-${index}`, work: "agent", background: true, state: entryState(state), bindingId: CHILDREN_BINDING, provider: ["cursor", "claude", "codex"][next(3)]!, observedAt: at, startedAt: at, child: { thread: ThreadIdSchema.parse(randomUUID()), name: `fin-${index}`, origin: "started", state } }
+    })
+    const fins = listedFins(roster)!
+    assert.ok(ReportedSessionSchema.parse({ ...row(1), fins }), "what the owner lists, the protocol carries")
+    const elsewhere = finsAsChildren(ListedSessionSchema.parse({ ...row(1), runsOn: { kind: "device", deviceId: uuid(9) }, listedAt: new Date(NOW).toISOString(), fins }).fins)
+    assert.deepEqual(rollup(orderedChildren(elsewhere)), rollup(roster), "the same counts every surface shows")
+    assert.deepEqual(orderedChildren(elsewhere).map((agent) => agent.child?.thread), orderedChildren(roster).map((agent) => agent.child?.thread), "in the same order")
+    assert.deepEqual(elsewhere.map((agent) => childWord(childStateOf(agent))), orderedChildren(roster).map((agent) => childWord(childStateOf(agent))), "each with the same word")
+    assert.deepEqual(elsewhere.map((agent) => cut(childLine(childStateOf(agent), NOW))), orderedChildren(roster).map((agent) => cut(childLine(childStateOf(agent), NOW))), "and the same line, as far as a row keeps of it")
+    assert.ok(finsAsChildren(fins) === finsAsChildren(fins), "the same entries while the row's Fins are")
+  }
+  assert.equal(listedFins([]), undefined, "an Apex with no Fins says none")
 })
 
 test("what a conversation's batch is checked against is what its row says", () => {
