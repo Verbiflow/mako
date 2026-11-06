@@ -254,7 +254,7 @@ export function WorkbenchStrip({ children, end }: { children: ReactNode; end?: R
     <div className="flex h-10 shrink-0 items-center bg-shell">
       <div
         role="tablist"
-        className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-2"
+        className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-2 [scrollbar-width:none]"
       >
         {children}
       </div>
