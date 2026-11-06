@@ -8,7 +8,7 @@ import { recordedTurnChanges } from "@/lib/turn-changes"
 import { useAcp } from "@/state/acp"
 import { useAgentsOffered } from "@/state/agents-offered"
 import { shallowEqual } from "@/state/store"
-import { agentsConversation, openAgents, useDeskFin } from "./agents-open"
+import { openAgents, useDeskFin } from "./agents-open"
 import { openFiles } from "./files-open"
 import { deskReviewCode, openReview } from "./review-open"
 import { changedRequests } from "./review-model"
@@ -28,8 +28,8 @@ function ChangesReading({ conversation }: { conversation: string }) {
  * the one open lit, and what it opened under them. The three take turns, so a row is all it takes to go between them.
  */
 export function WebSideRail({ active, conversation }: { active: "changes" | "files" | "agents"; conversation: string }) {
-  const offered = useAgentsOffered()
-  const fin = useDeskFin((state) => state.agent !== null)
+  const apex = useDeskFin((state) => state.fin?.apex)
+  const offered = useAgentsOffered(apex)
   return (
     <nav role="tablist" aria-label="Right rail" aria-orientation="vertical" data-side-rail className="flex shrink-0 flex-col gap-px px-2 pt-1.5 pb-2" onKeyDown={moveInRail}>
       <RailRow
@@ -59,7 +59,7 @@ export function WebSideRail({ active, conversation }: { active: "changes" | "fil
         open={active === "files"}
         onClick={() => active !== "files" && openFiles({ conversation })}
       />
-      {offered || fin || active === "agents" ? (
+      {offered || active === "agents" ? (
         <RailRow
           role="tab"
           aria-selected={active === "agents"}
@@ -69,8 +69,8 @@ export function WebSideRail({ active, conversation }: { active: "changes" | "fil
           icon={<ApexMark />}
           label="Agents"
           open={active === "agents"}
-          end={<AgentsReading />}
-          onClick={() => active !== "agents" && openAgents(agentsConversation(conversation))}
+          end={<AgentsReading conversation={apex} />}
+          onClick={() => active !== "agents" && openAgents()}
         />
       ) : null}
     </nav>

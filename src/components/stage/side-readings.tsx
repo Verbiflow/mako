@@ -37,9 +37,9 @@ export function ControlReading() {
 }
 
 /** Who needs the person, in the attention hue, or how the Fins stand; a Session without any counts what still runs. */
-export function AgentsReading() {
+export function AgentsReading({ conversation }: { conversation?: string }) {
   const reading = useAcp((state) => {
-    const { live, counts } = rosterOnScreen(state)
+    const { live, counts } = rosterOnScreen(state, conversation)
     return {
       needs: counts.needs,
       chip: counts.total ? rollupChip(counts) : "",

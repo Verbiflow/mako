@@ -5,31 +5,44 @@ import { createHook, createStore } from "@/state/store"
 /*
  * Agents in a laptop's browser, where Changes and Files go, and the Fin opened in its pane. The Fin is here rather than
  * in its Thread's page because Agents, beside the page, opens one too.
+ *
+ * Neither holds a conversation to go stale. Whether Agents is open is all it keeps: whose roster it shows follows from
+ * what's on screen (`useAgentsRoster`). An Apex is held only inside its open Fin, so none outlives it.
  */
 
-export const agentsOpenStore = createStore<{ open: { conversation: string } | null }>({ open: null })
+export const agentsOpenStore = createStore<{ open: boolean }>({ open: false })
 export const useAgentsOpen = createHook(agentsOpenStore)
 
-/** The Fin the browser's pane shows and the Apex's conversation behind it, whose roster Agents goes on showing. */
-export const deskFinStore = createStore<{ agent: NativeAgent | null; apex?: string }>({ agent: null })
+export interface DeskFin {
+  agent: NativeAgent
+  /** The Thread of the Apex behind it: its page is where the Fin stands. */
+  thread: string
+  /** The Apex's conversation, whose roster Agents goes on showing. */
+  apex: string
+}
+
+export const deskFinStore = createStore<{ fin: DeskFin | null }>({ fin: null })
 export const useDeskFin = createHook(deskFinStore)
 
-export function openAgents(conversation: string): void {
-  agentsOpenStore.set({ open: { conversation } })
+/** A Fin with no conversation on its device yet has nothing to open. */
+export function openDeskFin(agent: NativeAgent, thread: string, apex: string): void {
+  if (agent.child?.conversation) deskFinStore.set({ fin: { agent, thread, apex } })
+}
+
+export function closeDeskFin(): void {
+  if (deskFinStore.get().fin) deskFinStore.set({ fin: null })
+}
+
+export function openAgents(): void {
+  agentsOpenStore.set({ open: true })
 }
 
 export function closeAgents(): void {
-  if (agentsOpenStore.get().open) agentsOpenStore.set({ open: null })
+  if (agentsOpenStore.get().open) agentsOpenStore.set({ open: false })
 }
 
-/** Whose roster Agents shows: the Apex's while one of its Fins is open, else the conversation on hand. */
-export function agentsConversation(conversation: string): string {
-  return deskFinStore.get().apex ?? conversation
-}
-
-/** The composer's chip in the browser: Agents for the conversation on screen, or away again. */
+/** The composer's chip in the browser: Agents, or away again. */
 export function toggleAgents(): void {
-  if (agentsOpenStore.get().open) return closeAgents()
-  const live = activeLiveAcp(acpStore.get())?.key
-  if (live) openAgents(agentsConversation(live))
+  if (agentsOpenStore.get().open) closeAgents()
+  else if (activeLiveAcp(acpStore.get())) openAgents()
 }

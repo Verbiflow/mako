@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef } from "react"
 import { ConversationAgents } from "@/components/inspector/agents-panel"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { agentsOpenStore, closeAgents, deskFinStore, useAgentsOpen } from "./agents-open"
+import { activeAcp, useAcp } from "@/state/acp"
+import { agentsOpenStore, closeAgents, openDeskFin, useAgentsOpen, useDeskFin } from "./agents-open"
 import { filesOpenStore, leftFiles } from "./files-open"
 import { leftReview, reviewOpenStore } from "./review-open"
 import { WebSideRail } from "./side-rail"
@@ -12,13 +13,15 @@ import { WebSideRail } from "./side-rail"
  */
 export function AgentsLayer({ place }: { place: string | undefined }) {
   const open = useAgentsOpen((state) => state.open)
-  // The roster on show is the Fin's Apex's: Agents goes back to it while the Fin stands in the pane.
-  const apex = open?.conversation
+  const onScreen = useAcp((state) => activeAcp(state)?.key)
+  // The Apex's roster while one of its Fins stands in the pane, else that of what's on screen.
+  const roster = useDeskFin((state) => state.fin?.apex) ?? onScreen
+  const thread = useAcp((state) => (roster ? state.conversations[roster]?.threadId : undefined))
   const openFin = useCallback(
     (agent: NativeAgent) => {
-      if (agent.child?.conversation) deskFinStore.set({ agent, apex })
+      if (roster && thread) openDeskFin(agent, thread, roster)
     },
-    [apex]
+    [roster, thread]
   )
   useEffect(() => {
     if (open) {
@@ -42,13 +45,13 @@ export function AgentsLayer({ place }: { place: string | undefined }) {
     if (was.current !== place) closeAgents()
     was.current = place
   }, [place])
-  if (!open) return null
+  if (!open || !onScreen || !roster) return null
   return (
     <div className="rv-layer" data-form="desk">
       <div className="rv-screen">
-        <WebSideRail active="agents" conversation={open.conversation} />
+        <WebSideRail active="agents" conversation={onScreen} />
         <div className="flex min-h-0 flex-1 flex-col">
-          <ConversationAgents conversation={open.conversation} transcripts={false} onOpenChild={openFin} />
+          <ConversationAgents key={roster} conversation={roster} transcripts={false} onOpenChild={openFin} />
         </div>
       </div>
     </div>

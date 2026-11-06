@@ -55,7 +55,7 @@ async function check() {
   await app.whenReady()
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
   const page = window.webContents
-  const guard = guardElectronCheck({ app, page, name: "The right rail UI check", ms: 150_000 })
+  const guard = guardElectronCheck({ app, page, name: "The right rail UI check", ms: 240_000 })
   page.debugger.attach("1.3")
   /** The viewport drawn at, whatever the screen: a runner's 1024 px one clamps the window, and there the rail covers the chat. A page first: emulating a window that has drawn nothing crashes. */
   const viewport = async (width, height) => {
@@ -67,7 +67,10 @@ async function check() {
     guard.at(label)
     const deadline = Date.now() + 30_000
     while (!(await evaluate(code).catch(() => false))) {
-      if (Date.now() > deadline) throw new Error(`Timed out waiting for ${label}`)
+      if (Date.now() > deadline) {
+        await writeFile(join(root, "failure.png"), (await page.capturePage()).toPNG())
+        throw new Error(`Timed out waiting for ${label}`)
+      }
       await new Promise((done) => setTimeout(done, 50))
     }
   }

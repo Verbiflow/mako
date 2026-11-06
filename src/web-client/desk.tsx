@@ -32,7 +32,7 @@ import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { AgentsLayer } from "./agents-layer"
-import { agentsOpenStore, closeAgents, deskFinStore, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
+import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
 import { FinOfApexContext, childSession } from "./fin-of-apex"
@@ -105,7 +105,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
       routeWindow({
         open: (presence) => {
           // A Session tab or a rail row opens that Session, even the one a Fin stands in front of.
-          deskFinStore.set({ agent: null })
+          closeDeskFin()
           if (presence.threadId) latest.current.open({ kind: "thread", thread: presence.threadId, ...(presence.sessionId && { session: presence.sessionId }) })
         },
         newSession: () => addSession.current?.() ?? false,
@@ -116,6 +116,11 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         },
         threadMenu: (thread) => <DeskThreadMenu thread={thread} />,
         agents: toggleAgents,
+        fin: (thread, agent) => {
+          const listed = foldThreads(latest.current.list).threads.find((each) => each.id === thread)
+          if (listed) openDeskFin(agent, thread, openingSession(listed).row.conversation)
+          latest.current.open({ kind: "thread", thread })
+        },
       }),
     []
   )
@@ -183,7 +188,7 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
   const live = useAcp((state) => activeLiveAcp(state)?.key)
   const changes = useReviewOpen((state) => state.open !== null)
   const files = useFilesOpen((state) => state.open !== null)
-  const agents = useAgentsOpen((state) => state.open !== null)
+  const agents = useAgentsOpen((state) => state.open)
   const railOpen = usePrefs((prefs) => prefs.railOpen)
   return (
     <TitleStrip
@@ -455,16 +460,21 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
   const tabs = useThreadTabs(useMemo(() => ({ thread: threadId, session: session?.row.session }), [threadId, session?.row.session]))
   const shown = session?.row.session
   // The Fin opened from the crew card or Agents, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
-  const child = useDeskFin((state) => state.agent)
   const apexConversation = session?.row.conversation
-  const openChild = useCallback((agent: NativeAgent) => {
-    if (agent.child?.conversation) deskFinStore.set({ agent, apex: apexConversation })
-  }, [apexConversation])
-  useEffect(() => {
-    const apex = apexConversation
-    if (deskFinStore.get().agent) deskFinStore.set({ ...deskFinStore.get(), apex })
-    return () => deskFinStore.set({ agent: null })
-  }, [apexConversation])
+  const child = useDeskFin((state) => (state.fin?.thread === threadId ? state.fin.agent : null))
+  const openChild = useCallback(
+    (agent: NativeAgent) => {
+      if (apexConversation) openDeskFin(agent, threadId, apexConversation)
+    },
+    [threadId, apexConversation]
+  )
+  // Leaving the Thread leaves its Fin; one the rail just opened in the Thread being gone to stands.
+  useEffect(
+    () => () => {
+      if (deskFinStore.get().fin?.thread === threadId) closeDeskFin()
+    },
+    [threadId]
+  )
   // The address named none: the Session is the Thread's own choice, and a send to it may ask first (`openedBy`).
   useEffect(() => {
     if (sessionId === undefined && shown) noteOpenedByScreen(shown)
@@ -499,7 +509,7 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
         }
       >
         {tabs.length ? <SessionTabList tabs={tabs} here={{ thread: thread.id, session: session.row.session }} paneId="main" agentActive={!opened} /> : null}
-        {child && opened ? <FinTab agent={child} onClose={() => deskFinStore.set({ agent: null })} /> : null}
+        {child && opened ? <FinTab agent={child} onClose={closeDeskFin} /> : null}
       </WorkbenchStrip>
       <RoutedOpenContext value={openChild}>
         <FinOfApexContext value={opened ? thread.title : undefined}>

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { acp } from "@/state/acp"
 import { stage } from "@/state/stage"
+import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { AcpPresence } from "@/state/acp-presence"
 import { createHook, createStore } from "@/state/store"
 
@@ -27,6 +28,8 @@ export interface WindowRoutes {
   threadMenu(thread: string | undefined, conversation: string | undefined): ReactNode
   /** Agents, opened or put away, where the stage's right rail isn't drawn. */
   agents?(): void
+  /** An Apex's Fin: this window's own way of opening one, where a Thread's page holds it. */
+  fin?(thread: string, agent: NativeAgent): void
 }
 
 export const windowRoutesStore = createStore<{ routes: WindowRoutes | null }>({ routes: null })

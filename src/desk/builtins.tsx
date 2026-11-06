@@ -85,7 +85,7 @@ export function installBuiltins(): () => void {
       order: 3,
       reading: ControlReading,
     }),
-    registerSurface({ id: "agents", label: "Agents", icon: ApexMark, render: AgentsPanel, order: 4, reading: AgentsReading, useOffered: useAgentsOffered }),
+    registerSurface({ id: "agents", label: "Agents", icon: ApexMark, render: AgentsPanel, order: 4, reading: AgentsReading, useOffered: () => useAgentsOffered() }),
     installSimulatorSurface(),
     // Identity, through the same slots a plugin would use. It lives in the
     // rail's footer and only there: the titlebar carried the same avatar six

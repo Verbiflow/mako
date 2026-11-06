@@ -2613,7 +2613,11 @@ deliberate action and never rides along with a commit.
   is the Apex again. The phone has a count in the bar (`PhoneFinCount`) and the
   crew card, whose rows open a Fin through `RoutedOpenContext` on the web, as
   `openFinInApex` does on the desk; a laptop's browser draws the same rail
-  (`WebSideRail`: Changes, Files and Agents, at the desktop's width) and one Fin tab. `npm run test:side-rail-ui` holds all of it.
+  (`WebSideRail`: Changes, Files and Agents, at the desktop's width) and one Fin tab. Open Fins hold no state that can
+  outlive them: `openFinInApex` is the one way in, routed by `windowRoutes.fin` where a Thread's page holds the Fin; the
+  browser's `DeskFin` keeps its Apex inside the Fin, Agents keeps only that it's open and reads whose roster from what's
+  on screen, and `watchApexView` ends the desk's view once anything else shows. `npm run test:side-rail-ui` holds the
+  rail, and `test:fin-transitions-ui` each way in through closing, another Thread, a reload and the rail on every form.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
   composer's chip, the crew card, the rail's pips, the Agents panel, the stop
   card, the phone's row) counts from the Thread's one roster
