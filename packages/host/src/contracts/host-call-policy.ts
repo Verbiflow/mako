@@ -290,6 +290,8 @@ const replays = [
   "mako:settings-act",
   /** `HarnessTool.act`: an install or update under way refuses a second, and one done is the same end state. */
   "mako:harnesses-act",
+  /** `AutomationTool.act`: an automation already running doesn't run again; the switch is an end state. */
+  "mako:automations-act",
   /** `AgentAskGate.answer`: the ask's id; an answered ask ignores a repeat. */
   "mako:agent-ask-answer",
   /** Whether a machine has its folder for a move only reads. */

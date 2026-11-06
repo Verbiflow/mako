@@ -98,9 +98,24 @@ export type HarnessActResult =
   | { outcome: "asked"; ask: string; next: string }
   | { refused: "unavailable" | "no-thread" | "no-harness" | "cloud-machine" | "failed"; why: string }
 
+/** Lists the person's automations, runs one now, or turns one on or off. */
+export interface AutomationActInput {
+  action: "list" | "run" | "on" | "off"
+  /** run, on, off: the automation, as list gives it. */
+  id?: string
+  /** The caller's own key for this. */
+  clientKey: string
+}
+
+export type AutomationActResult =
+  | { outcome: "listed"; automations: JsonValue }
+  | { outcome: "done"; action: string; id: string }
+  | { outcome: "asked"; ask: string; next: string }
+  | { refused: "unavailable" | "no-thread" | "no-automation" | "failed"; why: string }
+
 /** What the MCP door shows the model of an operation; its input schema is the host call's. */
 export interface ThreadToolDefinition {
-  channel: "mako:threads-move" | "mako:threads-act" | "mako:settings-act" | "mako:harnesses-act"
+  channel: "mako:threads-move" | "mako:threads-act" | "mako:settings-act" | "mako:harnesses-act" | "mako:automations-act"
   replay: HostCallReplay
   /** Inputs the MCP door leaves out: an agent moves its own Thread. */
   filled: readonly "conversation"[]
@@ -181,8 +196,24 @@ export const HARNESS_TOOL: ThreadToolDefinition = {
   },
 }
 
+export const AUTOMATION_TOOL: ThreadToolDefinition = {
+  channel: "mako:automations-act",
+  replay: "replay",
+  filled: [],
+  mcp: {
+    name: "automation",
+    description: "List the person's automations, Run one now, or turn one on or off, as Settings › Automations does. Call it when the person asks. list answers at once; the rest happen now on full access, and on other access Mako asks the person first. To run work beside this Thread, use agents_start.",
+    fields: {
+      action: "list, run, on or off.",
+      id: "run, on, off: the automation's id, from list.",
+      clientKey: "Your own key for this: a repeat with it is the same action.",
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+}
+
 /** Every tool on a `mako` server that acts for the person through one host call. */
-export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, THREAD_ACT_TOOL, SETTINGS_TOOL, HARNESS_TOOL]
+export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, THREAD_ACT_TOOL, SETTINGS_TOOL, HARNESS_TOOL, AUTOMATION_TOOL]
 
 /** What an answer tells an agent to do next. */
 export const AFTER_ACT = {

@@ -5,10 +5,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { AgentAsk } from "@mako/host/contracts/agent-asks"
 import { agentAskLine, agentAskWords } from "@mako/host/contracts/agent-asks"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
-import { HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
-import { AgentAskGate, HarnessTool, registerThreadTools, SettingsTool, ThreadActTool, ThreadMoveAnswerSchema } from "@mako/host/conversations"
+import { AUTOMATION_TOOL, HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
+import { AgentAskGate, AutomationTool, HarnessTool, registerThreadTools, SettingsTool, ThreadActTool, ThreadMoveAnswerSchema } from "@mako/host/conversations"
 import { z } from "zod"
-import { harnessInput, settingsInput, threadActInput } from "../packages/client/src/thread"
+import { automationInput, harnessInput, settingsInput, threadActInput } from "../packages/client/src/thread"
 
 /** `thread`: Rename, Archive and Restore through the host calls the app's menu makes, asking below full access. */
 const agent = (session: string) => ({ kind: "agent" as const, session })
@@ -225,6 +225,45 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
   assert.ok(HARNESS_TOOL.mcp.description.length < 700, "its description stays short")
 }
 
+{
+  // `automation`: a list at any access; Run now and the switch through Settings' calls, asked below full access.
+  const calls: unknown[][] = []
+  const kept = new Map<string, AgentAsk[]>()
+  const gate = new AgentAskGate({
+    open: (id) => kept.get(id) ?? [],
+    raise: (id, ask) => void kept.set(id, [...(kept.get(id) ?? []), ask]),
+    settle: (id, ask) => {
+      const found = kept.get(id)?.find((each) => each.id === ask)
+      if (found) kept.set(id, (kept.get(id) ?? []).filter((each) => each !== found))
+      return found
+    },
+  })
+  let tier: "full" | "auto" = "auto"
+  const tool = new AutomationTool({
+    conversationOf: (session) => (session === "s-mine" ? "mine" : undefined),
+    tier: () => tier,
+    invoke: async (channel, args) => {
+      calls.push([channel, ...args])
+      return []
+    },
+    gate,
+  })
+  gate.runs = { automation: async (_id, want) => void (await tool.run(want.action, want.id)) }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "list", clientKey: "k" }), { outcome: "listed", automations: [] })
+  const asked = await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "k" })
+  assert.equal("outcome" in asked && asked.outcome, "asked")
+  assert.equal(calls.length, 1, "nothing ran on the agent's word alone")
+  await gate.answer("mine", "ask" in asked ? asked.ask : "", true)
+  assert.deepEqual(calls.at(-1), ["mako:run-automation", "nightly"])
+  tier = "full"
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "off", id: "nightly", clientKey: "k" }), { outcome: "done", action: "off", id: "nightly" })
+  assert.deepEqual(calls.at(-1), ["mako:automation-enabled", "nightly", false])
+  assert.equal(await tool.act(agent("s-mine"), { action: "on", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-automation")
+  assert.equal(hostCallReplay(AUTOMATION_TOOL.channel), AUTOMATION_TOOL.replay)
+  assert.ok(AUTOMATION_TOOL.mcp.description.length < 700, "its description stays short")
+}
+
+assert.deepEqual({ ...automationInput(["automation", "on", "nightly", "--key", "k"]) }, { action: "on", clientKey: "k", id: "nightly" })
 assert.deepEqual({ ...harnessInput(["harness", "update", "codex", "--key", "k"]) }, { action: "update", harness: "codex", clientKey: "k" })
 assert.deepEqual({ ...harnessInput(["harness", "read", "--key", "k"]) }, { action: "read", clientKey: "k" })
 

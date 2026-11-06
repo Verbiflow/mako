@@ -69,6 +69,15 @@ const START = verb("Start", "Starting", "Started")
 const READ = verb("Read", "Reading", "Read")
 const MOVE = verb("Move", "Moving", "Moved")
 
+/** `automation`: the list, or what it did to one. */
+function automationWords(args: Fields): Said {
+  const what = text(args.id) ? `the automation ${text(args.id)}` : "an automation"
+  if (args.action === "run") return { verb: verb("Run", "Running", "Ran"), what }
+  if (args.action === "on") return { verb: verb("Turn on", "Turning on", "Turned on"), what }
+  if (args.action === "off") return { verb: verb("Turn off", "Turning off", "Turned off"), what }
+  return { verb: verb("List", "Listing", "Listed"), what: "the automations" }
+}
+
 /** `harness`: what it read, or which it installed or updated. */
 function harnessWords(args: Fields): Said {
   const what = text(args.harness) ?? "a harness"
@@ -352,6 +361,7 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
   ["thread", { group: "cloud", say: ({ args }) => threadWords(args) }],
   ["settings", { group: "cloud", say: ({ args }) => settingsWords(args) }],
   ["harness", { group: "cloud", say: ({ args }) => harnessWords(args) }],
+  ["automation", { group: "cloud", say: ({ args }) => automationWords(args) }],
 ])
 
 /** The worktree tools' earlier names, in saved history. */
