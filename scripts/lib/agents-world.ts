@@ -12,6 +12,7 @@ import { withExecutionAdmission, type AccountAdmission } from "@mako/host/harnes
 import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
 import type { LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import { HostJobs } from "@mako/host/base/host-jobs"
+import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
 import type { ProviderBinding, ResumeVerdict } from "@mako/host/contracts/conversation-control"
@@ -220,6 +221,7 @@ export class AgentsWorld {
   readonly events: HostEvent[] = []
   /** Every launch admission resolved, in order, with the account it ran on (`WorldOptions.accounts`). */
   readonly launches: WorldLaunch[] = []
+  private readonly inputs = new HostCallInputs()
   /** When each of `events` was emitted, by its place. */
   readonly eventAt: number[] = []
   private asking = new Map<string, { observationId: string; answered: (response: LivePermissionResponse) => void }>()
@@ -299,7 +301,8 @@ export class AgentsWorld {
         // host starts on its own conversations: a start the last one left preparing never reaches the next host's.
         await this.options.preparing?.(options)
         if (options.parent && !options.resume && !agents.startWanted(options.parent.op)) throw new Error("Its Apex stopped it before it started.")
-        await live.start(harness, cwd, options)
+        // Parsed as the host parses it, so what a schema drops never reaches the start here either.
+        await live.start(...this.inputs.of("mako:live-start").parse([harness, cwd, options]))
         await this.options.replying?.(options)
       },
       harnesses: () => HARNESSES,
