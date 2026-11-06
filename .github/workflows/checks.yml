@@ -171,6 +171,7 @@ jobs:
       - run: npm run test:background-agents
       - run: npm run test:start-interleavings
       - run: npm run test:followed-stop-crash
+      - run: npm run test:held-notice-crash
       - run: npm run test:agents-migrate
       # A Thread is one conversation: every Thread of several Sessions split into one per Session, losing nothing, idempotent,
       # crash-safe, reversible, on a store of the person's scale (`docs/one-conversation.md`).
