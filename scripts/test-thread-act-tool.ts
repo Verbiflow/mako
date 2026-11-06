@@ -7,11 +7,14 @@ import { agentAskLine, agentAskWords } from "@mako/host/contracts/agent-asks"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
 import { AgentAskGate, registerThreadTools, ThreadActTool, ThreadMoveAnswerSchema } from "@mako/host/conversations"
+import { z } from "zod"
 import { threadActInput } from "../packages/client/src/thread"
 
 /** `thread`: Rename, Archive and Restore through the host calls the app's menu makes, asking below full access. */
 const agent = (session: string) => ({ kind: "agent" as const, session })
 const person = { kind: "person" as const }
+const ActSchema = z.object({ action: z.enum(["rename", "archive", "restore"]), title: z.string().optional(), clientKey: z.string() })
+const operationOf = (call: { args: unknown[] } | undefined) => z.object({ id: z.string() }).parse(call?.args[0]).id
 
 function world(tier: "full" | "auto" = "full", fails = false) {
   const calls: Array<{ channel: string; args: unknown[] }> = []
@@ -32,7 +35,6 @@ function world(tier: "full" | "auto" = "full", fails = false) {
     invoke: async (channel, args) => {
       if (fails) throw new Error("That Thread no longer exists")
       calls.push({ channel, args })
-      return {}
     },
     gate,
   })
@@ -50,9 +52,9 @@ function world(tier: "full" | "auto" = "full", fails = false) {
   assert.deepEqual(calls[0]?.args.slice(1), ["thread-mine", "Ship the importer"])
   assert.equal(calls[0]?.args[0], calls[1]?.args[0], "a repeat with the key is the same operation")
   assert.equal((await tool.act(agent("s-mine"), { action: "archive", clientKey: "a" })) && calls.at(-1)?.channel, "mako:thread-archive")
-  assert.deepEqual(calls.at(-1)?.args, [{ id: (calls.at(-1)?.args[0] as { id: string }).id, target: { kind: "live", id: "mine" }, archived: true }])
+  assert.deepEqual(calls.at(-1)?.args, [{ id: operationOf(calls.at(-1)), target: { kind: "live", id: "mine" }, archived: true }])
   assert.deepEqual(await tool.act(agent("s-mine"), { action: "restore", clientKey: "r" }), { outcome: "restored" })
-  assert.deepEqual(calls.at(-1)?.args, [{ id: (calls.at(-1)?.args[0] as { id: string }).id, target: { kind: "live", id: "mine" }, archived: false }])
+  assert.deepEqual(calls.at(-1)?.args, [{ id: operationOf(calls.at(-1)), target: { kind: "live", id: "mine" }, archived: false }])
 }
 
 {
@@ -97,7 +99,7 @@ function world(tier: "full" | "auto" = "full", fails = false) {
   const server = new McpServer({ name: "mako", version: "1.0.0" })
   const { tool } = world()
   registerThreadTools(server, {
-    invoke: async (_channel, args) => ThreadMoveAnswerSchema.parse(await tool.act(args[0] as { kind: "agent"; session: string }, args[1] as Parameters<ThreadActTool["act"]>[1])),
+    invoke: async (_channel, args) => ThreadMoveAnswerSchema.parse(await tool.act(agent("s-mine"), ActSchema.parse(args[1]))),
     caller: () => agent("s-mine"),
   })
   const [serverSide, clientSide] = InMemoryTransport.createLinkedPair()

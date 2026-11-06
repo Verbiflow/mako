@@ -73,7 +73,7 @@ const MOVE = verb("Move", "Moving", "Moved")
 function threadWords(args: Fields): Said {
   if (args.action === "archive") return { verb: verb("Archive", "Archiving", "Archived"), what: "this Thread" }
   if (args.action === "restore") return { verb: verb("Restore", "Restoring", "Restored"), what: "this Thread" }
-  const title = typeof args.title === "string" ? firstWords(args.title) : undefined
+  const title = firstWords(text(args.title))
   return { verb: verb("Rename", "Renaming", "Renamed"), what: title ? `this Thread to ${title}` : "this Thread" }
 }
 const MERGE = verb("Merge", "Merging", "Merged")

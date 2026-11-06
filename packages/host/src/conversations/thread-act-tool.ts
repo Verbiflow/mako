@@ -13,7 +13,7 @@ export interface ThreadActToolDeps {
   threadOf(conversationId: string): string | undefined
   tier(conversationId: string): AccessTier | undefined
   /** A host call through the table every client calls: Rename and Archive as the app presses them. */
-  invoke(channel: "mako:thread-rename" | "mako:thread-archive", args: unknown[]): Promise<unknown>
+  invoke(channel: "mako:thread-rename" | "mako:thread-archive", args: unknown[]): Promise<void>
   gate: AgentAskGate
 }
 

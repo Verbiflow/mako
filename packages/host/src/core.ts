@@ -1086,7 +1086,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
     threadOf: (id) => threads.store?.journalPlacement(id)?.thread,
     tier: (id) => sessionAccessTier(live.session(id)),
-    invoke: (channel, args) => methods.invoke(channel, args),
+    invoke: async (channel, args) => void (await methods.invoke(channel, args)),
     gate: late.agentAsks,
   })
   late.agentAsks.runs = {
