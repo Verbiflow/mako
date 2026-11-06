@@ -76,6 +76,9 @@ function FinLimit() {
   const saveLimit = (next: number | null) => void setFinLimit(next).catch(fail)
   const saveCeiling = (next: number) => void setFinCeiling(next).catch(fail)
   const based = capacity ? [capacity.pressure ?? capacity.why, ...capacity.measured ? [] : ["defaults so far"]].join(" · ") : undefined
+  // Another place's operations this Mac runs take Fins' places from the same number.
+  const lending = capacity?.lent?.length ? `${capacity.lent.length} lent: ${capacity.lent.join(", ")}` : undefined
+  const detail = [own !== undefined ? `Your number${capacity ? ` · Auto would be ${capacity.auto}` : ""}` : based ?? "Its capacity", lending].filter(Boolean).join(" · ")
   return (
     <section className="flex flex-col gap-3" aria-label="Fins at once">
       <div>
@@ -88,7 +91,7 @@ function FinLimit() {
       <div role="list" className="flex flex-col gap-px">
         <PlaceRow
           place="This Mac"
-          detail={own !== undefined ? `Your number${capacity ? ` · Auto would be ${capacity.auto}` : ""}` : based ?? "Its capacity"}
+          detail={detail}
           caution={Boolean(capacity?.pressure) && own === undefined}
         >
           <Segmented

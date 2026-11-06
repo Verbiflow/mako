@@ -34,9 +34,10 @@ export const PROTOCOL_VERSION = 1
  * what one of its Session's Fins asks the person (`asking`), which the row waits on, and where the Session stands
  * under it. 19 lets a `sessions` row say its Session's Fins (`fins`): every device shows an Apex's tree as its owner
  * does. 20 lets a row's Fins say all their selectors read of them (`FIN_STATES_VERSION`). 21 takes `borrow` frames,
- * what the runtime's Thread borrows as it changes. Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * what the runtime's Thread borrows as it changes. 22 takes a device runtime's `advertise`: what it can serve and its
+ * room, for borrowing by capability. Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 21
+export const LINK_VERSION = 22
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -128,6 +129,12 @@ export const FIN_STATES_VERSION = 20
  * said as it changes. A link that agreed less reads the same pushes by asking for them.
  */
 export const BORROW_LINK_VERSION = 21
+
+/**
+ * The first link version a device's runtime may send `advertise` on: its capabilities and slots as it probed them
+ * (`borrow.ts`), on enrolment, on each change and hourly. A gateway that agreed less hears none, and routes nothing to it.
+ */
+export const ADVERTISE_LINK_VERSION = 22
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

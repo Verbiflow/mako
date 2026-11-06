@@ -179,6 +179,8 @@ export interface ConversationsDeps {
   builds?(): { slots: number; holders: string[] }
   /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
   finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
+  /** Operations this device runs for another place's Threads (`LentHere`): each takes a Fin's place here. */
+  lent?: () => number
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -352,6 +354,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
         const saved = await deps.invoke("mako:harness-order-saved", [])
         return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))
       },
+      ...(deps.lent && { lent: deps.lent }),
       ...(deps.finCapacity && {
         finLimit: () => deps.finCapacity!.atOnce(),
         observeCapacity: (working: number, mix: Readonly<Record<string, number>>, fins?: readonly { conversation: string; harness: string }[]) => deps.finCapacity!.observe(working, mix, fins),

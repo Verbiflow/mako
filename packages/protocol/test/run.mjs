@@ -35,6 +35,7 @@ import {
   PORT_BODY_LIMIT,
   PORTS_VERSION,
   QUIET_VERSION,
+  ADVERTISE_LINK_VERSION,
   decodePortHead,
   encodePortHead,
   MediaTooLargeError,
@@ -111,7 +112,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 21)
+    assert.equal(SUPPORTED_VERSIONS.max, 22)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -605,6 +606,32 @@ describe("a runtime served through serveRuntime", () => {
     assert.equal(lines.filter((line) => line.event === "going-quiet").length, 1)
     assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "going-quiet", reason: "sign-out" })), { type: "going-quiet", reason: "sign-out" })
     assert.throws(() => decodeRuntimeFrame(JSON.stringify({ type: "going-quiet", reason: "bored" })), WireError)
+    older.close()
+    await gateway.close()
+  })
+
+  test("a device says what it can serve and its room on a link that knows the frame; never a value, and an older link never hears it", async () => {
+    const gateway = createFakeGateway()
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-mac", build: "test", handle: async (operation) => answer(operation, null) })
+    const advertisement = {
+      capabilities: [
+        { capability: "macos", version: "26.1", attributes: { arch: "arm64" } },
+        { capability: "ios-simulator", version: "26.1", attributes: { runtime: "iOS 26.1", device: "iPhone 17 Pro", form: "phone" } },
+      ],
+      slots: { used: 2, of: 6 },
+      load: "14 cores, 36 GB",
+      at: 1_000,
+    }
+    assert.equal(runtime.advertise(advertisement), true)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.deepEqual(gateway.advertisements("d-mac"), [advertisement])
+    const older = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-old", build: "test", versions: { min: 1, max: ADVERTISE_LINK_VERSION - 1 }, handle: async (operation) => answer(operation, null) })
+    assert.equal(older.advertise(advertisement), false, "a gateway before version 20 routes nothing to it by capability")
+    assert.deepEqual(gateway.advertisements("d-old"), [])
+    assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "advertise", ...advertisement })), { type: "advertise", ...advertisement })
+    const token = { capability: "cli", attributes: { command: "gh" }, token: "ghp_x" }
+    assert.throws(() => decodeRuntimeFrame(JSON.stringify({ type: "advertise", ...advertisement, capabilities: [token] })), WireError, "a capability carries names, never a value")
+    runtime.close()
     older.close()
     await gateway.close()
   })
