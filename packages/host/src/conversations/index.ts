@@ -1,6 +1,7 @@
 import { noteCarried } from "@mako/sessions/record-carried"
 import type { Foreground } from "../base/foreground.js"
 import type { NativeRoutingReading } from "../contracts/native-routing.js"
+import { routeAccepted } from "../contracts/model-routes.js"
 import type { HostWork } from "../base/event-loop.js"
 import { makoRecords } from "@mako/sessions/record-streams"
 import type { Git } from "@mako/git"
@@ -318,6 +319,21 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       catalogOf: (harness) => harnesses.profiles.held(harness)?.models,
       limited: async (harness) => (await harnesses.accounts.limited(harness)) ?? undefined,
       finPolicy: () => deps.finDefaults?.reading().policy,
+      accounts: (harness, on, all) => harnesses.accounts.standing(harness, on, all),
+      connections: async (harness) => {
+        const adapter = host.liveDrivers.get(harness)?.modelRoutes
+        const named = adapter?.kind === "accepts" ? adapter.model : undefined
+        if (adapter?.kind !== "accepts" || !named) return []
+        return (await host.modelConnections.snapshot()).connections.map((connection) => ({
+          id: connection.id,
+          name: connection.name,
+          enabled: connection.enabled,
+          accepted: routeAccepted(adapter, connection.kind, connection.wire),
+          models: connection.models.map((model) => ({ id: model.id, harnessModel: named(connection.id, model.id) })),
+        }))
+      },
+      accountContinuation: (harness) => host.liveDrivers.get(harness)?.accountContinuation,
+      moveOnLimit: () => deps.finDefaults?.reading().moveOnLimit ?? true,
       harnessOrder: async () => {
         const saved = await deps.invoke("mako:harness-order-saved", [])
         return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))
