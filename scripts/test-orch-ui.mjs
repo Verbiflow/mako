@@ -332,7 +332,14 @@ async function check() {
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
   await until("Boolean(document.querySelector('[data-thread] [data-rollup]'))", "the Apex's badge in the phone's list")
   const list = await evaluate(`(() => ({ text: document.querySelector('[data-list]').innerText, rows: document.querySelectorAll('[data-thread]').length, label: document.querySelector('[data-thread] [data-rollup]').getAttribute('aria-label') }))()`)
-  for (const title of children) assert.ok(!list.text.includes(title), `the phone's list lists no Fin (${title})`)
+  const needingYou = new Set(["Quiet-hours push wording", "Sheet motion on iPad"])
+  for (const title of children) {
+    if (needingYou.has(title)) assert.ok(list.text.includes(`${title}`), `a Fin that needs you is its own row (${title})`)
+    else assert.ok(!list.text.includes(title), `the phone's list lists no Fin that is getting on without you (${title})`)
+  }
+  assert.match(list.text, /Mobile polish · Which tone for the quiet-hours notice/)
+  assert.match(list.text, /Mobile polish · Approve: npm ci/)
+  assert.equal(await evaluate("document.querySelector('[data-list-chip=inbox] [data-inbox-count]')?.textContent"), "2", "the Inbox chip counts what needs you")
   assert.equal(list.rows, 4)
   assert.equal(list.label, "12 Fins: 2 need you, 5 working, 2 queued, 3 done")
   await both("phone-list")

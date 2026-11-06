@@ -166,7 +166,7 @@ test("archived cloud Threads fold apart, as the account keeps them", () => {
 })
 
 test("a route survives its address: Back, a reload and a notification land where they should", () => {
-  const routes: WebRoute[] = [{ kind: "list" }, { kind: "thread", thread: uuid(1) }, { kind: "thread", thread: uuid(1), session: uuid(2) }, { kind: "new" }, { kind: "settings" }]
+  const routes: WebRoute[] = [{ kind: "list" }, { kind: "inbox" }, { kind: "thread", thread: uuid(1) }, { kind: "thread", thread: uuid(1), session: uuid(2) }, { kind: "new" }, { kind: "settings" }]
   // At the root of the app's own host, and under a path of another's.
   for (const base of ["/", "/app/"])
     for (const route of routes) {

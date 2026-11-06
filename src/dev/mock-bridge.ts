@@ -482,6 +482,15 @@ export function installMockBridge() {
         liveSnapshots.set(APEX_CONVERSATION, next)
         emit({ type: "live-batch", batch: { id: APEX_CONVERSATION, revision: next.revision, updates: [], session } })
       },
+      /** One more word of the Apex's turn, the way a token arrives while it runs. */
+      token() {
+        const snapshot = liveSnapshots.get(APEX_CONVERSATION)
+        if (!snapshot) return 0
+        const next = { ...snapshot, revision: snapshot.revision + 1 }
+        liveSnapshots.set(APEX_CONVERSATION, next)
+        emit({ type: "live-batch", batch: { id: APEX_CONVERSATION, revision: next.revision, updates: [{ kind: "text", text: "token" }] } })
+        return next.revision
+      },
     })
   }
   /** `?app=slow-start`: a start the host takes 26 s to accept, as a cloud Thread's might, with its steps, to see the wait. */

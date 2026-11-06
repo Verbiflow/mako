@@ -7,9 +7,13 @@ import { selectAcpPresence } from "@/state/acp-presence"
 import { acpStore, type AcpConversation, type AcpState, type LiveAcpConversation } from "@/state/acp-state"
 import { openFinInApex, threadChildren } from "@/state/apex-fins"
 import { answerLiveApproval } from "@/state/live-approvals"
+import { hydrateLive } from "@/state/live-recovery"
 import { threads } from "@/state/threads"
 import { openConversation, windowRoutesStore } from "@/state/window-routes"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
+import { stage } from "@/state/stage"
+import { viewer } from "@/state/viewer"
+import { toast } from "sonner"
 import { createHook, createStore } from "@/state/store"
 import type { ThreadsState } from "@/state/thread-state"
 import { threadStatus } from "@/state/thread-status"
@@ -204,6 +208,11 @@ function buildModel(acp: AcpState, threads: ThreadsState): InboxModel {
   }
   for (const conversation of conversations) {
     if (conversation.kind !== "live") continue
+    // A Fin the Apex's roster carries is that roster's ask, not a second one from its own conversation.
+    if (conversation.parent && conversation.threadId && threadChildren(acp, conversation.parent.thread).some((agent) => agent.child?.thread === conversation.threadId)) {
+      if (conversation.threadPath) coveredPaths.add(conversation.threadPath)
+      continue
+    }
     if (conversation.threadId && askingFins.has(conversation.threadId)) {
       if (conversation.threadPath) coveredPaths.add(conversation.threadPath)
       continue
@@ -257,9 +266,35 @@ export function sameItems<Item extends InboxAsk | ReadInboxItem>(left: readonly 
   return left === right || (left.length === right.length && left.every((item, index) => sameItem(item, right[index]!)))
 }
 
-/** How many things wait on the person: the Inbox row's count, the phone's chip. */
-export function inboxCount(model: InboxModel): number {
-  return model.asks.length
+/**
+ * How many things wait on the person: the Inbox row's count, the phone's chip.
+ * An Apex whose roster this window hasn't opened yet still counts, from the
+ * same rollup its mark reads (`children.needs`), so the number is there before
+ * the questions are.
+ */
+export function inboxCount(acp: AcpState = acpStore.get(), threads: ThreadsState = threadsStore.get()): number {
+  const model = inboxModel(acp, threads)
+  let count = model.asks.length
+  const seen = new Set<string>()
+  for (const conversation of Object.values(acp.conversations)) {
+    if (conversation.kind !== "live" || !conversation.threadId || seen.has(conversation.threadId)) continue
+    seen.add(conversation.threadId)
+    if (threadChildren(acp, conversation.threadId).length) continue
+    count += conversation.children?.needs ?? 0
+  }
+  return count
+}
+
+/** Reads the rosters behind a count that came from a rollup, so the Inbox can show those asks. */
+export function ensureInboxRosters(): void {
+  const acp = acpStore.get()
+  const seen = new Set<string>()
+  for (const conversation of Object.values(acp.conversations)) {
+    if (conversation.kind !== "live" || !conversation.threadId || seen.has(conversation.threadId)) continue
+    seen.add(conversation.threadId)
+    if (threadChildren(acp, conversation.threadId).length) continue
+    if ((conversation.children?.needs ?? 0) > 0) void hydrateLive(conversation.key, true)
+  }
 }
 
 function subscribe(listener: () => void): () => void {
@@ -294,7 +329,28 @@ export function useInbox<S>(select: (model: InboxModel) => S, isEqual: (left: S,
 }
 
 export function useInboxCount(): number {
-  return useInbox(inboxCount)
+  const read = () => inboxCount()
+  return useSyncExternalStore(subscribe, read, read)
+}
+
+/** The Inbox in the main pane, over the conversation, and the first item ready for Enter. */
+export function openInbox(): void {
+  viewer.showAgent()
+  stage.showChat()
+  ensureInboxRosters()
+  inboxView.open()
+  requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-inbox-item]")?.focus())
+}
+
+/**
+ * Cmd+Shift+U: the Inbox; pressed again with it open, the first thing in it,
+ * which is what the chord did before the Inbox.
+ */
+export function inboxShortcut(): void {
+  if (!inboxViewStore.get().open) return openInbox()
+  const first = inboxModel().asks[0] ?? inboxModel().toRead[0]
+  if (first) openInboxItem(first)
+  else toast("Nothing is waiting for you")
 }
 
 /** Opens an item's Thread, or the Fin inside its Apex, and leaves the Inbox for it. */

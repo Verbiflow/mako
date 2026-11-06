@@ -6,6 +6,7 @@ import { MakoMark } from "@/components/ui/mako-mark"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
 import { useKeyboardInset } from "./keyboard"
+import { InboxScreen } from "./inbox"
 import { ThreadList } from "./list"
 import { followNotices } from "./open-notice"
 import { RETURNED_EVENT, returnedOf } from "./resume"
@@ -169,6 +170,8 @@ export function WebApp() {
       selected={under.kind === "thread" && !startPane ? under.thread : undefined}
       onOpen={(thread) => open({ kind: "thread", thread: thread.id })}
       onNew={() => navigate({ kind: "new", over: under })}
+      onInbox={() => open({ kind: "inbox" })}
+      inboxOpen={under.kind === "inbox" && !startPane}
       onSettings={() => open({ kind: "settings" })}
     />
   )
@@ -191,6 +194,8 @@ export function WebApp() {
       ) : (
         <div data-thread-loading className="flex-1 bg-surface" />
       )
+    ) : under.kind === "inbox" ? (
+      <InboxScreen onBack={wide ? undefined : back} onOpen={(thread) => open({ kind: "thread", thread })} />
     ) : under.kind === "settings" ? (
       <Suspense fallback={null}>
         <Settings onBack={wide ? undefined : back} />

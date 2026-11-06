@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { RollupBadge } from "@/components/rail/rollup-badge"
 import { useThreadRollup } from "@/state/apex-fins"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
+import { childStateOf } from "@mako/host/contracts/children"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, GitPullRequestIcon, InboxIcon, LaptopIcon, MoonIcon, SquarePenIcon, WorkflowIcon } from "lucide-react"
+import { FinMark } from "@/components/stage/child-tabs"
+import { ensureInboxRosters, sameItems, useInbox, useInboxCount, type FinInboxItem } from "@/state/inbox"
+import { useAutomations } from "@/state/automations"
+import { openPullRequests, useOpenPulls } from "@/state/open-pulls"
+import { useSession } from "@/state/session"
 import { shallowEqual } from "@/state/store"
 import { Avatar } from "@/components/ui/avatar"
 import { useRowFlip } from "@/components/rail/use-row-flip"
@@ -37,7 +43,7 @@ import { DiagnosisCard } from "./trouble"
 import { checkList, useListDiagnosis, useTryAgain } from "./trouble-state"
 
 /** The list's sections: what needs the person, what's at work, and the rest. */
-function sections(threads: readonly WebThread[]) {
+function sections(threads: readonly WebThread[], finsAsking: boolean) {
   const needs = threads.filter((thread) => thread.standing === "waiting" || thread.standing === "failed")
   const working = threads.filter((thread) => thread.standing === "working" || thread.standing === "moving")
   const rest = threads.filter((thread) => thread.standing === "idle")
@@ -45,7 +51,7 @@ function sections(threads: readonly WebThread[]) {
     { id: "needs", label: "Needs you", threads: needs },
     { id: "working", label: "Working", threads: working },
     { id: "recent", label: "Recent", threads: rest },
-  ].filter((section) => section.threads.length > 0)
+  ].filter((section) => section.threads.length > 0 || (finsAsking && section.id === "needs"))
 }
 
 /**
@@ -54,13 +60,17 @@ function sections(threads: readonly WebThread[]) {
  * round button that steps aside while the list is scrolled down and comes back on the way up. On a tablet, the rail
  * beside what's open: rows inset and rounded, the one open lit, New at its head and your account at its foot.
  */
-export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting = false, settings = false }: { selected?: string; onOpen: (thread: WebThread) => void; onNew: () => void; onSettings: () => void; wide: boolean; starting?: boolean; settings?: boolean }) {
+export function ThreadList({ selected, onOpen, onNew, onInbox, onSettings, wide, starting = false, settings = false, inboxOpen = false }: { selected?: string; onOpen: (thread: WebThread) => void; onNew: () => void; onInbox: () => void; onSettings: () => void; wide: boolean; starting?: boolean; settings?: boolean; inboxOpen?: boolean }) {
   const client = useWebClient()
   const list = useAccountList((state) => state)
   const folded = useMemo(() => foldThreads(list), [list])
   // A Thread swiped away leaves the list at once; it's back only if the archive is taken back or refused.
   const hidden = useArchiving((state) => state.hidden)
   const threads = useMemo(() => (hidden.size ? folded.threads.filter((thread) => !hidden.has(thread.id)) : folded.threads), [folded, hidden])
+  const inboxCount = useInboxCount()
+  const finAsks = useInbox((model) => model.asks.filter((item): item is FinInboxItem => item.kind === "fin"), sameItems)
+  useEffect(() => ensureInboxRosters(), [inboxCount])
+  const groups = sections(threads, finAsks.length > 0)
   const { archived } = folded
   const read = useReadState((state) => state)
   // Threads listed here for the first time read as seen: only what happens from now on is news.
@@ -106,6 +116,10 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
   const away = useAwayWhileScrolling(scroller, !wide)
   useRowFlip(scroller, showArchived ? "archived" : "threads")
   const named = macCount(list) > 1
+  const openFin = (item: FinInboxItem) => {
+    const apex = threads.find((thread) => thread.id === item.apex.thread)
+    if (apex) onOpen(apex)
+  }
   return (
     <div data-list={wide ? "rail" : "screen"} className={cn("web-list relative flex min-h-0 flex-1 flex-col", wide ? "bg-shell" : "bg-surface")}>
       <header className="web-bar flex shrink-0 items-center gap-0.5 pr-1.5 pl-4">
@@ -126,20 +140,28 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
           </>
         )}
       </header>
+      <ListChips count={inboxCount} inboxOpen={inboxOpen} onInbox={onInbox} onSettings={onSettings} />
       <div ref={scroller} className="web-scroll relative min-h-0 flex-1 overflow-y-auto">
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
         <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
           <ListTrouble />
-          {threads.length === 0 && archived.length === 0 ? (
+          {threads.length === 0 && archived.length === 0 && finAsks.length === 0 ? (
             <EmptyList answered={list.phase === "live" || list.asOf !== undefined} onNew={onNew} />
           ) : (
             <>
-              {sections(threads).map((section) => (
-                <section key={section.id} aria-labelledby={`section-${section.id}`} className="web-section">
-                  <h2 id={`section-${section.id}`} className="web-section-label">
+              {groups.map((section) => (
+                <section key={section.id} aria-labelledby={`section-${section.id}`} data-list-section={section.id} className="web-section">
+                  <h2 id={`section-${section.id}`} className={cn("web-section-label", section.id === "needs" && "text-caution")}>
                     {section.label}
                   </h2>
                   <ul role="list" className="web-rows">
+                    {section.id === "needs"
+                      ? finAsks.map((item) => (
+                          <li key={item.key} data-flip-key={item.key}>
+                            <FinRow item={item} onOpen={() => openFin(item)} />
+                          </li>
+                        ))
+                      : null}
                     {section.threads.map((thread) => (
                       <li key={thread.id} data-flip-key={thread.id}>
                         <ThreadRow {...rowProps(thread)} />
@@ -272,6 +294,60 @@ function EmptyList({ answered, onNew }: { answered: boolean; onNew: () => void }
         New thread
       </button>
     </div>
+  )
+}
+
+/**
+ * The list's doorways, under the bar: the Inbox and its count, then pull requests and automations when this
+ * browser knows of any. A phone has no project of its own, so those two stay away until it does.
+ */
+function ListChips({ count, inboxOpen, onInbox, onSettings }: { count: number; inboxOpen: boolean; onInbox: () => void; onSettings: () => void }) {
+  const root = useSession((state) => state.git?.root)
+  const pulls = useOpenPulls((state) => (root ? state.byRoot[root]?.count : undefined))
+  const automations = useAutomations((state) => state.list.length)
+  return (
+    <div data-list-chips className="flex shrink-0 gap-1 overflow-x-auto px-3 pt-1 pb-0.5">
+      <button type="button" data-list-chip="inbox" aria-current={inboxOpen ? "page" : undefined} aria-label={count ? `Inbox, ${count} ${count === 1 ? "needs" : "need"} you` : "Inbox"} onClick={onInbox} className={cn("web-chip", inboxOpen && "bg-fill-selected text-foreground")}>
+        <InboxIcon className="size-4 shrink-0" />
+        Inbox
+        {count ? (
+          <span data-inbox-count={count} className="tabular text-caution">
+            {count}
+          </span>
+        ) : null}
+      </button>
+      {pulls !== undefined && pulls !== null ? (
+        <button type="button" data-list-chip="pulls" onClick={() => void openPullRequests(root)} className="web-chip">
+          <GitPullRequestIcon className="size-4 shrink-0" />
+          Pull requests
+          {pulls > 0 ? <span className="tabular text-faint">{pulls}</span> : null}
+        </button>
+      ) : null}
+      {automations > 0 ? (
+        <button type="button" data-list-chip="automations" onClick={onSettings} className="web-chip">
+          <WorkflowIcon className="size-4 shrink-0" />
+          Automations
+          <span className="tabular text-faint">{automations}</span>
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/** A Fin that needs the person, as its own row: its Apex's name, then what it asks. A tap opens the Apex. */
+function FinRow({ item, onOpen }: { item: FinInboxItem; onOpen: () => void }) {
+  return (
+    <button type="button" data-fin-row={item.ask.fin} onClick={onOpen} aria-label={`${item.title}. ${item.apex.title} · ${item.question}`} className="web-row flex w-full items-center text-left">
+      <span className="web-row-mark">
+        <FinMark agent={item.agent} state={childStateOf(item.agent)} read />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="truncate text-ui font-medium text-foreground">{item.title}</span>
+        <span className="truncate text-label text-caution">
+          {item.apex.title} · {item.question}
+        </span>
+      </span>
+    </button>
   )
 }
 

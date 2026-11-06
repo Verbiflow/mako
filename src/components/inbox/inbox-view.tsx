@@ -1,6 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react"
 import { CheckIcon, ChevronRightIcon, XIcon } from "lucide-react"
-import { toast } from "sonner"
 import { childStateOf } from "@mako/host/contracts/children"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { LiveMark } from "@/components/ui/live-mark"
@@ -15,9 +14,7 @@ import { acpStore } from "@/state/acp-state"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
 import {
   answerApproval,
-  inboxModel,
   inboxView,
-  inboxViewStore,
   openInboxItem,
   sameItems,
   useInbox,
@@ -28,28 +25,7 @@ import {
   type InboxModel,
   type ReadInboxItem,
 } from "@/state/inbox"
-import { stage } from "@/state/stage"
 import { threadsStore } from "@/state/thread-store"
-import { viewer } from "@/state/viewer"
-
-/** The Inbox in the main pane, over the conversation, and the first item ready for Enter. */
-export function openInbox(): void {
-  viewer.showAgent()
-  stage.showChat()
-  inboxView.open()
-  requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-inbox-item]")?.focus())
-}
-
-/**
- * Cmd+Shift+U: the Inbox; pressed again with it open, the first thing in it,
- * which is what the chord did before the Inbox.
- */
-export function inboxShortcut(): void {
-  if (!inboxViewStore.get().open) return openInbox()
-  const first = inboxModel().asks[0] ?? inboxModel().toRead[0]
-  if (first) openInboxItem(first)
-  else toast("Nothing is waiting for you")
-}
 
 function sameModel(left: InboxModel, right: InboxModel): boolean {
   return sameItems(left.asks, right.asks) && sameItems(left.toRead, right.toRead)
@@ -120,6 +96,12 @@ function InboxPane() {
   useHarnessIdentity()
   const model = useInbox((next) => next, sameModel)
   useMinute()
+  const first = model.asks[0]?.key ?? model.toRead[0]?.key
+  useEffect(() => {
+    const current = document.activeElement
+    if (current instanceof HTMLElement && current.closest("[data-inbox]")) return
+    document.querySelector<HTMLElement>("[data-inbox-item]")?.focus()
+  }, [first])
   const empty = !model.asks.length && !model.toRead.length
   return (
     <section data-inbox aria-label="Inbox" className="absolute inset-0 z-30 flex min-h-0 flex-col bg-surface">
