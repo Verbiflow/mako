@@ -191,6 +191,7 @@ async function check() {
     const composer = document.querySelector('[data-composer]').getBoundingClientRect()
     return { rail: rail.width, chat: composer.width, beside: composer.right <= rail.left, covered: [...document.querySelectorAll('button')].some((node) => node.textContent.trim() === 'Workbench') }
   })()`)
+  assert.ok(narrow.chat >= 400, `the chat stays on screen: ${JSON.stringify(narrow)}`)
   assert.equal(narrow.beside, true, `the chat stands left of the rail: ${JSON.stringify(narrow)}`)
   assert.equal(narrow.covered, false, "nothing to get back from")
   assert.ok(narrow.rail >= 340, `the rail keeps its least: ${narrow.rail}`)
@@ -245,6 +246,17 @@ async function check() {
   await until(`Boolean(document.querySelector('[data-child-of] [data-child-tab="${needing}"][aria-selected="true"]'))`, "the Fin's tab in the browser")
   await click("button[aria-label='Close Sheet motion on iPad']")
   await until("!document.querySelector('[data-child-tab]') && Boolean(document.querySelector('[data-crew]'))", "the Apex in the browser again")
+  // So does selecting the Apex's own Session, the one it was already on, as the desktop's tab does.
+  const apexSelected = "!document.querySelector('[data-child-of]') && !document.querySelector('[data-child-tab]') && [...document.querySelectorAll('[data-session-tab]')].some((tab) => tab.getAttribute('aria-selected') === 'true')"
+  await click(`[data-crew-row="${needing}"] button`)
+  await until("Boolean(document.querySelector('[data-child-of] [data-child-tab]'))", "the Fin's tab again")
+  await press("[data-session-tab]")
+  await until(apexSelected, "the Apex's Session tab leaving the Fin")
+  // And its row in the left rail, which opens the same Thread.
+  await click(`[data-crew-row="${needing}"] button`)
+  await until("Boolean(document.querySelector('[data-child-of] [data-child-tab]'))", "the Fin's tab once more")
+  await evaluate("[...document.querySelectorAll('[data-thread-row]')].find((row) => row.textContent.includes('Mobile polish')).click(); true")
+  await until(apexSelected, "the Apex's rail row leaving the Fin")
 
   // The phone: the crew card holds the Fins, the bar counts them, and no chip repeats one.
   await viewport(390, 844)

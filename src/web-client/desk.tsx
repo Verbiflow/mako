@@ -104,6 +104,8 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
     () =>
       routeWindow({
         open: (presence) => {
+          // A Session tab or a rail row opens that Session, even the one a Fin stands in front of.
+          deskFinStore.set({ agent: null })
           if (presence.threadId) latest.current.open({ kind: "thread", thread: presence.threadId, ...(presence.sessionId && { session: presence.sessionId }) })
         },
         newSession: () => addSession.current?.() ?? false,
