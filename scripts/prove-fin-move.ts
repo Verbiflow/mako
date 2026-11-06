@@ -210,7 +210,7 @@ try {
   await writeFile(join(out, "fin-history.jsonl"), (await mako("history", conversation)).map((line) => JSON.stringify(line)).join("\n"))
   const read = await agents("read", "proof", "--transcript")
   await note("agents_read", { whole: read.whole ?? "", truncated: read.truncated ?? false })
-  console.log(`PROVED: ${child} went Codex → Cursor (out) → Claude Code, answered ${word} and reported to its Apex`)
+  console.log(`PROVED: ${child} went ${values.direct ? "Codex → Claude Code" : "Codex → Cursor (out) → Claude Code"}, answered ${word} and reported to its Apex`)
 } finally {
   await cp(join(dataRoot, "logs"), join(out, "logs"), { recursive: true }).catch(() => undefined)
   host?.kill("SIGTERM")
