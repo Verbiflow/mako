@@ -167,7 +167,7 @@ try {
 }
 
 /** Two apps' checks under one slot, in a fresh records folder: `host()` is a new host's tools over the same records and slots. */
-function bench(name: string, slotsOf: () => BuildSlots) {
+function bench(name: string, slotsOf: () => BuildSlots, stopGraceMs?: number) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), `mako-build-slots-${name}-`)))
   const records = join(root, "records")
   const apps = ["one", "two"].map((app, at) => {
@@ -196,7 +196,7 @@ function bench(name: string, slotsOf: () => BuildSlots) {
       return wait.ms
     },
   })
-  const processes = new ThreadProcesses({ root: records, listening: portListening })
+  const processes = new ThreadProcesses({ root: records, listening: portListening, ...(stopGraceMs !== undefined && { stopGraceMs }) })
   return { root, records, wait, one: apps[0]!, two: apps[1]!, processes, host: () => host(processes, slotsOf()), hostOver: host }
 }
 
@@ -482,6 +482,121 @@ const stubborn = (file: string) => `process.on("SIGTERM",()=>fs.writeFileSync("t
   } finally {
     await b.processes.stop(b.one.environment.app)
     rmSync(b.root, { recursive: true, force: true })
+  }
+}
+
+/** A process of a check that detaches, ignores SIGTERM and says its pid: reparented, it's out of the check's tree. */
+const detached = (saidIn: string) => `const child=require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(`process.on("SIGTERM",()=>{});require("node:fs").writeFileSync("${saidIn}",String(process.pid));setInterval(()=>{},1000)`)}],{detached:true,stdio:"ignore"});child.unref();`
+const alive = (pid: number) => {
+  try {
+    return process.kill(pid, 0)
+  } catch {
+    return false
+  }
+}
+const pidIn = (folder: string, file: string) => Number(readFileSync(join(folder, file), "utf8"))
+
+// ── A stopped check's detached child, out of its tree and ignoring SIGTERM: the slot waits for it to be gone.
+{
+  const slots = new BuildSlots(() => 1)
+  const b = bench("detached-stop", () => slots, 300)
+  try {
+    const tools = b.host()
+    writeFileSync(join(b.one.folder, "parent.cjs"), `${detached("child-pid")}setInterval(()=>{},1000)`)
+    for (const app of [b.one, b.two]) await tools.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === b.one ? `"${process.execPath}" parent.cjs` : "echo second finished" } }), "A check")
+    await tools.check(b.one.conversation, "quick")
+    await until(() => existsSync(join(b.one.folder, "child-pid")), "the detached child")
+    const child = pidIn(b.one.folder, "child-pid")
+    assert.ok((await b.processes.footprint(b.one.environment.app, [b.one.folder])).pids.includes(child), "it's the run's before the stop")
+    assert.match(await tools.check(b.two.conversation, "quick"), /waits for a build slot: 1 of 1 in use/)
+    const start = b.processes.start.bind(b.processes)
+    let aliveAtStart: boolean | undefined
+    b.processes.start = (app, specs) => {
+      aliveAtStart ??= alive(child)
+      return start(app, specs)
+    }
+    await b.processes.stop(b.one.environment.app)
+    assert.equal(alive(child), false, "a stop ends it, by what it was seen to be")
+    b.wait.ms = 10_000
+    assert.match(await tools.check(b.two.conversation, "quick"), /passed/)
+    assert.equal(aliveAtStart, false, "the next check started only once it was gone")
+  } finally {
+    for (const app of [b.one, b.two]) await b.processes.stop(app.environment.app)
+    rmSync(b.root, { recursive: true, force: true })
+  }
+}
+
+// ── A check that ends and leaves one behind: it's ended with the check, and the slot goes after it, not before.
+{
+  const slots = new BuildSlots(() => 1)
+  const b = bench("detached-end", () => slots, 300)
+  try {
+    const tools = b.host()
+    writeFileSync(join(b.one.folder, "parent.cjs"), detached("child-pid"))
+    await tools.save(b.one.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: `"${process.execPath}" parent.cjs` } }), "A check")
+    await tools.check(b.one.conversation, "quick")
+    await until(() => existsSync(join(b.one.folder, "child-pid")), "the detached child")
+    const child = pidIn(b.one.folder, "child-pid")
+    await until(() => !slots.reading().holders.length, "the slot to free")
+    assert.equal(alive(child), false, "it went before the slot did")
+  } finally {
+    await b.processes.stop(b.one.environment.app)
+    rmSync(b.root, { recursive: true, force: true })
+  }
+}
+
+// ── One that can't be ended: the slot stays held, and a check waiting on it says why.
+{
+  const slots = new BuildSlots(() => 1)
+  const b = bench("unending", () => slots, 100)
+  const kill = process.kill.bind(process)
+  let child = 0
+  try {
+    const tools = b.host()
+    writeFileSync(join(b.one.folder, "parent.cjs"), detached("child-pid"))
+    for (const app of [b.one, b.two]) await tools.save(app.conversation, RecipeSchema.parse({ values: {}, processes: {}, checks: { quick: app === b.one ? `"${process.execPath}" parent.cjs` : "echo second finished" } }), "A check")
+    const said = join(b.one.folder, "child-pid")
+    process.kill = (pid, signal) => (existsSync(said) && pid === Number(readFileSync(said, "utf8")) && signal !== 0 ? true : kill(pid, signal))
+    await tools.check(b.one.conversation, "quick")
+    await until(() => existsSync(said), "the detached child")
+    await until(() => b.processes.unending().length === 1, "it to outlive SIGKILL")
+    child = pidIn(b.one.folder, "child-pid")
+    assert.equal(slots.reading().holders.length, 1, "its slot stays held")
+    b.wait.ms = 1_000
+    assert.match(await tools.check(b.two.conversation, "quick"), new RegExp(`waits for a build slot: 1 of 1 in use \\(.*process ${child} .* won't end\\)`))
+    assert.notEqual((await b.processes.status(b.two.environment.app)).find((run) => run.name === "quick")?.state.kind, "running", "nothing starts over it")
+    process.kill = kill
+    await until(() => !alive(child), "it to go once it can be ended")
+    b.wait.ms = 10_000
+    assert.match(await tools.check(b.two.conversation, "quick"), /passed/)
+    assert.deepEqual(b.processes.unending(), [])
+  } finally {
+    process.kill = kill
+    if (child && alive(child)) process.kill(child, "SIGKILL")
+    for (const app of [b.one, b.two]) await b.processes.stop(app.environment.app)
+    rmSync(b.root, { recursive: true, force: true })
+  }
+}
+
+// ── A survivor's slot waits for all of it too, not only the tree the new host can see.
+{
+  const { b, processes, slots, check, done } = await survivor("survivor-footprint")
+  try {
+    let gone!: () => void
+    const left = new Promise<void>((resolve) => (gone = resolve))
+    const whenGone = processes.whenGone.bind(processes)
+    processes.whenGone = (app, key) => left.then(() => whenGone(app, key))
+    const next = b.hostOver(processes, slots)
+    await until(() => slots.reading().holders.length === 1, "the survivor to be counted")
+    release(b.one.folder)
+    await until(async () => await check(b.one) === "exited", "its tree to end")
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    assert.equal(slots.reading().holders.length, 1, "its slot waits for what's left of it")
+    gone()
+    b.wait.ms = 10_000
+    assert.match(await next.check(b.two.conversation, "quick"), /passed/)
+  } finally {
+    await done()
   }
 }
 

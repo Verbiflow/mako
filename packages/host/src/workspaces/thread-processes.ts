@@ -71,6 +71,8 @@ const WRAPPER = 'command=$1; exit_file=$2; shift 2; IFS= read -r go || exit 125;
  * shells carry the Thread's values but never this.
  */
 const RUN_MARK = "MAKO_APP_RUN"
+/** Which run of its app a process belongs to: its children keep it wherever they're reparented (`strays`). */
+const RUN_KEY_MARK = "MAKO_APP_RUN_KEY"
 
 export type RunKind = "process" | "check" | "prepare"
 
@@ -270,6 +272,8 @@ export interface ThreadProcessDependencies {
   cameUp?: (folder: string, at: number) => Promise<void>
   /** The container runtime's running containers, or undefined when none answers; the engine's API by default. */
   containers?: () => Promise<ContainerLook | undefined>
+  /** How long a stopped process has after SIGTERM before SIGKILL; `STOP_GRACE_MS` without it. */
+  stopGraceMs?: number
   now?: () => number
 }
 
@@ -315,6 +319,8 @@ export class ThreadProcesses {
   private sharedOverview: { at: number; apps: Promise<AppOverview[]> } | undefined
   private readonly containers: () => Promise<ContainerLook | undefined>
   private readonly exitListeners = new Set<(app: AppKey, key: string) => void>()
+  /** By `runTag`: a run's process that SIGKILL didn't end (`unending`). */
+  private readonly unended = new Map<string, string>()
 
   constructor(dependencies: ThreadProcessDependencies) {
     this.dependencies = dependencies
@@ -372,7 +378,8 @@ export class ThreadProcesses {
     return this.locked(app, async () => {
       const runs = await this.runs(app)
       const chosen = Object.entries(runs).filter(([key]) => !keys || keys.includes(key))
-      await Promise.all(chosen.map(([, record]) => stopTree(record))).finally(() => this.tableChanged())
+      const stopping = chosen.map(([key, record]) => stopTree(record, this.graceMs, record.kind === "check" ? (rows) => this.strays(app, key, record, rows) : undefined))
+      await Promise.all(stopping).finally(() => this.tableChanged())
       for (const [key] of chosen) {
         delete runs[key]
         await rm(this.file(app, key, "exit"), { force: true })
@@ -1010,20 +1017,71 @@ export class ThreadProcesses {
     return { kind: "ended" }
   }
 
-  /**
-   * A run's wrapper exited, which only says to look: its children can outlive it, as one a stop's SIGTERM didn't end
-   * does, and it reads as running until they're gone (`state`). A look that fails says nothing, so it looks again. A
-   * run that took its key meanwhile has its own end to hear.
-   */
+  private get graceMs(): number {
+    return this.dependencies.stopGraceMs ?? STOP_GRACE_MS
+  }
+
+  /** A run's wrapper exited, which only says to look: what it started can outlive it. A run that took its key meanwhile has its own end to hear. */
   private async heardEnd(app: AppKey, key: string, pid: number, run: Run | undefined): Promise<void> {
-    for (let wait = POLL_MS; run; wait = Math.min(wait * 2, GONE_POLL_MOST_MS)) {
-      const rows = await processTable().catch(() => undefined)
-      if (rows && !members(rows, run).length) break
-      await new Promise((resolve) => setTimeout(resolve, wait).unref())
-    }
+    if (run) await this.untilGone(app, key, run)
     const taken = (await this.runs(app).catch(() => undefined))?.[key]
     if (taken && taken.pid !== pid) return
     for (const listener of this.exitListeners) listener(app, key)
+  }
+
+  /** Until a run the last host left, or one this host started, has nothing left of it (`untilGone`). */
+  async whenGone(app: AppKey, key: string): Promise<void> {
+    const run = (await this.runs(app))[key]
+    if (run) await this.untilGone(app, key, run)
+  }
+
+  /**
+   * Until a run's processes are gone. A run reads as running while its tree does (`state`), and a look that fails says
+   * nothing, so it looks again. A check's detached children are out of that tree once reparented, and a daemon left
+   * that way would hold a build slot for hours, so they're ended here. One that can't be ended is said (`unending`),
+   * and the wait goes on: what can't be proved gone keeps its slot.
+   */
+  private async untilGone(app: AppKey, key: string, run: Run): Promise<void> {
+    const tag = runTag(app, key)
+    for (let wait = POLL_MS; ; wait = Math.min(wait * 2, GONE_POLL_MOST_MS)) {
+      const rows = await processTable().catch(() => undefined)
+      if (rows && !members(rows, run).length) {
+        const left = run.kind === "check" ? await this.strays(app, key, run, rows).catch(() => undefined) : []
+        if (left && !left.length) return void this.unended.delete(tag)
+        if (left) await stopTree(run, this.graceMs, (now) => this.strays(app, key, run, now)).then(
+          () => this.unended.delete(tag),
+          () => this.unended.set(tag, `${run.name} check's process ${left[0]!.pid} (${left[0]!.command.slice(0, 80)}) won't end`),
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, wait).unref())
+    }
+  }
+
+  /** What keeps a build slot held though its check ended, in words: a process that wouldn't die. */
+  unending(): string[] {
+    return [...this.unended.values()]
+  }
+
+  /**
+   * A check's processes its tree no longer reaches: detached and reparented, found by the mark each inherited, with
+   * whatever they started. Without the mark, by a system that won't show it, a process is known only while it's in the tree.
+   */
+  private async strays(app: AppKey, key: string, run: Run, rows: Row[]): Promise<Row[]> {
+    const later = rows.filter((row) => row.startedMs >= run.startedMs && row.pid !== process.pid)
+    // Reparented to whoever took it, which Linux lets be other than init: any whose parent didn't start with the run.
+    const since = new Set(later.map((row) => row.pid))
+    const orphans = later.filter((row) => !since.has(row.ppid))
+    const marks = await runMarks(orphans, RUN_KEY_MARK)
+    const found = new Set(orphans.filter((row) => marks.get(row.pid) === runTag(app, key)).map((row) => row.pid))
+    for (let grew = found.size > 0; grew;) {
+      grew = false
+      for (const row of later)
+        if (!found.has(row.pid) && found.has(row.ppid)) {
+          found.add(row.pid)
+          grew = true
+        }
+    }
+    return later.filter((row) => found.has(row.pid))
   }
 
   /** Starts the run once `record` has saved it, so no host can lose track of it. */
@@ -1047,7 +1105,7 @@ export class ThreadProcesses {
       const [shell, args] = spec.background ? belowAgents("/bin/sh", ["-c", WRAPPER, "mako-thread", spec.command, exit]) : ["/bin/sh", ["-c", WRAPPER, "mako-thread", spec.command, exit]]
       const child = spawn(shell, args, {
         cwd: spec.cwd,
-        env: { ...env, [RUN_MARK]: app },
+        env: { ...env, [RUN_MARK]: app, [RUN_KEY_MARK]: runTag(app, key) },
         detached: true,
         stdio: ["pipe", output.fd, output.fd],
       })
@@ -1264,6 +1322,9 @@ export async function freeMemory(): Promise<{ freeBytes: number; totalBytes: num
 }
 
 /** Every process on the machine, with when it started; `ps` is on macOS and Linux alike. */
+/** What a run's processes carry in `RUN_KEY_MARK`. */
+const runTag = (app: AppKey, key: string) => `${app}/${key}`
+
 /** For a read's `catch`: `value` when the file isn't there; any other failure stays one, since it says nothing of what's there. */
 const ifMissing = <T>(value: T) => (error: NodeJS.ErrnoException): T => {
   if (error.code === "ENOENT") return value
@@ -1335,7 +1396,11 @@ class TableIndex {
   }
 }
 
-async function stopTree(record: Run): Promise<void> {
+/**
+ * SIGTERM, then after `graceMs` SIGKILL, to a run's tree and `more`, each process held by its identity from the moment
+ * it's seen: a child that leaves the tree by being reparented is still the run's. Throws if any outlives SIGKILL.
+ */
+async function stopTree(record: Run, graceMs: number, more?: (rows: Row[]) => Promise<Row[]>): Promise<void> {
   const signaled = new Set<string>()
   const send = (rows: Row[], signal: NodeJS.Signals) => {
     for (const row of rows) {
@@ -1349,18 +1414,25 @@ async function stopTree(record: Run): Promise<void> {
       }
     }
   }
-  let rows = members(await processTable(), record)
+  const known = new Map<string, Row>()
+  const look = async () => {
+    const rows = await processTable()
+    for (const row of [...members(rows, record), ...await more?.(rows) ?? []]) known.set(`${row.pid}:${row.startedMs}`, row)
+    const alive = new Set(rows.map((row) => `${row.pid}:${row.startedMs}`))
+    return [...known].filter(([identity]) => alive.has(identity)).map(([, row]) => row)
+  }
+  let rows = await look()
   send(rows, "SIGTERM")
-  const deadline = Date.now() + STOP_GRACE_MS
+  const deadline = Date.now() + graceMs
   while (rows.length && Date.now() < deadline) {
     await sleep(POLL_MS)
-    rows = members(await processTable(), record)
+    rows = await look()
     send(rows, "SIGTERM")
   }
   for (let attempt = 0; rows.length && attempt < 20; attempt += 1) {
     send(rows, "SIGKILL")
     await sleep(POLL_MS)
-    rows = members(await processTable(), record)
+    rows = await look()
   }
   if (rows.length) throw new Error(`${record.name} still has ${rows.length} process(es) after SIGKILL: ${rows.map((row) => row.pid).join(", ")}`)
 }
@@ -1385,10 +1457,10 @@ async function listeningPids(port: number): Promise<number[]> {
  * of is left out. macOS shows the environment of this user's processes
  * except Apple's own programs; Linux, of this user's.
  */
-async function runMarks(rows: Row[]): Promise<Map<number, string>> {
+async function runMarks(rows: Row[], mark = RUN_MARK): Promise<Map<number, string>> {
   const found = new Map<number, string>()
   if (!rows.length) return found
-  const markIn = (variables: string) => new RegExp(`(?:^|\\s)${RUN_MARK}=(\\S+)`).exec(variables)?.[1] ?? ""
+  const markIn = (variables: string) => new RegExp(`(?:^|\\s)${mark}=(\\S+)`).exec(variables)?.[1] ?? ""
   if (onLinux()) {
     await Promise.all(rows.map(async (row) => {
       const text = await readFile(`/proc/${row.pid}/environ`, "utf8").catch(() => undefined)

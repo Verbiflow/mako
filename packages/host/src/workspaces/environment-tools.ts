@@ -1071,6 +1071,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const holdThrough = async (app: AppKey, tier: CheckTier, ticket: BuildTicket): Promise<void> => {
     for (;;) {
       await untilExited(app, tier)
+      for (let reading = false; !reading;)
+        reading = await deps.processes.whenGone(app, runKey("check", tier)).then(() => true, () => until(COUNT_AGAIN_MS).then(() => false))
       const starting = pendingChecks.get(slotKey(app, tier))
       if (!starting) return ticket.release()
       await starting.started.catch(() => {})
@@ -1099,7 +1101,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (uncounted) return `waits for a build slot: none goes out until the checks the last host left running can be read (${uncounted}), and Mako keeps trying`
     const reading = deps.buildSlots!.reading()
     const ahead = deps.buildSlots!.ahead(slotKey(app, tier))
-    return `waits for a build slot: ${reading.holders.length} of ${reading.slots} in use (${reading.holders.join("; ")})${ahead ? `, ${ahead} ahead of it` : ", and it's next"}`
+    const stuck = deps.processes.unending()
+    return `waits for a build slot: ${reading.holders.length} of ${reading.slots} in use (${[...reading.holders, ...stuck].join("; ")})${ahead ? `, ${ahead} ahead of it` : ", and it's next"}`
   }
   /** Why the install step runs now: the first step due, in words. */
   const prepareReason = async (recipe: Recipe, checkout: string): Promise<string> => {
