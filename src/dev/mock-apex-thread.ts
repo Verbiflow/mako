@@ -120,7 +120,7 @@ function shown(state: ChildState, child: string, at: number): ChildShowing {
       return { thread: {}, journal: {} }
     case "ended": {
       const decision = state.decision
-      if (!decision) return { thread: { ended: { outcome: state.outcome, ...(state.reason && { reason: state.reason }), at } }, journal: {} }
+      if (!decision?.ask) return { thread: { ended: { outcome: state.outcome, ...(state.reason && { reason: state.reason }), at } }, journal: {} }
       const { options, recommended, action } = decision.ask
       const latest = { id: decision.ask.id, child: ThreadIdSchema.parse(child), status: "done" as const, summary: "It's finished and green.", question: decision.question, ...(options && { options }), ...(recommended !== undefined && { recommended }), ...(action && { action }), ...(decision.on === "person" && { decides: "person" as const }), ownerGeneration: 1, at }
       return { thread: {}, journal: { latest } }

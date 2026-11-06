@@ -12,8 +12,9 @@ import { THREAD_PORT_COUNT, THREAD_PORT_FIRST } from "../contracts/thread-enviro
 import type { AppActionOutcome, AppCheckStepView, AppCheckView, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, AppProcessView, RoomApp, RoomFit, RoomView, SetupProgress, SetupStep, ThreadAppView } from "../contracts/thread-app.js"
 import type { ProjectAppSetup, ProjectRecipeState, RecipeProcessView, RecipeProofSummary, RecipeVersionView } from "../contracts/project-app.js"
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
+import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
-import { bringFiles, carryReport, holdsCredentials, isSpareCheckout, linkedCarry, linkedEntries, linkReach, ownPackages, reachRoots, throughLinks, type LinkReach } from "./worktree-carry.js"
+import { carryReport, holdsCredentials, isSpareCheckout, linkedCarry, linkedEntries, linkReach, ownPackages, reachRoots, throughLinks, type LinkReach } from "./worktree-carry.js"
 import { ago, toolText, when } from "../base/tool-text.js"
 import { cleanOutput, OUTPUT_BUDGET, presentOutput } from "./run-output.js"
 import { recordState, runStepStates, stepsCommand, stepsOf, type CheckStep, type StepRecord, type StepState } from "./check-steps.js"
@@ -147,6 +148,8 @@ interface Deps {
   recipes?: RecipeAccounts
   /** Whether a named secret has a value here: the host's environment, or a carried file the account's store gave a cloud machine. */
   hasSecret?(name: string): boolean
+  /** This device's broker for what worktrees take from their main checkouts; without it, one kept in memory. */
+  borrowing?: Pick<CheckoutBorrowing, "bring">
   /** Whose app it is, in words, such as `the Thread "Fix login"`, to name whose app was stopped to make room. */
   whose?(app: AppKey): string | undefined
   /** The Worktree Thread whose app it is, for the Room. */
@@ -507,11 +510,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     return settled()
   }
   /** Catch up older worktrees with the recipe's carry, keeping their own edits and the copies they made their own. */
-  const bringCheckoutFiles = async ({ checkout, recipe }: Context & { recipe: Recipe }) => {
+  const borrowing = deps.borrowing ?? CheckoutBorrowing.inMemory(git)
+  const bringCheckoutFiles = async ({ checkout, recipe, environment }: Context & { recipe: Recipe }) => {
     const root = await projectRoot(git, checkout)
     if (root === checkout) return
     // A link never replaces what the worktree has; a copy makes an entry the recipe stopped linking the worktree's own.
-    await bringFiles(git, root, checkout, recipe.carry ?? [])
+    await borrowing.bring(environment.thread ?? checkout, root, checkout, recipe.carry ?? [])
   }
   /**
    * Why a copy of the app doesn't fit now, by its project's estimate: free

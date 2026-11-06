@@ -234,8 +234,6 @@ export interface ConversationChildren {
   ruleLines(conversation: string): RoleRuleLines
   /** Whether a turn of the conversation a usage limit cut may go on now: a Fin's takes a place as anything else does. */
   mayWake?(conversation: string): boolean
-  /** The account a Fin's conversation runs on `harness` instead of the selected one, since its own ran out (`ProviderStartOptions.pinnedAccount`). */
-  pinnedAccount?(conversation: string, harness: string): string | undefined
   /**
    * At a request's handoff: whether a message Mako sent a Fin by itself (a pull request's outcome) still holds. False
    * refuses it with nothing sent; any other request is always admitted.
@@ -243,9 +241,12 @@ export interface ConversationChildren {
   admits?(conversation: string, request: Pick<LiveRequest, "id" | "actor">): boolean
 }
 
-/** What a launch of `conversation` on `harness` reads its account from: the Fin's pin, else the selected account. */
-export function launchAccount(dependencies: Pick<Dependencies, "agents">, conversation: string, harness: string): () => string | undefined {
-  return () => dependencies.agents?.()?.pinnedAccount?.(conversation, harness)
+/** What a launch on `harness` reads its account from, each time: the binding's pin (`LiveConversations.pinnedAccount`), else the selected account. */
+export function launchAccount(resident: Resident, harness: string): () => string | undefined {
+  return () => {
+    const binding = activeBinding(resident)
+    return binding?.provider === harness ? binding.account : undefined
+  }
 }
 export interface Dependencies {
   /** This machine's build slots now, for the note a heavy suite started while each is in use hears (`build-slots-full`). */

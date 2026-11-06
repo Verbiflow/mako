@@ -1007,6 +1007,11 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** Sends the person's message from an Apex's conversation straight to one of its Fins, with no Apex turn. */
     agentsDirect: (conversation: string, input: AgentsDirectInput) =>
       invokeTrustedHost<AgentsDirected | AgentRefused>("mako:agents-direct", conversation, input),
+    /** Where a Thread held by a limit could go on, for its card (`Agents.nextPlace`). */
+    agentsNextPlace: (conversation: string) =>
+      invokeTrustedHost<{ label: string; harness: string } | null>("mako:agents-next-place", conversation),
+    agentsContinueNext: (conversation: string, id: string) =>
+      invokeTrustedHost<boolean>("mako:agents-continue-next", conversation, id),
     agentsRespond: (conversation: string, input: AgentsRespondInput) =>
       invokeTrustedHost<AgentsAnswered | AgentRefused>("mako:agents-respond", conversation, input),
     /** Where each harness stands on an Apex's native spawns: its control, unverified on this version, or words alone. */

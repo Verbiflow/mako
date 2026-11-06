@@ -1,4 +1,4 @@
-import { childGroup, childStateOf, rollup, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
+import { childGroup, childStateOf, finsAsChildren, rollup, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { AgentsDirected, AgentsRedirected, AgentsRedirectInput } from "@mako/host/contracts/agents"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
@@ -32,6 +32,11 @@ export function threadChildren(state: AcpState, thread: string | undefined): rea
       if (conversation.kind !== "live" || !conversation.threadId || index.has(conversation.threadId)) continue
       const children = rosterChildren(conversation.nativeAgents)
       if (children.length) index.set(conversation.threadId, children)
+    }
+    // An Apex this window holds no roster of (another device's, or one asleep): its row's Fins, as its owner said them.
+    for (const conversation of Object.values(state.conversations)) {
+      if (conversation.kind !== "live" || !conversation.threadId || index.has(conversation.threadId) || !conversation.fins) continue
+      index.set(conversation.threadId, finsAsChildren(conversation.fins))
     }
     byThread.set(state.conversations, index)
   }

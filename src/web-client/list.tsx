@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { finsWord } from "@mako/host/contracts/agents"
 import { FinPips } from "@/components/rail/fin-pips"
-import { apexPips, pipsCounts } from "@/state/fin-pips"
+import { apexPips, pipsCounts, pipsOf } from "@/state/fin-pips"
 import { useAcp } from "@/state/acp"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
-import { askWords, childLine, childStateOf, childWord, rollupLabel } from "@mako/host/contracts/children"
+import { askWords, childLine, childStateOf, childWord, finsAsChildren, rollup, rollupLabel } from "@mako/host/contracts/children"
+import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { finMarkState, motionOf } from "@/lib/live-mark-state"
 import { shallowEqual } from "@/state/store"
@@ -403,7 +404,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
               <span className="tabular text-label text-faint">{formatRelative(thread.activityAt)}</span>
             </span>
           </span>
-          <ApexLineOr thread={thread.id}>
+          <ApexLineOr thread={thread.id} fins={thread.sessions.find((session) => session.summary.fins)?.summary.fins}>
           <span className="flex min-w-0 items-center gap-1.5 text-label">
             {detail.place || detail.move ? <Place aria-hidden data-move-mark={detail.move} className={cn("size-3 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
             {detail.tone === "working" ? (
@@ -528,10 +529,12 @@ function useAwayWhileScrolling(scroller: React.RefObject<HTMLDivElement | null>,
 
 /**
  * An Apex's second line: one pip per Fin and how many, where another row says what it's doing, from the snapshot this
- * page holds of it. Its Fins that need the person are rows of their own under Needs you. Repaints when a pip changes.
+ * page holds of it, or else from its row's Fins as its owner listed them (`finsAsChildren`), drawn by the same
+ * selectors. Its Fins that need the person are rows of their own under Needs you. Repaints when a pip changes.
  */
-function ApexLineOr({ thread, children }: { thread: string; children: ReactNode }) {
-  const pips = useAcp((state) => apexPips(state, thread))
+function ApexLineOr({ thread, fins, children }: { thread: string; fins: LiveSummary["fins"]; children: ReactNode }) {
+  const held = useAcp((state) => apexPips(state, thread))
+  const pips = held || (fins ? pipsOf(finsAsChildren(fins), rollup(finsAsChildren(fins))) : "")
   if (!pips) return children
   const label = rollupLabel(pipsCounts(pips))
   return (

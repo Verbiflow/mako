@@ -10,12 +10,13 @@ import type { WorkspaceMoves } from "./moves.js"
 import type { WorktreeLeaves } from "./worktree-leaves.js"
 import type { Git } from "@mako/git"
 import { checkoutPattern, projectRoot, projectRecipe } from "./thread-recipe.js"
-import { bringFiles, ignoredEntries, type BringEntry } from "./worktree-carry.js"
+import { ignoredEntries, type BringEntry } from "./worktree-carry.js"
+import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { gitActionPrompt } from "../contracts/git-actions.js"
 import type { ThreadWorktree, WorktreeBranchPull, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 import type { MoveShare, MoveShares } from "../contracts/workspace-moves.js"
 
-type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary" | "shares" | "wantBranch">
+type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary" | "shares" | "wantBranch"> & Partial<Pick<ThreadWorktreeService, "borrowing">>
 
 interface Deps {
   git: Git
@@ -221,6 +222,7 @@ export async function moveablePlace(git: Git, worktrees: Worktrees | null, conve
 
 export function workspaceTools(deps: Deps): WorkspaceTools {
   const { git } = deps
+  const borrowing = deps.worktrees?.borrowing ?? CheckoutBorrowing.inMemory(git)
   const cwdOf = (conversationId: string) => {
     const cwd = deps.cwd(conversationId)
     if (!cwd) throw new Error("Mako isn't running this conversation.")
@@ -315,7 +317,7 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       const main = await projectRoot(git, checkout)
       const recipe = await projectRecipe(git, checkout, deps.recipesRoot)
       const wanted = entries ?? recipe?.carry ?? []
-      const result = await bringFiles(git, main, checkout, wanted)
+      const result = await borrowing.bring(conversationId, main, checkout, wanted)
       return toolText({ mainCheckout: main, worktree: checkout, ...result })
     },
     async update(conversationId) {
