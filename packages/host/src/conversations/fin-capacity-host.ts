@@ -4,7 +4,7 @@ import type { FinCapacityReading } from "../contracts/fin-tuning.js"
 import { CapacityGovernor, deviceCapacity, reserveOf, type FinHardware, type PressureReading } from "./fin-capacity.js"
 import type { FinCostModel } from "./fin-cost.js"
 import type { FinAtWork, FinCostReading } from "./fin-cost-sampler.js"
-import { DISK_FREE_LEAST, FIN_LOAD, idleCores, SWAP_FREE_LEAST, type MacReading } from "./mac-capacity.js"
+import { DISK_FREE_LEAST, SWAP_FREE_LEAST, type MacReading } from "./mac-capacity.js"
 
 export interface FinCapacityDeps {
   /** This machine's load and pressure (`MacCapacity`). */
@@ -29,6 +29,8 @@ export class FinCapacity {
   readonly #deps: FinCapacityDeps
   readonly #governor = new CapacityGovernor()
   #mix: Record<string, number> = {}
+  /** The cores the Fins at work took at the last reading of their processes (`sampler`). */
+  #finCores = 0
   #pressure: string | undefined
   #allowed: number | undefined
   readonly #listeners = new Set<() => void>()
@@ -41,9 +43,13 @@ export class FinCapacity {
   async observe(working: number, mix: Readonly<Record<string, number>>, fins?: readonly FinAtWork[]): Promise<void> {
     const before = this.atOnce()
     this.#mix = { ...mix }
-    if (fins && this.#deps.sampler) for (const reading of await this.#deps.sampler.sample(fins).catch(() => [])) this.#deps.costs.add(reading)
+    if (fins && this.#deps.sampler) {
+      const readings = await this.#deps.sampler.sample(fins).catch(() => [])
+      for (const reading of readings) this.#deps.costs.add(reading)
+      if (readings.length) this.#finCores = readings.reduce((sum, reading) => sum + reading.cores, 0)
+    }
     const reading = await this.#deps.read().catch(() => undefined)
-    if (reading) this.#governor.read(this.#now(), pressureOf(reading, working, this.#hardware()))
+    if (reading) this.#governor.read(this.#now(), pressureOf(reading, working ? this.#finCores : 0, this.#hardware()))
     this.#deps.costs.save()
     this.#allow()
     if (this.atOnce() > before) this.changed()
@@ -100,17 +106,18 @@ export class FinCapacity {
 }
 
 /**
- * What presses on the machine now, from one reading. The person's own work is the busy cores working Fins don't account
- * for, and it presses only while it leaves them fewer idle cores than their reserve: idle cores are room, whoever
- * keeps the rest busy.
+ * What presses on the machine now, from one reading and the cores `finCores` its Fins' own processes were measured to
+ * take. The person's own work is the busy cores those don't account for, and it presses only while it leaves fewer idle
+ * cores than their reserve: idle cores are room, whoever keeps the rest busy, and a count of Fins says nothing of what
+ * they take, since most of them wait on their models.
  */
-export function pressureOf(reading: MacReading, working: number, hardware: FinHardware): PressureReading {
-  const others = Math.max(0, reading.busyCores - working * FIN_LOAD)
+export function pressureOf(reading: MacReading, finCores: number, hardware: FinHardware): PressureReading {
+  const busy = reading.busyCores
   const reserve = reserveOf(hardware).cores
   return {
     memory: reading.memoryPressure === true || (reading.swapFreeBytes !== undefined && reading.swapFreeBytes < SWAP_FREE_LEAST),
     thermal: reading.hot === true,
-    person: others > reserve && idleCores(reading) < reserve,
+    person: busy !== undefined && busy - finCores > reserve && hardware.cores - busy < reserve,
     disk: reading.diskFreeBytes !== undefined && reading.diskFreeBytes < DISK_FREE_LEAST,
   }
 }

@@ -80,9 +80,29 @@ const GB = 1024 ** 3
   const reading = (over: Partial<MacReading> = {}): MacReading => ({ cores: 14, memoryBytes: 36 * GB, busyCores: 4, ...over })
   assert.deepEqual(pressureOf(reading(), 2, hardware), { memory: false, thermal: false, person: false, disk: false })
   assert.equal(pressureOf(reading({ busyCores: 13.5 }), 2, hardware).person, true, "the person's own work past their reserve, with no idle core to spare")
-  assert.equal(pressureOf(reading({ busyCores: 14 }), 10, hardware).person, false, "cores that are the Fins' own aren't the person's")
+  assert.equal(pressureOf(reading({ busyCores: 14 }), 13, hardware).person, false, "cores the Fins were measured to take aren't the person's")
+  assert.equal(pressureOf({ cores: 14, memoryBytes: 36 * GB }, 0, hardware).person, false, "no reading of the cores presses nothing")
   // The Mac as it stood on 2026-11-05, measured: 1 Fin at work, 9 cores busy, 5 idle, the load average at 18.
   assert.equal(pressureOf(reading({ busyCores: 9 }), 1, hardware).person, false, "idle cores are room, whatever keeps the rest busy")
+  // Fins mostly wait on their models: a full Mac presses however many there are, unless their own processes filled it.
+  for (const [each, pressed] of [[0.05, true], [14 / 8, false]] as const) {
+    let at = 0
+    const fins = Array.from({ length: 8 }, (_, index) => ({ conversation: `fin-${index}`, harness: "claude" }))
+    const capacity = new FinCapacity({
+      read: async () => reading({ busyCores: 14 }),
+      costs: new FinCostModel(),
+      sampler: new FinCostSampler({
+        table: async () => fins.map((_, index) => ({ pid: 10 + index, ppid: 1, rssKb: 1024, cpuPercent: 0, cpuSeconds: (each * at) / 1000, command: "/opt/claude/claude" })),
+        owned: () => fins.map(({ conversation }, index) => ({ pid: 10 + index, owner: conversation })),
+        now: () => at,
+      }),
+      own: () => undefined,
+      hardware: () => hardware,
+      now: () => at,
+    })
+    for (; at < 30 * 60_000; at += 10_000) await capacity.observe(8, { claude: 8 }, fins)
+    assert.equal(/your own work is busy/.test(capacity.reading().pressure ?? ""), pressed, `8 Fins taking ${each} core each on a full Mac`)
+  }
   // What capacity reads over minutes of that Mac: nothing presses, so the number stays the machine's own.
   {
     let at = 0
@@ -120,6 +140,14 @@ const GB = 1024 ** 3
   at += 1_000
   ticks = { busy: ticks.busy + 1_000 * cores, total: ticks.total + 1_000 * cores }
   assert.equal((await mac.read()).busyCores, cores * 0.75, "a burst of starts reads the Mac once")
+  // Reads side by side: the first takes the CPU time spent, and the next would find none and call a full Mac idle.
+  spend(1)
+  assert.deepEqual((await Promise.all([mac.read(), mac.read(), mac.read()])).map((reading) => reading.busyCores), [cores, cores, cores], "they share one reading")
+  assert.equal((await mac.read()).busyCores, cores, "and it stays what's kept")
+  // Time passed, but no CPU time did: that says nothing of the cores, whichever reading came before.
+  at += 10_000
+  assert.equal((await mac.read()).busyCores, cores, "no time spent keeps the last reading")
+  assert.equal((await new MacCapacity({ now: () => at, ticks: () => ticks }).read()).busyCores, undefined, "and a first reading says nothing")
 }
 
 // ── The cost each machine learns of its own Fins, per harness, kept across hosts.

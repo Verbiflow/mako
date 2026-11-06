@@ -201,7 +201,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
           recipe: (checkout) => projectRecipe(git, checkout, recipes),
           env: (values) => ({ ...commandEnvironment(), ...values }),
         }),
-      } : undefined, deps.conversations, deps.ledger)
+      } : undefined, deps.conversations, deps.ledger, deps.workingFolders)
     : null
   if (worktrees) {
     const tidy = () => worktrees.tidy()

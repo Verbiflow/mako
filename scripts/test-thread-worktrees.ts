@@ -1,5 +1,6 @@
 import "./lib/scratch-git.mjs"
 import { Git } from "@mako/git"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -13,6 +14,7 @@ import { inputsDigest, mirroredProject, projectRoot, recipePath, RecipeSchema, t
 import { projectRepositories } from "@mako/host/git/repository-discovery"
 import { ThreadStore } from "@mako/host/threads/store"
 import { worktreeCheckout, worktreeSlug } from "@mako/host/contracts/thread-worktrees"
+import { openWorkspaces } from "@mako/host/workspaces"
 import { ThreadWorktreeService, type CheckoutConversations } from "@mako/host/workspaces/thread-worktrees"
 import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "@mako/host/workspaces/worktree-carry"
 
@@ -869,13 +871,29 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   let at: string[] = []
   const real = { now: Date.now, readOutput: gitRunner.readOutput }
   let reads = 0
+  let closing = () => {}
   Date.now = () => now
   gitRunner.readOutput = function (this: typeof gitRunner, cwd, args) {
     if (args[0] === "status" && cwd === made.path) reads++
     return real.readOutput.call(this, cwd, args)
   }
   try {
-    const watched = new ThreadWorktreeService(gitRunner, join(root, "worktrees"), threads, undefined, undefined, undefined, setup, undefined, undefined, async () => at)
+    // As the host makes it: what's at work reaches the worktrees only through this.
+    const workspaces = openWorkspaces({
+      git: gitRunner,
+      dataRoot: join(root, "composed"),
+      readOnly: false,
+      store: threads,
+      jobs: new HostJobs(),
+      emit: () => {},
+      inUse: async () => [],
+      working: async () => [],
+      workingFolders: async () => at,
+      conversations: { holding: async () => [], leave: async () => [] },
+      cleanup: () => undefined,
+    })
+    closing = () => workspaces.close()
+    const watched = workspaces.worktrees!
     const changes = async () => (await watched.summaries()).find((summary) => summary.path === made.path)?.changes
     const passes = async (count: number) => {
       const before = reads
@@ -908,6 +926,7 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   } finally {
     Date.now = real.now
     gitRunner.readOutput = real.readOutput
+    closing()
   }
   await worktrees.abandon(id).catch(() => undefined)
 }

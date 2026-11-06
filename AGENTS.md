@@ -254,8 +254,9 @@ pressure or swap, heat, the person's own work, disk; a 5-minute average,
 held 3 minutes, then a Fin a minute, never below half) and brings it back
 after relief holds 5 minutes; running Fins are never touched. A machine's
 work is CPU time really spent since the last reading (`coresBusy`), never the
-load average, and the person's own work presses only while it leaves fewer
-idle cores than their reserve: on 2026-11-05 six short `git status` at a time
+load average, and the person's own work, the busy cores the Fins' own
+processes weren't measured to take, presses only while it leaves fewer idle
+cores than their reserve: on 2026-11-05 six short `git status` at a time
 held this 14-core Mac's load at 18 with 5 cores idle. The person
 can fix a number per device instead of Auto (Settings › Fins), and
 `FinCapacity` reads the machine on the engine's 10 s tick. The cloud, a
