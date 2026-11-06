@@ -1490,8 +1490,6 @@ export class Agents implements AgentOperations, ConversationChildren {
         hostWarn("agents", "a kept answer didn't reach its Fin; the next start sends it", { op: edge.op, ask: kept.ask, refused: sent.refused })
         return sent
       }
-      // Another message reached it meanwhile, so the question stays closed, whatever became of this answer.
-      if (this.answersHeld.get(edge.child)?.delivered && this.answersHeld.get(edge.child)?.ask === kept.ask) return sent
       store.releaseAnswer(kept.ask, kept.op)
       const before = store.latestAnswers().get(edge.child)
       if (before) this.answersHeld.set(edge.child, before)
@@ -2782,18 +2780,21 @@ export class Agents implements AgentOperations, ConversationChildren {
   private async moveAll(apex: Apex, input: AgentsMoveInput, op: string): Promise<AgentsMoveResult> {
     if (!this.deps.harnesses().includes(input.harness))
       return this.refuse(op, "unknown-harness", `No harness named ${input.harness} runs here: ${this.deps.harnesses().join(", ")}.`)
+    // Owned from here, before anything is waited for: a Stop, a stop of the Fin or a turn that comes meanwhile declines it.
+    const edges = input.all ? this.store()!.edges().children(apex.thread) : [this.resolve(apex, input.child!, true)].flatMap((edge) => edge ?? [])
+    const intents = new Map(edges.map((edge) => [edge.child, this.intentOf(edge)]))
     const limit = await this.limitOf(input.harness)
     if (limit) {
       const instead = limit.instead ? ` ${limit.instead}, another ${this.deps.harnessLabel(input.harness)} account, has room: the person can switch to it in Settings › Agents.` : ""
       return this.refuse(op, "limited", `${this.spentWords(input.harness, limit)}, so a ${FIN_WORD} moved there would stop at once.${instead} Name another harness, or move it after the reset.`)
     }
     if (!input.all) {
-      const edge = this.resolve(apex, input.child!, true)
+      const edge = edges[0]
       if (!edge) return unknownFin(input.child!)
-      const one = await this.moveOne(apex, edge, input, op)
+      const one = await this.moveOne(apex, edge, input, op, intents.get(edge.child)!)
       return "refused" in one ? this.refuse(op, one.refused, one.why) : { moved: [one] }
     }
-    const each = await Promise.all(this.store()!.edges().children(apex.thread).map(async (edge) => ({ edge, moved: await this.moveOne(apex, edge, input, op) })))
+    const each = await Promise.all(edges.map(async (edge) => ({ edge, moved: await this.moveOne(apex, edge, input, op, intents.get(edge.child)!) })))
     const moved: AgentMoved[] = []
     const left: AgentNotMoved[] = []
     for (const one of each) {
@@ -2803,13 +2804,20 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { moved, ...(left.length && { left }) } satisfies AgentsMoved
   }
 
-  private async moveOne(apex: Apex, edge: ThreadParent, input: AgentsMoveInput, op: string): Promise<AgentMoved | AgentRefused> {
+  /** What a move of `edge` is decided on, read as it's asked for: true while no Stop has come since and no turn runs. */
+  private intentOf(edge: ThreadParent): () => boolean {
+    const conversation = this.conversationOf(edge.child)
+    const closed = edge.closedAt
+    const mark = conversation ? this.deps.live.stopMark(conversation) : 0
+    return () => {
+      const now = this.conversationOf(edge.child)
+      return this.store()!.edges().of(edge.child)?.closedAt === closed && (!conversation || this.deps.live.stopMark(conversation) === mark) && !(now && this.inTurn(now))
+    }
+  }
+
+  private async moveOne(apex: Apex, edge: ThreadParent, input: AgentsMoveInput, op: string, wanted: () => boolean): Promise<AgentMoved | AgentRefused> {
     const { name } = edge
     if (edge.run && !edge.run.ended) return { refused: "conflict", why: `${name} runs in a process your shell started: agents_stop stops it, and then it can move.` }
-    // Owned from here, before anything is waited for: a Stop, a stop of the Fin or a turn that comes meanwhile declines it.
-    const closed = edge.closedAt
-    const opening = this.conversationOf(edge.child)
-    const marked = opening ? this.deps.live.stopMark(opening) : 0
     const taken = edge.run && !this.conversationOf(edge.child) ? await this.takeOver(edge) : undefined
     if (taken && "refused" in taken) return taken
     const conversation = this.conversationOf(edge.child)
@@ -2833,7 +2841,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const note = [fit.note, decided.note].filter(Boolean).join(" ")
     let snapshot: LiveSnapshot | undefined
     try {
-      snapshot = await this.deps.continueOn(conversation, { kind: "move", move: { id: moveId, to: { harness: input.harness, modeId: mode.id, ...(decided.settings && { tuning: decided.settings }) } } }, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, () => !this.inTurn(conversation) && this.store()!.edges().of(edge.child)?.closedAt === closed && (opening === undefined || this.deps.live.stopMark(opening) === marked))
+      snapshot = await this.deps.continueOn(conversation, { kind: "move", move: { id: moveId, to: { harness: input.harness, modeId: mode.id, ...(decided.settings && { tuning: decided.settings }) } } }, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, wanted)
     } catch (error) {
       return { refused: "unavailable", why: `${name} stayed on ${this.deps.harnessLabel(from)}: ${errorMessage({ error })}` }
     }

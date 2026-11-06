@@ -15,6 +15,7 @@ import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
 import { declareConversationMethods } from "@mako/host/conversations/index"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { withdrawGone } from "@mako/host/conversations/live-transfers"
 import { threadHistoryTools } from "@mako/host/conversations/thread-history"
 import { HARNESSES, AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
 
@@ -331,6 +332,34 @@ async function landing(): Promise<void> {
     await f.world.close()
   }
   {
+    // A move has no row, by design, so a write while it's under way doesn't read it as a switch whose row went (`withdrawGone`).
+    let open = () => {}
+    let armed = false
+    let opening = false
+    const opened = new Promise<void>((done) => { open = done })
+    const f = await fixture("codex", { starting: async (_conversation, harness) => {
+      if (armed && harness === "claude") {
+        opening = true
+        await opened
+      }
+    } })
+    await f.world.settle(40, 20_000)
+    const { conversation } = f.fin()
+    armed = true
+    const id = randomUUID()
+    const settled = f.world.live.switchSettled(id)
+    await f.world.continueOn(conversation, { kind: "move", move: { id, to: { harness: "claude" } } }, { kind: "service", name: "auto-continue" })
+    await until("it to open", () => opening)
+    const before = f.world.live.snapshot(conversation)!
+    assert.deepEqual(withdrawGone(before).control?.transfers, before.control?.transfers, "a switch with no row isn't a switch whose row went")
+    f.world.live.clearQueue(conversation)
+    assert.equal(f.world.live.snapshot(conversation)?.control?.transfers.find((transfer) => transfer.input.id === id)?.state.kind, "preparing", "writes while it's under way leave it")
+    open()
+    assert.equal((await settled).state.kind, "accepted")
+    assert.equal(f.world.live.session(conversation)?.harness, "claude")
+    await f.world.close()
+  }
+  {
     // A Stop while it opens retires it: no binding changes, the caller hears, and it can ask again.
     let open: (() => void) | undefined
     let gated = false
@@ -510,6 +539,65 @@ async function reviewed(): Promise<void> {
     assert.equal(f.world.live.session(conversation)?.harness, "codex", "no binding comes after the Stop")
     assert.ok(f.world.store.edges().of(child)?.closedAt !== undefined)
     await f.world.close()
+  }
+  {
+    // A Stop while a move reads the harness's limit or catalog, before the operation has it, wins too.
+    const f = await fixture("codex")
+    await f.world.settle(40, 20_000)
+    const { conversation } = f.fin()
+    let reading = false
+    let release = () => {}
+    const gate = new Promise<void>((done) => { release = done })
+    Object.assign(f.world.agents, { tuningOf: async () => {
+      reading = true
+      await gate
+      return { source: "harness" }
+    } })
+    const asked = f.world.agents.move(f.apex.caller, { child: "labels", harness: "claude", clientKey: "tuning" })
+    await until("the move to read its catalog", () => reading)
+    await f.world.agents.stop(f.apex.caller, { child: "labels", reason: "not now" })
+    release()
+    assert.ok("refused" in await asked)
+    assert.equal(f.world.live.session(conversation)?.harness, "codex", "no binding comes after the Stop")
+    await f.world.close()
+  }
+  {
+    // A relaunch reads its row's hold as it stands: one the person took to edit meanwhile stays theirs, with no Stop at all.
+    let stall: ((error: Error) => void) | undefined
+    let stalling = true
+    const cut = new AgentsWorld({ root: join(root, "relaunch-edit"), script: () => "Done", starting: async (_conversation, harness) => {
+      if (harness === "codex" && stalling) await new Promise<void>((_resolve, reject) => { stall = reject })
+    } })
+    const apex = await cut.apex("claude", "full")
+    const started = cut.agents.start(apex.caller, { brief: { objective: "Label the edited rows" }, name: "cut", harness: "codex", cwd: cut.root, clientKey: "cut" }).catch(() => undefined)
+    await until("its launch to stall", () => stall !== undefined)
+    stalling = false
+    stall!(new Error("the host stopped"))
+    await started
+    const read = LiveConversations.prototype.historyReady
+    let reading = false
+    let release = () => {}
+    const gate = new Promise<void>((done) => { release = done })
+    LiveConversations.prototype.historyReady = async function (this: LiveConversations, id) {
+      reading = true
+      await gate
+      return read.call(this, id)
+    }
+    try {
+      await cut.restart()
+      await until("its relaunch to read its history", () => reading)
+      const child = cut.store.edges().children(cut.store.journalPlacement(apex.conversation)!.thread)[0]!
+      const conversation = cut.store.conversationsOf(cut.store.thread(ThreadIdSchema.parse(child.child))!.sessions[0]!)[0]!
+      const row = cut.live.snapshot(conversation)!.requests.find((request) => request.text.includes("Label the edited rows"))!
+      cut.live.editQueued(conversation, { requestId: row.id, expectedText: row.text, change: { kind: "pause" } })
+      release()
+      await cut.settle(40, 20_000, "ignore")
+      assert.equal(cut.live.snapshot(conversation)!.requests.find((request) => request.id === row.id)?.editing, true, "it's still the person's")
+    } finally {
+      LiveConversations.prototype.historyReady = read
+    }
+    assert.equal(cut.prompts.filter((prompt) => prompt.text.includes("Label the edited rows")).length, 0)
+    await cut.close()
   }
   {
     // A relaunch asked for before a Stop sends nothing after it: the brief stays paused, and its row is the Stop's.
