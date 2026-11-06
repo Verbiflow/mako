@@ -1011,7 +1011,7 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<AgentsDirected | AgentRefused>("mako:agents-direct", conversation, input),
     /** Where a Thread held by a limit could go on, for its card (`Agents.nextPlace`). */
     agentsNextPlace: (conversation: string) =>
-      invokeTrustedHost<{ label: string } | null>("mako:agents-next-place", conversation),
+      invokeTrustedHost<{ label: string; harness: string } | null>("mako:agents-next-place", conversation),
     agentsContinueNext: (conversation: string, id: string) =>
       invokeTrustedHost<boolean>("mako:agents-continue-next", conversation, id),
     agentsRespond: (conversation: string, input: AgentsRespondInput) =>
