@@ -1164,7 +1164,9 @@ does (`context: [{ thread }]`, a ref, a Thread ID or a Fin's name; `agents_list`
 one check bounds it and that search (`Agents.reachOf`): the Apex the person talks
 to reaches what their picker offers, every attach a chip in its Thread, and a Fin
 below reaches its own tree and what it holds by reference, so a Thread comes down
-only as an Apex hands it on. `@mako/sessions/thread-references` resolves and
+only as an Apex hands it on. What a Thread holds is a stored fact: a person's chips,
+and each message's `LiveRequest.grants`, never items an agent's text spells out
+(`heldReferences`). `@mako/sessions/thread-references` resolves and
 writes both, and `thread_history` reads the caller's referenced threads and
 its own tree (`thread-tree.ts`): its Fins, its Apex and the Fins beside it, each
 by Thread ID or a Fin's name. `thread: "tree"` searches all of them, and `export`

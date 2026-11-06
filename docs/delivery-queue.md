@@ -6,7 +6,7 @@ says why a held message waits (`holdOf`) and what goes next (`nextInLine`). This
 note holds the rules a change to the queue must keep. A provider switch
 (`ContextTransfer`) is queued work too, so the same rules cover it. A Thread moved
 by an agent or by Mako (`continueOn`, `agents_move`) goes through the same switch,
-with no message of its own: rules 9 to 11 are what's different about it.
+with no message of its own: rules 9 to 11 are what's different about it. Rule 12 is how the queue closes what a Fin asked.
 `npm run test:switch-interleavings` checks them after every step of generated
 schedules, and a failing schedule is pinned there.
 
@@ -99,6 +99,14 @@ schedules, and a failing schedule is pinned there.
     and again right before its commit, with nothing awaited between
     (`stillDecided`). A restart retires one too, since what it was decided on went
     with the last host, and whoever asked hears.
+
+12. **A Fin's question closes when input reaches it.** When its harness takes a
+    message or a steer after the Fin asked, from anyone, an Apex's or the person's,
+    its question is answered, whatever the words, and an answer sent after that is
+    refused as answered. Queueing isn't delivery: a message removed unheard leaves
+    the question open. What Mako sends by itself (a digest, a continuation, a goal's
+    step) answers nothing. An answer still on its way that fails doesn't reopen a
+    question something else closed (`Agents.inputDelivered`).
 
 ## What each failure leaves
 

@@ -785,7 +785,7 @@ export class LiveConversations {
     targetBindingId?: string,
     displayText?: string,
     actor?: Actor,
-    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause"> = {}
+    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants"> = {}
   ): LiveRequest {
     this.admission.assert()
     const resident = this.records.require(id)
@@ -880,7 +880,8 @@ export class LiveConversations {
         attachments,
         tuning,
         displayText,
-      })
+        ...marks.grants && { grants: marks.grants },
+      }, actor)
       return request
     }
     request.inputDigest = inputDigest
@@ -1466,9 +1467,9 @@ export class LiveConversations {
    * Stops the running turn and sends this message as the next one, ahead of what was queued, which follows it in
    * order; with no turn running it goes as the next message, like any. Answers whether it stopped a turn.
    */
-  interrupt(id: string, requestId: string, text: string, attachments: PromptAttachment[], actor?: Actor): boolean {
+  interrupt(id: string, requestId: string, text: string, attachments: PromptAttachment[], actor?: Actor, grants?: string[]): boolean {
     const running = this.activeRequest(id)
-    this.submit(id, requestId, text, attachments, undefined, undefined, undefined, actor)
+    this.submit(id, requestId, text, attachments, undefined, undefined, undefined, actor, { ...grants && { grants } })
     if (!running) return false
     this.stopFor(id, running, requestId, "person")
     return true
