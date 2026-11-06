@@ -99,6 +99,16 @@ async function check() {
   assert.equal(allowed.allow, true)
   console.log("PASS: the phone's card, and Move to the cloud reaching the host")
 
+  // From inside a cloud Thread: allowed on the phone, it's the sheet that picks the Mac, as the menu's Bring it back opens.
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex&ask=back&open=${APEX_THREAD}`)
+  await until("Boolean(document.querySelector('[data-ask=agent]'))", "the phone's card to come back")
+  const back = await evaluate("document.querySelector('[data-ask=agent]').innerText.replace(/\\s+/g, ' ')")
+  assert.ok(back.includes("wants to bring this thread back to your Mac") && back.includes("Bring it back"), back)
+  await evaluate("document.querySelector('[data-agent-answer=allow]').click(); true")
+  await until("Boolean(document.querySelector('[data-move-ask=device]'))", "the sheet that brings it back")
+  await shoot("phone-back", "[data-move-ask=device]")
+  console.log("PASS: allowed, the phone's Bring it back sheet opens")
+
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])
   console.log("Agent ask UI: passed")
   app.exit(0)
