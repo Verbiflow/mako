@@ -121,6 +121,7 @@ export const LiveRequestSchema = z.object({
   undone: TurnUndoneSchema,
   tuning: SessionSettingsSchema.optional(),
   mode: z.string().optional(),
+  ruleLines: z.array(z.string()).optional(),
   inputDigest: z.string().optional(),
   nativeRun: z
     .object({

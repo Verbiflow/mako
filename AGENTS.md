@@ -392,7 +392,22 @@ an Apex of its own with its brief. `agents_start`'s `rule` names the one a
 Fin follows: its harness and model apply unless the spawn names them (a
 model only on the rule's own harness), a spawn with no rule, harness or
 model goes to `otherwise`, a missing rule is refused (`unknown-rule`), and
-the Fin's row and strip say the rule (`ThreadParent.tuned.rule`). A worktree in a project folder of several
+the Fin's row and strip say the rule (`ThreadParent.tuned.rule`). Beside
+them the person keeps standing rules in their own words for every Fin and
+every Apex (`forFins`, `forApexes`, at most `ROLE_RULES_CHARS`; empty is
+none, and then briefs and notes are byte for byte as before). Each is saved
+alone (`mako:fin-role-rules-save`), and every save of the Fin-defaults file
+keeps what it doesn't name, a newer build's fields included. They're standing
+lines of Mako's note (`roleRuleLines`, merged with the host's own in
+`LiveDispatch`): a Fin reads the Fin rules, and a top-level Thread, an Apex
+or a Fin started as one the Apex rules, each whole on a process's first
+prompt, a Fin's being its brief's, then only when they change, whoever's
+message starts the turn (`standingLines`). A request keeps which rule lines
+its prompt carried (`LiveRequest.ruleLines`), so a conversation that read
+rules the person cleared is told they no longer apply, in every later process
+too. Settings › Fins on the desk and the phone (`web-client/fins.tsx`)
+edits both through the same calls and previews only what each adds to the
+note, from the same functions (`roleRulesPreview`); `npm run test:person-rules` covers it. A worktree in a project folder of several
 repositories can be on a branch it names, adopted in each repository that
 has it and made from the newest start in the rest. A report (`agents_report`, else one
 implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
