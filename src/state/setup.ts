@@ -88,6 +88,11 @@ export function readSetupIfOld(folder: string, maxAgeMs = 60_000): void {
   if (!held || Date.now() - held.at > maxAgeMs) void readSetup(folder)
 }
 
+/** Whether a folder's page was built away from its Mac (`SetupView.away`), so only a no or a Stop can be drawn. */
+export function useAway(folder: string): boolean {
+  return useSetup((state) => Boolean(state.byFolder[folder]?.away))
+}
+
 export function choosePlace(folder: string, place: string) {
   setupStore.set((state) => ({ place: { ...state.place, [folder]: place } }))
 }
@@ -111,14 +116,23 @@ export function threadPlaceId(view: SetupView | undefined, elsewhere: string | u
   return view.places.find((place) => place.place.kind === "device" && place.place.here)?.id ?? view.places[0]?.id
 }
 
-/** Every folder's asks, oldest first: what the Inbox lists. */
+/**
+ * Every ask, once, oldest first: what the Inbox lists. A project's asks are in the view of each of its folders (its
+ * main checkout's, a worktree's), and one ask is one thing to answer.
+ */
 export function allAsks(state: SetupState): Array<{ folder: string; ask: SetupAsk }> {
-  return Object.entries(state.byFolder)
-    .flatMap(([folder, view]) => viewAsks(view).map((ask) => ({ folder, ask })))
-    .sort((left, right) => left.ask.at - right.ask.at)
+  const seen = new Map<string, { folder: string; ask: SetupAsk }>()
+  for (const [folder, view] of Object.entries(state.byFolder)) for (const ask of viewAsks(view)) if (!seen.has(ask.id)) seen.set(ask.id, { folder, ask })
+  return [...seen.values()].sort((left, right) => left.ask.at - right.ask.at)
+}
+
+/** The folders whose views hold an ask: each reads again once it's answered. */
+function foldersHolding(state: SetupState, ask: string): string[] {
+  return Object.entries(state.byFolder).filter(([, view]) => viewAsks(view).some((held) => held.id === ask)).map(([folder]) => folder)
 }
 
 async function act(folder: string, key: string, request: SetupAct): Promise<SetupActOutcome> {
+  const holding = request.act === "answer" ? foldersHolding(setupStore.get(), request.ask) : []
   setupStore.set((state) => ({ busy: { ...state.busy, [key]: true } }))
   try {
     const from = currentSource()
@@ -136,7 +150,7 @@ async function act(folder: string, key: string, request: SetupAct): Promise<Setu
       delete busy[key]
       return { busy }
     })
-    void readSetup(folder)
+    for (const each of new Set([folder, ...holding])) void readSetup(each)
   }
 }
 

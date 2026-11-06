@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { ArrowUpRightIcon, PlusIcon, RefreshCwIcon } from "lucide-react"
-import { SETUP_ADDITIONS, threadPlace, viewAsks, type SetupPlaceView, type SetupView } from "@mako/host/contracts/setup"
+import { SETUP_ADDITIONS, SETUP_AWAY_NOTE, threadPlace, viewAsks, type SetupPlaceView, type SetupView } from "@mako/host/contracts/setup"
 import { Action, Chip, Segmented } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuTrigger } from "@/components/ui/menu"
 import { Shimmer } from "@/components/ui/shimmer"
@@ -51,7 +51,7 @@ function PlacePicker({ folder, view, current, short }: { folder: string; view: S
   )
 }
 
-function PlaceHeader({ folder, place }: { folder: string; place: SetupPlaceView }) {
+function PlaceHeader({ folder, place, away }: { folder: string; place: SetupPlaceView; away: boolean }) {
   const busy = useSetup((state) => Boolean(state.busy.rebuild))
   return (
     <div className="flex items-start gap-3">
@@ -62,7 +62,7 @@ function PlaceHeader({ folder, place }: { folder: string; place: SetupPlaceView 
         </div>
         <p className="mt-1 max-w-[46rem] text-label leading-relaxed text-muted-foreground">{place.line}</p>
       </div>
-      {place.place.kind === "cloud" ? (
+      {place.place.kind === "cloud" && !away ? (
         <Action tone="quiet" size="sm" disabled={busy} onClick={() => rebuildBase(folder)}>
           <RefreshCwIcon />
           Rebuild base
@@ -83,11 +83,11 @@ export function SetupPage({ folder, addOpen }: { folder: string; addOpen?: boole
   return (
     <div data-setup-page={place.id} className="flex flex-col gap-7">
       <div className="flex items-center gap-3">
-        <p className="min-w-0 flex-1 text-label text-faint">What each place has for {view.project}, and where each thing stands.</p>
+        <p data-setup-intro className="min-w-0 flex-1 text-label text-faint">{view.away ? SETUP_AWAY_NOTE : `What each place has for ${view.project}, and where each thing stands.`}</p>
         <PlacePicker folder={folder} view={view} current={place} />
-        <AddMenu folder={folder} place={place} open={addOpen} />
+        {view.away ? null : <AddMenu folder={folder} place={place} open={addOpen} />}
       </div>
-      <PlaceHeader folder={folder} place={place} />
+      <PlaceHeader folder={folder} place={place} away={Boolean(view.away)} />
       <SetupPlaceBody folder={folder} view={place} now={now} />
       <p className="px-1 text-label text-faint">Agents see names, never a value. A change reaches running Threads within a minute; a copy refreshes at a Thread&apos;s next turn.</p>
     </div>
@@ -141,6 +141,8 @@ export function PhoneSetup({ folder }: { folder: string }) {
       </div>
       <div className="px-4 pb-3">
         <PlacePicker folder={folder} view={view} current={place} short />
+        <p className="mt-2 px-1 text-label leading-relaxed text-muted-foreground">{place.line}</p>
+        {view.away ? <p data-setup-intro className="mt-1 px-1 text-label leading-relaxed text-faint">{SETUP_AWAY_NOTE}</p> : null}
       </div>
       <div className="flex flex-col gap-6 px-4 pb-10">
         <NeedsYou folder={folder} asks={place.asks} now={now} compact />
@@ -149,7 +151,7 @@ export function PhoneSetup({ folder }: { folder: string }) {
           <div className="flex flex-col divide-y divide-hairline bg-shell/55">
             {place.parts.map((part) => (
               <div key={part.part} className={cn(open === part.part && "bg-surface/40")}>
-                <PartSummaryRow part={part} now={now} open={open === part.part} onToggle={() => setOpen(open === part.part ? undefined : part.part)} />
+                <PartSummaryRow part={part} now={now} away={Boolean(view.away)} open={open === part.part} onToggle={() => setOpen(open === part.part ? undefined : part.part)} />
                 {open === part.part && part.rows.length ? <PartRows folder={folder} view={place} part={part} now={now} /> : null}
               </div>
             ))}

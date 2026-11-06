@@ -8,6 +8,8 @@ import {
   ROW_ACTION_LABELS,
   rowAction,
   SCOPE_WORDS,
+  SETUP_AWAY_ALLOW,
+  SETUP_AWAY_EMPTY,
   SETUP_PART_ADDS,
   SETUP_PART_TITLES,
   syncWords,
@@ -26,7 +28,7 @@ import { LiveMark } from "@/components/ui/live-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { addTo, answerAsk, rowTap, useSetup } from "@/state/setup"
+import { addTo, answerAsk, rowTap, useAway, useSetup } from "@/state/setup"
 
 /** The dot's colour by its tone; the words beside it always say the same. */
 const DOT = {
@@ -59,7 +61,7 @@ export function PlaceIcon({ place, className }: { place: SetupPlace; className?:
 /** One thing the place has: its name and scope, where it comes from, its state in words, and its one button. */
 function Row({ folder, place, row, now, compact }: { folder: string; place: string; row: SetupRow; now: number; compact: boolean }) {
   const said = syncWords(row.sync, now)
-  const action = rowAction(row, now)
+  const action = rowAction(row, now, useAway(folder))
   const busy = useSetup((state) => Boolean(state.busy[row.id]))
   const Icon = ICONS[row.icon]
   return (
@@ -124,6 +126,7 @@ function minutes(ms: number): string {
 export function AskRow({ folder, ask, now, compact }: { folder: string; ask: SetupAsk; now: number; compact: boolean }) {
   useHarnessIdentity()
   const busy = useSetup((state) => Boolean(state.busy[`ask:${ask.id}`]))
+  const away = useAway(folder)
   const line = askLine(ask)
   return (
     <div
@@ -144,8 +147,9 @@ export function AskRow({ folder, ask, now, compact }: { folder: string; ask: Set
       </div>
       <p className="mt-1 pl-7 text-label leading-relaxed text-muted-foreground">“{ask.why}”</p>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-7">
-        {askAnswers(ask).map((answer, index) => (
-          <Answer key={answer} primary={index === 0} disabled={busy} onClick={() => answerAsk(folder, ask, answer)}>
+        {away && askAnswers(ask).length > 1 ? <span data-setup-away-allow className="mr-1 text-label text-muted-foreground">{SETUP_AWAY_ALLOW}</span> : null}
+        {askAnswers(ask, away).map((answer, index) => (
+          <Answer key={answer} primary={index === 0 && !away} disabled={busy} onClick={() => answerAsk(folder, ask, answer)}>
             {askAnswerLabel(ask, answer, compact)}
           </Answer>
         ))}
@@ -196,14 +200,15 @@ const EMPTY = {
 } as const satisfies Record<SetupListPart, string>
 
 function ListPart({ folder, view, part, now, compact }: { folder: string; view: SetupPlaceView; part: SetupPartView; now: number; compact: boolean }) {
+  const away = useAway(folder)
   return (
     <section data-setup-part={part.part} className="flex flex-col gap-1.5">
-      <PartHead title={SETUP_PART_TITLES[part.part]} hint={compact ? undefined : partHint(part.part, view.place)} add={compact ? undefined : { label: SETUP_PART_ADDS[part.part], onClick: () => addTo(folder, part.part, view) }} />
+      <PartHead title={SETUP_PART_TITLES[part.part]} hint={compact ? undefined : partHint(part.part, view.place)} add={compact || away ? undefined : { label: SETUP_PART_ADDS[part.part], onClick: () => addTo(folder, part.part, view) }} />
       <div className="flex flex-col divide-y divide-hairline bg-shell/55">
         {part.rows.length ? (
           part.rows.map((row) => <Row key={row.id} folder={folder} place={view.id} row={row} now={now} compact={compact} />)
         ) : (
-          <p className="px-3 py-2.5 text-label text-faint">{EMPTY[part.part]}</p>
+          <p className="px-3 py-2.5 text-label text-faint">{away ? SETUP_AWAY_EMPTY : EMPTY[part.part]}</p>
         )}
       </div>
     </section>
@@ -233,8 +238,8 @@ export function SetupPlaceBody({ folder, view, now, compact = false }: { folder:
 }
 
 /** The phone's fold: each part as one line, opened to its rows. */
-export function PartSummaryRow({ part, now, open, onToggle }: { part: SetupPartView; now: number; open: boolean; onToggle: () => void }) {
-  const summary = partSummary(part, now)
+export function PartSummaryRow({ part, now, away, open, onToggle }: { part: SetupPartView; now: number; away: boolean; open: boolean; onToggle: () => void }) {
+  const summary = partSummary(part, now, away)
   return (
     <button type="button" aria-expanded={open} data-setup-summary={part.part} onClick={onToggle} className="pressable flex min-h-12 w-full items-center gap-3 px-3 py-2 text-left">
       <SyncDot tone={summary.tone} />

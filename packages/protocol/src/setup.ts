@@ -213,9 +213,10 @@ export const SetupRowSchema = z
   .strict()
 export type SetupRow = z.infer<typeof SetupRowSchema>
 
-/** The row's one button: its own, or its state's. */
-export function rowAction(row: SetupRow, now: number): RowAction | undefined {
-  return row.action ?? syncWords(row.sync, now).action
+/** The row's one button: its own, or its state's. Away from its Mac (`SetupView.away`), only Stop does anything. */
+export function rowAction(row: SetupRow, now: number, away = false): RowAction | undefined {
+  const action = row.action ?? syncWords(row.sync, now).action
+  return away && action !== "stop" ? undefined : action
 }
 
 export const ROW_ACTION_LABELS = { send: "Send", add: "Add", retry: "Retry", keep: "Keep", stop: "Stop" } as const satisfies Record<RowAction, string>
@@ -247,8 +248,9 @@ export const ASK_ANSWERS = ["allow-thread", "allow-project", "decline", "add-to-
 export const AskAnswerSchema = z.enum(ASK_ANSWERS)
 export type AskAnswer = z.infer<typeof AskAnswerSchema>
 
-/** The answers an ask offers, the one for the narrowest reach first. */
-export function askAnswers(ask: SetupAsk): AskAnswer[] {
+/** The answers an ask offers, the one for the narrowest reach first. Away from its Mac (`SetupView.away`), only no. */
+export function askAnswers(ask: SetupAsk, away = false): AskAnswer[] {
+  if (away) return ["decline"]
   if (ask.kind === "tool") return ["add-to-setup", "decline"]
   // A source's yes is for the borrower that asked; widening it is a grant of its own, given in Setup.
   if (ask.answer === "grant") return ["allow-thread", "allow-project", "decline"]
@@ -421,9 +423,21 @@ export const SetupViewSchema = z
     places: z.array(SetupPlaceViewSchema),
     /** When it was read. */
     at: At,
+    /**
+     * Built from the account broker alone, away from any Mac (`accountSetupView`): it sees what the account lends and
+     * nothing of a device's own, and can only say no or stop a grant. Absent on a host's page.
+     */
+    away: z.literal(true).optional(),
   })
   .strict()
 export type SetupView = z.infer<typeof SetupViewSchema>
+
+/** What a page built away from the Mac says of itself, for what it can't see. */
+export const SETUP_AWAY_NOTE = "This shows what your account lends. Open Setup on your Mac for the rest."
+/** What an ask says in place of the answers only its source can give. */
+export const SETUP_AWAY_ALLOW = "Allow it on your Mac"
+/** A part with nothing in it, on a page that can only see grants: it says no more than that. */
+export const SETUP_AWAY_EMPTY = "No grants"
 
 // ---- Derivation ----
 
@@ -739,8 +753,8 @@ export function setupView(input: SetupInput): SetupView {
 /** A part folded to one line, as the phone lists it: its first names, then the worst state said. */
 export type PartSummary = { line: string; tone: SyncTone }
 
-export function partSummary(part: SetupPartView, now: number): PartSummary {
-  if (!part.rows.length) return { line: "Nothing yet", tone: "neutral" }
+export function partSummary(part: SetupPartView, now: number, away = false): PartSummary {
+  if (!part.rows.length) return { line: away ? SETUP_AWAY_EMPTY : "Nothing yet", tone: "neutral" }
   const ranked = part.rows.map((row) => ({ row, said: syncWords(row.sync, now) })).sort((left, right) => TONE_RANK[left.said.tone] - TONE_RANK[right.said.tone])
   const worst = ranked[0]!
   const names = part.rows.filter((row) => row !== worst.row).slice(0, 2).map((row) => row.name)
@@ -815,7 +829,7 @@ function platformOf(text: string): Platform {
  * `/leases`, `/events`, `/asks`): the cloud's place and each device of the account's, every row by `setupView`. The
  * project is its folder's name; its repository is the one the broker's grants, leases or asks name that ends with it.
  * A device's own readings (its recipe, its own brokers) are its host's to say, so a device place here shows only what
- * the account's broker holds for it.
+ * the account's broker holds for it, and the page says so (`away`).
  */
 export function accountSetupView(input: { now: number; project: string; snapshot: BorrowSnapshot; devices: readonly AccountDevice[] }): SetupView {
   const { now, project, snapshot } = input
@@ -854,5 +868,5 @@ export function accountSetupView(input: { now: number; project: string; snapshot
     devices: Object.fromEntries(input.devices.map((device) => [device.id, { name: device.name, platform: platformOf(device.platform), online: false, lastSeen: device.lastSeenAt ? Date.parse(device.lastSeenAt) || null : null }])),
   }
   const threads = [...new Set([...snapshot.leases.filter((lease) => ours(lease.borrower)).map((lease) => lease.borrower.thread), ...asks.map((ask) => ask.by.thread)])]
-  return setupView({ now, project: { name: project, root: project, repository }, places, broker, threads })
+  return { ...setupView({ now, project: { name: project, root: project, repository }, places, broker, threads }), away: true }
 }

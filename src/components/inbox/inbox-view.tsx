@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react"
 import { CheckIcon, ChevronRightIcon, XIcon } from "lucide-react"
 import { childStateOf } from "@mako/host/contracts/children"
-import { askAnswerLabel, askAnswers } from "@mako/host/contracts/setup"
+import { askAnswerLabel, askAnswers, SETUP_AWAY_ALLOW } from "@mako/host/contracts/setup"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { LiveMark } from "@/components/ui/live-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -206,11 +206,14 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
         ) : item.kind === "approval" && item.answerable ? (
           <ApprovalAnswers item={item} sending={sending} send={(option) => settle(answerApproval(item, option))} />
         ) : item.kind === "setup" ? (
-          askAnswers(item.ask).map((answer, index) => (
-            <button key={answer} type="button" data-inbox-answer={answer} disabled={sending} onClick={() => { setSending(true); answerAsk(item.folder, item.ask, answer) }} className={cn(BUTTON, index === 0 ? PRIMARY : QUIET)}>
-              {askAnswerLabel(item.ask, answer, true)}
-            </button>
-          ))
+          <>
+            {item.away && askAnswers(item.ask).length > 1 ? <span className="text-label text-muted-foreground">{SETUP_AWAY_ALLOW}</span> : null}
+            {askAnswers(item.ask, item.away).map((answer, index) => (
+              <button key={answer} type="button" data-inbox-answer={answer} disabled={sending} onClick={() => { setSending(true); answerAsk(item.folder, item.ask, answer) }} className={cn(BUTTON, index === 0 && !item.away ? PRIMARY : QUIET)}>
+                {askAnswerLabel(item.ask, answer, true)}
+              </button>
+            ))}
+          </>
         ) : null}
         <span className="flex-1" />
         <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">
