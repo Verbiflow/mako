@@ -320,6 +320,29 @@ jobs:
           name: transcript-send
           path: ${{ runner.temp }}/transcript-send
 
+  # Every npm test script no other job runs, on a Mac, where the tests' Electron runs (`ci-suites.mjs`): each suite runs
+  # however the last went, so one run names all that fail, and none gets a second try.
+  suites:
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      # Recording needs ffmpeg and ffprobe, which the Mac runner doesn't have.
+      - run: brew install ffmpeg
+      - run: npm run build:control-runtime
+      - run: node scripts/ci-suites.mjs ${{ matrix.shard }} 3
+
   # How soon each device sees what another does and what a streamed token costs on each hop, against the bench's
   # budgets (`bench:sync-latency`): two screenless hosts, a phone and a cloud watcher on the protocol's fake gateway,
   # the owner's Codex at the tested build sealed against the bench's stand-in model. Counts (words missed, rereads,

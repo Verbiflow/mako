@@ -3,7 +3,7 @@ import { ChildProcess, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { appendFileSync } from "node:fs"
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -46,6 +46,7 @@ if (!process.versions.electron) {
 }
 
 const VERSION = "standin-9.9.9"
+const HANG_MS = 60_000
 const alive = (pid) => {
   try {
     process.kill(pid, 0)
@@ -54,12 +55,13 @@ const alive = (pid) => {
     return false
   }
 }
-async function until(label, check, ms = 5000) {
-  const deadline = performance.now() + ms
+/** A hang guard, not a limit: a stand-in is a whole Electron process, and six start at once below. `says` is what the timeout saw. */
+async function until(label, check, says = () => "") {
+  const deadline = performance.now() + HANG_MS
   for (;;) {
     const value = await check()
     if (value) return value
-    if (performance.now() > deadline) throw new Error(`Timed out: ${label}`)
+    if (performance.now() > deadline) throw new Error(`Timed out: ${label}${await says()}`)
     await delay(10)
   }
 }
@@ -226,7 +228,21 @@ async function main() {
     const events = []
     const emit = (event) => events.push({ at: performance.now(), event })
     const started = settled(standIn.start(settings.dir, admitted(provider, { conversationId: id, emit, mcpSnapshot })))
-    const pids = await until(`${provider} stand-in launched`, () => readFile(settings.pids, "utf8").then(JSON.parse, () => undefined))
+    const opened = performance.now()
+    const startState = () => Promise.race([started, delay(0).then(() => undefined)])
+    const launching = await until(`${provider} stand-in launched`, async () => {
+      const state = await startState()
+      if (state && !state.ok) throw new Error(`${provider}: its start failed before its stand-in wrote its pids: ${state.error?.message}`, { cause: state.error })
+      // The stand-in's write creates the file, then fills it: a read between the two isn't an answer yet.
+      const text = await readFile(settings.pids, "utf8").catch(() => "")
+      return text ? text : undefined
+    }, async () => {
+      const state = await startState()
+      const pidsFile = await stat(settings.pids).then(({ size }) => `${size} bytes`, () => "not written")
+      return `: start ${state ? "answered, its stand-in never launched" : "still waiting"}, pids file ${pidsFile}, events: ${events.map(({ event }) => event.type).join(", ") || "none"}`
+    })
+    const pids = JSON.parse(launching)
+    trace(`${provider}: launched ${behavior} in ${Math.round(performance.now() - opened)} ms`)
     const sessions = () => events.filter(({ event }) => event.type === "live-session" && event.session.id === id)
     return { provider, id, standIn, events, started, pids, sessions, session: () => sessions().at(-1)?.event.session }
   }
