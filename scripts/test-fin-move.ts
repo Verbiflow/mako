@@ -334,6 +334,26 @@ async function landing(): Promise<void> {
     await f.world.close()
   }
   {
+    // A digest held with the limit goes ahead of the person's words, and the transcript goes with it.
+    let out = false
+    const f = await fixture("codex", { refusePrompt: (_conversation, harness) => (out && harness === "codex" ? "You've hit your usage limit." : undefined) })
+    await f.world.settle(40, 20_000)
+    const { conversation } = f.fin()
+    out = true
+    const digest = randomUUID()
+    f.world.live.submit(conversation, digest, "row-digest", [], undefined, undefined, undefined, { kind: "agent", session: SessionIdSchema.parse(f.world.caller(conversation).kind === "agent" ? f.world.caller(conversation).session : "") }, { digest: { notices: [] } })
+    await until("it to wait", () => f.world.live.snapshot(conversation)!.requests.some((request) => request.id === digest && request.retry))
+    const id = randomUUID()
+    await f.world.continueOn(conversation, { kind: "words", input: { id, provider: "claude", text: "row-words", attachments: [] } })
+    await until("both", () => ["row-digest", "row-words"].every((words) => f.prompts().some((prompt) => prompt.text.includes(words))))
+    await f.world.settle(40, 20_000)
+    assert.deepEqual(f.prompts().filter((prompt) => prompt.text.includes("row-")).map((prompt) => (prompt.text.includes("row-words") ? "row-words" : "row-digest")), ["row-digest", "row-words"])
+    const requests = f.world.live.snapshot(conversation)!.requests
+    assert.equal(requests.find((request) => request.id === digest)?.context?.length, 1, "the transcript goes with it")
+    assert.ok(!requests.find((request) => request.id === id)?.context?.length)
+    await f.world.close()
+  }
+  {
     // A move has no row, by design, so a write while it's under way doesn't read it as a switch whose row went (`withdrawGone`).
     let open = () => {}
     let armed = false
