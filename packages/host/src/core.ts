@@ -1105,7 +1105,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   late.harnessTool = new HarnessTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
     tier: (id) => sessionAccessTier(live.session(id)),
-    invoke: async (channel, args) => z.json().parse(decodeRuntimeValue(await methods.invoke(channel, args))),
+    invoke: async (channel, args) => z.json().optional().parse(decodeRuntimeValue(await methods.invoke(channel, args))),
     machine: config.machineAgentFd !== undefined,
     gate: late.agentAsks,
   })
