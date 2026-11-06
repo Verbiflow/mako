@@ -296,7 +296,7 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
    */
   z.object({ type: z.literal("live-form"), threadId: ThreadIdSchema, form: LiveFormSchema }).strict(),
   /**
-   * What a Thread this runtime runs borrows changed (version 19 on, `borrow.ts`): a lease decided after it waited, a
+   * What a Thread this runtime runs borrows changed (version 21 on, `borrow.ts`): a lease decided after it waited, a
    * lease ended, or a newer version of a copy. `seq` is the Thread's push sequence, the one asking for its pushes
    * answers from, so a runtime that sees a gap asks from the last it had. Never a value.
    */

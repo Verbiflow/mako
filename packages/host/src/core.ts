@@ -3,6 +3,7 @@ import { recipesOverHttp } from "@mako/protocol/recipes-http"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { decodeRuntimeValue, encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { sessionAccessTier } from "./contracts/access.js"
+import { listedFins } from "./contracts/children.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
 import { writeFile } from "node:fs/promises"
@@ -413,7 +414,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     emit,
     inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
     working: async (path) => conversationsIn(path, (status) => status === "running"),
-    workingFolders: async () => (late.conversations?.live.summaries() ?? []).filter(({ session }) => session.status === "running").map(({ session }) => session.cwd),
+    workingFolders: async () => (late.conversations?.live.listed() ?? []).filter(({ session }) => session.status === "running").map(({ session }) => session.cwd),
     conversations: checkoutConversations({
       summaries: () => late.conversations?.live.summaries() ?? [],
       relocation: (id) => late.conversations?.live.relocation(id) ?? { kind: "never", reason: "isn't open" },
@@ -537,6 +538,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           return held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined
         },
         asking: (id) => finAsking(late.conversations?.agents?.personAsk(id)),
+        fins: (id) => listedFins(late.conversations?.agents?.roster(id)),
         now: Date.now,
       }))
     },
@@ -554,6 +556,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         background: held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined,
         promptedAt: held ? personPromptedAt(held.requests, held.control?.actions) : undefined,
         asking: (conversation) => finAsking(late.conversations?.agents?.personAsk(conversation)),
+        fins: (conversation) => listedFins(late.conversations?.agents?.roster(conversation)),
       })
     },
     // A change goes to the account within a fraction of a second, on the link this host serves then, named as the tick's

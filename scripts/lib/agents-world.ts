@@ -283,7 +283,7 @@ export class AgentsWorld {
       resumeVerdict: this.options.resumeVerdict ?? (async () => ({ kind: "resumable", record: "same" })),
     })
     this.live = live
-    const continuing = continueOn({ live, resolveLaunch: async (_provider, _cwd, tuning) => tuning, switched: () => {}, resumesUnderAccount: (harness) => this.options.resumesUnderAccount?.includes(harness) === true })
+    const continuing = continueOn({ live, resolveLaunch: async (_provider, _cwd, tuning) => tuning, switched: () => {}, resumesUnderAccount: (harness) => this.options.resumesUnderAccount?.includes(harness) ?? (this.options.continuation?.[harness]?.kind ?? "resumes") === "resumes"})
     this.continueOn = (id, continuation, actor, stillDecided) => {
       const to = continuation.kind === "words" ? continuation.input.provider : continuation.kind === "move" ? continuation.move.to.harness : continuation.reply.provider
       this.continued.push({ conversation: id, to, kind: continuation.kind, by: actor?.kind ?? "person" })
@@ -597,7 +597,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, wakeDue: () => [], snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, pinnedAccount: () => undefined, submit: none,
     act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
-    turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false, recordNote: () => false, moveWaiting: () => false,
+    turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {},
   }
 }
 

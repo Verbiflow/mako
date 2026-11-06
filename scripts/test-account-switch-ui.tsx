@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
-import { useAccountLimitNotice, useAccountSwitchNotice } from "../src/components/composer/account-notice"
+import { useAccountLimitNotice, useAccountSwitchNotice, limitContinueNotice } from "../src/components/composer/account-notice"
 import { ProducedNotice } from "../src/components/composer/composer-notices"
 import { accountReading, stopSwitches, waitText } from "../src/lib/account-switch"
 import type { FinChoicesReading } from "@mako/host/contracts/fin-tuning"
@@ -155,6 +155,8 @@ assert.match(mismatch, /data-notice-tone="caution"/)
   assert.match(alone, /codex@example\.com is at 96% of its weekly limit · When it runs out, Fins go on with your next harness/)
   assert.match(switched(false), /codex@example\.com is at 96% of its weekly limit · When it runs out, Fins wait until it resets/, "Settings' switch off: they don't go on")
   assert.doesNotMatch(switched(undefined), /When it runs out/, "the switch unread: it says neither")
+  const card = limitContinueNotice("Cursor is at its usage limit until Sun 12:00 AM PST", "cursor", "Claude Code", false, () => {})
+  assert.deepEqual(card.actions?.map((action) => [action.label, action.primary]), [["Continue on Claude Code", true]], "one card, one press")
   assert.doesNotMatch(alone, /Switch to/)
   accountsStore.set({ limitOffers: { codex: offered } })
   accountsStore.set((state) => ({ limitOffers: { codex: { ...state.limitOffers.codex!, because: "refused" } } }))
