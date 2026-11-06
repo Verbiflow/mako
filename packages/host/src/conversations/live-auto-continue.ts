@@ -4,7 +4,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import { BRIEF_AGAIN } from "../contracts/children.js"
-import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
+import { transientCause, unheardDigest, waitsAgain } from "../contracts/delivery-retry.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
@@ -174,27 +174,33 @@ export class LiveAutoContinue {
     // A turn a Stop latched isn't picked up again by itself (`LiveRequest.pause`).
     if (failed.pause === "stop") return
     const cause = transientCause(failed.error ?? "", failed.failure ?? "unknown", false)
-    // Only a turn its harness ran is continued: one it never took has nothing to pick up.
+    // Only a turn its harness ran is continued: one it never took has nothing to pick up. A digest no model answered is
+    // the exception, whatever ended it: it stays until one does.
     const ran = failed.nativeRun !== undefined || failed.nativeDelivery?.evidence.kind === "accepted"
-    if (!cause || !ran) return
+    const unheard = unheardDigest(failed) ? failed.digest : undefined
+    if ((!cause || !ran) && !unheard) return
     if (resident.snapshot.requests.some((request) => request.continues?.requestId === failed.id)) return
     const now = Date.now()
-    const retry = nextRetry(failed.retry, cause, failed.error ?? "", now)
-    if (!retry) return
+    const waits = cause || unheard ? waitsAgain(failed, cause, failed.error ?? "", now) : undefined
+    if (!waits) return
+    const retry = waits.retry
     const continues: TurnContinuation = { requestId: failed.id, reason: "connection-lost", auto: true }
+    // Its reports read as heard, so it goes again as itself, for later news to join, as often as it fails, where "carry
+    // on" would tell nothing of them; past the retries it rests (`resting`).
     const request = LiveRequestSchema.parse({
       actor: { kind: "service", name: "auto-continue" },
       id: randomUUID(),
       createdAt: now,
-      text: continueTurnPrompt("connection-lost", "mako"),
+      text: unheard ? failed.text : continueTurnPrompt("connection-lost", "mako"),
+      ...(unheard && { displayText: "", digest: { notices: unheard.notices, ...(!retry && { resting: true as const, ...(waits.digest?.nextTry !== undefined && { nextTry: waits.digest.nextTry }) }) } }),
       attachments: [],
       tuning: failed.tuning,
       status: "held",
       continues,
-      retry,
+      ...(retry && { retry }),
     })
     request.inputDigest = promptFingerprint(request.text, request.attachments, request.tuning)
-    const requests = resident.snapshot.requests.map((candidate) => (candidate === failed ? { ...candidate, retry } : candidate))
+    const requests = resident.snapshot.requests.map((candidate) => (candidate === failed && retry ? { ...candidate, retry } : candidate))
     const at = requests.findIndex((candidate) => candidate.id === failed.id) + 1
     // The failure is being picked up, not left to the person: the session reads ready, so what was queued after the
     // turn goes in the order it came, behind the continuation or after a message that supersedes it.
@@ -205,13 +211,14 @@ export class LiveAutoContinue {
       requests: [...requests.slice(0, at), request, ...requests.slice(at)],
     }
     this.access.flush(resident)
-    hostLog("live", "a turn its harness failed for now continues by itself", { conversation: resident.snapshot.session.id, request: request.id, continues: failed.id, cause, attempt: retry.attempt, at: new Date(retry.at).toISOString() })
+    hostLog("live", "a turn its harness failed for now continues by itself", { conversation: resident.snapshot.session.id, request: request.id, continues: failed.id, ...(cause && { cause }), ...(retry && { attempt: retry.attempt, at: new Date(retry.at).toISOString() }) })
   }
 
   /** Drop a pending continuation and its stamp; a later prompt, close or host exit made it moot. */
   decline(resident: Resident): void {
     // A failed turn's continuation that waits for its time gives way the same way.
-    const waiting = resident.snapshot.requests.filter((request) => request.status === "held" && request.continues?.auto && request.retry)
+    // One carrying a digest doesn't: it's the only way its reports are heard.
+    const waiting = resident.snapshot.requests.filter((request) => request.status === "held" && request.continues?.auto && request.retry && !request.digest)
     if (waiting.length) {
       const failed = new Set(waiting.map((request) => request.continues!.requestId))
       const ids = new Set(waiting.map((request) => request.id))
