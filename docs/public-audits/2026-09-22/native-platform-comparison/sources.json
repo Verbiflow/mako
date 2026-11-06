@@ -1,42 +1,42 @@
 [
   {
-    "path": "/Users/kashyab/makomono/codex-cu-layers-3-4-deep-dive.md",
+    "path": "../codex-cu-layers-3-4-deep-dive.md",
     "sha256": "ed9921a4fca9752cc64269e3ccd5c3266a3799ffa3726b6c9ea2e66f16f8fa63"
   },
   {
-    "path": "/Users/kashyab/makomono/chrome-chatgpt.md",
+    "path": "../chrome-chatgpt.md",
     "sha256": "9afe2c44a6e5e130cc0d41db21ebc1c03b69da99f71a0f930ebe8783b94b1575"
   },
   {
-    "path": "/Users/kashyab/makomono/mako/packages/control/src/control/client.ts",
+    "path": "packages/control/src/control/client.ts",
     "sha256": "0653cec7d576d8c013b02dc7da8dbb70a8d3feee8fb2770b4c8374b47d3df637"
   },
   {
-    "path": "/Users/kashyab/makomono/mako/packages/control/src/computer/control-contract.ts",
+    "path": "packages/control/src/computer/control-contract.ts",
     "sha256": "f118c28f313e446ed0b32465ecfdb794f52194f53055b41fc3b1a95a2f393ef6"
   },
   {
-    "path": "/Users/kashyab/makomono/mako/electron/computer-input-target.ts",
+    "path": "electron/computer-input-target.ts",
     "sha256": "969f1e63bc3fbdc5060d55d53028eac05b2b738ebc4b035a3a43bbe65352fe89"
   },
   {
-    "path": "/Users/kashyab/makomono/mako/electron/computer-tools-main.ts",
+    "path": "electron/computer-tools-main.ts",
     "sha256": "809239f35786bfaee2946efba51923f12632a05f5c4a05d9de2ea48ce31015cc"
   },
   {
-    "path": "/Users/kashyab/makomono/mako/browser-extension/tasks.ts",
+    "path": "browser-extension/tasks.ts",
     "sha256": "90363aa9bc307025cb55622e157beb164bda77549cd5bdde6791a83321110a2f"
   },
   {
-    "path": "/Users/kashyab/makomono/mako/browser-extension/router.ts",
+    "path": "browser-extension/router.ts",
     "sha256": "17b228690fff21de5bc58e218e5b4d4e475b74ce9237df71d670b075778b929f"
   },
   {
-    "path": "/Users/kashyab/makomono/mako/vendor/cua-driver/release.json",
+    "path": "vendor/cua-driver/release.json",
     "sha256": "2a713038718d67cb5d5cb0cb7c0d3801385f0b251d4963a38a12b1c3d067fd9f"
   },
   {
-    "path": "/Users/kashyab/makomono/mako/.github/workflows/release.yml",
+    "path": ".github/workflows/release.yml",
     "sha256": "38e0f813ea3f872c65266181d80964d817a0e22a62a014a098504815447706fa"
   },
   {

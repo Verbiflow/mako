@@ -113,7 +113,7 @@ The follow-up uses populated historical conversations, not the short browser fix
 | Continuity camera focus loss | First prompt beginning `i have continuity camera connected via iphone` | Both retain the two diagnostic exchanges and failed command. Claude describes the operation; Mako labels it with the shell command. Mako additionally renders `[Request interrupted by user for tool use]` as a user bubble and navigation target. |
 | Podcast name brainstorming | `Can you set this up please: https://github.com/diffusionstudio/editor`, the open Claude session under pods | Matching naming replies and the final captioning explanation confirm identity. Both preserve code blocks, lists, and the caption example's line breaks. Claude turns `scripts/transcribe.sh` and `scripts/cues.py` into file-preview buttons; Mako keeps them as inline code. Claude folds the two commands into one summary; Mako shows both raw command rows. |
 
-The empty `kashyabs-macbook-pro-2-local-serialized-sunrise` session is excluded from the count. No prompts were sent and no historical commands were rerun.
+The empty `someones-macbook-local-serialized-sunrise` session is excluded from the count. No prompts were sent and no historical commands were rerun.
 
 ### Additional provider observations and incomplete coverage
 
@@ -155,7 +155,7 @@ These comparisons only read historical conversations. The historical test and de
 
 ### Additional Cursor comparisons
 
-- **Rebuild arca with new changes** is the Claude import at `~/.claude/projects/-Users-kashyab-repos-nu-arca/8b5c725a-c6a0-43ad-99c8-1da2eb36f5f1.jsonl`. Mako finds it as **plese rebuild arca since we have pulled in new changes**. The same final stale-build explanation, source hash, and hooks discussion rendered in both apps. Cursor shows the user's screenshot as `[Image #11]`. Its companion Changes panel displays numbered, syntax-colored diffs, but that panel is scoped to current uncommitted workspace changes and must not be confused with the historical answer's edits.
+- **Rebuild arca with new changes** is the Claude import at `~/.claude/projects/-Users-someone-repos-nu-arca/8b5c725a-c6a0-43ad-99c8-1da2eb36f5f1.jsonl`. Mako finds it as **plese rebuild arca since we have pulled in new changes**. The same final stale-build explanation, source hash, and hooks discussion rendered in both apps. Cursor shows the user's screenshot as `[Image #11]`. Its companion Changes panel displays numbered, syntax-colored diffs, but that panel is scoped to current uncommitted workspace changes and must not be confused with the historical answer's edits.
 - **System comparison and cloning**, under Arca, has a saved **Letta Vs Arca Memory Review** Canvas. Opening it renders a live interactive document in the right companion. Clicking Verdict switches its content from Steal and avoid to the comparison view. Canvas, source-view, design-mode, and share controls remain beside the artifact. The answer also has a Markdown document link and a one-file changed card with Review and `+616` lines. No publish, design, commit, or agent-run action was taken.
 - Searching Mako for **System comparison** returns **Nothing matches**. Mako's Cursor adapter discovers `~/.cursor/chats` and `~/.cursor/acp-sessions`, not Cursor desktop workspace/global storage. This establishes a title-search miss and a reader-coverage limit. It does not prove the same conversation is absent under every possible alternate title. Its saved Canvas has no verified Mako counterpart.
 

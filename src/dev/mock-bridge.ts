@@ -970,7 +970,7 @@ export function installMockBridge() {
       const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
       return [
         { number: 812, title: "Fix the login redirect after SSO", branch: "fix/login-redirect", draft: false, author: "ann", updatedAt: ago(2), cross: false },
-        { number: 809, title: "Billing webhooks retry with backoff", branch: "billing-webhooks", draft: true, author: "kashyab", updatedAt: ago(26), cross: false },
+        { number: 809, title: "Billing webhooks retry with backoff", branch: "billing-webhooks", draft: true, author: "ana", updatedAt: ago(26), cross: false },
         { number: 801, title: "Typo in the README", branch: "patch-1", draft: false, author: "outside-contributor", updatedAt: ago(120), cross: true },
       ]
     },
