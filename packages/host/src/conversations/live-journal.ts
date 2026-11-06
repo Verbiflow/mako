@@ -160,7 +160,7 @@ export const LiveRequestSchema = z.object({
   signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
   retry: RequestRetrySchema.optional(),
-  digest: z.object({ notices: z.array(NoticeSchema), sentAt: z.number().optional() }).optional(),
+  digest: z.object({ notices: z.array(NoticeSchema), sentAt: z.number().optional(), heard: z.literal(true).optional() }).optional(),
   interruption: z
     .object({
       ...StoredReason,

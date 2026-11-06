@@ -5,7 +5,6 @@ import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import { BRIEF_AGAIN } from "../contracts/children.js"
 import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
-import { turnReply } from "./live-goals.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
@@ -182,9 +181,9 @@ export class LiveAutoContinue {
     const retry = nextRetry(failed.retry, cause, failed.error ?? "", now)
     if (!retry) return
     const continues: TurnContinuation = { requestId: failed.id, reason: "connection-lost", auto: true }
-    // A digest the limit refused before anything ran was heard by no model, and its reports read heard: it goes again
-    // as itself, for later news to join, where "carry on" would tell nothing of them.
-    const unheard = failed.digest && !turnReply(resident, failed.id).worked ? failed.digest : undefined
+    // A digest no model answered may have been heard by none, and its reports read heard: it goes again as itself, for
+    // later news to join, as often as it fails, where "carry on" would tell nothing of them.
+    const unheard = failed.digest?.heard ? undefined : failed.digest
     const request = LiveRequestSchema.parse({
       actor: { kind: "service", name: "auto-continue" },
       id: randomUUID(),

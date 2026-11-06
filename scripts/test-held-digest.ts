@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { mock } from "node:test"
 import { join } from "node:path"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { FROM_AGENTS } from "@mako/host/contracts/children"
@@ -12,7 +13,7 @@ import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
  * Reports that arrive while an Apex can't run wait as one digest and go once, in the first turn after it can
  * (`npm run test:held-digest`), on each of the six harnesses. The case of 2026-11-05: an Apex's plan ran out, its Fin
  * posted 25 reports, each woke the Apex and every turn failed the same way. Covered: a wake refused unsent, a wake its
- * harness accepted and failed with nothing done, a restart in the wait, a crash as the digest is written, a switch by hand, a Stop
+ * harness accepted and failed with nothing done, a restart in the wait, a crash as the digest is written, a switch by hand, any number of failures in a row, a Stop
  * in the wait and a message of the person's in the wait.
  */
 
@@ -32,17 +33,20 @@ async function until(what: string, ready: () => boolean, ms = 10_000): Promise<v
 interface Limits {
   refused: Set<string>
   failing: Set<string>
+  /** Conversations whose turn says something before its limit: a model that heard what it was sent. */
+  speaking: Set<string>
   /** The harness whose account ran out: any other takes what's sent. */
   on?: string
   knocks: string[]
 }
 
 function worldOf(name: string) {
-  const limits: Limits = { refused: new Set(), failing: new Set(), knocks: [] }
+  const limits: Limits = { refused: new Set(), failing: new Set(), speaking: new Set(), knocks: [] }
   const script: Script = async (turn) => {
     if (turn.text.includes("You're fin:")) return turn.world.hold(turn.conversation).then(() => "Labels finished.")
     if (!limits.failing.has(turn.conversation)) return "Done."
     limits.knocks.push(turn.conversation)
+    if (limits.speaking.has(turn.conversation)) turn.world.live.observe({ type: "live-update", id: turn.conversation, update: { kind: "text", text: "Reading the reports." } })
     const session = turn.world.live.snapshot(turn.conversation)!.session
     turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: LIMIT } })
     return new Promise<string>(() => {})
@@ -218,6 +222,54 @@ try {
       await world.close()
     }
 
+    // 2026-11-05's shape: the account stays out, turn after turn. Each attempt that nothing heard proves nothing, so
+    // the reports outlast any number of them, then the person's message, a restart among them or none.
+    for (const failures of [2, 3, 28]) {
+      const { world, limits } = worldOf(`${harness}-failures-${failures}`)
+      const { conversation, fins } = await apexWithFins(world, harness, names.slice(0, 2))
+      limits.failing.add(conversation)
+      await report(world, conversation, fins, names)
+      // A minute apart, as the budget for an Apex's digests has them (`WAKES_PER_MINUTE`).
+      let passed = 0
+      const clock = Date.now.bind(Date)
+      const time = mock.method(Date, "now", () => clock() + passed)
+      for (let attempt = 1; attempt <= failures; attempt += 1) {
+        if (attempt > 1) {
+          passed += 61_000
+          world.live.wakeDue(Date.now() + LATER)
+        }
+        await until(`${harness} ${failures} failures: attempt ${attempt}`, () => limits.knocks.length === attempt && rows(world, conversation).some((request) => request.status === "held" && request.digest !== undefined))
+        if (attempt === 2) await world.restart()
+      }
+      assert.equal(limits.knocks.length, failures, `${harness} ${failures} failures: one attempt each, none for the reports`)
+      waitsAsOne(world, conversation, names.slice(0, 2), `${harness} ${failures} failures`)
+      const sent = digests(world, conversation).length
+      limits.failing.clear()
+      passed += 61_000
+      world.say(conversation, "Then this.")
+      await until(`${harness} ${failures} failures: their message to be taken`, () => rows(world, conversation).some((request) => request.text === "Then this." && request.status === "completed"))
+      const went = digests(world, conversation).slice(sent)
+      assert.equal(went.length, 1, `${harness} ${failures} failures: the digest went, once`)
+      for (const name of names.slice(0, 2)) assert.equal(readFinReports(went[0]!.text).text.split(`"${name}"`).length - 1, 1, `${harness} ${failures} failures: ${name} was heard once`)
+      const order = world.prompts.filter((prompt) => prompt.conversation === conversation).map((prompt) => prompt.text)
+      assert.ok(order.lastIndexOf(went[0]!.text) < order.findIndex((text) => text.includes("Then this.")), `${harness} ${failures} failures: the digest went first`)
+      assert.equal(world.store.undeliveredReports().filter(({ report: kept }) => kept.status !== "progress").length, 0, `${harness} ${failures} failures: nothing left unheard`)
+      await world.close()
+      time.mock.restore()
+    }
+
+    // A turn that said something heard it: what follows is a plain continuation, which the person's message supersedes, and the digest isn't told twice.
+    {
+      const { world, limits } = worldOf(`${harness}-heard`)
+      const { conversation, fins } = await apexWithFins(world, harness, names.slice(0, 2))
+      limits.failing.add(conversation)
+      limits.speaking.add(conversation)
+      await report(world, conversation, fins, names)
+      await until(`${harness} heard: the turn to fail`, () => limits.knocks.length === 1 && rows(world, conversation).some((request) => request.status === "held" && request.continues !== undefined))
+      assert.ok(!rows(world, conversation).some((request) => request.status === "held" && request.text.startsWith(FROM_AGENTS)), `${harness} heard: nothing retells it`)
+      await world.close()
+    }
+
     // A Stop in the wait: the digest stays, Stop's, and goes on a Resume alone.
     {
       const { world, limits } = worldOf(`${harness}-stop`)
@@ -254,7 +306,7 @@ try {
       assert.ok(order.indexOf(went[0]!.text) < order.findIndex((text) => text.includes("Then this.")), `${harness} person: the digest went first`)
       await world.close()
     }
-    console.log(`${harness}: a wake refused or failed at a limit knocked once for three reports, which waited as one digest and went once, across a restart, a crash mid-write, a switch, a Stop and the person's own message`)
+    console.log(`${harness}: a wake refused or failed at a limit knocked once for three reports, which waited as one digest and went once, across a restart, a crash mid-write, a switch, 28 failures in a row, a Stop and the person's own message`)
   }
   console.log("held digest: ok")
 } finally {

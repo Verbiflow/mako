@@ -376,6 +376,8 @@ export interface LiveRequest {
     notices: Notice[]
     /** When it went to the harness, for the minute's budget (`WAKES_PER_MINUTE`), which counts what was sent. */
     sentAt?: number
+    /** A model answered during its turn: the only proof it was heard, as nothing else proves it either way. */
+    heard?: true
   }
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption
