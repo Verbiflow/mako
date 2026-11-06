@@ -564,11 +564,12 @@ try {
     if (place.heard.includes(WORDS.asks)) throw new Error("the command ran on its Apex's word")
     return answer
   })
+  // The ask as the Apex's device holds it: the Fin's report of it, which its notice named.
+  const noticesOf = async () => (await digests()).flatMap((request) => request.digest?.notices ?? []).filter((each) => each.id.startsWith(`notice:${asker.child}:`))
+  const asked = (await noticesOf())[0]?.id
   await step("the person's answer from the Apex's Thread is refused, and says where to go", async () => {
-    // The ask as the Apex's device holds it: the Fin's report of it, which its notice named.
-    const notice = (await digests()).flatMap((request) => request.digest?.notices ?? []).find((each) => each.id.startsWith(`notice:${asker.child}:`))
-    if (!notice) throw new Error("the Apex's device took no notice of the Fin's ask")
-    const answer = RefusedSchema.parse(await apex.call("mako:agents-respond", [apexConversation, { fin: asker.child, ask: notice.id.slice(`notice:${asker.child}:`.length), allow: true, request: randomUUID() }]))
+    if (!asked) throw new Error("the Apex's device took no notice of the Fin's ask")
+    const answer = RefusedSchema.parse(await apex.call("mako:agents-respond", [apexConversation, { fin: asker.child, ask: asked.slice(`notice:${asker.child}:`.length), option: 0, request: randomUUID() }]))
     if (!answer.refused) throw new Error(`the person's answer from the Apex's Thread was taken: ${JSON.stringify(answer)}`)
     if (place.heard.includes(WORDS.asks)) throw new Error("the command ran on an answer its device never took")
     return answer
@@ -578,10 +579,14 @@ try {
     say("ASK", { device: names.place, thread: asker.child, name: asker.name, title, ...(asker.state.question && { question: asker.state.question }) })
     // Ten minutes for whoever answers it: there's no window on that device to answer it in.
     await until("the person's answer", async () => (place.heard.includes(WORDS.asks) ? true : undefined), 10 * 60_000)
-    const wake = await until("the Apex's wake with its result", async () => (await digests()).find((request) => request.text?.includes(WORDS.asks) && request.status === "completed"))
-    const strip = await stripOf(asker.child)
-    if (strip?.state.kind !== "ended") throw new Error(`the Fin read otherwise after its answer: ${JSON.stringify(strip?.state)}`)
-    return { msToAnswer: Date.now() - askedAt, request: wake.id, state: strip.state, heardOnPlace: [...place.heard], heardOnApex: [...apex.heard], permission: (await place.log()).filter((line) => /permission/i.test(line) && !/gateway trace/.test(line)).slice(-6).map((line) => line.slice(0, 300)) }
+    const msToAnswer = Date.now() - askedAt
+    // Its result is another notice than its ask's: the digest that carries it is the wake.
+    const wake = await until("the Apex's wake with its result", async () => (await digests()).find((request) => request.status === "completed" && request.digest?.notices.some((each) => each.id.startsWith(`notice:${asker.child}:`) && each.id !== asked)))
+    const strip = await until("the Fin to read as ended", async () => {
+      const found = await stripOf(asker.child)
+      return found?.state.kind === "ended" ? found : undefined
+    })
+    return { msToAnswer, request: wake.id, notices: wake.digest?.notices.map((each) => each.id), state: strip.state, heardOnPlace: [...place.heard], heardOnApex: [...apex.heard], permission: (await place.log()).filter((line) => /permission/i.test(line) && !/gateway trace/.test(line)).slice(-6).map((line) => line.slice(0, 300)) }
   })
   if (apex.heard.includes(WORDS.asks)) throw new Error("the asking Fin's turn ran on the wrong device")
 
