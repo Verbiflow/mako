@@ -1139,7 +1139,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   late.keepAwake = keepAwake
   if (keepAwake) {
     void keepAwake.refresh()
-    // What no batch says (a conversation closed, or gone to the cloud) is caught within a minute.
+    // What no batch says (a conversation closed, or gone to the cloud), and a helper to try again, within a minute.
     shell.jobs.every("keep this Mac awake while agents work", 60_000, () => keepAwake.refresh())
   }
   // The person's choice and their sign-in can change it; a minute is soon enough to start or stop listening.

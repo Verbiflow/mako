@@ -143,7 +143,7 @@ const utilityChoices: UtilityWorkChoices = { commit: "auto" }
 const mockHandOffOnSleep = { value: true }
 /**
  * Keeping the fixture's Mac awake: on, as on a new Mac. `?awake=3` has three agents at work, `?awake=lid:3` with the lid
- * held too, `?awake=battery:3` on a battery below the floor; nothing works without it.
+ * held too, `?awake=battery:3` on a battery below the floor, `?awake=failed:3` with nothing held; nothing works without it.
  */
 const mockKeepAwakeScene = new URLSearchParams(globalThis.location?.search).get("awake") ?? ""
 const mockKeepAwake: { settings: KeepAwakeSettings } = { settings: { on: true, lidClosed: mockKeepAwakeScene.startsWith("lid:") } }
@@ -153,7 +153,9 @@ function mockKeepAwakeState(): KeepAwakeState {
     ? { kind: "rest" }
     : mockKeepAwakeScene.startsWith("battery:")
       ? { kind: "low-battery", agents, percent: 14, floor: KEEP_AWAKE_BATTERY_FLOOR }
-      : { kind: mockKeepAwake.settings.lidClosed ? "lid" : "idle", agents }
+      : mockKeepAwakeScene.startsWith("failed:")
+        ? { kind: "failed", agents }
+        : { kind: mockKeepAwake.settings.lidClosed ? "lid" : "idle", agents }
   return { settings: mockKeepAwake.settings, hold }
 }
 /** The fixture's conversation settings, off as on a new Mac. */

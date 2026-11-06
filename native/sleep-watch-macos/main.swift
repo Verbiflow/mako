@@ -21,7 +21,8 @@
 //   out  `ready`                      started
 //   out  `power ac` | `power battery <percent>`   at start, and each time the power source or charge changes
 //   in   `hold idle <name>`           prevent idle sleep (`PreventUserIdleSystemSleep`); a closed lid still sleeps
-//   in   `hold lid <name>`            prevent sleep even with the lid closed (`PreventSystemSleep`: on power only)
+//   in   `hold lid <name>`            ask for sleep held off with the lid closed too (`PreventSystemSleep`, what `caffeinate -s`
+//                                     takes: on power only, and IOKit no longer documents it)
 //   out  `holding <idle|lid>`         held, or renamed if it already was
 //   in   `release`                    let the Mac sleep again
 //   out  `released`
@@ -81,7 +82,7 @@ func releaseAssertion() {
   holding = nil
 }
 
-func hold(_ kind: String, _ name: String) {
+func holdAssertion(_ kind: String, _ name: String) {
   if holding == kind {
     IOPMAssertionSetProperty(assertion, kIOPMAssertionNameKey as CFString, name as CFString)
     print("holding \(kind)")
@@ -114,7 +115,7 @@ func keepAwake() -> Never {
   readHost({ line in
     let words = line.split(separator: " ", maxSplits: 2).map(String.init)
     if words.count == 3, words[0] == "hold", words[1] == "idle" || words[1] == "lid" {
-      hold(words[1], words[2])
+      holdAssertion(words[1], words[2])
     } else if words.first == "release" {
       releaseAssertion()
       print("released")

@@ -114,6 +114,7 @@
     "bench:live-read": "node --expose-gc --import tsx scripts/bench-live-read.ts",
     "bench:running-memory": "node --expose-gc --import tsx scripts/bench-running-memory.ts",
     "test:thread-history": "tsx scripts/test-thread-history.ts",
+    "test:keep-awake": "tsx scripts/test-keep-awake.ts",
     "mako-log": "tsx --tsconfig tsconfig.app.json scripts/mako-log.ts",
     "attribution:footprint": "npm run -s build --workspace @mako/protocol && tsx scripts/footprint-replay.ts",
     "audit:effects": "tsx scripts/audit-tool-effects.ts",

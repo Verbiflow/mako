@@ -66,6 +66,8 @@ jobs:
       # A picture or page another host read (a cloud Thread's machine, another device, another host here) loads in this host's windows.
       - run: npx tsx scripts/test-owned-files.ts
       - run: npx tsx scripts/test-cloud-returns.ts
+      # Keeping a Mac awake while its agents work, against a stand-in for the native helper.
+      - run: npm run test:keep-awake
 
   # The renderer's and the live state's own suites, in Node without a window: the transcript as live and saved
   # draw it, the stage's thread identity, the live controls and notices, how a message is delivered and recovered,

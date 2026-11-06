@@ -47,7 +47,7 @@ export function ConversationSection() {
       </SettingRow>
       <SettingRow
         title="Keep this Mac awake while agents work"
-        description={awake?.unavailable ?? `Idle sleep waits while any agent here works or runs a command, and resumes the moment none does. Below ${KEEP_AWAKE_BATTERY_FLOOR}% battery, Mako lets the Mac sleep and says so`}
+        description={awake?.unavailable ?? `Holds off idle sleep while an agent here works or runs a command, not while it waits on you. Below ${KEEP_AWAKE_BATTERY_FLOOR}% battery, Mako lets the Mac sleep and says so`}
       >
         <Toggle
           label="Keep this Mac awake while agents work"
@@ -57,11 +57,11 @@ export function ConversationSection() {
         />
       </SettingRow>
       <SettingRow
-        title="Even with the lid closed"
-        description="On power only. Off, closing the lid sleeps the Mac as usual"
+        title="Try to stay awake with the lid closed"
+        description="Asks macOS to stay awake, on power only, and it may not. Off, closing the lid sleeps the Mac as usual"
       >
         <Toggle
-          label="Keep this Mac awake with the lid closed"
+          label="Try to stay awake with the lid closed"
           on={awakeOn && awakeLid && !awakeOff}
           disabled={awakeOff || !awakeOn}
           onChange={() => void keepAwake.set({ lidClosed: !awakeLid })}

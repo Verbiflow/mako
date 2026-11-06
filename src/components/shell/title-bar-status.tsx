@@ -6,7 +6,7 @@ import { updates, useUpdates } from "@/state/updates"
 import { keepAwake, useKeepAwake } from "@/state/keep-awake"
 import { cn } from "@/lib/utils"
 import { useEffect } from "react"
-import { ArrowUpCircleIcon, BatteryLowIcon, CoffeeIcon, PlugZapIcon } from "lucide-react"
+import { ArrowUpCircleIcon, BatteryLowIcon, CoffeeIcon, PlugZapIcon, TriangleAlertIcon } from "lucide-react"
 
 /**
  * What is wrong, in the titlebar's right cluster — and nothing else.
@@ -76,9 +76,10 @@ function UpdatePill() {
 }
 
 /**
- * This Mac kept awake while its agents work, said quietly: a glyph and a word while it holds, the count and what a
- * closed lid does in its tooltip, since the rail already shows who works. A battery too low to hold on is news, so it
- * says so in words. Nothing while nothing works. Opens the setting.
+ * This Mac kept awake while its agents work, said quietly: a glyph and a word only while macOS holds it, the count and
+ * what a closed lid does in its tooltip, since the rail already shows who works. Agents working on a Mac that may sleep
+ * is news, from a low battery or a hold that failed, so it says so in words. Nothing while nothing works. Opens the
+ * setting.
  */
 function KeepAwakePill() {
   const hold = useKeepAwake((store) => store.state?.hold)
@@ -87,11 +88,13 @@ function KeepAwakePill() {
   }, [])
   if (!hold || hold.kind === "rest") return null
   const agents = `${hold.agents} ${hold.agents === 1 ? "agent" : "agents"} working`
-  const low = hold.kind === "low-battery"
-  const title = low
-    ? `Battery at ${hold.percent}%, below ${hold.floor}%: this Mac may sleep, which pauses the ${agents}.`
-    : `Keeping this Mac awake: ${agents}. ${hold.kind === "lid" ? "It stays awake with the lid closed while on power." : "Closing the lid still puts it to sleep."}`
-  const Icon = low ? BatteryLowIcon : CoffeeIcon
+  const held = hold.kind === "idle" || hold.kind === "lid"
+  const title = hold.kind === "low-battery"
+    ? `Battery at ${hold.percent}%, below ${hold.floor}%: this Mac may sleep with ${agents}.`
+    : hold.kind === "failed"
+      ? `Mako couldn't keep this Mac awake, so it may sleep with ${agents}. Mako tries again within a minute.`
+      : `Keeping this Mac awake: ${agents}. ${hold.kind === "lid" ? "Mako asked macOS to stay awake with the lid closed, on power." : "Closing the lid still puts it to sleep."}`
+  const Icon = hold.kind === "low-battery" ? BatteryLowIcon : held ? CoffeeIcon : TriangleAlertIcon
   return (
     <button
       type="button"
@@ -100,12 +103,12 @@ function KeepAwakePill() {
       aria-label={title}
       data-keep-awake={hold.kind}
       className={cn(
-        "no-drag flex items-center gap-1 rounded px-1.5 transition-colors duration-100",
-        low ? "text-caution hover:bg-caution/10" : "hover:bg-fill-hover hover:text-foreground"
+        "no-drag flex items-center gap-1 px-1.5 transition-colors duration-100",
+        held ? "hover:bg-fill-hover hover:text-foreground" : "text-caution hover:bg-caution/10"
       )}
     >
       <Icon className="size-3" />
-      <span>{low ? `Battery ${hold.percent}%: may sleep` : "Kept awake"}</span>
+      <span>{hold.kind === "low-battery" ? `Battery ${hold.percent}%: may sleep` : held ? "Kept awake" : "Can't keep awake"}</span>
     </button>
   )
 }

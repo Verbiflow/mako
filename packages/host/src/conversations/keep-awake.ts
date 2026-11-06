@@ -17,9 +17,6 @@ const COALESCE_MS = 150
 const LINGER_MS = 60_000
 /** How long the helper has to say it's ready and where the power comes from. */
 const READY_MS = 5_000
-/** Restarts after the helper exits on its own: at most this many in `RESTART_WINDOW_MS`, then it's left down. */
-const RESTARTS = 3
-const RESTART_WINDOW_MS = 60_000
 
 /** Where this Mac's power comes from, as the helper last said; `percent` is -1 when the charge can't be read. */
 export type PowerSource = { kind: "ac" } | { kind: "battery"; percent: number }
@@ -41,10 +38,10 @@ export type KeepAwakeOptions = {
 
 /**
  * What to hold for this many agents at work, by the person's choice and the power: idle sleep held off while any
- * works; with the lid closed too only when they chose it and the Mac is on power (macOS honours that hold only on
- * power anyway); nothing on a battery below the floor, which is said rather than held.
+ * works; with the lid closed too only when they chose it and the Mac is on power (macOS takes that hold only on
+ * power); nothing on a battery below the floor, which is said rather than held.
  */
-export function keepAwakeHold(settings: KeepAwakeSettings, agents: number, power: PowerSource | undefined): KeepAwakeHold {
+export function keepAwakeHold(settings: KeepAwakeSettings, agents: number, power: PowerSource | undefined): Exclude<KeepAwakeHold, { kind: "failed" }> {
   if (!settings.on || agents === 0) return { kind: "rest" }
   if (power?.kind === "battery" && power.percent >= 0 && power.percent < KEEP_AWAKE_BATTERY_FLOOR) {
     return { kind: "low-battery", agents, percent: power.percent, floor: KEEP_AWAKE_BATTERY_FLOOR }
@@ -73,23 +70,24 @@ export function assertionName(agents: number): string {
  * holds nothing.
  *
  * It follows the live batches that can change who works (`mayChangeWork`), counted once per burst, and the helper's
- * word on the power source; nothing polls.
+ * word on the power source; its owner's recount each minute catches what no batch says and tries again after a
+ * failure. A hold is shown only once the helper says it holds: anything else is `failed`, never a claim.
  */
 export class KeepAwake {
   readonly #options: KeepAwakeOptions
   #settings: KeepAwakeSettings | undefined
   #hold: KeepAwakeHold = { kind: "rest" }
-  #unavailable: string | undefined
   #child: ChildProcessWithoutNullStreams | undefined
   #ready: Promise<boolean> | undefined
   #power: PowerSource | undefined
   /** What the helper was last told to hold, as `hold <kind> <name>`, or undefined when it holds nothing. */
   #told: string | undefined
+  /** The hold that line asks for, shown once the helper says `holding`. */
+  #asked: Extract<KeepAwakeHold, { kind: "idle" | "lid" }> | undefined
   #running: Promise<void> = Promise.resolve()
   #coalesce: ReturnType<typeof setTimeout> | undefined
   #linger: ReturnType<typeof setTimeout> | undefined
-  #restarts: number[] = []
-  /** The helper couldn't be had (`sleepWatchHelper` said so once); it isn't built again until Mako restarts. */
+  /** The helper couldn't be had (`sleepWatchHelper` said so once); it isn't looked for again until Mako restarts. */
   #noHelper = false
   #stopped = false
 
@@ -115,7 +113,7 @@ export class KeepAwake {
   }
 
   async state(): Promise<KeepAwakeState> {
-    return { settings: await this.#readSettings(), hold: this.#hold, ...this.#unavailable && { unavailable: this.#unavailable } }
+    return { settings: await this.#readSettings(), hold: this.#hold }
   }
 
   async set(change: Partial<KeepAwakeSettings>): Promise<KeepAwakeState> {
@@ -142,6 +140,7 @@ export class KeepAwake {
     const settings = await this.#readSettings()
     const agents = settings.on ? this.#options.working() : 0
     if (agents === 0) {
+      this.#asked = undefined
       this.#tell(undefined)
       this.#lingerThenEnd()
       this.#publish({ kind: "rest" })
@@ -150,12 +149,14 @@ export class KeepAwake {
     clearTimeout(this.#linger)
     this.#linger = undefined
     if (!(await this.#start())) {
-      this.#publish({ kind: "rest" })
+      this.#publish({ kind: "failed", agents })
       return
     }
     const hold = keepAwakeHold(settings, agents, this.#power)
-    this.#tell(hold.kind === "idle" || hold.kind === "lid" ? `hold ${hold.kind} ${assertionName(agents)}` : undefined)
-    this.#publish(hold)
+    const holding = hold.kind === "idle" || hold.kind === "lid"
+    this.#asked = holding ? hold : undefined
+    this.#tell(holding ? `hold ${hold.kind} ${assertionName(agents)}` : undefined)
+    if (!holding) this.#publish(hold)
   }
 
   /** Tells the helper what to hold, only when that changed. */
@@ -177,6 +178,7 @@ export class KeepAwake {
     if (hold.kind !== before.kind) {
       if (hold.kind === "idle" || hold.kind === "lid") hostLog("keep-awake", "keeping this Mac awake", { agents: hold.agents, lid: hold.kind === "lid" })
       else if (hold.kind === "low-battery") hostWarn("keep-awake", "the battery is low: this Mac may sleep while agents work", { percent: hold.percent })
+      else if (hold.kind === "failed") hostWarn("keep-awake", "nothing is held: this Mac may sleep while agents work", { agents: hold.agents })
       else hostLog("keep-awake", "this Mac may sleep again")
     }
     void this.state().then((state) => this.#options.changed(state))
@@ -189,7 +191,6 @@ export class KeepAwake {
     const helper = await this.#options.helper().catch(() => undefined)
     if (!helper) {
       this.#noHelper = true
-      this.#unavailable = "Mako couldn't start its power helper on this Mac."
       return false
     }
     const child = (this.#options.spawn ?? spawnHelper)(helper, ["--keep-awake"])
@@ -197,11 +198,13 @@ export class KeepAwake {
     this.#told = undefined
     trackProviderChild(child, { kind: "keep-awake", owner: "host" })
     child.stderr.on("data", (chunk: Buffer) => hostWarn("keep-awake", "the power helper said", { text: chunk.toString("utf8").trim().slice(0, 500) }))
+    // A helper gone as it's written to ends as `exit` says.
+    child.stdin.on("error", () => {})
     this.#ready = new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => resolve(false), READY_MS)
       timer.unref?.()
       createInterface({ input: child.stdout }).on("line", (line) => {
-        if (this.#heard(line)) {
+        if (this.#child === child && this.#heard(line)) {
           clearTimeout(timer)
           resolve(true)
         }
@@ -210,24 +213,26 @@ export class KeepAwake {
         clearTimeout(timer)
         resolve(false)
       })
+      child.once("error", (error) => {
+        hostWarn("keep-awake", "the power helper couldn't start", { error: errorMessage({ error }) })
+        clearTimeout(timer)
+        resolve(false)
+      })
     })
     child.once("exit", (code) => this.#exited(child, code))
     const ready = await this.#ready
-    if (ready) this.#unavailable = undefined
-    else {
-      this.#unavailable = "Mako's power helper didn't start."
-      this.#end()
-    }
+    if (!ready) this.#end()
     return ready
   }
 
   /** One line from the helper; true once it said where the power comes from. */
   #heard(line: string): boolean {
     const [word, kind, percent] = line.trim().split(" ")
+    if (word === "holding" && this.#asked) this.#publish(this.#asked)
     if (word === "failed") {
       hostWarn("keep-awake", "macOS refused to keep this Mac awake", { code: kind ?? "" })
       this.#told = undefined
-      return false
+      if (this.#asked) this.#publish({ kind: "failed", agents: this.#asked.agents })
     }
     if (word !== "power") return false
     const known = this.#power !== undefined
@@ -243,16 +248,8 @@ export class KeepAwake {
     this.#told = undefined
     this.#power = undefined
     if (this.#stopped || this.#hold.kind === "rest") return
-    const now = Date.now()
-    this.#restarts = [...this.#restarts.filter((at) => now - at < RESTART_WINDOW_MS), now]
-    if (this.#restarts.length > RESTARTS) {
-      hostWarn("keep-awake", "the power helper keeps exiting; this Mac may sleep while agents work until Mako restarts", { code: code ?? "signal" })
-      this.#unavailable = "Mako's power helper keeps stopping. Restart Mako to try again."
-      this.#publish({ kind: "rest" })
-      return
-    }
-    hostWarn("keep-awake", "the power helper exited while agents work; starting it again", { code: code ?? "signal" })
-    void this.refresh()
+    hostWarn("keep-awake", "the power helper exited while agents work; the next recount starts it again", { code: code ?? "signal" })
+    this.#publish({ kind: "failed", agents: this.#hold.agents })
   }
 
   #lingerThenEnd(): void {
