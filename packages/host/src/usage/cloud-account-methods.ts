@@ -128,8 +128,8 @@ export interface CloudAccount {
   unwaitMessage?(session: string, id: string): Promise<WaitingMessage[]>
   /** This Mac's claim on a message that waited for one of its Sessions, before it runs it here (`CloudAccount.claimWaiting`). */
   claimWaiting?(session: string, id: string): Promise<WaitingClaim>
-  /** The account's devices, by ID and name, and which is this one. */
-  devices?(): Promise<{ devices: Array<{ id: string; name: string }>; current: string }>
+  /** The account's devices, by ID, name and kind, and which is this one. */
+  devices?(): Promise<{ devices: Array<{ id: string; name: string; kind?: string }>; current: string }>
   /** The harness versions the cloud's machines run, or null from a cloud that doesn't say (`CloudAccounts.cloudHarnesses`). */
   cloudHarnesses?(): Promise<CloudHarnesses | null>
   /** The person's access choices as the account keeps them, or null from a cloud that doesn't keep them yet. */
