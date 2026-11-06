@@ -463,7 +463,24 @@ default) wakes the Apex for results and questions, `finish` for results
 only, `never` for none unless it waited; a question its Apex doesn't hear is
 the person's, never dropped. A Fin's turn an exit or an update cut short
 always continues in the next host (`LeftTurn.always`), and its messages the
-exit paused go on. Fins are roster entries (`childEntry` under
+exit paused go on. So does an Apex's own turn while it has open Fins
+(`inTree`, `continueCrashed`), under the same loop guard. A crash's cut reads
+as `uncertain`. A Fin's cut turn that nothing picks up within
+`STRANDED_AFTER_MS` (`strandedTurn`) becomes a question for its Apex
+(`reportCut`). That covers the loop guard being spent, a sign-out, a reason
+Mako doesn't continue, and a continuation that was dropped. The question says
+what cut it (`CUT_BY`), why it isn't going on, and what it had in flight. A
+followed run whose process ended unexplained asks the same way, naming a quit,
+crash or shutdown when no host saw it alive. The Apex answers with one
+`agents_answer`: `Continue` continues the turn, or resumes a run's session
+here, through the resume path a stopped Fin takes; `Stop` pauses it; other
+words go to the Fin as its next message. Beneath its words, a continuation
+Mako sends for a Fin or an Apex carries the account a resumed Fin reads
+(`finResumedText` with `how: "cut"`, `cutAccount`). That account says when and
+what cut the turn, what moved in its checkout since, and where its branch
+stands. `savedContinuation` still reads it as a continuation. A message to
+a Fin whose session is reopening waits for that to settle (`switchSettled`).
+`test:orch-recovery` kills hosts to show each of these. Fins are roster entries (`childEntry` under
 `CHILDREN_BINDING`, `withChildren`) built from the store, never saved in a
 journal. `npm run test:background-agents` covers the engine,
 `test:agents-doors` the three doors, `test:agents-migrate` migration 6 from

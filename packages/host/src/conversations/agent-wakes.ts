@@ -14,6 +14,8 @@ export const WAKE_COALESCE_MS = 2_000
 export const RESULT_COALESCE_MS = 250
 /** The most of a waited-for result its wake carries; `agents_read` gives the rest. */
 const RESULT_CHARS = 8_000
+/** What a decision's report says beside its question, at most: the rest is `agents_read`'s. */
+const DECISION_CHARS = 600
 /** Wakes an Apex takes in a minute; notices past them wait for the next wake. */
 export const WAKES_PER_MINUTE = 6
 const MINUTE_MS = 60_000
@@ -320,6 +322,9 @@ export function digest(notices: readonly Notice[], counts: string): string {
       const waiting = waitingWords(report.waitingOn)
       lines.push(`  • ${label} is ${report.status === "blocked" ? "blocked" : "asking"}: ${asked}${waiting ? ` · ${waiting}` : ""}`)
       cards.push(card(notice, asked))
+      // What it said beside the question: why it asks, as a cut turn's what cut it and what it had in flight.
+      const said = report.summary.replace(/\s+/g, " ").trim()
+      if (report.question && said && said !== report.question.trim()) lines.push(`    ${said.length > DECISION_CHARS ? `${said.slice(0, DECISION_CHARS - 1)}…` : said}`)
       if (report.options?.length)
         lines.push(`    options: ${report.options.map((option, index) => `${option.label}${index === report.recommended ? " (recommended)" : ""}`).join(" · ")}`)
     }
