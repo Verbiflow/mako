@@ -388,6 +388,12 @@ export interface LiveRequest {
     lines?: string[]
     /** When it went to the harness, for the minute's budget (`WAKES_PER_MINUTE`), which counts what was sent. */
     sentAt?: number
+    /** A model answered during its turn: the only proof it was heard, as nothing else proves it either way. */
+    heard?: true
+    /** Past Mako's retries and no model heard it: it waits for the next turn that can run. */
+    resting?: true
+    /** When a resting digest tries by itself: a limit's only, once an hour for the Thread, however many reports it holds. */
+    nextTry?: number
   }
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption

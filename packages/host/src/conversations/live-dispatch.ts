@@ -8,7 +8,7 @@ import { quietSwitch } from "../contracts/conversation-control.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
-import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
+import { transientCause, waitsAgain } from "../contracts/delivery-retry.js"
 import { nextInLine } from "../contracts/request-hold.js"
 import { DIGEST_WAITS, WAKES_PER_MINUTE } from "../contracts/children.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
@@ -524,16 +524,17 @@ export class LiveDispatch {
         }
         // The harness refused it unsent for a cause that clears by itself: it waits and goes again, never a failure.
         const cause = refused ? transientCause(errorMessage({ error }), classifyProviderFailure(errorMessage({ error })).kind, error instanceof SessionBusyError) : undefined
-        const retry = cause && nextRetry(target.retry, cause, errorMessage({ error }), Date.now())
-        if (retry) {
+        const waits = refused ? waitsAgain(target, cause, errorMessage({ error }), Date.now()) : undefined
+        const retry = waits?.retry
+        if (waits) {
           resident.snapshot = {
             ...resident.snapshot,
             requests: resident.snapshot.requests.map((candidate) =>
-              candidate === target ? { ...candidate, status: "held", retry, error: undefined, snapshots: undefined } : candidate),
+              candidate === target ? { ...waits, error: undefined, snapshots: undefined } : candidate),
           }
           dependencies.workspaceSnapshots?.abandonRun(request.id)
           this.access.flush(resident)
-          hostWarn("live", "a message its harness refused for now goes again by itself", { conversation: session.id, request: request.id, cause, attempt: retry.attempt, at: new Date(retry.at).toISOString() })
+          hostWarn("live", "a message its harness refused for now goes again by itself", { conversation: session.id, request: request.id, ...(cause && { cause }), ...(retry && { attempt: retry.attempt, at: new Date(retry.at).toISOString() }) })
           return
         }
         resident.snapshot = {
