@@ -145,8 +145,9 @@ const mockHandOffOnSleep = { value: true }
  * Keeping the fixture's Mac awake: on, as on a new Mac. `?awake=3` has three agents at work, `?awake=lid:3` with the lid
  * held too, `?awake=battery:3` on a battery below the floor, `?awake=failed:3` with nothing held; nothing works without it.
  */
+interface MockKeepAwake { settings: KeepAwakeSettings }
 const mockKeepAwakeScene = new URLSearchParams(globalThis.location?.search).get("awake") ?? ""
-const mockKeepAwake: { settings: KeepAwakeSettings } = { settings: { on: true, lidClosed: mockKeepAwakeScene.startsWith("lid:") } }
+const mockKeepAwake: MockKeepAwake = { settings: { on: true, lidClosed: mockKeepAwakeScene.startsWith("lid:") } }
 function mockKeepAwakeState(): KeepAwakeState {
   const agents = Number(mockKeepAwakeScene.split(":").at(-1) || 0)
   const hold: KeepAwakeHold = !mockKeepAwake.settings.on || agents === 0

@@ -1,9 +1,9 @@
 import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
+import type { EventEmitter } from "node:events"
 import { createInterface } from "node:readline"
 import { z } from "zod"
-import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { trackProviderChild } from "../base/provider-children.js"
 import { KEEP_AWAKE_BATTERY_FLOOR, type KeepAwakeHold, type KeepAwakeSettings, type KeepAwakeState } from "../contracts/keep-awake.js"
@@ -18,6 +18,9 @@ const LINGER_MS = 60_000
 /** How long the helper has to say it's ready and where the power comes from. */
 const READY_MS = 5_000
 
+/** What `KeepAwake` uses of the helper's process. */
+export type PowerHelper = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr"> & Pick<EventEmitter, "once">
+
 /** Where this Mac's power comes from, as the helper last said; `percent` is -1 when the charge can't be read. */
 export type PowerSource = { kind: "ac" } | { kind: "battery"; percent: number }
 
@@ -31,7 +34,7 @@ export type KeepAwakeOptions = {
   /** What every window shows changed. */
   changed(state: KeepAwakeState): void
   /** How a test starts the helper; the real one by default. */
-  spawn?(path: string, args: readonly string[]): ChildProcessWithoutNullStreams
+  spawn?(path: string, args: readonly string[]): PowerHelper
   lingerMs?: number
   coalesceMs?: number
 }
@@ -50,7 +53,7 @@ export function keepAwakeHold(settings: KeepAwakeSettings, agents: number, power
 }
 
 /** Whether a batch can change whether its conversation's agent works: its status, requests, approvals, background work or subagents. */
-export function mayChangeWork(batch: LiveBatch): boolean {
+export function mayChangeWork(batch: Pick<LiveBatch, "session" | "requests" | "requestChanges" | "permissions" | "nativeAgents" | "sessionChanges" | "sessionCleared">): boolean {
   if (batch.session || batch.requests || batch.requestChanges || batch.permissions || batch.nativeAgents) return true
   const changes = batch.sessionChanges
   if (changes && ("status" in changes || "backgroundTasks" in changes)) return true
@@ -77,7 +80,7 @@ export class KeepAwake {
   readonly #options: KeepAwakeOptions
   #settings: KeepAwakeSettings | undefined
   #hold: KeepAwakeHold = { kind: "rest" }
-  #child: ChildProcessWithoutNullStreams | undefined
+  #child: PowerHelper | undefined
   #ready: Promise<boolean> | undefined
   #power: PowerSource | undefined
   /** What the helper was last told to hold, as `hold <kind> <name>`, or undefined when it holds nothing. */
@@ -108,7 +111,7 @@ export class KeepAwake {
   /** Counts the agents at work now and holds, or lets go, to match. One at a time, in order. */
   refresh(): Promise<void> {
     const run = this.#running.then(() => this.#refresh())
-    this.#running = run.catch((error: unknown) => hostWarn("keep-awake", "keeping this Mac awake failed", { error: errorMessage({ error }) }))
+    this.#running = run.catch((error: Error) => hostWarn("keep-awake", "keeping this Mac awake failed", { error: error.message }))
     return this.#running
   }
 
@@ -196,7 +199,6 @@ export class KeepAwake {
     const child = (this.#options.spawn ?? spawnHelper)(helper, ["--keep-awake"])
     this.#child = child
     this.#told = undefined
-    trackProviderChild(child, { kind: "keep-awake", owner: "host" })
     child.stderr.on("data", (chunk: Buffer) => hostWarn("keep-awake", "the power helper said", { text: chunk.toString("utf8").trim().slice(0, 500) }))
     // A helper gone as it's written to ends as `exit` says.
     child.stdin.on("error", () => {})
@@ -213,13 +215,13 @@ export class KeepAwake {
         clearTimeout(timer)
         resolve(false)
       })
-      child.once("error", (error) => {
-        hostWarn("keep-awake", "the power helper couldn't start", { error: errorMessage({ error }) })
+      child.once("error", (error: Error) => {
+        hostWarn("keep-awake", "the power helper couldn't start", { error: error.message })
         clearTimeout(timer)
         resolve(false)
       })
     })
-    child.once("exit", (code) => this.#exited(child, code))
+    child.once("exit", (code: number | null) => this.#exited(child, code))
     const ready = await this.#ready
     if (!ready) this.#end()
     return ready
@@ -241,7 +243,7 @@ export class KeepAwake {
     return true
   }
 
-  #exited(child: ChildProcessWithoutNullStreams, code: number | null): void {
+  #exited(child: PowerHelper, code: number | null): void {
     if (this.#child !== child) return
     this.#child = undefined
     this.#ready = undefined
@@ -279,6 +281,8 @@ export class KeepAwake {
   }
 }
 
-function spawnHelper(path: string, args: readonly string[]): ChildProcessWithoutNullStreams {
-  return spawnProcess(path, args, { stdio: ["pipe", "pipe", "pipe"] })
+function spawnHelper(path: string, args: readonly string[]): PowerHelper {
+  const child = spawnProcess(path, args, { stdio: ["pipe", "pipe", "pipe"] })
+  trackProviderChild(child, { kind: "keep-awake", owner: "host" })
+  return child
 }

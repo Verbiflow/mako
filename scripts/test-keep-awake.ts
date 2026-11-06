@@ -5,9 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
-import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import type { KeepAwakeState } from "@mako/host/contracts/keep-awake"
-import type { LiveBatch } from "@mako/host/contracts/live-conversations"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { workingThreads, type WorkingSnapshot } from "@mako/host/conversations/cloud-handoffs"
 import { KeepAwake, assertionName, keepAwakeHold, mayChangeWork } from "@mako/host/conversations/keep-awake"
@@ -31,10 +29,8 @@ function standIn() {
   stdin.on("end", () => {
     ended = true
   })
-  // SAFETY: `KeepAwake` reads these three streams and `exit`; the rest of a real child goes unused.
-  const process = Object.assign(child, { stdin, stdout, stderr, pid: undefined }) as unknown as ChildProcessWithoutNullStreams
   return {
-    process,
+    process: Object.assign(child, { stdin, stdout, stderr }),
     told,
     ended: () => ended,
     say: (line: string) => void stdout.write(`${line}\n`),
@@ -96,14 +92,12 @@ try {
   assert.equal(assertionName(3), "Mako: 3 agents working")
 
   // Only batches that can change who works are counted: streamed text isn't.
-  // SAFETY: `mayChangeWork` reads only these fields of a batch.
-  const batch = (fields: object) => fields as LiveBatch
-  assert.equal(mayChangeWork(batch({ sessionChanges: { status: "ready" } })), true)
-  assert.equal(mayChangeWork(batch({ sessionChanges: { backgroundTasks: 1 } })), true)
-  assert.equal(mayChangeWork(batch({ sessionCleared: ["backgroundTasks"] })), true)
-  assert.equal(mayChangeWork(batch({ requestChanges: [] })), true)
-  assert.equal(mayChangeWork(batch({ sessionChanges: { title: "New name" } })), false)
-  assert.equal(mayChangeWork(batch({})), false)
+  assert.equal(mayChangeWork({ sessionChanges: { status: "ready" } }), true)
+  assert.equal(mayChangeWork({ sessionChanges: { backgroundTasks: 1 } }), true)
+  assert.equal(mayChangeWork({ sessionCleared: ["backgroundTasks"] }), true)
+  assert.equal(mayChangeWork({ requestChanges: [] }), true)
+  assert.equal(mayChangeWork({ sessionChanges: { title: "New name" } }), false)
+  assert.equal(mayChangeWork({}), false)
 
   // A wait on the person isn't work that holds a Mac awake; background work is. A handoff still takes both.
   const snapshots = new Map<string, WorkingSnapshot>([
