@@ -1,7 +1,7 @@
 import { applyControlEnvironment } from "../control/index.js"
 import { applyThreadEnvironment } from "../workspaces/index.js"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "../contracts/approval-response.js"
-import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
+import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
 import { SHUTDOWN_GRACE_MS, type AdmittedStartOptions, type DriverSideQuestion, type ProviderSteerInput, type ProviderSteerResult } from "./live-driver.js"
@@ -38,11 +38,11 @@ import { adapters } from "./heavy.js"
  */
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
-import { spawnProviderProcess } from "./provider-process.js"
+import { closeProviderProcess, endProviderProcess, providerProcessGone, spawnProviderProcess } from "./provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { acpPromptBlocks } from "./acp-prompt.js"
-import { acpReadable, acpWritable, screenSessionUpdates, type LossySessionUpdate, type RefusedSessionUpdate } from "./acp-stream.js"
+import { acpReadable, acpWritable, inWireOrder, screenSessionUpdates, type LossySessionUpdate, type RefusedSessionUpdate } from "./acp-stream.js"
 import type {
   Client,
   ClientSideConnection as Connection,
@@ -719,7 +719,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
 
     const connection = new ClientSideConnection(
       () => client,
-      await screenSessionUpdates(ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)), refusedUpdate, lossyUpdate)
+      inWireOrder(await screenSessionUpdates(ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)), refusedUpdate, lossyUpdate))
     )
     live.connection = connection
 
@@ -877,7 +877,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         signal: child.signalCode,
         stderr: stderr.slice(-600),
       })
-      await liveClose(id)
+      // One that outlives this stays in `sessions` for the next close; what the start reports is why it failed.
+      await liveClose(id).catch(() => undefined)
       throw new Error(surfaced, { cause: error })
     }
   }
@@ -941,7 +942,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     })
     const compact = source.compaction
     if (compact?.kind === "supported" && text.trim() === compact.command && attachments.length === 0) {
-      dispatch.report({ kind: "submitted", source: "transport-call" })
+      handOff(dispatch, { kind: "submitted", source: "transport-call" })
       await liveCompact(id, randomUUID())
       return
     }
@@ -967,7 +968,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       // update. A process that closed its pipes without exiting is ended so
       // that exit comes.
       if (verdict.status === "failed" && connection.signal.aborted) {
-        if (live.child.exitCode === null && live.child.signalCode === null) live.child.kill()
+        void endProviderProcess(live.child)
         return
       }
       if (verdict.status === "failed")
@@ -979,6 +980,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         })
       update(live, { ...verdict, nativePath: live.locateNativePath(), nativeForkId: verdict.status === "ready" ? live.checkpoint?.() : undefined })
     })
+    const prompt = preparePrompt(dispatch, () => acpPromptBlocks(text, attachments, live.promptCapabilities))
+    handOff(dispatch, { kind: "submitted", source: "transport-call", correlationId: turn.id })
     live.turn = turn
     live.turnReceipt = () => {
       if (live.turn !== turn) return
@@ -992,8 +995,6 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     engine.emitUpdate(live, { kind: "user", text })
     live.sent?.(text, attachments.length)
     live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
-    const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
-    dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn.id })
     void turn.send(() => connection.prompt({ sessionId, prompt })).then(
       () => dispatch.report({ kind: "accepted", source: "native-response" }),
       (error: Error) => dispatch.report({ kind: "uncertain", reason: error.message })
@@ -1216,18 +1217,21 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
    */
   async function endAgent(live: Live): Promise<void> {
     const { child } = live
-    if (child.exitCode !== null || child.signalCode !== null) return
+    if (providerProcessGone(child)) return
     const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()))
-    const deadline = setTimeout(() => child.kill(), SHUTDOWN_GRACE_MS)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // An agent that never answers `session/close` is ended by this, and past it there is nothing left to wait for.
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(() => { void endProviderProcess(child); resolve() }, SHUTDOWN_GRACE_MS)
+    })
     if (live.closesSession && live.connection && live.sessionId)
-      await Promise.race([live.connection.closeSession({ sessionId: live.sessionId }).catch(() => undefined), exited])
-    child.stdin.end()
-    await exited
-    clearTimeout(deadline)
+      await Promise.race([live.connection.closeSession({ sessionId: live.sessionId }).catch(() => undefined), exited, deadline])
+    clearTimeout(timer)
+    await closeProviderProcess(child, "input", SHUTDOWN_GRACE_MS)
   }
 
   function stop(): void {
-    for (const id of sessions.keys()) void liveClose(id)
+    for (const id of sessions.keys()) void liveClose(id).catch(() => undefined)
   }
 
   function update(live: Live, patch: Partial<LiveSessionState>): void {

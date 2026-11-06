@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks"
 import type { EventEmitter } from "node:events"
 import { stripVTControlCharacters } from "node:util"
 
@@ -46,11 +47,27 @@ export interface StartupStepReport {
 export const STARTUP_SILENCE_MS = 20_000
 export const STARTUP_TOTAL_MS = 120_000
 
+/** A clock a test advances, so a silence deadline fires without waiting it out. Absent, the watch uses the real one. */
+export interface StartupClock {
+  now(): number
+  /** Arms a timer and returns what cancels it. The default is `setTimeout`. */
+  schedule(ms: number, fn: () => void): () => void
+  silenceMs?: number
+  totalMs?: number
+}
+
+const startupClocks = new AsyncLocalStorage<StartupClock>()
+
+/** Runs `work` where every startup watch takes its clock from `clock` unless the watch was given its own. */
+export function withStartupClock<Value>(clock: StartupClock, work: () => Promise<Value>): Promise<Value> {
+  return startupClocks.run(clock, work)
+}
+
 interface PendingStep {
   name: string
   startedAt: number
-  silence: NodeJS.Timeout | null
-  total: NodeJS.Timeout | null
+  silence: (() => void) | null
+  total: (() => void) | null
   reject: (error: Error) => void
 }
 
@@ -82,6 +99,7 @@ export class ProviderStartupWatch {
   private readonly silenceMs: number
   private readonly totalMs: number
   private readonly now: () => number
+  private readonly schedule: StartupClock["schedule"]
   private readonly stderrTail: () => string
   private readonly process: StartupProcess
   private lastOutputAt: number
@@ -105,11 +123,16 @@ export class ProviderStartupWatch {
   }
 
   constructor(process: StartupProcess, options: StartupWatchOptions) {
+    const clock = startupClocks.getStore()
     this.process = process
     this.harness = options.harness
-    this.silenceMs = options.silenceMs ?? STARTUP_SILENCE_MS
-    this.totalMs = options.totalMs ?? STARTUP_TOTAL_MS
-    this.now = options.now ?? Date.now
+    this.silenceMs = options.silenceMs ?? clock?.silenceMs ?? STARTUP_SILENCE_MS
+    this.totalMs = options.totalMs ?? clock?.totalMs ?? STARTUP_TOTAL_MS
+    this.now = options.now ?? clock?.now.bind(clock) ?? Date.now
+    this.schedule = clock?.schedule.bind(clock) ?? ((ms, fn) => {
+      const timer = setTimeout(fn, ms)
+      return () => clearTimeout(timer)
+    })
     this.stderrTail = options.stderr ?? (() => "")
     this.lastOutputAt = this.now()
     process.stdout.on("data", this.onStdout)
@@ -134,7 +157,7 @@ export class ProviderStartupWatch {
       const pending: PendingStep = { name, startedAt, silence: null, total: null, reject }
       this.pending = pending
       this.armSilence()
-      pending.total = setTimeout(() => {
+      pending.total = this.schedule(this.totalMs, () => {
         if (this.pending !== pending) return
         this.settle(pending, "timed-out")
         reject(
@@ -142,7 +165,7 @@ export class ProviderStartupWatch {
             `${this.harness} did not finish ${name} within ${seconds(this.totalMs)}${this.describeOutput()}`
           )
         )
-      }, this.totalMs)
+      })
       work.then(
         (value) => {
           if (this.pending !== pending) return
@@ -185,8 +208,8 @@ export class ProviderStartupWatch {
   private armSilence(): void {
     const pending = this.pending
     if (!pending) return
-    if (pending.silence) clearTimeout(pending.silence)
-    pending.silence = setTimeout(() => {
+    if (pending.silence) pending.silence()
+    pending.silence = this.schedule(this.silenceMs, () => {
       if (this.pending !== pending) return
       const quiet = this.now() - this.lastOutputAt
       if (quiet < this.silenceMs) {
@@ -202,12 +225,14 @@ export class ProviderStartupWatch {
           `${this.harness} produced no output for ${seconds(quiet)} during ${pending.name}${after} (${alive})`
         )
       )
-    }, this.silenceMs)
+    })
   }
 
   private settle(pending: PendingStep, outcome: StartupStepReport["outcome"]): void {
-    if (pending.silence) clearTimeout(pending.silence)
-    if (pending.total) clearTimeout(pending.total)
+    if (pending.silence) pending.silence()
+    if (pending.total) pending.total()
+    pending.silence = null
+    pending.total = null
     this.steps.push({ name: pending.name, ms: Math.max(0, this.now() - pending.startedAt), outcome })
     if (this.pending === pending) this.pending = null
   }

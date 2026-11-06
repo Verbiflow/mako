@@ -1,7 +1,8 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
 import { z } from "zod"
 import { childProcessEnv } from "../base/child-environment.js"
+import { publishFile } from "../base/published-files.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import {
   CloudSignInHarnessSchema,
@@ -389,12 +390,10 @@ export class CloudSignInSync {
   }
 
   async #save(): Promise<void> {
-    await mkdir(dirname(this.#choicePath), { recursive: true, mode: 0o700 })
     const choice: z.input<typeof ChoiceSchema> = { version: 2, inStep: this.#inStep }
     if (this.#sharing !== undefined) choice.sharing = this.#sharing
     if (this.#accessOnly) choice.accessOnly = true
-    await writeFile(`${this.#choicePath}.tmp`, JSON.stringify(choice), { mode: 0o600 })
-    await rename(`${this.#choicePath}.tmp`, this.#choicePath)
+    await publishFile(this.#choicePath, JSON.stringify(choice), { mode: 0o600, dirMode: 0o700 })
   }
 
   async #check(): Promise<CloudSignInsState> {

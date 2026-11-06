@@ -435,6 +435,11 @@ export class LiveActions {
       resident.snapshot = { ...resident.snapshot,
         control: retireQuestionsForInput(this.host.control(resident), input.id, control.questions ?? []),
       }
+      if (input.kind === "steer" || input.kind === "steer-queued") {
+        const id = input.kind === "steer-queued" ? input.queuedRequestId : input.id
+        const steered = resident.snapshot.requests.find((request) => request.id === id)
+        this.host.dependencies.agents?.()?.inputDelivered?.(resident.snapshot.session.id, { id, text: input.text, ...steered?.actor && { actor: steered.actor } }, "steer")
+      }
       resident.updates.push({
         kind: "user",
         at: Date.now(),

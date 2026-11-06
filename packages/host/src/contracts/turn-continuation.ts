@@ -1,4 +1,5 @@
 import { INTERRUPTION_REASONS, type InterruptionReason, type LiveRequest } from "./live-conversations.js"
+import { RESUMED_OPENS } from "./resume-account.js"
 
 /**
  * How long Mako waits after a turn ends on a dropped connection before it
@@ -136,7 +137,7 @@ export interface SavedContinuation {
 export function savedContinuation(text: string): SavedContinuation | undefined {
   // Asked of every prompt as it streams: anything else is told apart by its opening, without copying it.
   if (!opensContinuation(text)) return undefined
-  const words = text.trim()
+  const words = withoutResumeAccount(text.trim()).trim()
   for (const each of INTERRUPTION_REASONS) {
     const reason = SITUATIONS[each] === SITUATIONS["host-quit"] ? "host-quit" : each
     for (const stayed of reason === "handed-off" ? [false, true] : [false]) {
@@ -209,10 +210,63 @@ export function crashedChildTurn(requests: readonly LiveRequest[], now = Date.no
     const request = requests[index]!
     if (request.status !== "canceled" && request.status !== "queued" && request.status !== "held") ran = request
   }
-  if (ran?.interruption?.reason !== "host-crashed") return undefined
+  // A turn a Stop had reached before the crash, its end unwritten, stays stopped (`LiveRequest.pause`).
+  if (ran?.interruption?.reason !== "host-crashed" || ran.pause === "stop") return undefined
   if (ran.continues?.auto && chainedContinuations(requests, ran, now) >= RESTART_CHAIN) return undefined
   if (requests.some((request) => request.continues?.requestId === ran.id)) return undefined
   return ran
+}
+
+/**
+ * A Fin's or an Apex's turn cut short that nothing will pick up: the newest
+ * request that ran, cut for a reason other than a Stop, with no continuation
+ * scheduled or sent and nothing waiting behind it. Asked a while after the
+ * cut (`STRANDED_AFTER_MS`), once Mako's own continuation would have been
+ * scheduled. Its Apex hears of it, since nobody else is watching.
+ */
+export function strandedTurn(requests: readonly LiveRequest[]): LiveRequest | undefined {
+  let ran: LiveRequest | undefined
+  for (let index = requests.length - 1; index >= 0 && !ran; index -= 1) {
+    const request = requests[index]!
+    if (request.status !== "canceled" && request.status !== "queued" && request.status !== "held") ran = request
+  }
+  const interruption = ran?.interruption
+  // A crash's cut reads as `uncertain` (its provider may have finished it), with its reason, as a quit's reads as `interrupted`.
+  // A Stop is someone's choice, and a steer's cut has its message next.
+  if (!ran || (ran.status !== "interrupted" && ran.status !== "uncertain") || !interruption || interruption.reason === "stopped" || interruption.reason === "steered" || interruption.autoContinue) return undefined
+  if (requests.some((request) => request.continues?.requestId === ran.id)) return undefined
+  // What waits on a sign-in (`signIn`) waits on someone signing in, which nobody watching a Fin will do.
+  if (requests.some((request) => request.status === "queued" || (request.status === "held" && !request.signIn) || request.status === "dispatching")) return undefined
+  return ran
+}
+
+/** How long after a turn is cut short its Apex hears that nothing continued it: past the wait before Mako's own continuation. */
+export const STRANDED_AFTER_MS = AUTO_CONTINUE_DELAY_MS + 3_000
+
+/** Whether Mako's continuations of `last` have run out: `RESTART_CHAIN` in a row cut short within `RESTART_CHAIN_MS`. */
+export function continuationsSpent(requests: readonly LiveRequest[], last: LiveRequest, now = Date.now()): boolean {
+  return Boolean(last.continues?.auto) && chainedContinuations(requests, last, now) >= RESTART_CHAIN
+}
+
+/** What cut a turn short, as its Apex reads it. */
+export const CUT_BY = {
+  stopped: "it was stopped",
+  "host-quit": "Mako quit, restarted or updated",
+  "host-crashed": "Mako stopped without closing: a crash, a force quit, or this Mac shutting down or losing power",
+  "connection-lost": "its harness lost its connection",
+  "provider-exited": "its harness's process exited",
+  "signed-out": "its harness's account signed out",
+  "handed-off": "Mako handed its Thread to another machine",
+  "not-saved": "Mako couldn't save its conversation",
+  "goal-budget": "its goal reached its token budget",
+  "machine-lost": "the machine it ran on went away",
+  steered: "a message went into it that its harness would have held, so Mako stopped it to send that next",
+} as const satisfies Record<InterruptionReason, string>
+
+/** `text` without the account of a resume (`finResumedText`) a continuation may carry beneath its words. */
+function withoutResumeAccount(text: string): string {
+  const at = text.indexOf(`\n\n${RESUMED_OPENS}`)
+  return at < 0 ? text : text.slice(0, at)
 }
 
 /** How many of Mako's continuations lead in a row to `last`, it included, counting those cut short within `RESTART_CHAIN_MS` of `now`. */
@@ -225,4 +279,13 @@ function chainedContinuations(requests: readonly LiveRequest[], last: LiveReques
     if (now - (request.interruption?.at ?? 0) <= RESTART_CHAIN_MS) count += 1
   }
   return count
+}
+
+/**
+ * `requests` with `request` taken in: a Fin's brief carried again (`TurnContinuation.brief`) in the brief's own place,
+ * ahead of every message waiting, as what came after the brief waits for it; anything else after them all.
+ */
+export function admittedInPlace<T extends Pick<LiveRequest, "status" | "continues">>(requests: readonly T[], request: T): T[] {
+  const ahead = request.continues?.brief ? requests.findIndex((candidate) => candidate.status === "queued" || candidate.status === "held") : -1
+  return ahead === -1 ? [...requests, request] : [...requests.slice(0, ahead), request, ...requests.slice(ahead)]
 }

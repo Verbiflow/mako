@@ -5,7 +5,7 @@ import type { MethodTable } from "../base/methods.js"
 
 const execute = promisify(execFile)
 
-interface Row {
+export interface ProcessRow {
   pid: number
   ppid: number
   rssKb: number
@@ -36,8 +36,8 @@ export function cpuTime(text: string): number {
   return Number.isFinite(seconds) ? Math.round(seconds * 10) / 10 : 0
 }
 
-export function processRows(stdout: string): Row[] {
-  const rows: Row[] = []
+export function processRows(stdout: string): ProcessRow[] {
+  const rows: ProcessRow[] = []
   for (const line of stdout.split("\n")) {
     const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(\S+)\s+(.*)$/.exec(line)
     if (!match) continue
@@ -53,12 +53,12 @@ export function processRows(stdout: string): Row[] {
  * agent or what an agent ran, counted apart.
  */
 export function makoProcesses(
-  rows: readonly Row[], host: { pid: number; ppid: number; inApp: boolean }, own: ReadonlyMap<number, string>,
+  rows: readonly ProcessRow[], host: { pid: number; ppid: number; inApp: boolean }, own: ReadonlyMap<number, string>,
 ): Pick<MakoFootprint, "processes" | "agents"> {
-  const children = new Map<number, Row[]>()
+  const children = new Map<number, ProcessRow[]>()
   for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row])
   const processes: MakoProcess[] = []
-  const add = (row: Row, role: string) =>
+  const add = (row: ProcessRow, role: string) =>
     processes.push({ pid: row.pid, role, cpuPercent: row.cpuPercent, cpuSeconds: row.cpuSeconds, residentBytes: row.rssKb * 1024 })
   // A host run on its own (tests, `npm run host`) has a shell above it, not the app.
   const app = host.inApp ? rows.find((row) => row.pid === host.ppid) : undefined
@@ -74,7 +74,7 @@ export function makoProcesses(
   const self = rows.find((row) => row.pid === host.pid)
   if (self) add(self, "host")
   const agents = { count: 0, cpuPercent: 0, residentBytes: 0 }
-  const agent = (row: Row) => {
+  const agent = (row: ProcessRow) => {
     agents.count++
     agents.cpuPercent += row.cpuPercent
     agents.residentBytes += row.rssKb * 1024
@@ -89,19 +89,25 @@ export function makoProcesses(
   return { processes, agents }
 }
 
-/** Mako's footprint on this Mac now: its processes from `ps`, and the file watching and rescans this host reports. */
-export async function readMakoFootprint(deps: { watching: WatchFootprint; rescans: RescanFootprint | null }): Promise<MakoFootprint> {
+/** Every process on this machine now, from `ps`: unreadable where there's no `ps` (Windows). */
+export async function readProcessTable(): Promise<ProcessRow[]> {
   const { stdout } = await execute("ps", ["-axo", "pid=,ppid=,rss=,%cpu=,time=,command="], {
     env: { ...process.env, LC_ALL: "C" },
     maxBuffer: 64 * 1024 * 1024,
     timeout: 5_000,
   })
+  return processRows(stdout)
+}
+
+/** Mako's footprint on this Mac now: its processes from `ps`, and the file watching and rescans this host reports. */
+export async function readMakoFootprint(deps: { watching: WatchFootprint; rescans: RescanFootprint | null }): Promise<MakoFootprint> {
+  const rows = await readProcessTable()
   const own = new Map<number, string>()
   if (deps.watching.child?.pid) own.set(deps.watching.child.pid, "file watcher")
   if (deps.watching.historyChild?.pid) own.set(deps.watching.historyChild.pid, "history reader")
   return {
     at: new Date().toISOString(),
-    ...makoProcesses(processRows(stdout), { pid: process.pid, ppid: process.ppid, inApp: Boolean(process.versions.electron) }, own),
+    ...makoProcesses(rows, { pid: process.pid, ppid: process.ppid, inApp: Boolean(process.versions.electron) }, own),
     watching: deps.watching,
     rescans: deps.rescans,
   }

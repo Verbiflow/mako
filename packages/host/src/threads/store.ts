@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, realpathSync, renameSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
-import { DatabaseSync, type StatementSync } from "node:sqlite"
+import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import type { ThreadRef } from "@mako/sessions"
 import { ReadOnlyConnection, ReadOnlyStoreError } from "@mako/sessions/read-only-sqlite"
@@ -49,7 +49,7 @@ import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
-import { ReportSchema, ThreadParentSchema, type FollowedRun, type Report, type ThreadParent } from "../contracts/agents.js"
+import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
@@ -583,9 +583,68 @@ CREATE TABLE IF NOT EXISTS thread_reports (
 CREATE INDEX IF NOT EXISTS thread_reports_child ON thread_reports(child_thread, at);
 CREATE INDEX IF NOT EXISTS thread_reports_waiting ON thread_reports(at) WHERE delivered_at IS NULL;
 CREATE TABLE IF NOT EXISTS agent_spawns (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS fin_moves (child_thread TEXT PRIMARY KEY, record TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS limit_notices (root_thread TEXT NOT NULL, id TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY (root_thread, id));
+CREATE TABLE IF NOT EXISTS agent_answers (
+  ask TEXT PRIMARY KEY, child_thread TEXT NOT NULL, op TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL, delivered_at INTEGER);
+CREATE INDEX IF NOT EXISTS agent_answers_child ON agent_answers(child_thread, at);
+CREATE INDEX IF NOT EXISTS agent_answers_op ON agent_answers(op);
+CREATE TABLE IF NOT EXISTS agent_pull_wakes (
+  wait TEXT PRIMARY KEY, child_thread TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL, delivered_at INTEGER);
+CREATE INDEX IF NOT EXISTS agent_pull_wakes_waiting ON agent_pull_wakes(at) WHERE delivered_at IS NULL;
 `
 const RecordRowSchema = z.object({ record: z.string() })
+const LimitNoticeRowSchema = z.object({ root_thread: z.string(), record: z.string() })
 const ReportRowSchema = z.object({ record: z.string(), wake_request: z.string().nullable() })
+
+/**
+ * The answer that took a question in a Fin's report, kept as it's claimed and before it's delivered: the ask it
+ * answers, the operation whose repeat it is, who gave it and its words, and the message that carries it to the Fin
+ * under the request it's sent as, so a host that stopped before it was delivered sends that same request once.
+ */
+export const KeptAnswerSchema = z.object({
+  ask: z.string().min(1).max(600),
+  child: ThreadIdSchema,
+  op: z.string().min(1).max(600),
+  by: z.enum(["lead", "person"]),
+  answer: z.string().max(400),
+  request: z.string().min(1).max(200),
+  text: z.string().max(20_000),
+  actor: z.object({ kind: z.literal("agent"), session: SessionIdSchema }).optional(),
+  at: z.number(),
+  /** When it reached the Fin's conversation, and how. */
+  delivered: z.object({ at: z.number(), delivery: z.enum(["turn", "steer", "queued", "interrupt"]) }).optional(),
+})
+export type KeptAnswer = z.infer<typeof KeptAnswerSchema>
+const AnswerRowSchema = z.object({ record: z.string(), delivered_at: z.number().nullable() })
+function keptAnswer(row: Record<string, SQLOutputValue>): KeptAnswer {
+  return KeptAnswerSchema.parse(JSON.parse(AnswerRowSchema.parse(row).record))
+}
+
+/**
+ * The outcome of a pull request that woke a Fin waiting on it, claimed before it's delivered: the wait (its Fin, the
+ * report that named the pull request, and the pull request), the outcome, and the note that carries it under the
+ * request it's sent as, so a host that stopped before it was delivered sends that same request once, and none sends
+ * a wait's outcome twice.
+ */
+export const KeptPullWakeSchema = z.object({
+  wait: z.string().min(1).max(1200),
+  child: ThreadIdSchema,
+  /** The report that named the pull request, and the pull request by `pullKey`: what must still stand for it to go. */
+  report: z.string().min(1).max(600),
+  pull: z.string().min(1).max(300),
+  outcome: z.enum(["settled", "failed", "review", "merged", "closed"]),
+  request: z.string().min(1).max(200),
+  text: z.string().max(2_000),
+  at: z.number(),
+  delivered: z.object({ at: z.number(), delivery: z.enum(["turn", "steer", "queued", "interrupt"]) }).optional(),
+  /** When its wait stopped holding before its note was sent (a newer report, a stop): retired, never sent. */
+  obsolete: z.number().optional(),
+})
+export type KeptPullWake = z.infer<typeof KeptPullWakeSchema>
+function keptPullWake(row: Record<string, SQLOutputValue>): KeptPullWake {
+  return KeptPullWakeSchema.parse(JSON.parse(RecordRowSchema.parse(row).record))
+}
 
 /** A report its parent hasn't heard yet, and the request already named to carry it, if one was. */
 export interface WaitingReport {
@@ -945,6 +1004,129 @@ export class ThreadStore {
     })
   }
 
+  /** A Fin's logical turn as its fallback left it (`FinTurn`); undefined between turns, or for one this build can't read. */
+  finTurn(child: string): FinTurn | undefined {
+    const kept = this.sql("SELECT record FROM fin_moves WHERE child_thread = ?").get(child)
+    if (!kept) return undefined
+    const parsed = FinTurnSchema.safeParse(JSON.parse(RecordRowSchema.parse(kept).record))
+    return parsed.success ? parsed.data : undefined
+  }
+
+  /** The notice of a limit a tree waits on the person's seeing: the newest not seen. */
+  limitNotice(root: string): LimitNotice | undefined {
+    const rows = this.sql("SELECT record FROM limit_notices WHERE root_thread = ?").all(root).flatMap((row) => {
+      const parsed = LimitNoticeSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
+      return parsed.success ? [parsed.data] : []
+    })
+    return rows.filter((notice) => !notice.seen && !notice.gathering).sort((a, b) => b.at - a.at)[0]
+  }
+
+  /** Every tree's notices, said or gathering: what a host picks up from the last. */
+  limitNotices(): { root: string; notice: LimitNotice }[] {
+    return this.sql("SELECT root_thread, record FROM limit_notices").all().flatMap((row) => {
+      const { root_thread: root, record } = LimitNoticeRowSchema.parse(row)
+      const parsed = LimitNoticeSchema.safeParse(JSON.parse(record))
+      return parsed.success ? [{ root, notice: parsed.data }] : []
+    })
+  }
+
+  private keptLimitNotice(root: string, id: string): LimitNotice | undefined {
+    const kept = this.sql("SELECT record FROM limit_notices WHERE root_thread = ? AND id = ?").get(root, id)
+    return kept ? LimitNoticeSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record)) : undefined
+  }
+
+  /**
+   * A limit touched a Fin of tree `root`, gone on to `to` or nowhere: kept now, gathering what else it touches until
+   * `sayLimitNotice`. False when this episode was said already, seen or not.
+   */
+  gatherLimitNotice(root: string, first: LimitNotice & { gathering: NonNullable<LimitNotice["gathering"]> }, to?: string): boolean {
+    return this.write(() => {
+      const kept = this.keptLimitNotice(root, first.id)
+      if (kept && !kept.gathering) return false
+      const notice = kept ?? first
+      const { moved, stopped, ...rest } = notice.gathering!
+      const gathering = to ? { ...rest, moved: [...moved, to], stopped } : { ...rest, moved, stopped: stopped + 1 }
+      this.sql("INSERT INTO limit_notices (root_thread, id, record) VALUES (?, ?, ?) ON CONFLICT (root_thread, id) DO UPDATE SET record = excluded.record").run(root, first.id, JSON.stringify({ ...notice, gathering }))
+      return true
+    })
+  }
+
+  /** A gathered notice is said, once: false when it was already. */
+  sayLimitNotice(root: string, id: string, line: string): boolean {
+    return this.write(() => {
+      const kept = this.keptLimitNotice(root, id)
+      if (!kept?.gathering) return false
+      this.sql("UPDATE limit_notices SET record = ? WHERE root_thread = ? AND id = ?").run(JSON.stringify({ ...kept, gathering: undefined, line }), root, id)
+      return true
+    })
+  }
+
+  /** The person has seen it, wherever they were: it stays said. False when it's not theirs to see. */
+  seeLimitNotice(root: string, id: string): boolean {
+    return this.write(() => {
+      const notice = this.keptLimitNotice(root, id)
+      if (!notice) return false
+      this.sql("UPDATE limit_notices SET record = ? WHERE root_thread = ? AND id = ?").run(JSON.stringify({ ...notice, seen: true }), root, id)
+      return true
+    })
+  }
+
+  /**
+   * Claims the move for `wait` for host generation `owner`: refused (undefined) when the turn moved for it already or
+   * a newer host holds a move; an older host's claim, left by an exit, gives way. The turn as claimed.
+   */
+  claimFinMove(child: string, wait: string, owner: number, at: number): FinTurn | undefined {
+    return this.write(() => {
+      const turn = this.finTurn(child) ?? { visited: [], handled: [] }
+      if (turn.handled.includes(wait) || (turn.moving && turn.moving.owner > owner)) return undefined
+      const next: FinTurn = { ...turn, moving: { owner, wait, at } }
+      this.sql("INSERT INTO fin_moves (child_thread, record) VALUES (?, ?) ON CONFLICT (child_thread) DO UPDATE SET record = excluded.record").run(child, JSON.stringify(next))
+      return next
+    })
+  }
+
+  /**
+   * Ends `owner`'s move for its wait: with `visited` added and the wait handled when it moved; `retired`, the wait
+   * handled with nothing visited, when what the move was decided on stopped holding, so no move is made for it again;
+   * released when it found nothing to do. False when another host's claim took it meanwhile, which then has the move.
+   */
+  finishFinMove(child: string, owner: number, moved?: { visited: readonly string[] } | "retired"): boolean {
+    return this.write(() => {
+      const turn = this.finTurn(child)
+      if (!turn?.moving || turn.moving.owner !== owner) return false
+      const { moving, ...rest } = turn
+      const next: FinTurn = moved === "retired"
+        ? { ...rest, handled: [...rest.handled, moving.wait].slice(-64) }
+        : moved
+          ? { visited: [...new Set([...rest.visited, ...moved.visited])].slice(-64), handled: [...rest.handled, moving.wait].slice(-64) }
+          : rest
+      this.sql("UPDATE fin_moves SET record = ? WHERE child_thread = ?").run(JSON.stringify(next), child)
+      return true
+    })
+  }
+
+  /** The Fin's turn ended without a limit: its next one goes from the person's first choice again. */
+  clearFinTurn(child: string): void {
+    this.write(() => this.sql("DELETE FROM fin_moves WHERE child_thread = ?").run(child))
+  }
+
+  /**
+   * Where a child went on when its harness's account ran out (`FinRerouted`): the move replaces the last one, its
+   * model's source kept. The edge as it stands after, undefined when there's none.
+   */
+  rerouteEdge(child: string, rerouted: FinRerouted | undefined): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(child)
+      if (!kept) return undefined
+      const previous = ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record))
+      const tuned: NonNullable<ThreadParent["tuned"]> = { ...(previous.tuned ?? { source: "harness" }) }
+      delete tuned.rerouted
+      const next: ThreadParent = { ...previous, tuned: { ...tuned, ...(rerouted && { rerouted }) } }
+      this.sql("UPDATE thread_parents SET record = ? WHERE child_thread = ?").run(JSON.stringify(next), child)
+      return next
+    })
+  }
+
   /**
    * Opens a stopped child's delegation again, as a message to it does: the
    * close and its reason go into `resumed`, and a later stop closes it anew.
@@ -959,6 +1141,26 @@ export class ThreadStore {
       const { closedAt, closedReason, ...open } = previous
       const next: ThreadParent = { ...open, resumed: { at, closedAt, ...(closedReason && { reason: closedReason }) } }
       this.sql("UPDATE thread_parents SET record = ?, closed_at = NULL WHERE child_thread = ?").run(JSON.stringify(next), child)
+      return next
+    })
+  }
+
+  /** A Fin moved to another harness: its edge says what it runs on now (`Agents.move`), nothing else of it changes. */
+  moveEdge(child: string, asked: Pick<ThreadParent["asked"], "harness" | "model" | "reasoning" | "fast" | "access">, tuned: Omit<NonNullable<ThreadParent["tuned"]>, "rule" | "rerouted"> | undefined): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(child)
+      if (!kept) return undefined
+      const previous = ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record))
+      const { asked: was, ...edge } = previous
+      const held = { ...was }
+      delete held.harness
+      delete held.model
+      delete held.reasoning
+      delete held.fast
+      delete held.access
+      delete edge.tuned
+      const next: ThreadParent = { ...edge, asked: { ...held, ...asked }, ...(tuned && { tuned }) }
+      this.sql("UPDATE thread_parents SET record = ? WHERE child_thread = ?").run(JSON.stringify(next), child)
       return next
     })
   }
@@ -984,7 +1186,7 @@ export class ThreadStore {
         if (first.status !== report.status || first.summary !== report.summary || first.child !== report.child) throw new ThreadOperationConflictError(report.id)
         return { report: first, deduped: true }
       }
-      const newest = this.sql("SELECT record FROM thread_reports WHERE child_thread = ? ORDER BY at DESC LIMIT 1").get(report.child)
+      const newest = this.sql("SELECT record FROM thread_reports WHERE child_thread = ? ORDER BY rowid DESC LIMIT 1").get(report.child)
       if (newest && ReportSchema.parse(JSON.parse(RecordRowSchema.parse(newest).record)).ownerGeneration > report.ownerGeneration) return { stale: true }
       this.sql("INSERT INTO thread_reports (id, child_thread, record, at, delivered_at) VALUES (?, ?, ?, ?, ?)")
         .run(report.id, report.child, JSON.stringify(report), report.at, null)
@@ -992,10 +1194,13 @@ export class ThreadStore {
     })
   }
 
-  /** A child's reports, oldest first; `after` leaves out those at or before it. */
+  /**
+   * A child's reports in the order the store took them, oldest first; `after` leaves out those at or before it. A
+   * report's `rowid` is that order: `at` can tie or run backward with the clock, and an id is its client's to choose.
+   */
   reportsOf(child: string, after = 0): Report[] {
     this.syncVersion()
-    return this.sql("SELECT record FROM thread_reports WHERE child_thread = ? AND at > ? ORDER BY at, id").all(child, after)
+    return this.sql("SELECT record FROM thread_reports WHERE child_thread = ? AND at > ? ORDER BY rowid").all(child, after)
       .flatMap((row) => {
         const parsed = ReportSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
         return parsed.success ? [parsed.data] : []
@@ -1022,7 +1227,7 @@ export class ThreadStore {
   latestReports(): Map<string, Report> {
     this.syncVersion()
     const latest = new Map<string, Report>()
-    for (const row of this.sql(`SELECT record FROM thread_reports r WHERE at = (SELECT max(at) FROM thread_reports WHERE child_thread = r.child_thread) ORDER BY at, id`).all()) {
+    for (const row of this.sql(`SELECT record FROM thread_reports r WHERE rowid = (SELECT max(rowid) FROM thread_reports WHERE child_thread = r.child_thread)`).all()) {
       const parsed = ReportSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
       if (parsed.success) latest.set(parsed.data.child, parsed.data)
     }
@@ -1032,7 +1237,7 @@ export class ThreadStore {
   /** Reports no parent has heard yet, oldest first: the outbox a starting host sends again under their ids. */
   undeliveredReports(): WaitingReport[] {
     this.syncVersion()
-    return this.sql("SELECT record, wake_request FROM thread_reports WHERE delivered_at IS NULL ORDER BY at, id").all().flatMap((row) => {
+    return this.sql("SELECT record, wake_request FROM thread_reports WHERE delivered_at IS NULL ORDER BY rowid").all().flatMap((row) => {
       const found = ReportRowSchema.parse(row)
       const parsed = ReportSchema.safeParse(JSON.parse(found.record))
       return parsed.success ? [{ report: parsed.data, ...(found.wake_request && { wake: found.wake_request }) }] : []
@@ -1057,6 +1262,119 @@ export class ThreadStore {
     })
   }
 
+  /**
+   * Claims a question in a Fin's report for one answer, in one write: the answer kept, or the one that claimed it
+   * first (`claimed: false`), whoever's it was. A repeat of the same operation is that first answer.
+   */
+  claimAnswer(input: KeptAnswer): { answer: KeptAnswer; claimed: boolean } {
+    const answer = KeptAnswerSchema.parse(input)
+    return this.write(() => {
+      const held = this.sql("SELECT record, delivered_at FROM agent_answers WHERE ask = ?").get(answer.ask)
+      if (held) return { answer: keptAnswer(held), claimed: false }
+      this.sql("INSERT INTO agent_answers (ask, child_thread, op, record, at, delivered_at) VALUES (?, ?, ?, ?, ?, NULL)")
+        .run(answer.ask, answer.child, answer.op, JSON.stringify(answer), answer.at)
+      return { answer, claimed: true }
+    })
+  }
+
+  /** The answer an operation claimed with, delivered or not. */
+  answerByOp(op: string): KeptAnswer | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT record, delivered_at FROM agent_answers WHERE op = ?").get(op)
+    return row ? keptAnswer(row) : undefined
+  }
+
+  /** The answer that took an ask, if one did. */
+  answerOf(ask: string): KeptAnswer | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT record, delivered_at FROM agent_answers WHERE ask = ?").get(ask)
+    return row ? keptAnswer(row) : undefined
+  }
+
+  /** Each Fin's newest answer, by its Thread: the last one kept, whatever the clocks said. */
+  latestAnswers(): Map<string, KeptAnswer> {
+    this.syncVersion()
+    const latest = new Map<string, KeptAnswer>()
+    for (const row of this.sql("SELECT record, delivered_at FROM agent_answers a WHERE rowid = (SELECT max(rowid) FROM agent_answers WHERE child_thread = a.child_thread) ORDER BY at, ask").all()) {
+      const answer = keptAnswer(row)
+      latest.set(answer.child, answer)
+    }
+    return latest
+  }
+
+  /** Answers claimed and not yet delivered to their Fin, oldest first: what a starting host sends once. */
+  undeliveredAnswers(): KeptAnswer[] {
+    this.syncVersion()
+    return this.sql("SELECT record, delivered_at FROM agent_answers WHERE delivered_at IS NULL ORDER BY at, ask").all().map(keptAnswer)
+  }
+
+  /** The answer reached its Fin's conversation. */
+  markAnswerDelivered(ask: string, delivered: NonNullable<KeptAnswer["delivered"]>): void {
+    this.write(() => {
+      const held = this.sql("SELECT record, delivered_at FROM agent_answers WHERE ask = ? AND delivered_at IS NULL").get(ask)
+      if (!held) return
+      const answer = { ...keptAnswer(held), delivered }
+      this.sql("UPDATE agent_answers SET record = ?, delivered_at = ? WHERE ask = ?").run(JSON.stringify(answer), delivered.at, ask)
+    })
+  }
+
+  /** Lets go of a claim whose delivery failed, so another answer can take the ask; one delivered stays. */
+  releaseAnswer(ask: string, op: string): void {
+    this.write(() => this.sql("DELETE FROM agent_answers WHERE ask = ? AND op = ? AND delivered_at IS NULL").run(ask, op))
+  }
+
+  /** Claims a wait's one wake, in one write: the wake kept, or the one that claimed it first (`claimed: false`). */
+  claimPullWake(input: KeptPullWake): { wake: KeptPullWake; claimed: boolean } {
+    const wake = KeptPullWakeSchema.parse(input)
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM agent_pull_wakes WHERE wait = ?").get(wake.wait)
+      if (held) return { wake: keptPullWake(held), claimed: false }
+      this.sql("INSERT INTO agent_pull_wakes (wait, child_thread, record, at, delivered_at) VALUES (?, ?, ?, ?, NULL)")
+        .run(wake.wait, wake.child, JSON.stringify(wake), wake.at)
+      return { wake, claimed: true }
+    })
+  }
+
+  /** The waits of these Fins that woke them already. */
+  pullWakesOf(children: readonly string[]): Set<string> {
+    this.syncVersion()
+    if (!children.length) return new Set()
+    const rows = this.sql(`SELECT wait FROM agent_pull_wakes WHERE child_thread IN (${children.map(() => "?").join(", ")})`).all(...children)
+    return new Set(rows.map((row) => z.object({ wait: z.string() }).parse(row).wait))
+  }
+
+  /** Wakes claimed and not yet delivered to their Fin, oldest first: what a starting host sends once. */
+  undeliveredPullWakes(): KeptPullWake[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM agent_pull_wakes WHERE delivered_at IS NULL ORDER BY at, wait").all().map(keptPullWake)
+  }
+
+  /** The wake reached its Fin's conversation. */
+  markPullWakeDelivered(wait: string, delivered: NonNullable<KeptPullWake["delivered"]>): void {
+    this.write(() => {
+      const held = this.sql("SELECT record FROM agent_pull_wakes WHERE wait = ? AND delivered_at IS NULL").get(wait)
+      if (!held || keptPullWake(held).obsolete !== undefined) return
+      this.sql("UPDATE agent_pull_wakes SET record = ?, delivered_at = ? WHERE wait = ?").run(JSON.stringify({ ...keptPullWake(held), delivered }), delivered.at, wait)
+    })
+  }
+
+  /** A Fin's wake that its note goes as `request`. */
+  pullWakeOfRequest(child: string, request: string): KeptPullWake | undefined {
+    this.syncVersion()
+    return this.sql("SELECT record FROM agent_pull_wakes WHERE child_thread = ?").all(child).map(keptPullWake).find((wake) => wake.request === request)
+  }
+
+  /** Retires a wake whose wait no longer holds: marked obsolete and as settled, so no start sends it again. */
+  retirePullWake(wait: string, at: number): void {
+    this.write(() => {
+      const held = this.sql("SELECT record FROM agent_pull_wakes WHERE wait = ?").get(wait)
+      if (!held) return
+      const wake = keptPullWake(held)
+      if (wake.obsolete !== undefined) return
+      this.sql("UPDATE agent_pull_wakes SET record = ?, delivered_at = coalesce(delivered_at, ?) WHERE wait = ?").run(JSON.stringify({ ...wake, obsolete: at }), at, wait)
+    })
+  }
+
   /** Spawns waiting on a tree's running budget, oldest first. */
   queuedSpawns(): QueuedSpawn[] {
     this.syncVersion()
@@ -1067,6 +1385,11 @@ export class ThreadStore {
   /** Holds a spawn for its tree's budget; a repeat of one held keeps its place. */
   queueSpawn(spawn: QueuedSpawn): void {
     this.write(() => this.sql("INSERT OR IGNORE INTO agent_spawns (op, tree, record, at) VALUES (?, ?, ?, ?)").run(spawn.op, spawn.tree, spawn.record, spawn.at))
+  }
+
+  /** Rewrites a held spawn's record in its place in line: one that couldn't start, kept until its Apex has heard why. */
+  keepQueuedSpawn(op: string, record: string): void {
+    this.write(() => this.sql("UPDATE agent_spawns SET record = ? WHERE op = ?").run(record, op))
   }
 
   unqueueSpawn(op: string): void {

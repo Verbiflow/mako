@@ -114,6 +114,13 @@ const reads = [
   "mako:thread-continuation-resolve",
   "mako:thread-owner-resolve",
   "mako:list-files",
+  "mako:files-folders",
+  "mako:files-find",
+  "mako:live-files-folders",
+  "mako:live-files-find",
+  /** A text search changes nothing; a newer one in the same folder stops the last. */
+  "mako:files-grep",
+  "mako:live-files-grep",
   "mako:read-file",
   "mako:capabilities",
   "mako:live-snapshot",
@@ -245,6 +252,7 @@ const replays = [
   "mako:native-submit",
   /** A spawn, a link, a report, a message and an answer are settled by the caller's key; stopping a stopped child stops nothing. */
   "mako:agents-start",
+  "mako:agents-move",
   "mako:agents-link",
   "mako:agents-report",
   "mako:agents-send",
@@ -333,6 +341,14 @@ const replays = [
   "mako:fin-default-choose",
   /** `FinDefaultsStore.savePolicy`: the whole policy replaces the last, so saving it twice is saving it once. */
   "mako:fin-policy-save",
+  /** `FinDefaultsStore.saveRoleRules`: the same words for a role saved twice are saved once. */
+  "mako:fin-role-rules-save",
+  /** `FinDefaultsStore.setLimit`: the same number saved twice is one choice. */
+  "mako:fin-limit-set",
+  /** `FinDefaultsStore.setCeiling`: the same number saved twice is one choice. */
+  "mako:fin-ceiling-set",
+  /** `FinDefaultsStore.chooseMoveOnLimit`: the same switch set twice is set once. */
+  "mako:fin-move-on-limit",
   /** `Telemetry.choose`: the same choice saved twice is one choice. */
   "mako:telemetry-choose",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
