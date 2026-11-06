@@ -124,6 +124,7 @@ import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-run
 import { holdOf } from "../contracts/request-hold.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
+import { carriedDigest } from "../contracts/delivery-retry.js"
 import { settledWithin, type ContinueOn } from "./continue-on.js"
 import type { LiveConversations } from "./live-conversations.js"
 import { heldReferences, treeEdges } from "./thread-tree.js"
@@ -584,7 +585,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ready: (conversation) => this.ready(conversation),
       // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against.
       unsent: (conversation) => (deps.live.snapshot(conversation)?.requests ?? []).flatMap((request) =>
-        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, notices: request.digest.notices, ...(request.digest.lines && { lines: request.digest.lines }) }] : []),
+        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
       carried: (conversation, notice) => Boolean(deps.live.snapshot(conversation)?.requests.some((request) =>
         request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
       admit: (conversation, request, text, notices, actor, hold, lines) => {

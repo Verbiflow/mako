@@ -4,7 +4,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import { BRIEF_AGAIN } from "../contracts/children.js"
-import { transientCause, unheardDigest, waitsAgain } from "../contracts/delivery-retry.js"
+import { transientCause, unheardDigest, waitsAgain, carriedDigest } from "../contracts/delivery-retry.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
@@ -192,7 +192,7 @@ export class LiveAutoContinue {
       id: randomUUID(),
       createdAt: now,
       text: unheard ? failed.text : continueTurnPrompt("connection-lost", "mako"),
-      ...(unheard && { displayText: "", digest: { notices: unheard.notices, ...(!retry && { resting: true as const, ...(waits.digest?.nextTry !== undefined && { nextTry: waits.digest.nextTry }) }) } }),
+      ...(unheard && { displayText: "", digest: { ...carriedDigest(unheard), ...(!retry && { resting: true as const, ...(waits.digest?.nextTry !== undefined && { nextTry: waits.digest.nextTry }) }) } }),
       attachments: [],
       tuning: failed.tuning,
       status: "held",

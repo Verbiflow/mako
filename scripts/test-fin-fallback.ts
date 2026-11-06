@@ -574,6 +574,62 @@ try {
     assert.equal(r.world.prompts.filter((prompt) => prompt.conversation === apex && prompt.text.includes(MOVED_LINE)).length, 1, "the Apex hears it, once")
     await r.world.close()
   }
+  // A digest that fails with nothing done goes on as a new row, carrying its move; a report joining that row keeps it.
+  {
+    const held = { claude: named("personal"), codex: named("default") }
+    let spent!: () => void
+    const out = new Promise<void>((resolve) => (spent = resolve))
+    let limited = false
+    let failing = true
+    const heard: string[] = []
+    const r = await run("moved-failed", {
+      apexOn: "codex",
+      accounts: held,
+      selected: { claude: "personal" },
+      start: { harness: "claude" },
+      fin: () => "unused",
+      script: async (turn) => {
+        if (turn.text.startsWith(FROM_AGENTS)) {
+          if (!failing) {
+            heard.push(turn.text)
+            return "Done."
+          }
+          const session = turn.world.live.snapshot(turn.conversation)!.session
+          turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: LIMIT } })
+          return new Promise<string>(() => {})
+        }
+        if (turn.text.includes("HOLD")) return turn.world.hold(turn.conversation).then(() => "ok")
+        if (!limited && turn.harness === "claude" && turn.text.includes("You're fin:")) {
+          limited = true
+          await out
+          turn.world.endWith(turn.conversation, { limit: { resetsAt: RESET }, fail: LIMIT })
+          return "Partial labels."
+        }
+        return "Done."
+      },
+    })
+    assert.ok(!("refused" in r))
+    const apex = r.apex.conversation
+    r.world.say(apex, "HOLD")
+    await until("the Apex at work", () => r.world.live.session(apex)?.status === "running")
+    held.claude[0]!.spentUntil = RESET
+    spent()
+    const MOVED_LINE = '"labels" moved to Codex'
+    const waiting = () => r.world.live.snapshot(apex)!.requests.find((request) => request.digest && (request.status === "queued" || request.status === "held"))
+    await until("the digest", () => Boolean(waiting()?.text.includes(MOVED_LINE)))
+    r.world.release(apex)
+    await until("the digest to fail with nothing done", () => Boolean(waiting()?.continues))
+    assert.equal(waiting()!.digest?.lines?.length, 1, "the row that goes on from it carries the move")
+    const second = await r.world.agents.start(r.caller, { brief: { objective: "A second result" }, harness: "codex", name: "second", clientKey: "second", cwd: r.world.root })
+    assert.ok(!("refused" in second))
+    await until("the second result to join", () => (waiting()?.digest?.notices.length ?? 0) >= 2)
+    assert.equal(waiting()!.text.split(MOVED_LINE).length, 2, "a report joining it keeps the move, once")
+    failing = false
+    const person = r.world.say(apex, "After the limit.")
+    await until("their message", () => r.world.live.snapshot(apex)!.requests.find((request) => request.id === person)?.status === "completed")
+    assert.equal(heard.filter((text) => text.includes(MOVED_LINE)).length, 1, "the Apex hears it, once")
+    await r.world.close()
+  }
   console.log("a limit's notice: kept before it gathers, said once after a restart, and over at its reset on every surface")
 
   // The person's own message in the Fin's Thread is theirs to drive: a limit there ends the turn as before.

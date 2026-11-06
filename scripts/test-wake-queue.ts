@@ -10,6 +10,7 @@ import { ReportSchema, type Notice } from "@mako/host/contracts/agents"
 import { DIGEST_WAITS } from "@mako/host/contracts/children"
 import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentWakes, FROM_AGENTS, RESULT_COALESCE_MS, WAKE_COALESCE_MS, WAKES_PER_MINUTE, type AgentWakesDeps, type ParentReady } from "@mako/host/conversations/agent-wakes"
+import { carriedDigest } from "@mako/host/contracts/delivery-retry"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
 
@@ -235,6 +236,8 @@ try {
     await pause(0)
     assert.ok(f.open()!.text.includes("grok moved"), "a steer not taken: it goes in the digest instead")
   }
+  // A digest goes on with all it carries; what's left behind is how that attempt went, named once.
+  assert.deepEqual(carriedDigest({ notices: [], lines: ["moved"], sentAt: 1, heard: true, resting: true, nextTry: 2 }), { notices: [], lines: ["moved"] })
   console.log("wakes: a burst is one digest held for its window; joins, results, busy, stopped, steered, carried receipts, and withdrawals and stale ends across every unsent digest")
 
   // A host killed by SIGKILL at each write between a digest, its claim and its receipt: each report delivered once.
