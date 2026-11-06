@@ -352,7 +352,8 @@ class Schedule {
         const work = pick(rows())
         if (!work) break
         await live.cancelRequest(id, work.id)
-        work.gone = true
+        // It reaches a queued row or a switch's: a plain held one stays, and goes on its Resume.
+        work.gone = this.row(work)?.status !== "held"
         break
       }
       case "message": {

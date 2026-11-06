@@ -7,6 +7,7 @@ import type { ThreadRef } from "@mako/sessions"
 import { readMessage, writeMessage } from "@mako/sessions/context-wire"
 import { threadReferenceId, threadToken, writeReference } from "@mako/sessions/thread-references"
 import type { AgentCaller } from "@mako/host/contracts/agents"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { AgentMoved, AgentsMoveInput, AgentsMoveResult } from "@mako/host/contracts/agent-tools"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { arriving } from "@mako/host/contracts/request-hold"
@@ -702,10 +703,14 @@ async function reviewed(): Promise<void> {
     await f.world.close()
   }
   {
-    // A failed answer doesn't reopen a question another message closed.
-    const f = await fixture("codex")
+    // A failed answer doesn't reopen a question another message closed, while its Fin works on and no later report does.
+    let finConversation = ""
+    const f = await fixture("codex", { script: async (turn) => {
+      if (turn.text.includes("You're fin:")) finConversation = turn.conversation
+      return turn.text.includes("another-message") ? turn.world.hold(turn.conversation).then(() => "Done.") : "Done."
+    } })
     await f.world.settle(40, 20_000)
-    const { conversation } = f.fin()
+    const conversation = finConversation
     await f.world.agents.report(f.world.caller(conversation), { status: "needs-input", summary: "Choose", question: "Which one?", options: [{ label: "first-answer" }, { label: "second-answer" }], clientKey: "ask" })
     await f.world.settle(40, 20_000)
     let entered = false
@@ -728,12 +733,13 @@ async function reviewed(): Promise<void> {
     const first = f.world.agents.answer(f.apex.caller, { to: "labels", answer: "first-answer", clientKey: "first" })
     await until("the answer to wait", () => entered)
     assert.ok(!("refused" in await f.world.agents.send(f.apex.caller, { to: "labels", text: "another-message", clientKey: "other" })))
-    await until("the other message", () => f.prompts().some((prompt) => prompt.text.includes("another-message")))
+    await until("the other message's turn", () => f.world.live.session(conversation)?.status === "running")
     release()
     assert.ok("refused" in await first, "the first answer failed")
-    await f.world.settle(40, 20_000)
     const second = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "second-answer", clientKey: "second" })
     assert.ok("refused" in second && second.refused === "conflict", JSON.stringify(second))
+    f.world.release(conversation)
+    await f.world.settle(40, 20_000)
     assert.equal(f.prompts().filter((prompt) => prompt.text.includes("second-answer")).length, 0)
     await f.world.close()
   }
@@ -758,8 +764,8 @@ async function reviewed(): Promise<void> {
     const id = randomUUID()
     await f.world.continueOn(conversation, { kind: "move", move: { id, to: { harness: "claude" } } })
     await until("the move to prepare", () => opening)
-    const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>()
-    const table = { handle: (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => void handlers.set(channel, handler) }
+    const handlers = new Map<string, (...args: readonly (string | readonly string[])[]) => Promise<LiveSnapshot>>()
+    const table = { handle: (channel: string, handler: (...args: readonly (string | readonly string[])[]) => Promise<LiveSnapshot>) => void handlers.set(channel, handler) }
     // SAFETY: the handler reads only the fields given here; the rest of the host isn't reached by these channels.
     const deps = { conversations: { live: f.world.live, agents: f.world.agents, continueOn: f.world.continueOn, harnessLabel: (harness: string) => harness, native: {}, runs: {}, history: {}, continuation: {} }, profiles: { resolveLaunch: async () => { await selected; return undefined } }, threads: { catalog: {} }, workspaces: {}, movers: {}, lifecycle: {}, telemetry: { feature: () => {} }, files: {}, emit: () => {}, workspace: async () => root, invoke: async () => {} } as never
     // SAFETY: a method table is `handle` to whoever declares on it.
