@@ -463,7 +463,7 @@ export class LiveTransfers {
           nativeRouting: launchRouting(this.host.dependencies, source.session.id, conversationTools),
           nativeCalls: launchCalls(this.host.dependencies, source.session.id, source.session.cwd, conversationTools, threadEnvironment),
           // A hand-over to another account: the binding that will name it isn't active yet.
-          pinnedAccount: transfer.input.account ? () => transfer.input.account : launchAccount(this.host.dependencies, source.session.id, transfer.input.provider),
+          pinnedAccount: transfer.input.account ? () => transfer.input.account : launchAccount(resident, transfer.input.provider),
           title: source.session.title,
           tuning,
           modeId,
@@ -810,7 +810,7 @@ export class LiveTransfers {
 }
 
 /** Whether a switch has yet to commit: it has done nothing to the conversation's binding. */
-function unsettled(transfer: ContextTransfer): boolean {
+export function unsettled(transfer: ContextTransfer): boolean {
   return transfer.state.kind === "queued" || transfer.state.kind === "preparing"
 }
 
