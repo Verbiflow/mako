@@ -173,6 +173,8 @@ jobs:
       - run: npm run test:switch-interleavings
       - run: npm run test:followed-stop-crash
       - run: npm run test:held-notice-crash
+      # The outage of 2026-11-05 on all six: a tree moving, one digest with nowhere to go, the person told once, a Stop holding.
+      - run: npm run test:limit-replay
       - run: npm run test:held-digest
       - run: npm run test:fin-fallback
       # A prompt reaches its harness only once its journal holds it as sent; one it couldn't record goes once after a crash.
