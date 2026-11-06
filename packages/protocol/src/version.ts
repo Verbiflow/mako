@@ -32,9 +32,11 @@ export const PROTOCOL_VERSION = 1
  * its owner is off clones (`continues.ts`), and says a runtime that agreed it takes such a continue back as a move when
  * it returns. 17 lets a `sessions` row say the Session it was forked from (`forkOf`). 18 lets a `sessions` row say
  * what one of its Session's Fins asks the person (`asking`), which the row waits on, and where the Session stands
- * under it. Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * under it. 19 lets a `sessions` row say its Session's Fins (`fins`): every device shows an Apex's tree as its owner
+ * does. 20 lets a row's Fins say all their selectors read of them (`FIN_STATES_VERSION`). 21 takes `borrow` frames,
+ * what the runtime's Thread borrows as it changes. Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 18
+export const LINK_VERSION = 21
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -107,6 +109,25 @@ export const FORKS_VERSION = 17
  * agreed less hears the row as it stands under the ask, and none of it.
  */
 export const ASKING_VERSION = 18
+
+/**
+ * The first link version whose `sessions` rows may say their Session's Fins (`fins`): a link that agreed less hears the
+ * row without them, as before.
+ */
+export const FINS_VERSION = 19
+
+/**
+ * The first link version whose `sessions` rows may say all of a Fin's state: `refused`, `apexStopped`, `answered`,
+ * `unfinished`, and what an idle one waits on (`waitingOn`, `since`). A gateway that agreed 19 refuses a row saying any
+ * of them, so it hears each Fin as 19 knew it.
+ */
+export const FIN_STATES_VERSION = 20
+
+/**
+ * The first link version that takes `borrow` frames: what the runtime's Thread borrows changed (`borrow.ts`'s pushes),
+ * said as it changes. A link that agreed less reads the same pushes by asking for them.
+ */
+export const BORROW_LINK_VERSION = 21
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake
