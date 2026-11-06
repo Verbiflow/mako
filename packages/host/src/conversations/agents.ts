@@ -1644,11 +1644,20 @@ export class Agents implements AgentOperations, ConversationChildren {
       this.answersHeld.set(edge.child, { ...held, delivered })
       return this.childMoved(edge, false)
     }
+    // An Apex's message answers only what reached it: one that crossed the question is just a message, and the question goes on.
+    if (actor?.kind === "agent" && !this.reachedApex(edge, latest)) return hostLog("agents", "a message crossed a question its Apex hasn't heard", { op: edge.op, ask, request })
     const claim = store.claimAnswer({ ask, child: ThreadIdSchema.parse(edge.child), op: request, by: actor?.kind === "agent" ? "lead" : "person", answer: text.slice(0, 400), request, text, ...(actor?.kind === "agent" && { actor }), at: this.now() })
     if (!claim.claimed) return
     store.markAnswerDelivered(ask, delivered)
     this.answersHeld.set(edge.child, { ...claim.answer, delivered })
     this.childMoved(edge, false)
+  }
+
+  /** Whether a Fin's report has reached its Apex: it isn't in the store's outbox, an unsent digest or an unanswered steer. */
+  private reachedApex(edge: ThreadParent, report: Report): boolean {
+    const apex = this.frontOf(edge.parent, edge.parentSession)
+    if (apex && this.wakes.onItsWay(apex, `notice:${edge.child}:${report.id}`)) return false
+    return !this.store()!.undeliveredReports().some((waiting) => waiting.report.id === report.id)
   }
 
   private async answerOnce(by: Answerer, edge: ThreadParent, op: string, input: Pick<AgentsAnswerInput, "answer" | "allow" | "person">): Promise<AgentsAnswered | AgentRefused> {
