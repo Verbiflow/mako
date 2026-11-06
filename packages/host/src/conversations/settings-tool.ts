@@ -11,7 +11,7 @@ export interface SettingsToolDeps {
   conversationOf(session: string): string | undefined
   tier(conversationId: string): AccessTier | undefined
   /** A host call through the table every client calls, decoded: each read and change as Settings makes it. */
-  invoke(channel: string, args: unknown[]): Promise<JsonValue>
+  invoke(channel: string, args: unknown[]): Promise<JsonValue | undefined>
   gate: AgentAskGate
 }
 
@@ -49,7 +49,7 @@ export class SettingsTool {
   async #read(): Promise<SettingsResult> {
     const { invoke } = this.#deps
     const [handOff, conversations, order] = await Promise.all([invoke("mako:handoff-settings", []), invoke("mako:conversation-settings", []), invoke("mako:harness-order-saved", [])])
-    return { outcome: "read", settings: { handOff, conversations, harnessOrder: order } }
+    return { outcome: "read", settings: { handOff: handOff ?? null, conversations: conversations ?? null, harnessOrder: order ?? null } }
   }
 }
 

@@ -11,7 +11,7 @@ export interface HarnessToolDeps {
   conversationOf(session: string): string | undefined
   tier(conversationId: string): AccessTier | undefined
   /** A host call through the table every client calls, decoded: Install and Update as Settings presses them. */
-  invoke(channel: "mako:harness-updates" | "mako:harness-install" | "mako:harness-update", args: unknown[]): Promise<JsonValue>
+  invoke(channel: "mako:harness-updates" | "mako:harness-install" | "mako:harness-update", args: unknown[]): Promise<JsonValue | undefined>
   /** This host is a cloud machine, whose harnesses come from its image. */
   machine: boolean
   gate: AgentAskGate
@@ -28,7 +28,7 @@ export class HarnessTool {
   }
 
   async act(caller: AgentCaller, input: HarnessActInput): Promise<HarnessActResult> {
-    if (input.action === "read") return this.#deps.invoke("mako:harness-updates", [true]).then((harnesses): HarnessActResult => ({ outcome: "read", harnesses }), (error: Error) => ({ refused: "failed", why: error.message }))
+    if (input.action === "read") return this.#deps.invoke("mako:harness-updates", []).then((harnesses): HarnessActResult => ({ outcome: "read", harnesses: harnesses ?? null }), (error: Error) => ({ refused: "failed", why: error.message }))
     if (this.#deps.machine) return { refused: "cloud-machine", why: "A cloud machine's harnesses come from its image: they can't be installed or updated here." }
     const own = caller.kind === "agent" ? this.#deps.conversationOf(caller.session) : undefined
     if (caller.kind === "agent" && !own) return { refused: "no-thread", why: "No conversation here has that Session. Call it from a Thread's mako tools, or its shell, where MAKO_SESSION_ID names it." }
