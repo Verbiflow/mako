@@ -136,6 +136,7 @@ export class LiveLaunches {
             path: options.threadPath,
             tuning,
             modeId,
+            ...options.account !== undefined && { account: options.account },
           },
         ],
         transfers: [],
@@ -275,7 +276,7 @@ export class LiveLaunches {
           threadEnvironment,
           nativeRouting: launchRouting(dependencies, id, conversationTools),
           nativeCalls: launchCalls(dependencies, id, cwd, conversationTools, threadEnvironment),
-          pinnedAccount: launchAccount(dependencies, id, provider),
+          pinnedAccount: launchAccount(resident, provider),
           unattended: dependencies.unattended,
         }))
       })
