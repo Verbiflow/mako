@@ -83,7 +83,7 @@ import { ContextBundles } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident, STOPPED_FOR } from "./live-runtime.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
-import { holdSwitches, LiveTransfers } from "./live-transfers.js"
+import { holdSwitches, LiveTransfers, withdrawGone } from "./live-transfers.js"
 
 /** How long after the host starts it moves journals' copies of their history onto records (`LiveSources.settleBases`). */
 const SETTLE_AFTER_START_MS = 60_000
@@ -1207,13 +1207,12 @@ export class LiveConversations {
         break
     }
     const previous = resident.snapshot
-    const edited = {
+    resident.snapshot = {
       ...previous,
       requests: previous.requests.map((item) =>
         item.id === request.id ? next : item
       ),
     }
-    resident.snapshot = command.change.kind === "remove" ? this.transfers.withdraw(edited, request.id) : edited
     try {
       this.flush(resident)
     } catch (error) {
@@ -1744,6 +1743,7 @@ export class LiveConversations {
 
   /** Commits what changed to the journal and tells every window, in one batch. */
   private flush(resident: Resident): void {
+    resident.snapshot = withdrawGone(resident.snapshot)
     if (this.records.isReleased(resident)) {
       hostWarn("residency", "a write reached an unloaded conversation and was dropped", { conversation: resident.snapshot.session.id })
       return

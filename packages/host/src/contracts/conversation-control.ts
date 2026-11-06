@@ -139,7 +139,7 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
     error: z.string(),
     /** What `error` means; see `provider-failure.ts`. */
     failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
-    /** The person removed its message from the queue before it went (`LiveTransfers.withdraw`): nothing went wrong, and nothing is left to retry. */
+    /** Its message left the queue before it went (`withdrawGone`): nothing went wrong with the switch, and nothing is left to retry. */
     removed: z.literal(true).optional(),
   }),
   z.object({ kind: z.literal("uncertain"), error: z.string() }),

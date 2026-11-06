@@ -19,10 +19,13 @@ schedules, and a failing schedule is pinned there.
    message.** Whether it's waiting behind another switch, waiting to go again, or
    under way, its message enters the queue as a held row (`holdSwitches`), and the
    switch waits with that row. From there the row is edited, removed and resumed
-   as any message is. Resume sends the row's words through the switch. Removing
-   the row takes the switch with it (`LiveTransfers.withdraw`). While a switch's
-   row is held, the switch holds nothing else up: a new message, or a new switch,
-   goes ahead of it.
+   as any message is. Resume sends the row's words through the switch. Whatever
+   takes the row out of the queue takes the switch with it: a removal, Clear
+   Queue, the Thread carrying it to the cloud, a remote cancel, a failed start.
+   That's read at every write (`withdrawGone`, in `LiveConversations.flush`), so
+   a new path can't leave a switch pending behind a row that will never go. While
+   a switch's row is held, the switch holds nothing else up: a new message, or a
+   new switch, goes ahead of it.
 
 3. **A committed switch completes, a Stop or not.** Once the journal names the
    destination as the binding, the conversation is on it. The Stop pauses the
