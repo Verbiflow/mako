@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import type { MethodTable } from "../base/methods.js"
-import type { AgentCaller, AgentRefused } from "../contracts/agents.js"
+import type { AgentCaller, AgentRefused, AgentsNoticeInput, AgentsPlaceInput } from "../contracts/agents.js"
 import {
   AGENT_TOOLS,
   type AgentOperations,
@@ -17,13 +17,18 @@ import {
   type AgentsStartInput,
   type AgentsStopInput,
   type AgentsWaitInput,
+  type PlacementOperations,
 } from "../contracts/agent-tools.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 
 const UNAVAILABLE: AgentRefused = { refused: "unavailable", why: "Children need the Thread store, which didn't open on this host." }
 
 /** `mako:agents-<verb>`: every door's one way in, each the engine's operation of the same name. */
-export function declareAgentMethods(methods: MethodTable, agents: () => AgentOperations | undefined): void {
+export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOperations & PlacementOperations) | undefined): void {
+  // Between hosts, for Fins placed across the person's devices: no door shows these to an agent.
+  methods.handle("mako:agents-capabilities", () => agents()?.capabilities() ?? UNAVAILABLE)
+  methods.handle("mako:agents-place", (input: AgentsPlaceInput) => agents()?.place(input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-notice", (input: AgentsNoticeInput) => agents()?.notice(input) ?? UNAVAILABLE)
   methods.handle("mako:agents-start", (caller: AgentCaller, input: AgentsStartInput) => agents()?.start(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-move", (caller: AgentCaller, input: AgentsMoveInput) => agents()?.move(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-link", (caller: AgentCaller, input: AgentsLinkInput) => agents()?.link(caller, input) ?? UNAVAILABLE)

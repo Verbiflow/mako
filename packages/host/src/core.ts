@@ -840,6 +840,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   const opened = await openConversations({
     streams,
+    // A person's own device reaches their others through the account; a fixture desk reaches none.
+    ...(!fixtureDesk && { account: () => late.cloud }),
     finDefaults,
     finCapacity,
     builds: () => buildSlots.reading(),
@@ -923,6 +925,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     admission,
   })
   late.conversations = opened
+  // Reachable again (its runtime's link is back), this device asks the places holding its Fins how they stand, which
+  // tells them it hears: the notices they kept for it come now, not at their next retry.
+  late.cloud?.onRuntimeLinked?.(() => opened.agents?.knock())
   const { live, runs, native } = opened
   // A message held until a time (a usage limit's reset) sends itself within a tick of it, across restarts.
   // Held messages' times: one timer, armed for the soonest (`LiveConversations.armWakes`), once the host has started.

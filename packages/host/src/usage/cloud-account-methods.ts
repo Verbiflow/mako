@@ -129,7 +129,7 @@ export interface CloudAccount {
   /** This Mac's claim on a message that waited for one of its Sessions, before it runs it here (`CloudAccount.claimWaiting`). */
   claimWaiting?(session: string, id: string): Promise<WaitingClaim>
   /** The account's devices, by ID and name, and which is this one. */
-  devices?(): Promise<{ devices: Array<{ id: string; name: string }>; current: string }>
+  devices?(): Promise<{ devices: Array<{ id: string; name: string; kind?: string; platform?: string }>; current: string }>
   /** The harness versions the cloud's machines run, or null from a cloud that doesn't say (`CloudAccounts.cloudHarnesses`). */
   cloudHarnesses?(): Promise<CloudHarnesses | null>
   /** The person's access choices as the account keeps them, or null from a cloud that doesn't keep them yet. */
@@ -144,6 +144,8 @@ export interface CloudAccount {
   }
   /** Hears what the account's list of Sessions is told (`AccountListNotice`), in the stream's order, as it comes; returns how to stop. */
   onThreadListings?(listener: (heard: AccountListNotice) => void): () => void
+  /** Hears each time this device's runtime is enrolled on a new link: its account's other devices' calls reach it from then. */
+  onRuntimeLinked?(listener: () => void): () => void
   /** Whether the account's link is open and heard from within a ping: what the account says reaches this Mac now. */
   accountHeard?(): boolean
   /** The account's link tried now if it isn't heard, rather than at its next backoff step: whether it opened (`CloudLink.reach`). */
@@ -243,6 +245,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
   })
   const threadListeners = new Set<(heard: AccountListNotice) => void>()
+  const runtimeListeners = new Set<() => void>()
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
     secrets: secrets.secrets,
@@ -293,6 +296,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     onAccountLinked: () => {
       for (const listener of threadListeners) listener("linked")
+    },
+    onRuntimeLinked: () => {
+      for (const listener of runtimeListeners) listener()
     },
     onRequest: request,
     sessions,
@@ -391,6 +397,10 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onThreadListings: (listener) => {
       threadListeners.add(listener)
       return () => threadListeners.delete(listener)
+    },
+    onRuntimeLinked: (listener) => {
+      runtimeListeners.add(listener)
+      return () => runtimeListeners.delete(listener)
     },
     leaving: (why) => cloud.leaving(why),
     accountHeard: () => cloud.accountHeard(),

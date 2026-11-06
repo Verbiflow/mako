@@ -1,5 +1,5 @@
 import type { AccessTier } from "./access.js"
-import { APEX_WORD, decisionWords, FIN_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import { type AgentsCapabilities, type AgentsNoticed, type AgentsNoticeInput, type AgentsPlaced, type AgentsPlaceInput, APEX_WORD, decisionWords, FIN_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
@@ -110,6 +110,8 @@ export interface AgentsStarted {
   moved?: string
   /** The person's rule it follows, as its row says it. */
   rule?: string
+  /** Where it runs, when that isn't this device: `device:<name>`, by the device's own name. */
+  place?: string
   next: string
 }
 export type AgentsStartResult = AgentsStarted | AgentRefused
@@ -164,6 +166,8 @@ export interface AgentStrip {
   idleFor?: number
   /** Its open pull requests, from what the host holds (`finPullRequests`). */
   openPRs?: FinPullRequest[]
+  /** Where it runs, when that isn't this device: `device:<name>`. */
+  place?: string
   startedAt: number
 }
 /**
@@ -381,6 +385,16 @@ export interface AgentOperations {
   wait(caller: AgentCaller, input: AgentsWaitInput): Promise<AgentsWaitResult>
 }
 export type AgentVerb = keyof AgentOperations
+
+/**
+ * What one host answers another about Fins placed across devices, each a host call of its own that no door shows an
+ * agent: what it offers as a place, a start for an Apex elsewhere, and a placed Fin's notice for its Apex's device.
+ */
+export interface PlacementOperations {
+  capabilities(): AgentsCapabilities
+  place(input: AgentsPlaceInput): Promise<AgentsPlaced | AgentRefused>
+  notice(input: AgentsNoticeInput): Promise<AgentsNoticed>
+}
 
 /** What the MCP door shows the model of one operation. */
 export interface AgentToolProjection {
