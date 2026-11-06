@@ -501,7 +501,7 @@ export class LiveHibernation {
         threadEnvironment,
         nativeRouting: launchRouting(dependencies, resident.snapshot.session.id, conversationTools),
         nativeCalls: launchCalls(dependencies, resident.snapshot.session.id, resident.snapshot.session.cwd, conversationTools, threadEnvironment),
-        pinnedAccount: launchAccount(dependencies, resident.snapshot.session.id, binding.provider),
+        pinnedAccount: launchAccount(resident, binding.provider),
       }))
       startedSession = session
       if (resident.generation !== generation) {

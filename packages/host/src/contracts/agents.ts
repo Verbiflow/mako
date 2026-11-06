@@ -122,8 +122,8 @@ export function decisionOn(asked: Pick<ChildSpec, "mode" | "wake">, report: Pick
  * (Merge · Leave open, recommends Merge)", or "the person decides" for theirs.
  */
 export function decisionWords(decision: Pick<FinDecision, "question" | "on" | "ask">): string {
-  const options = decision.ask.options ?? []
-  const recommended = decision.ask.recommended === undefined ? undefined : options[decision.ask.recommended]?.label
+  const options = decision.ask?.options ?? []
+  const recommended = decision.ask?.recommended === undefined ? undefined : options[decision.ask.recommended]?.label
   const offered = options.length ? ` (${options.map((option) => option.label).join(" · ")}${recommended ? `, recommends ${recommended}` : ""})` : ""
   return `done; ${decision.on === "lead" ? "decide" : "the person decides"}: ${decision.question}${offered}`
 }
@@ -325,7 +325,7 @@ export const LimitNoticeSchema = z.object({
   until: z.number().optional(),
   seen: z.literal(true).optional(),
   /** What the limit did to its tree so far, kept as it happens so a restart loses none of it: nobody reads it until it's said. */
-  gathering: z.object({ account: z.string().optional(), moved: z.array(z.string()), stopped: z.number() }).optional(),
+  gathering: z.object({ account: z.string().optional(), apex: z.string().optional(), moved: z.array(z.string()), stopped: z.number() }).optional(),
 })
 export type LimitNotice = z.infer<typeof LimitNoticeSchema>
 
@@ -647,7 +647,7 @@ export function queuedWords(state: Extract<ChildState, { kind: "queued" }>): str
   return `Queued: ${state.ahead} ahead`
 }
 
-function entryState(state: ChildState): NativeAgent["state"] {
+export function entryState(state: ChildState): NativeAgent["state"] {
   switch (state.kind) {
     case "queued":
       return { kind: "waiting", reason: queuedWords(state) }
