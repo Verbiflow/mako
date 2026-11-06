@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import { execFile, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises"
+import { appendFile, copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
 import { request as httpsRequest } from "node:https"
 import { createRequire } from "node:module"
@@ -17,7 +17,8 @@ import { hostCommand, runtimeLocation } from "@mako/host/transport/service"
 import { PackagedApp } from "./lib/packaged-app.mjs"
 import { assertOwnHarnessStores } from "./lib/proof-host.ts"
 import { assertScratchEnvironment, scratchInstall, scratchKeychain, seedScratchHome } from "./scratch-harness-home.ts"
-import { scriptedModel } from "./scripted-model.ts"
+import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
+import { ACCESS_TIER_NAMES, accessModeId } from "@mako/host/contracts/access"
 
 /**
  * The Mac's half of a "Continue in the cloud" proof against a deployed cloud: a host of this checkout's build on a
@@ -52,6 +53,14 @@ import { scriptedModel } from "./scripted-model.ts"
  * - `heard`: every word the scripted model was asked for, in order: the turns that ran here. `HEARD [...]`
  * - `offline`, `online`: the relay cut, or listening again on the same port. `OFFLINE {at}`, `ONLINE {at}`
  * - `return <conversation>`: the Thread brought back from the cloud, as Bring back does. `RETURNED {outcome, ms}`
+ * - `start-as <access> <title> <word>`: `start` on that access (`full`, `auto`, `ask`, …), as its mode in the composer.
+ * - `move <conversation> <token> <word> [ms]`: a turn whose agent calls the `mako` server's `thread_move`, then runs a
+ *   command that sleeps five minutes and writes `handoff-<token>.txt`, then says the word. Waits until the Thread runs
+ *   elsewhere, or `ms` (ten minutes) pass. `MOVED {answer, elsewhere, ms, read}`: `answer` is what thread_move told the agent.
+ * - `asks <conversation>`: what its agent asked, as the card shows it. `ASKS [...]`
+ * - `allow <conversation> <ask>`: Move to the cloud on that card, then waits until its Thread runs elsewhere. `ALLOWED {elsewhere, ms}`
+ * - `back <conversation>`: `mako thread move back --conversation <id>` from a shell outside any Thread, this checkout's
+ *   CLI against this host's socket. `BACK {answer, ms}`
  * - `shot <path> [title]`: the window's screenshot, the Thread named by its title selected first. `SHOT <path>`
  * - `quit` (or stdin's end): signs out, stops the host (and the window), removes the root unless `--keep`. The host's
  *   log is kept beside it, as `<root>.host.log`.
@@ -87,8 +96,29 @@ scratchKeychain(scratch.home)
 const home = scratch.home
 const heard: string[] = []
 const ONE_WORD = /Reply with the single word ([A-Za-z0-9-]+)\./g
+// A move turn: the agent calls thread_move, then a command that runs on while the handoff pauses it, then its word.
+const MOVE = /Move this Thread to the cloud with thread_move \(proof ([A-Za-z0-9-]+)\)/g
+/** What thread_move told the agent, by the move turn's token. */
+const moveAnswers = new Map<string, string>()
+const moving = (text: string): ScriptedReply | undefined => {
+  const token = [...text.matchAll(MOVE)].at(-1)?.[1]
+  if (!token) return undefined
+  // Nothing else in a request says this: not the worktree, whose folder is named from the Thread's title.
+  const key = `thread-move-key:${token}`
+  // What the harness sent on the move turn, kept beside the root for a run that goes wrong.
+  void appendFile(`${root}.move-${token}.heard`, `${text}\n\n`).catch(() => undefined)
+  // OpenCode keeps MCP tools in Code Mode, so the agent's call goes through its `execute`.
+  if (!text.includes(key)) return { call: { id: `call_move_${token}`, name: "execute", arguments: { code: `return await tools.mako.thread_move(${JSON.stringify({ to: "cloud", clientKey: key })})` } } }
+  const outcome = /\\?"outcome\\?":\s*\\?"([a-z-]+)/.exec(text.slice(text.lastIndexOf(key)))?.[1]
+  if (outcome && !moveAnswers.has(token)) moveAnswers.set(token, outcome)
+  const file = `handoff-${token}.txt`
+  if (!text.includes(file)) return { call: { id: `call_sleep_${token}`, name: "shell", arguments: { command: `sleep 300 && echo ${token} > ${file}`, timeout: 600_000 } } }
+  return undefined
+}
 const model = await scriptedModel({
   reply: (text) => {
+    const move = moving(text)
+    if (move) return move
     const word = [...text.matchAll(ONE_WORD)].at(-1)?.[1]
     if (!word) return { text: "OK" }
     heard.push(word)
@@ -216,6 +246,16 @@ const read = async (id: string) => {
   const words = [...kept, ...said(shot.blocks).filter((word) => !kept.includes(word))]
   return { elsewhere: shot.elsewhere ?? null, threadId: shot.threadId ?? null, requests: shot.requests.map(({ id: request, status, error }) => ({ request, status, ...error && { error } })), words }
 }
+/** Where the conversation's folder is once its Thread runs elsewhere, waited for up to `ms`; null if it stayed. */
+const awayWithin = async (conversation: string, ms: number) => {
+  for (const deadline = Date.now() + ms; Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 1_000))) {
+    const where = (await snapshot(conversation)).elsewhere
+    if (where) return where
+  }
+  return null
+}
+/** What a conversation's agent asked, as its control keeps it. */
+const AsksSchema = z.object({ control: z.object({ asks: z.array(z.object({ id: z.string() }).loose()).optional() }).loose().optional() }).loose()
 const SyncSchema = z.object({ state: z.string(), stale: z.number().optional(), sending: z.number().optional(), tiers: z.array(z.object({ sessions: z.number(), inCloud: z.number() }).loose()).optional() }).loose()
 
 const stop = async () => {
@@ -240,12 +280,13 @@ const stop = async () => {
 let selected: string | undefined
 for await (const line of createInterface({ input: process.stdin })) {
   const [command, ...rest] = line.trim().split(/\s+/)
-  if (command === "start") {
+  if (command === "start" || command === "start-as") {
+    const access = command === "start-as" ? z.enum(ACCESS_TIER_NAMES).parse(rest.shift()) : undefined
     const word = rest.pop()!
     const title = rest.join(" ")
     const conversationId = randomUUID()
     const request = randomUUID()
-    await call("mako:live-start", ["opencode", project, { conversationId, title, worktree: true, ...branchOnGitHub && { worktreeStart: { kind: "branch", branch: branchOnGitHub } }, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
+    await call("mako:live-start", ["opencode", project, { conversationId, title, worktree: true, ...access && { modeId: accessModeId(access) }, ...branchOnGitHub && { worktreeStart: { kind: "branch", branch: branchOnGitHub } }, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
     for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
       const status = (await snapshot(conversationId)).requests.find((entry) => entry.id === request)?.status
       if (status && !["queued", "held", "dispatching"].includes(status)) break
@@ -291,6 +332,31 @@ for await (const line of createInterface({ input: process.stdin })) {
     const began = Date.now()
     const outcome = await call("mako:thread-return", [rest[0]!, randomUUID()])
     say("RETURNED", JSON.stringify({ outcome, ms: Date.now() - began }))
+  } else if (command === "move") {
+    const [conversation, token, word, wait] = rest
+    if (!conversation || !token || !word) {
+      say("UNKNOWN", JSON.stringify({ line }))
+      continue
+    }
+    const began = Date.now()
+    const text = `Move this Thread to the cloud with thread_move (proof ${token}), finish the work, then reply with the single word ${word}.`
+    await call("mako:live-prompt", [conversation, randomUUID(), text, []])
+    for (const deadline = Date.now() + 60_000; Date.now() < deadline && !moveAnswers.has(token); ) await new Promise((resolve) => setTimeout(resolve, 500))
+    const elsewhere = await awayWithin(conversation, Number(wait) || 10 * 60_000)
+    say("MOVED", JSON.stringify({ answer: moveAnswers.get(token) ?? null, elsewhere, ms: Date.now() - began, read: await read(conversation) }))
+  } else if (command === "asks") say("ASKS", JSON.stringify(AsksSchema.parse(await call("mako:live-snapshot", [rest[0]!])).control?.asks ?? []))
+  else if (command === "allow") {
+    const [conversation, ask] = rest
+    const began = Date.now()
+    await call("mako:agent-ask-answer", [conversation, ask, true])
+    say("ALLOWED", JSON.stringify({ elsewhere: await awayWithin(conversation!, 10 * 60_000), ms: Date.now() - began }))
+  } else if (command === "back") {
+    const began = Date.now()
+    // The person's own shell: no Session of a Thread's, so the CLI names the conversation and waits for the end.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("MAKO_")))
+    const answer = await run(process.execPath, [join(process.cwd(), "packages", "client", "dist", "cli.js"), "thread", "move", "back", "--conversation", rest[0]!, "--socket", runtimeLocation(dataRoot).socket, "--json"], { env, timeout: 15 * 60_000 })
+      .then(({ stdout }) => stdout, (error: { stdout?: string; message: string }) => error.stdout || JSON.stringify({ failed: error.message }))
+    say("BACK", JSON.stringify({ answer: JSON.parse(answer.trim() || "null"), ms: Date.now() - began }))
   } else if (command === "shot") {
     const [path, ...title] = rest
     if (!desktop) say("SHOT", JSON.stringify({ path: null, reason: "no window: started without --window" }))
