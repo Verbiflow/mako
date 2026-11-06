@@ -72,14 +72,15 @@ const MOVE = verb("Move", "Moving", "Moved")
 /** `settings`: what it read, or which it changed. */
 function settingsWords(args: Fields): Said {
   if (args.action === "read") return { verb: verb("Read", "Reading", "Read"), what: "Settings" }
-  return { verb: verb("Change", "Changing", "Changed"), what: typeof args.setting === "string" ? `the setting ${args.setting}` : "a setting" }
+  const setting = text(args.setting)
+  return { verb: verb("Change", "Changing", "Changed"), what: setting ? `the setting ${setting}` : "a setting" }
 }
 
 /** `thread`, by its action, in the words of the Thread's menu. */
 function threadWords(args: Fields): Said {
   if (args.action === "archive") return { verb: verb("Archive", "Archiving", "Archived"), what: "this Thread" }
   if (args.action === "restore") return { verb: verb("Restore", "Restoring", "Restored"), what: "this Thread" }
-  const title = typeof args.title === "string" ? firstWords(args.title) : undefined
+  const title = firstWords(text(args.title))
   return { verb: verb("Rename", "Renaming", "Renamed"), what: title ? `this Thread to ${title}` : "this Thread" }
 }
 const MERGE = verb("Merge", "Merging", "Merged")

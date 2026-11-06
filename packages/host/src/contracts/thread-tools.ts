@@ -1,4 +1,5 @@
 import type { HostCallReplay } from "./host-call-policy.js"
+import type { JsonValue } from "./json.js"
 import type { ReturnLanded } from "./cloud-threads.js"
 
 /**
@@ -76,7 +77,7 @@ export interface SettingsInput {
 }
 
 export type SettingsResult =
-  | { outcome: "read"; settings: { handOff: unknown; conversations: unknown; harnessOrder: unknown } }
+  | { outcome: "read"; settings: { handOff: JsonValue; conversations: JsonValue; harnessOrder: JsonValue } }
   | { outcome: "set"; setting: string; value: boolean | string | string[] }
   | { outcome: "asked"; ask: string; next: string }
   | { refused: "unavailable" | "no-thread" | "bad-value" | "failed"; why: string }

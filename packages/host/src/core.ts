@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
 import type { RecordsLink } from "@mako/sessions/record-sync"
+import { z } from "zod"
 import { decodeRuntimeValue, encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { sessionAccessTier } from "./contracts/access.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
@@ -1087,13 +1088,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
     threadOf: (id) => threads.store?.journalPlacement(id)?.thread,
     tier: (id) => sessionAccessTier(live.session(id)),
-    invoke: (channel, args) => methods.invoke(channel, args),
+    invoke: async (channel, args) => void (await methods.invoke(channel, args)),
     gate: late.agentAsks,
   })
   late.settingsTool = new SettingsTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
     tier: (id) => sessionAccessTier(live.session(id)),
-    invoke: async (channel, args) => decodeRuntimeValue(await methods.invoke(channel, args)),
+    invoke: async (channel, args) => z.json().parse(decodeRuntimeValue(await methods.invoke(channel, args))),
     gate: late.agentAsks,
   })
   late.agentAsks.runs = {

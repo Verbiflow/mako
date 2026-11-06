@@ -1,6 +1,7 @@
 import type { MethodTable } from "../base/methods.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
+import type { JsonValue } from "../contracts/json.js"
 import { settingValue, type Setting } from "../contracts/agent-asks.js"
 import { AFTER_ACT, type SettingsInput, type SettingsResult } from "../contracts/thread-tools.js"
 import type { AgentAskGate } from "./agent-ask-gate.js"
@@ -10,7 +11,7 @@ export interface SettingsToolDeps {
   conversationOf(session: string): string | undefined
   tier(conversationId: string): AccessTier | undefined
   /** A host call through the table every client calls, decoded: each read and change as Settings makes it. */
-  invoke(channel: string, args: unknown[]): Promise<unknown>
+  invoke(channel: string, args: unknown[]): Promise<JsonValue>
   gate: AgentAskGate
 }
 

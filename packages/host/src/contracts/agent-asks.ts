@@ -10,7 +10,7 @@ export const SettingSchema = z.discriminatedUnion("name", [
 export type Setting = z.infer<typeof SettingSchema>
 
 /** A setting from a tool's arguments; undefined when the name or its value isn't one. */
-export function settingValue(name: string, value: unknown): Setting | undefined {
+export function settingValue(name: string, value: boolean | string | string[] | undefined): Setting | undefined {
   return SettingSchema.safeParse({ name, value }).data
 }
 
