@@ -421,6 +421,11 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession,
   const client = useWebClient()
   const [adding, setAdding] = useState(false)
   const [openedOn, setOpenedOn] = useState<string | undefined>(undefined)
+  // The Fin opened from the crew card, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
+  const [child, setChild] = useState<NativeAgent | null>(null)
+  const openChild = useCallback((agent: NativeAgent) => {
+    if (agent.child?.conversation) setChild(agent)
+  }, [])
   const seenThread = thread?.id
   useEffect(() => {
     if (!seenThread) return
@@ -450,11 +455,6 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession,
   const here: OnScreen = { thread: threadId, session: shown }
   useEffect(() => showInTabs({ thread: threadId, session: shown }), [threadId, shown])
   const tabs = useOpenTabs(here)
-  // The Fin opened from the crew card, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
-  const [child, setChild] = useState<NativeAgent | null>(null)
-  const openChild = useCallback((agent: NativeAgent) => {
-    if (agent.child?.conversation) setChild(agent)
-  }, [])
   // The address named none: the Session is the Thread's own choice, and a send to it may ask first (`openedBy`).
   useEffect(() => {
     if (sessionId === undefined && shown) noteOpenedByScreen(shown)
