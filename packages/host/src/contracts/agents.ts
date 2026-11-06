@@ -325,7 +325,7 @@ export const LimitNoticeSchema = z.object({
   until: z.number().optional(),
   seen: z.literal(true).optional(),
   /** What the limit did to its tree so far, kept as it happens so a restart loses none of it: nobody reads it until it's said. */
-  gathering: z.object({ account: z.string().optional(), moved: z.array(z.string()), stopped: z.number() }).optional(),
+  gathering: z.object({ account: z.string().optional(), apex: z.string().optional(), moved: z.array(z.string()), stopped: z.number() }).optional(),
 })
 export type LimitNotice = z.infer<typeof LimitNoticeSchema>
 
