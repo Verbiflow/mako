@@ -12,8 +12,9 @@ const DEVICES_EVERY_MS = 60_000
 
 /**
  * Settings › Devices in a browser: the desktop's own component (`Devices`), fed from the account's list this browser
- * follows. The devices and what each runs are the list's; a quiet device is the account's own word (`device-quiet`),
- * and one that lists work and isn't quiet is there, whatever its record's last sign-in says (`deviceReadings`);
+ * follows. The devices and what each runs are the list's; while the list is current, a quiet device is the account's
+ * own word (`device-quiet`) and one that lists work and isn't quiet is there, whatever its record's last sign-in says
+ * (`deviceReadings`). A list from this browser's cache, or one being followed again, leaves each record to speak;
  * a machine that joins is heard on the account's stream, so Add a machine says so as it happens. Removing one asks
  * the gateway, as any device of the account may.
  */
@@ -40,11 +41,17 @@ export function WebDevices() {
       shown = false
     }
   }, [client])
-  const { runs, heard } = useMemo(() => deviceReadings({ rows, quiet }), [rows, quiet])
+  const asOf = useAccountList((state) => state.asOf)
+  // This window's clock for how current the list is: read again with each re-read of the devices.
+  const [now, setNow] = useState(() => Date.now())
+  const readings = useMemo(() => deviceReadings({ rows, quiet, phase, asOf }, now), [rows, quiet, phase, asOf, now])
   // The devices' own records (their Mako, when each last signed in) are read again while this shows: once a minute and
   // whenever the window comes back to the front, as a Mac's Settings does. A read that fails keeps the last one.
   useEffect(() => {
-    const read = () => void client.list.refreshDevices().catch(() => undefined)
+    const read = () => {
+      setNow(Date.now())
+      void client.list.refreshDevices().catch(() => undefined)
+    }
     read()
     const timer = setInterval(read, DEVICES_EVERY_MS)
     window.addEventListener("focus", read)
@@ -73,9 +80,9 @@ export function WebDevices() {
       devices={list.length || phase === "live" || phase === "reconnecting" ? list : undefined}
       current={client.deviceId}
       currentLabel="This browser"
-      quiet={quiet}
-      heard={heard}
-      runs={runs}
+      quiet={readings.quiet}
+      heard={readings.heard}
+      runs={readings.runs}
       removing={removing}
       busy={removing !== undefined}
       failure={failure}

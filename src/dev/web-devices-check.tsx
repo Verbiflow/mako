@@ -54,6 +54,7 @@ function row(index: number, deviceId: string, title: string): ListedSession {
 const listed = search.get("devices") === "none" ? [] : search.get("devices") === "one" ? devices.slice(0, 1) : devices
 accountListStore.set({
   phase: "live",
+  asOf: Date.now(),
   rows: listed.length > 1 ? [row(1, ONLINE, "Rebuild the search index"), row(2, ONLINE, "Bisect the upload timeout"), row(3, MAC, "Fix the flaky login test")] : [],
   devices: new Map(listed.map((device) => [device.id, device])),
   // The account's own word on the machine it stopped hearing from, as its stream says it.
@@ -76,6 +77,8 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   list: {
     refreshDevices: async () => {
       refreshes += 1
+      // As the list does when it reads its devices again while it's followed: it's current as of now.
+      accountListStore.set({ asOf: Date.now() })
     },
     removeDevice: async (id: string) => {
       await new Promise((resolve) => setTimeout(resolve, 300))

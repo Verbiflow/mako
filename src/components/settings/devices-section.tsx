@@ -1,12 +1,12 @@
 import { useEffect, useMemo } from "react"
 import { XIcon } from "lucide-react"
-import type { DeviceRuns } from "@mako/host/contracts/account-devices"
 import { Devices, type MachineSheetProps } from "@/components/settings/devices"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action, IconAction } from "@/components/ui/kit"
 import { useAcp } from "@/state/acp"
 import { cloudAccount, useCloudAccount } from "@/state/cloud-account"
 import { desktop } from "@/state/desktop"
+import { deviceEvidence, placeCounts } from "@/lib/device-places"
 import { shallowEqual } from "@/state/store"
 import type { CloudAccountState, CloudDevice } from "@/lib/types"
 
@@ -35,54 +35,12 @@ export function DevicesSection() {
   )
 }
 
-/** What this window knows of a place from the conversations it holds there. */
-interface PlaceReading extends DeviceRuns {
-  /** When the account last heard from the device, as its listed conversations say while it's quiet (`quietSince`). */
-  quietSince?: number
-  /** It lists work the account doesn't call quiet: it's there now. */
-  heard: boolean
-}
-
 /**
- * What this window knows runs where, by a device's name: the conversations it holds, its own and the ones the
- * account's list named on another device, folded into their Threads, and those with an Apex its Fins; and the
- * account's own word on that device, quiet since a time or there, which the host's listing puts on each. A cloud
- * machine's are nobody's here. Compared by its numbers, so a token streaming somewhere wakes nothing.
+ * What this window knows runs where, as a few numbers a place (`placeCounts`): compared by its numbers, so a token
+ * streaming somewhere wakes nothing.
  */
-function useRunsByPlace(): ReadonlyMap<string, PlaceReading> {
-  // A few numbers a place, each under a letter before its name (`t` Threads, `f` Fins, `q` quiet since, `h` heard),
-  // so the whole reading compares by its numbers.
-  const counts = useAcp((state) => {
-    const threads = new Map<string, Set<string>>()
-    const counted: Record<string, number> = {}
-    for (const conversation of Object.values(state.conversations)) {
-      if (conversation.kind !== "live") continue
-      const place = conversation.elsewhere ?? ""
-      if (conversation.elsewhere !== undefined) {
-        if (conversation.quietSince === undefined) counted[`h${place}`] = 1
-        else counted[`q${place}`] = Math.max(counted[`q${place}`] ?? 0, conversation.quietSince)
-      }
-      if (conversation.parent) {
-        counted[`f${place}`] = (counted[`f${place}`] ?? 0) + 1
-        continue
-      }
-      const there = threads.get(place) ?? new Set<string>()
-      there.add(conversation.threadId ?? conversation.key)
-      threads.set(place, there)
-    }
-    for (const [place, there] of threads) counted[`t${place}`] = there.size
-    return counted
-  }, shallowEqual)
-  return useMemo(() => {
-    const places = new Map<string, PlaceReading>()
-    for (const [key, count] of Object.entries(counts)) {
-      const place = key.slice(1)
-      const there = places.get(place) ?? { threads: 0, fins: 0, heard: false }
-      const letter = key.charAt(0)
-      places.set(place, letter === "f" ? { ...there, fins: count } : letter === "t" ? { ...there, threads: count } : letter === "q" ? { ...there, quietSince: count } : { ...there, heard: true })
-    }
-    return places
-  }, [counts])
+function usePlaceCounts(): Readonly<Record<string, number>> {
+  return useAcp((state) => placeCounts(Object.values(state.conversations)), shallowEqual)
 }
 
 /** How this Mac's own row says whether the account's other devices reach it (`runtime`, the link they call it by). */
@@ -111,19 +69,10 @@ function AccountDevices({ state, cloud }: { state: SignedIn; cloud: string | nul
     }
   }, [connection])
   useEffect(() => () => cloudAccount.addingMachine(false), [])
-  const byPlace = useRunsByPlace()
-  const list: CloudDevice[] = devices?.list ?? [current]
-  const runs = new Map<string, DeviceRuns>()
-  const quiet = new Map<string, string>()
-  const heard = new Set<string>()
-  for (const device of list) {
-    const there = byPlace.get(device.id === current.id ? "" : device.name)
-    if (!there) continue
-    runs.set(device.id, { threads: there.threads, fins: there.fins })
-    // The account's word, as the list's rows carry it: quiet since a time, else there while it lists work.
-    if (there.quietSince !== undefined && !there.heard) quiet.set(device.id, new Date(there.quietSince).toISOString())
-    else if (there.heard) heard.add(device.id)
-  }
+  const counts = usePlaceCounts()
+  const list = useMemo<CloudDevice[]>(() => devices?.list ?? [current], [devices, current])
+  // The account's word on each device counts only while this Mac's link to the account is up (`deviceEvidence`).
+  const { runs, quiet, heard } = useMemo(() => deviceEvidence(counts, list, current.id, connection === "connected"), [counts, list, current.id, connection])
   return (
     <Devices
       form="desk"

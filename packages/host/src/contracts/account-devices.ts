@@ -65,12 +65,19 @@ export type DeviceHealth = { state: "online" } | { state: "quiet"; since: number
 
 /** A device renews its connection every few minutes while it's on, which moves `lastSeenAt`: within this, it's there. */
 const SEEN_NOW_MS = 10 * 60_000
+/**
+ * How long a list's word on its devices stays current after it last said anything: its rows are evidence of when
+ * they were heard, never of now. A browser's list says something with each event of the account's stream, and reads
+ * its devices again each minute while Settings shows, so a list that has been silent this long isn't being followed.
+ */
+export const HEARD_FRESH_MS = 5 * 60_000
+
 /** The cloud writes `lastSeenAt` as a device joins: one that never moved past that never connected. */
 const JOIN_WRITE_MS = 60_000
 
 /**
  * A device's health from what a list holds of it. `quietSince` is the account's own word (its `device-quiet`), where
- * the list hears it; `heard` says it listed Sessions or answered a call. Without either, `lastSeenAt` decides: moved
+ * the list hears it; `heard` says it lists Sessions on a list that is current (followed live, said something lately). Without either, `lastSeenAt` decides: moved
  * in the last few minutes it's there, never moved since it joined it never connected, else it's quiet since then.
  */
 export function deviceHealth(device: Pick<DeviceRecord, "createdAt" | "lastSeenAt">, facts: { current: boolean; quietSince?: string | undefined; heard?: boolean; now: number }): DeviceHealth {

@@ -1867,9 +1867,14 @@ machine of the person's own), its health (`deviceHealth`: the account's
 work the account doesn't call quiet, which is there whatever its record says;
 else `lastSeenAt`, which is only as new as the record's last read and which
 the cloud writes as a device joins, so one that never moved past that never
-connected. A browser reads `heard` from its list (`deviceReadings`) and reads
-the records again while Settings shows; a Mac reads it and the quiet word
-from the conversations its host lists),
+connected. A row is evidence of when it was heard, never of now, so the
+list's word, quiet or there, counts only while the list is current: in a
+browser, followed live and said something within `HEARD_FRESH_MS`
+(`deviceReadings`; each event and each re-read of the devices while Settings
+shows makes it so), never a list painted from the cache or one being
+followed again; on a Mac, while its own link to the account is up
+(`deviceEvidence` in `lib/device-places.ts`, over the conversations its host
+lists). Otherwise the counts stay and each record speaks for itself),
 whether its Mako is behind (`needsMakoUpdate` against `DEVICE_MAKO_NEEDED`; a
 checkout's 0.0.1 is never judged), and the lines Add a machine shows
 (`joinCommand`, `containerCommand`), which are `docs/linux-device.md`'s and

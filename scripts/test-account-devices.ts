@@ -17,6 +17,7 @@ import {
   deviceFamily,
   deviceHealth,
   deviceKindWords,
+  HEARD_FRESH_MS,
   healthWords,
   HOST_COMMAND,
   joinCommand,
@@ -24,6 +25,7 @@ import {
   runPlace,
 } from "@mako/host/contracts/account-devices"
 import { listedSummary } from "@mako/host/contracts/listed-conversations"
+import { deviceEvidence, placeCounts } from "../src/lib/device-places"
 import { selectAcpPresence } from "../src/state/acp-presence"
 import { acpStore } from "../src/state/acp-state"
 import { listLive } from "../src/state/live-recovery"
@@ -154,85 +156,241 @@ test("a Thread on a machine of the person's own is marked from the account's lis
   assert.equal(rowDetail(threads.get(uuid(102))!, true).place, "device")
 })
 
-test("a device with a live Session is there, however old its record: a live stream past the timestamp's threshold, through the browser's own list", async () => {
-  const before = accountListStore.get()
-  const held = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
-  const kept = new Map<string, string>()
-  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: (key: string) => kept.get(key) ?? null, setItem: (key: string, value: string) => kept.set(key, value), removeItem: (key: string) => kept.delete(key) } })
-  // A machine as the gateway lists one that joined 20 minutes ago: its `lastSeenAt` is its join's, never moved since.
+const DAY = 24 * 60 * 60_000
+
+/** How a test's gateway answers its reads: as it should, refusing each, or never answering one. */
+type Answering = "up" | "down" | "silent"
+
+/**
+ * A browser's own list (`AccountList`) on its own gateway class, with what the gateway would answer given here: the
+ * two reads the list makes and the account's stream it follows. The machine is as the gateway lists one that joined
+ * 20 minutes ago and never renewed: its `lastSeenAt` is its join's. `storage` is the browser's, kept between visits.
+ */
+function browserList(storage: Map<string, string>) {
   const joined = new Date(Date.now() - 20 * 60_000).toISOString()
   const machine = { id: BOX, kind: "runtime", name: "review-build-box", platform: "Linux x64", appVersion: "0.4.0", enrolledBy: "device-code", createdAt: joined, lastSeenAt: joined, enrolledFrom: null }
-  let deviceReads = 0
-  // The account's stream as the gateway sends it: each frame handed to whoever waits for the next.
+  const held = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) } })
+  const reads = { devices: 0, sessions: 0 }
+  let answering: Answering = "up"
   const frames: EventFrame[] = []
-  const waiting: Array<(frame: EventFrame) => void> = []
-  const send = (seq: number, event: Parameters<typeof Payload.of>[0]) => {
-    // SAFETY: an event frame as the list reads one: its number and its payload, nothing else of the envelope.
-    const frame = { seq, event: Payload.of(event) } as EventFrame
-    const next = waiting.shift()
-    if (next) next(frame)
-    else frames.push(frame)
-  }
+  const waiting: Array<{ resolve: (frame: EventFrame) => void; reject: (error: Error) => void }> = []
   const subscription: Subscription = {
-    next: () => new Promise((resolve) => (frames.length ? resolve(frames.shift()!) : waiting.push(resolve))),
+    next: () => new Promise((resolve, reject) => (frames.length ? resolve(frames.shift()!) : waiting.push({ resolve, reject }))),
     close: () => {},
   }
-  // The browser's own gateway, with what it would fetch answered here: the two reads the list makes, and the
-  // account's stream it follows.
   const gateway = new Gateway({ origin: "https://app.example.com", connect: async () => ({ token: "t", expiresAt: Date.now() + 300_000, deviceId: uuid(1), account: { id: "ana", name: "Ana", email: "ana@example.com", image: null, entitlements: [] } }) })
   Object.defineProperty(gateway, "rest", {
     value: async (_method: string, path: string) => {
-      if (path === "/v1/sessions") return { sessions: [], seq: 0 }
+      if (answering === "silent") return new Promise(() => {})
+      if (answering === "down") throw new Error("The gateway couldn't be reached")
+      if (path === "/v1/sessions") {
+        reads.sessions += 1
+        return { sessions: [], seq: 0 }
+      }
       if (path === "/v1/devices") {
-        deviceReads += 1
+        reads.devices += 1
         return { devices: [machine] }
       }
       throw new Error(`no ${path} in this test`)
     },
   })
   Object.defineProperty(gateway, "session", { value: { subscribe: () => subscription, close: () => {}, wake: () => {}, probe: () => {} } })
+  const before = accountListStore.get()
   const list = new AccountList(gateway, "ana")
-  const until = async (what: string, check: () => boolean) => {
-    const deadline = Date.now() + 3_000
-    while (!check()) {
-      if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`)
-      await new Promise((resolve) => setTimeout(resolve, 5))
-    }
+  return {
+    list,
+    reads,
+    /** How the gateway answers its reads from now on. */
+    answer(how: Answering) {
+      answering = how
+    },
+    /** An event of the account's stream, as the gateway sends it. */
+    send(seq: number, event: Parameters<typeof Payload.of>[0]) {
+      // SAFETY: an event frame as the list reads one: its number and its payload, nothing else of the envelope.
+      const frame = { seq, event: Payload.of(event) } as EventFrame
+      const next = waiting.shift()
+      if (next) next.resolve(frame)
+      else frames.push(frame)
+    },
+    /** The stream ends: its socket dropped. */
+    drop() {
+      waiting.shift()?.reject(new Error("The connection closed"))
+    },
+    /** A Session the machine runs now, as its report lists it. */
+    working: () => ({ ...row(7, { kind: "device", deviceId: BOX }), state: "working", createdAt: new Date().toISOString(), activityAt: new Date().toISOString(), listedAt: new Date().toISOString() }),
+    /** The machine's health as Settings › Devices reads it, from the list as it stands: the list's word, then its record. */
+    health(now = Date.now()) {
+      const state = accountListStore.get()
+      const readings = deviceReadings(state, now)
+      return deviceHealth(state.devices.get(BOX)!, { current: false, quietSince: readings.quiet.get(BOX), heard: readings.heard.has(BOX), now })
+    },
+    close() {
+      list.stop()
+      accountListStore.set(before)
+      if (held) Object.defineProperty(globalThis, "localStorage", held)
+      else Reflect.deleteProperty(globalThis, "localStorage")
+    },
   }
-  /** The machine's health as Settings › Devices reads it, from the list as it stands. */
-  const health = () => {
-    const state = accountListStore.get()
-    const device = state.devices.get(BOX)!
-    return deviceHealth(device, { current: false, quietSince: state.quiet.get(BOX), heard: deviceReadings(state).heard.has(BOX), now: Date.now() })
+}
+
+async function until(what: string, check: () => boolean) {
+  const deadline = Date.now() + 3_000
+  while (!check()) {
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`)
+    await new Promise((resolve) => setTimeout(resolve, 5))
   }
+}
+
+/** Runs `run` with this process's clock moved forward by `ms`, as the list and a window read it. */
+async function later<Result>(ms: number, run: () => Result | Promise<Result>): Promise<Result> {
+  const read = Date.now
+  Date.now = () => read() + ms
   try {
-    list.start()
+    return await run()
+  } finally {
+    Date.now = read
+  }
+}
+
+test("a device with a live Session is there, however old its record: a live stream past the timestamp's threshold, through the browser's own list", async () => {
+  const browser = browserList(new Map())
+  try {
+    browser.list.start()
     await until("the list followed", () => accountListStore.get().phase === "live" && accountListStore.get().devices.has(BOX))
-    assert.deepEqual(health(), { state: "never" }, "joined and nothing heard of it: it never connected")
+    assert.deepEqual(browser.health(), { state: "never" }, "joined and nothing heard of it: it never connected")
 
     // It runs a Session now, said on the account's stream. Its record isn't read again; the list is the evidence.
-    send(1, { type: "sessions-listed", sessions: [{ ...row(7, { kind: "device", deviceId: BOX }), state: "working", createdAt: new Date().toISOString(), activityAt: new Date().toISOString(), listedAt: new Date().toISOString() }] })
+    browser.send(1, { type: "sessions-listed", sessions: [browser.working()] })
     await until("its Session listed", () => accountListStore.get().rows.length === 1)
-    assert.equal(deviceReads, 1, "its record was read once, 20 minutes stale by its own time")
-    assert.deepEqual(deviceReadings(accountListStore.get()).runs.get(BOX), { threads: 1, fins: 0 })
-    assert.deepEqual(health(), { state: "online" }, "a device with a live Session is there")
+    assert.equal(browser.reads.devices, 1, "its record was read once, 20 minutes stale by its own time")
+    assert.deepEqual(deviceReadings(accountListStore.get(), Date.now()).runs.get(BOX), { threads: 1, fins: 0 })
+    assert.deepEqual(browser.health(), { state: "online" }, "a device with a live Session is there")
 
     // The account stops hearing from it: quiet since then, its own word, over the row it still lists.
     const since = new Date(Date.now() - 3 * 60_000).toISOString()
-    send(2, { type: "device-quiet", deviceId: BOX, since })
+    browser.send(2, { type: "device-quiet", deviceId: BOX, since })
     await until("the account's word on it", () => accountListStore.get().quiet.has(BOX))
-    assert.deepEqual(health(), { state: "quiet", since: Date.parse(since) })
+    assert.deepEqual(browser.health(), { state: "quiet", since: Date.parse(since) })
 
     // Heard from again: there, by the same row.
-    send(3, { type: "device-quiet", deviceId: BOX, since: null })
+    browser.send(3, { type: "device-quiet", deviceId: BOX, since: null })
     await until("heard from again", () => !accountListStore.get().quiet.has(BOX))
-    assert.deepEqual(health(), { state: "online" })
+    assert.deepEqual(browser.health(), { state: "online" })
   } finally {
-    list.stop()
-    accountListStore.set(before)
-    if (held) Object.defineProperty(globalThis, "localStorage", held)
-    else Reflect.deleteProperty(globalThis, "localStorage")
+    browser.close()
   }
+})
+
+test("a row is evidence of when it was heard, never of now: a list from the browser's cache a day later doesn't say a device is there", async () => {
+  const storage = new Map<string, string>()
+  const visit = browserList(storage)
+  try {
+    visit.list.start()
+    await until("the list followed", () => accountListStore.get().phase === "live" && accountListStore.get().devices.has(BOX))
+    visit.send(1, { type: "sessions-listed", sessions: [visit.working()] })
+    await until("its Session listed", () => accountListStore.get().rows.length === 1)
+    assert.deepEqual(visit.health(), { state: "online" }, "live and working: it's there")
+    // The page goes: what it heard is kept for the next visit to paint.
+    visit.list.save()
+  } finally {
+    visit.close()
+  }
+  assert.ok(storage.get("mako:web:list:ana"), "the list was kept")
+
+  // The next day the browser opens again, and paints what it kept before the gateway has answered anything.
+  await later(DAY, async () => {
+    const next = browserList(storage)
+    next.answer("silent")
+    try {
+      const state = accountListStore.get()
+      assert.equal(state.phase, "cached")
+      assert.equal(state.rows.length, 1, "yesterday's row is painted")
+      assert.deepEqual(deviceReadings(state, Date.now()).runs.get(BOX), { threads: 1, fins: 0 }, "and still counted")
+      assert.deepEqual(next.health(), { state: "never" }, "a Session heard yesterday doesn't say the machine is there now: its record speaks")
+      next.list.start()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      assert.equal(accountListStore.get().phase, "cached", "nothing has confirmed it yet")
+      assert.notEqual(next.health().state, "online")
+    } finally {
+      next.close()
+    }
+  })
+})
+
+test("rows kept while the stream is followed again say nothing of now: a failing subscription a day on doesn't say a device is there", async () => {
+  const browser = browserList(new Map())
+  try {
+    browser.list.start()
+    await until("the list followed", () => accountListStore.get().phase === "live" && accountListStore.get().devices.has(BOX))
+    browser.send(1, { type: "sessions-listed", sessions: [browser.working()] })
+    await until("its Session listed", () => accountListStore.get().rows.length === 1)
+    assert.deepEqual(browser.health(), { state: "online" })
+
+    // The stream drops and the gateway can't be reached: the list keeps what it last heard, and follows again.
+    browser.answer("down")
+    browser.drop()
+    await until("the list following again", () => accountListStore.get().phase === "reconnecting")
+    assert.equal(accountListStore.get().rows.length, 1, "the row is kept as last heard")
+    assert.notEqual(browser.health().state, "online", "a list that isn't being followed says nothing of now, at once")
+    await later(DAY, () => {
+      assert.equal(accountListStore.get().phase, "reconnecting")
+      assert.deepEqual(deviceReadings(accountListStore.get(), Date.now()).runs.get(BOX), { threads: 1, fins: 0 }, "what ran there is still counted")
+      assert.deepEqual(browser.health(), { state: "never" }, "and a day on, still nothing but its record")
+    })
+  } finally {
+    browser.close()
+  }
+})
+
+test("a live list that has gone silent stops speaking for its devices, and speaks again once it's read again", async () => {
+  const browser = browserList(new Map())
+  try {
+    browser.list.start()
+    await until("the list followed", () => accountListStore.get().phase === "live" && accountListStore.get().devices.has(BOX))
+    browser.send(1, { type: "sessions-listed", sessions: [browser.working()] })
+    await until("its Session listed", () => accountListStore.get().rows.length === 1)
+    assert.deepEqual(browser.health(), { state: "online" })
+    // A page asleep for an hour still says it's live; nothing was heard meanwhile.
+    await later(60 * 60_000, async () => {
+      assert.equal(accountListStore.get().phase, "live")
+      assert.deepEqual(browser.health(), { state: "never" }, "an hour of silence isn't evidence")
+      // Settings › Devices reads the devices again as it shows: the list is current once more, and so is its word.
+      await browser.list.refreshDevices()
+      assert.deepEqual(browser.health(), { state: "online" }, "followed and read again: the machine's live Session counts")
+    })
+    // Within the window, a quiet list that's still followed keeps its word: an idle device doesn't flicker.
+    await later(HEARD_FRESH_MS - 30_000, () => assert.deepEqual(browser.health(), { state: "online" }))
+  } finally {
+    browser.close()
+  }
+})
+
+test("a Mac's window says the account's word on a device only while its own link to the account is up", () => {
+  const devices = [{ id: uuid(1), name: "This Mac" }, { id: BOX, name: "build-box" }, { id: STUDIO, name: "Studio" }]
+  const since = Date.parse("2026-11-06T18:00:00.000Z")
+  const counts = placeCounts([
+    { kind: "live", key: "a", threadId: "t1" },
+    { kind: "live", key: "b", threadId: "t1" },
+    { kind: "live", key: "c", elsewhere: "build-box", threadId: "t2" },
+    { kind: "live", key: "d", elsewhere: "build-box", threadId: "t3", parent: { thread: "t2" } },
+    { kind: "live", key: "e", elsewhere: "Studio", threadId: "t4", quietSince: since },
+    { kind: "live", key: "f", elsewhere: "a cloud machine", threadId: "t5" },
+    { kind: "starting", key: "g" },
+  ])
+  const linked = deviceEvidence(counts, devices, uuid(1), true)
+  assert.deepEqual([...linked.runs], [[uuid(1), { threads: 1, fins: 0 }], [BOX, { threads: 1, fins: 1 }], [STUDIO, { threads: 1, fins: 0 }]], "Sessions fold into Threads, a Fin is a Fin, the cloud's are nobody's")
+  assert.deepEqual([...linked.heard], [BOX], "a machine that lists work the account doesn't call quiet is there")
+  assert.deepEqual([...linked.quiet], [[STUDIO, new Date(since).toISOString()]], "a quiet Mac is quiet since the account last heard it")
+  assert.deepEqual(deviceHealth({ createdAt: at(-600), lastSeenAt: at(-600) }, { current: false, heard: linked.heard.has(BOX), now: T }), { state: "online" })
+
+  // The Mac's link to the account is down: the conversations its host listed are from before. What ran there is
+  // still counted; nothing says a device is there or quiet but its own record.
+  const unlinked = deviceEvidence(counts, devices, uuid(1), false)
+  assert.deepEqual([...unlinked.runs], [...linked.runs])
+  assert.equal(unlinked.heard.size, 0, "no device is called there on rows from before")
+  assert.equal(unlinked.quiet.size, 0, "nor quiet")
+  assert.deepEqual(deviceHealth({ createdAt: at(-600), lastSeenAt: at(-600) }, { current: false, heard: unlinked.heard.has(BOX), now: T }), { state: "never" })
 })
 
 test("the lines a browser shows name the cloud its gateway says of itself, and every line runs as it's written", async () => {
