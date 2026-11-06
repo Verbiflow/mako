@@ -18,7 +18,8 @@ import { applyTheme } from "@/web-client/theme"
 import type { WebSession } from "@/web-client/threads"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { BUSY_CWD, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE, busyActivity, busySnapshot } from "./mock-busy-thread"
-import { apexSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
+import { apexFins, apexSnapshot, placedSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE, PLACED_ASKS, PLACED_CONVERSATION, PLACED_DEVICE, PLACED_SCENE, PLACED_SESSION, PLACED_THREAD, PLACED_TITLE, PLACED_WHERE } from "./mock-apex-thread"
+import { listedFins } from "@mako/host/contracts/children"
 import { installMockBridge, MOCK_HEADS } from "./mock-bridge"
 import { mockThreads } from "./mock-runtime-fixtures"
 import "../web-client/style.css"
@@ -119,12 +120,20 @@ getMako().onEvent((event) => {
 })
 const apex = row({ session: APEX_SESSION, thread: APEX_THREAD, threadTitle: APEX_TITLE, conversation: APEX_CONVERSATION, harness: "claude", title: APEX_TITLE, folder: APEX_CWD, createdAt: now, activityAt: now })
 
+// `?placed=loft|off`: a Fin of the Apex's placed on Loft, which lists it to the account under its Apex; `off` leaves the
+// Apex's own device quiet, the Fin's row still saying what it asks.
+if (PLACED_SCENE) apex.fins = listedFins(apexFins())
+const placedRow = row({ session: PLACED_SESSION, thread: PLACED_THREAD, conversation: PLACED_CONVERSATION, harness: "opencode", title: PLACED_TITLE, state: "waiting", waitingOn: PLACED_ASKS, waitingFor: "approval", runsOn: { kind: "device", deviceId: PLACED_DEVICE }, createdAt: now, activityAt: now })
 threadsStore.set({ composerHarness: "claude", descriptors: fixtureHarnesses })
 store.set({ messages: [], stream: null })
 accountListStore.set({
   phase: "live",
-  rows: [...busy, apex, ...native],
-  devices: new Map([[STUDIO, { id: STUDIO, kind: "desktop", name: "Studio", platform: "darwin" }]]),
+  ...(PLACED_SCENE === "off" && { quiet: new Map([[STUDIO, new Date(Date.now() - 25 * 60_000).toISOString()]]) }),
+  rows: [...busy, apex, ...(placedSnapshot() ? [placedRow] : []), ...native],
+  devices: new Map([
+    [STUDIO, { id: STUDIO, kind: "desktop", name: "Studio", platform: "darwin" }],
+    [PLACED_DEVICE, { id: PLACED_DEVICE, kind: "runtime", name: PLACED_WHERE, platform: "Linux x64 · Debian GNU/Linux 12" }],
+  ]),
 })
 
 /** What another Session's owner answers when it's opened: its record, a short exchange. */
@@ -132,6 +141,8 @@ function opened(session: WebSession): LiveSnapshot {
   const index = BUSY_SESSIONS.findIndex((entry) => entry.conversation === session.row.conversation)
   if (index >= 0) return busySnapshot(index)
   if (session.row.conversation === APEX_CONVERSATION) return apexSnapshot()
+  const placed = placedSnapshot()
+  if (placed && session.row.conversation === PLACED_CONVERSATION) return placed
   const request = { id: uuid(session.row.conversation, 4), text: session.row.title ?? "Go on", attachments: [], status: "completed" as const }
   return {
     ...session.summary,

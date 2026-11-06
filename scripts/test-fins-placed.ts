@@ -162,7 +162,7 @@ async function startsOnAnotherDevice(): Promise<void> {
   try {
     assert.deepEqual(studio.world.agents.capabilities().orchestration, { version: ORCHESTRATION_VERSION }, "a place says which placement it speaks")
     const offers = studio.world.agents.capabilities()
-    assert.ok(offers.slots.of > 0 && offers.slots.free === offers.slots.of && offers.harnesses.includes("claude"), "and its free slots and harnesses")
+    assert.ok(offers.slots.of > 0 && offers.slots.used === 0 && offers.harnesses.includes("claude"), "and its slots, none used, and harnesses")
 
     const apex = await mac.world.apex("codex", "full")
     const began = Date.now()
@@ -497,7 +497,7 @@ async function fullPlaceQueues(): Promise<void> {
     const apex = await mac.world.apex("claude")
     const first = started(await mac.world.agents.start(apex.caller, { brief: { objective: "The first job." }, harness: "codex", name: "first", place: "device:Studio", clientKey: "1", cwd: mac.world.root }))
     await until("the first Fin's turn", () => studio.world.prompts.some((prompt) => isBrief(prompt.text)))
-    assert.deepEqual(studio.world.agents.capabilities().slots, { free: 0, of: 1 }, "a device says when it's full")
+    assert.deepEqual(studio.world.agents.capabilities().slots, { used: 1, of: 1 }, "a device says when it's full")
     const full = refused(await mac.world.agents.start(apex.caller, { brief: { objective: "The second job." }, harness: "codex", name: "second", place: "device:Studio", clientKey: "2", cwd: mac.world.root }))
     assert.equal(full.refused, "budget")
     assert.match(full.why, /The 1 Fins Studio runs at once are at work\..*Pass queue: true to start it when Studio has room/, "a full device refuses with its count")

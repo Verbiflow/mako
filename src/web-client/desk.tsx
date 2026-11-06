@@ -1,3 +1,4 @@
+import { useLimitContinueNotice } from "@/components/composer/account-notice"
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { CloudIcon, LaptopIcon, LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -27,6 +28,7 @@ import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
 import { store } from "@/state/session"
 import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
+import { finRoutes } from "@/state/apex-fins"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
@@ -39,7 +41,7 @@ import type { Started } from "./start"
 import { startingWhere } from "./started"
 import { archiveWithUndo } from "./archive-thread"
 import { ThreadActions, ThreadBody, TranscriptLoading } from "./thread"
-import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, type WebThread } from "./threads"
+import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, threadById, type WebThread } from "./threads"
 import { useThread } from "./use-thread"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
@@ -88,6 +90,11 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   // The Thread on screen's `+`, which its pane answers with its own Add a Session.
   const addSession = useRef<(() => boolean) | null>(null)
   useEffect(() => followListing(), [])
+  // A Fin on another device, opened from under its Apex: its own Thread's page, through the gateway to that device.
+  useEffect(() => {
+    finRoutes.set({ elsewhere: (thread, session) => navigate({ kind: "thread", thread, ...(session && { session }) }) })
+    return () => finRoutes.set({})
+  }, [navigate])
   // A browser has no file manager to show a path in and no folder chooser: the desk's pieces don't offer either.
   useEffect(() => store.set({ machine: { fileManager: null, chooseFolder: false } }), [])
   const latest = useRef({ open, newThread, list })
@@ -115,6 +122,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
   // Of the desk's notices above its composer, the one a laptop's browser needs: a send to an old Session asks first.
   useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
+  useEffect(() => registerNotice("limit-continue", useLimitContinueNotice, -4), [])
 
   return (
     <TooltipProvider delayDuration={350}>
@@ -341,7 +349,7 @@ function DeskIdentity({ settings, onSettings }: { settings: boolean; onSettings:
  */
 function DeskThreadMenu({ thread: id }: { thread: string | undefined }) {
   const client = useWebClient()
-  const thread = useAccountList((state) => (id ? foldThreads(state).threads.find((each) => each.id === id) : undefined))
+  const thread = useAccountList((state) => (id ? threadById(foldThreads(state), (each) => each.id === id) : undefined))
   if (!thread) return null
   const reachable = !thread.quietSince && !thread.archived
   const copyLink = async () => {

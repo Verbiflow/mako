@@ -802,7 +802,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   /** The person answering what one of an Apex's Fins asks them, from the Apex's Thread on any device (`Agents.respond`). */
   methods.handle("mako:agents-next-place", async (conversation: string) => {
     const next = await conversations.agents?.nextPlace(conversation)
-    return next ? { label: next.label } : null
+    return next ? { label: next.label, harness: next.harness } : null
   })
   methods.handle("mako:agents-continue-next", async (conversation: string, id: string) => await conversations.agents?.continueNext(conversation, id) ?? false)
   methods.handle("mako:agents-respond", (conversation: string, input: AgentsRespondInput) =>

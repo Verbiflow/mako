@@ -90,7 +90,7 @@ import {
 } from "./mock-runtime-fixtures"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
 import { openAsk } from "@mako/host/contracts/children"
-import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
+import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -352,6 +352,7 @@ export function installMockBridge() {
   let apexPrewarms = 0
   let wakeApex: (() => void) | undefined
   const respondCalls: Array<AgentsRespondInput & { conversation: string }> = []
+  const continueCalls: string[] = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -452,6 +453,9 @@ export function installMockBridge() {
       acpSessions.set(snapshot.session.id, snapshot.session)
     }
     boot.live.push(...apexSummaries(), ...benchScene.summaries)
+    // The placed Fin's conversation, as Loft would answer it when opened from here.
+    const placed = placedSnapshot()
+    if (placed) liveSnapshots.set(placed.session.id, placed)
     const setChildren = (agents: NativeAgent[]) => {
       const snapshot = liveSnapshots.get(APEX_CONVERSATION)
       if (!snapshot) return
@@ -496,6 +500,7 @@ export function installMockBridge() {
       directs: () => [...directCalls],
       /** The person's answers to Fins' asks, as the Apex's host heard them. */
       responds: () => [...respondCalls],
+      continues: () => [...continueCalls],
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
        * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
@@ -3456,8 +3461,11 @@ export function installMockBridge() {
       }
       return { to: direct.to, fin: direct.fin, delivery: direct.delivery }
     },
-    agentsNextPlace: async () => ({ label: "Claude Code" }),
-    agentsContinueNext: async () => true,
+    agentsNextPlace: async () => ({ label: "Codex", harness: "codex" }),
+    agentsContinueNext: async (conversation: string) => {
+      continueCalls.push(conversation)
+      return true
+    },
     // As the host answers it: the Fin goes on, and its entry says so in the Apex's next batch.
     agentsRespond: async (conversation: string, input: AgentsRespondInput): Promise<AgentsAnswered | AgentRefused> => {
       respondCalls.push({ conversation, ...input })

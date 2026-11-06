@@ -65,7 +65,7 @@ export type ResolvedPlace = { kind: "here" } | { kind: "away"; target: PlaceTarg
 
 const CapabilitiesSchema = z.object({
   orchestration: z.object({ version: z.number() }),
-  slots: z.object({ free: z.number(), of: z.number() }),
+  slots: z.object({ used: z.number(), of: z.number() }),
   harnesses: z.array(z.string()),
 })
 const RefusedSchema = z.object({ refused: z.string(), why: z.string() })
@@ -204,13 +204,13 @@ export class AgentPlaces {
   /** A Fin was placed in `where`: it has one place less until it's asked again. */
   took(where: string): void {
     const room = this.rooms.get(where)
-    if (room) this.rooms.set(where, { ...room, capabilities: { ...room.capabilities, slots: { ...room.capabilities.slots, free: Math.max(0, room.capabilities.slots.free - 1) } } })
+    if (room) this.rooms.set(where, { ...room, capabilities: { ...room.capabilities, slots: { ...room.capabilities.slots, used: Math.min(room.capabilities.slots.of, room.capabilities.slots.used + 1) } } })
   }
 
   /** `where` refused a start as full: it has no place until it's asked again. */
   filled(where: string): void {
     const room = this.rooms.get(where)
-    if (room) this.rooms.set(where, { ...room, capabilities: { ...room.capabilities, slots: { ...room.capabilities.slots, free: 0 } } })
+    if (room) this.rooms.set(where, { ...room, capabilities: { ...room.capabilities, slots: { ...room.capabilities.slots, used: room.capabilities.slots.of } } })
   }
 
   /** A place stopped answering: nothing is known of its room until it's asked again. */
