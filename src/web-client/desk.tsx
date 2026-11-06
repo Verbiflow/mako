@@ -1,3 +1,4 @@
+import { useLimitContinueNotice } from "@/components/composer/account-notice"
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { CloudIcon, LaptopIcon, LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -115,6 +116,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
   // Of the desk's notices above its composer, the one a laptop's browser needs: a send to an old Session asks first.
   useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
+  useEffect(() => registerNotice("limit-continue", useLimitContinueNotice, -4), [])
 
   return (
     <TooltipProvider delayDuration={350}>

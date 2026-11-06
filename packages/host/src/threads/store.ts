@@ -1036,16 +1036,17 @@ export class ThreadStore {
   }
 
   /**
-   * A limit touched a Fin of tree `root`, gone on to `to` or nowhere: kept now, gathering what else it touches until
-   * `sayLimitNotice`. False when this episode was said already, seen or not.
+   * A limit touched a Fin of tree `root`, gone on to `to` or nowhere, or with `apex` the Apex itself, which stays where
+   * it is without one: kept now, gathering what else it touches until `sayLimitNotice`. False when this episode was said
+   * already, seen or not.
    */
-  gatherLimitNotice(root: string, first: LimitNotice & { gathering: NonNullable<LimitNotice["gathering"]> }, to?: string): boolean {
+  gatherLimitNotice(root: string, first: LimitNotice & { gathering: NonNullable<LimitNotice["gathering"]> }, to?: string, apex = false): boolean {
     return this.write(() => {
       const kept = this.keptLimitNotice(root, first.id)
       if (kept && !kept.gathering) return false
       const notice = kept ?? first
       const { moved, stopped, ...rest } = notice.gathering!
-      const gathering = to ? { ...rest, moved: [...moved, to], stopped } : { ...rest, moved, stopped: stopped + 1 }
+      const gathering = apex ? { ...rest, moved, stopped, ...(to && { apex: to }) } : to ? { ...rest, moved: [...moved, to], stopped } : { ...rest, moved, stopped: stopped + 1 }
       this.sql("INSERT INTO limit_notices (root_thread, id, record) VALUES (?, ?, ?) ON CONFLICT (root_thread, id) DO UPDATE SET record = excluded.record").run(root, first.id, JSON.stringify({ ...notice, gathering }))
       return true
     })

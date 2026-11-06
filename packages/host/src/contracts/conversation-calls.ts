@@ -21,6 +21,7 @@ export const conversationCalls: ReadonlySet<string> = new Set([
   "mako:agents-redirect", "mako:agents-direct", "mako:agents-respond",
   // What its agent asked the person is its host's to answer.
   "mako:agent-ask-answer",
+  "mako:agents-next-place", "mako:agents-continue-next",
 ])
 
 /** The conversation a call is aimed at, when it's one that goes to the host running it. */

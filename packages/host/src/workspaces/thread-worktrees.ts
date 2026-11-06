@@ -10,7 +10,8 @@ import type { GitDiff } from "../contracts/git-workspace-search.js"
 import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { previewDiffs, projectRepositories } from "../git/index.js"
-import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
+import { CheckoutBorrowing } from "./checkout-borrowing.js"
+import { carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { GitError, numstatEntries, PARALLEL_CHECKOUT, untrackedLines, type Git } from "@mako/git"
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
@@ -268,6 +269,8 @@ export class ThreadWorktreeService {
   private readonly working: (path: string) => Promise<string[]>
   private readonly environment: ThreadEnvironmentEnd | undefined
   private readonly setup: CheckoutSetup | undefined
+  /** What a worktree takes from its main checkout, as leases of this device's broker. */
+  readonly borrowing: CheckoutBorrowing
   private readonly conversations: CheckoutConversations | undefined
   private readonly ledger: () => MoveLedger | undefined
   private readonly workingFolders: () => Promise<string[]>
@@ -329,6 +332,7 @@ export class ThreadWorktreeService {
     this.working = working
     this.environment = environment
     this.setup = setup
+    this.borrowing = setup?.borrowing ?? CheckoutBorrowing.inMemory(git)
     this.conversations = conversations
     this.ledger = ledger
     this.workingFolders = workingFolders
@@ -1087,6 +1091,7 @@ export class ThreadWorktreeService {
       else await this.git.output(worktree.repoRoot, ["worktree", "prune"]).catch(() => {})
     }
     if (checkout !== path) await this.trashFolder(checkout)
+    await this.borrowing.forget(checkout)
     if (attached) {
       for (const worktree of together) this.threads.detachWorktree(worktree.path)
       await this.environment?.discard(attached.thread, checkout)
@@ -1460,7 +1465,7 @@ export class ThreadWorktreeService {
       await this.git.output(receipt.path, ["checkout", "-q", receipt.branch])
     const recipe = await this.setup?.recipe(receipt.path).catch(() => undefined)
     if (recipe?.carry?.length) onStep?.("carry")
-    const copied = await carryFiles(this.git, receipt.repoRoot, receipt.path, recipe?.carry ?? [])
+    const { copied } = await this.borrowing.carry(conversationId, receipt.repoRoot, receipt.path, recipe?.carry ?? [])
     const ready: Receipt = { ...receipt, state: "ready", copied, tookMs: Math.round(performance.now() - began) }
     if (spare) ready.spare = true
     await this.save(ready)
@@ -1543,7 +1548,7 @@ export class ThreadWorktreeService {
     })
     const recipe = await this.setup?.recipe(receipt.path).catch(() => undefined)
     if (recipe?.carry?.length) onStep?.("carry")
-    const copied = await carryFiles(this.git, source, receipt.path, recipe?.carry ?? [])
+    const { copied } = await this.borrowing.carry(conversationId, source, receipt.path, recipe?.carry ?? [])
     const ready: Receipt = { ...receipt, state: "ready", copied, tookMs: Math.round(performance.now() - began) }
     if (spare) ready.spare = true
     await this.save(ready)
