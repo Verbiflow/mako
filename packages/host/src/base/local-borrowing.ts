@@ -175,7 +175,7 @@ export class LocalBorrowing implements Borrowing {
    * does can fall after the lease's revoke: a revoke takes the same lock, so it comes wholly before `work` or sees
    * everything `work` did.
    */
-  whileLeased<T>(lease: string, work: () => Promise<T>): Promise<{ done: T } | { ended: "revoked" | "expired" | "released" }> {
+  whileLeased<T>(lease: string, work: () => Promise<T>): Promise<{ done: T } | { ended: LeaseEnd }> {
     return this.locked(async () => {
       const held = (await this.#load()).state.leases[lease]
       if (!held) return { ended: "released" as const }
