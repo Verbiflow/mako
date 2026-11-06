@@ -1,4 +1,4 @@
-import { memo, useState, type KeyboardEvent, type ReactNode } from "react"
+import { memo, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { ArchiveIcon, Columns2Icon, PencilLineIcon, PlusIcon, Rows2Icon, ScrollTextIcon, XIcon } from "lucide-react"
 import { ThreadMark } from "@/components/rail/thread-status"
 import { IconAction } from "@/components/ui/kit"
@@ -127,15 +127,21 @@ function ThreadTabButton({
     if (tab.kind === "draft") closeDraftTab(tab.draft)
     else closeThreadTab(tab)
   }
+  // Past what fits the strip scrolls, and the tab on screen stays in view.
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (selected) box.current?.scrollIntoView({ block: "nearest", inline: "nearest" })
+  }, [selected])
   const body = (
     <div
+      ref={box}
       data-active={selected || undefined}
       data-new={arrived || undefined}
       onAuxClick={(event) => {
         if (event.button === 1) close()
       }}
       className={cn(
-        "session-tab group @container/tab relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center overflow-hidden",
+        "session-tab group @container/tab relative flex h-7 w-56 min-w-28 max-w-56 shrink items-center overflow-hidden",
         selected
           ? "bg-raised text-foreground"
           : "bg-shell text-faint hover:bg-fill-hover hover:text-muted-foreground"

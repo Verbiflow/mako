@@ -488,7 +488,7 @@ export function recordSentPlanBuilds(text: string, plans: readonly ProposedPlan[
 }
 
 /**
- * Build the plan in a new session of the same Thread. The planning session
+ * Build the plan in a new Thread beside this one. The planning session
  * is settled first — a turn still running or waiting on its plan approval is
  * stopped — so it cannot carry on beside the build. The new tab opens with
  * the implementation request and the plan attached, not in plan mode, on the

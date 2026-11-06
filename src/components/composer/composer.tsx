@@ -1211,7 +1211,7 @@ export function Composer() {
                 ? `Queue for ${harnessTitle(routedHarness)}`
                 : `Reply — ${harnessTitle(routedHarness)} answers`
         : newSessionKey
-          ? `Start a ${harnessTitle(newHarness)} session in this Thread`
+          ? `Ask ${harnessTitle(newHarness)} to start a new thread here`
           : `Ask ${harnessTitle(newHarness)} for a change`
 
   // The composer has no line over it. What waits on the person (asks, the
