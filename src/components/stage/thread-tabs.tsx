@@ -236,10 +236,10 @@ export function ThreadTabList({
   )
 }
 
-/** The strip's `+`: a new Thread beside the one on screen. */
+/** The strip's `+`: a new Thread beside the one on screen, reachable however far the tabs scroll. */
 function AddThreadButton() {
   return (
-    <IconAction label="New thread here" keys={formatChord("mod+t")} size="xs" data-add-session="new" className="shrink-0" onClick={() => { newThreadHere() }}>
+    <IconAction label="New thread here" keys={formatChord("mod+t")} size="xs" data-add-session="new" className="sticky right-0 z-[1] shrink-0 bg-shell" onClick={() => { newThreadHere() }}>
       <PlusIcon />
     </IconAction>
   )
