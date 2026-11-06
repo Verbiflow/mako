@@ -246,6 +246,7 @@ const read = async (id: string) => {
   const words = [...kept, ...said(shot.blocks).filter((word) => !kept.includes(word))]
   return { elsewhere: shot.elsewhere ?? null, threadId: shot.threadId ?? null, requests: shot.requests.map(({ id: request, status, error }) => ({ request, status, ...error && { error } })), words }
 }
+const PermissionsSchema = z.object({ permissions: z.array(z.object({ id: z.string(), options: z.array(z.object({ optionId: z.string(), kind: z.string().optional() }).loose()) }).loose()) }).loose()
 /** What a conversation's agent asked, as its control keeps it. */
 const AsksSchema = z.object({ control: z.object({ asks: z.array(z.object({ id: z.string() }).loose()).optional() }).loose().optional() }).loose()
 const SyncSchema = z.object({ state: z.string(), stale: z.number().optional(), sending: z.number().optional(), tiers: z.array(z.object({ sessions: z.number(), inCloud: z.number() }).loose()).optional() }).loose()
@@ -333,7 +334,12 @@ for await (const line of createInterface({ input: process.stdin })) {
     const began = Date.now()
     const text = `Move this Thread to the cloud with thread_move (proof ${token}), finish the work, then reply with the single word ${word}.`
     await call("mako:live-prompt", [conversation, randomUUID(), text, []])
-    for (const deadline = Date.now() + 60_000; Date.now() < deadline && !moveAnswers.has(token); ) await new Promise((resolve) => setTimeout(resolve, 500))
+    // Below full access the harness asks before it runs Code Mode, which holds the call: the person allows that.
+    for (const deadline = Date.now() + 60_000; Date.now() < deadline && !moveAnswers.has(token); await new Promise((resolve) => setTimeout(resolve, 500))) {
+      const held = PermissionsSchema.parse(await call("mako:live-snapshot", [conversation])).permissions[0]
+      const allow = held?.options.find((option) => option.kind === "allow_once") ?? held?.options[0]
+      if (held && allow) await call("mako:live-permission", [conversation, held.id, { kind: "choice", optionId: allow.optionId }]).catch(() => undefined)
+    }
     say("MOVED", JSON.stringify({ answer: moveAnswers.get(token) ?? null, ms: Date.now() - began }))
   } else if (command === "asks") say("ASKS", JSON.stringify(AsksSchema.parse(await call("mako:live-snapshot", [rest[0]!])).control?.asks ?? []))
   else if (command === "allow") {
