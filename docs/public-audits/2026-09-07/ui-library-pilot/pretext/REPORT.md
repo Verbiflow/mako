@@ -54,10 +54,10 @@ Textarea tests cover empty strings, a newline alone, final newline, tabs, whites
 
 The current bottlenecks and relevant contracts are concrete:
 
-- `/Users/kashyab/pi-ui/src/index.css:359` uses `.contain-turn` with `content-visibility:auto` and `contain-intrinsic-size:auto 120px`. `/Users/kashyab/pi-ui/src/components/transcript/exchange.tsx:77` applies it to each exchange.
-- `/Users/kashyab/pi-ui/src/components/transcript/conversation-timeline.tsx:30` initially mounts 30 exchanges, then adds 30. Lines 41–60 and 180–226 force visibility and read geometry to preserve the anchor during prepends. Keep these safeguards until real tests prove estimates can replace specific reads.
-- `/Users/kashyab/pi-ui/src/components/transcript/markdown.tsx:20` explicitly documents whole-answer parse cost and invalid blank-line splitting. It throttles streaming parsing to 90ms and uses react-markdown, GFM and file citations. Pretext does not eliminate this parse work.
-- `/Users/kashyab/pi-ui/src/lib/reconcile.ts:18` preserves message identity. Use that identity in the geometry cache rather than hashing/repreparing the whole session per token.
+- `src/index.css:359` uses `.contain-turn` with `content-visibility:auto` and `contain-intrinsic-size:auto 120px`. `src/components/transcript/exchange.tsx:77` applies it to each exchange.
+- `src/components/transcript/conversation-timeline.tsx:30` initially mounts 30 exchanges, then adds 30. Lines 41–60 and 180–226 force visibility and read geometry to preserve the anchor during prepends. Keep these safeguards until real tests prove estimates can replace specific reads.
+- `src/components/transcript/markdown.tsx:20` explicitly documents whole-answer parse cost and invalid blank-line splitting. It throttles streaming parsing to 90ms and uses react-markdown, GFM and file citations. Pretext does not eliminate this parse work.
+- `src/lib/reconcile.ts:18` preserves message identity. Use that identity in the geometry cache rather than hashing/repreparing the whole session per token.
 
 Build a renderer-owned block geometry model alongside the existing Markdown projection. Parse through one shared remark/GFM/citation pipeline; derive both DOM and measurement descriptions from it. Compile paragraphs and styled inline runs with Pretext; compose list/quote indents, margins, code headers and exchange chrome explicitly. Measure real table/tool/attachment blocks and store their observed heights by width and expansion state. Do not flatten arbitrary Markdown to plain text and label the result exact.
 
@@ -69,7 +69,7 @@ This is an ambitious geometry layer without a second transcript renderer. It can
 
 ## Composer and rail decisions
 
-`/Users/kashyab/pi-ui/src/components/composer/composer.tsx:234` resets height and reads scrollHeight on `[draft, expanded]`, then may read the wrapper scrollHeight to reveal the caret. Prefer a `CSS.supports`-gated native `field-sizing:content` pilot with a fixed width, existing min-height and existing external scroller. Remove only the autogrow height mutation in that implementation; caret reveal remains an independent behavior. Preserve the real textarea and mention overlay. CSS sizing does not itself solve caret following.
+`src/components/composer/composer.tsx:234` resets height and reads scrollHeight on `[draft, expanded]`, then may read the wrapper scrollHeight to reveal the caret. Prefer a `CSS.supports`-gated native `field-sizing:content` pilot with a fixed width, existing min-height and existing external scroller. Remove only the autogrow height mutation in that implementation; caret reveal remains an independent behavior. Preserve the real textarea and mention overlay. CSS sizing does not itself solve caret following.
 
 `reference-overlay.tsx:13` paints matching glyphs behind the transparent textarea, including a final-line sentinel. Share exact font, padding and width metrics between the two layers. Test expanded/collapsed padding, placeholder sizing, selection, IME, middle-of-draft edits and long pastes inside the 320px wrapper. The benchmark tests size, not overlay/caret behavior. Current composer metrics are 13px/20.15px; the requested prose-style 14px/22.4px is a separate test config.
 

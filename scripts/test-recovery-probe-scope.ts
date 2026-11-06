@@ -14,11 +14,16 @@ import { fileResumeEvidence, resumeVerdict } from "@mako/host/harnesses/native-c
 const codexProcessProbe = createCodexProcessProbe()
 const run = promisify(execFile)
 
-/** `/bin/sleep` under another name. macOS kills a copy whose signature no longer matches within a second, so it's signed again here. */
+/**
+ * Node under another name, a native executable that stays up. macOS kills a copy whose signature no longer matches
+ * within a second, so it's signed again here; `/bin/sleep`'s copy was gone before its kill on CI's Mac all the same.
+ */
 async function standIn(path: string): Promise<void> {
-  await copyFile("/bin/sleep", path)
+  await copyFile(process.execPath, path)
   if (process.platform === "darwin") await run("codesign", ["--sign", "-", "--force", path])
 }
+
+const STAY = ["-e", "setInterval(() => {}, 1000)"]
 
 const root = await mkdtemp(join(tmpdir(), "mako-probe-scope-"))
 const id = "recovery-scope-fixture"
@@ -75,14 +80,14 @@ try {
     await writeFile(join(grok, "active_sessions.json"), "[]")
     const unrelated = join(root, "Grok Bot")
     await standIn(unrelated)
-    child = spawn(unrelated, ["300"], { stdio: "ignore" })
+    child = spawn(unrelated, STAY, { stdio: "ignore" })
     await once(child, "spawn")
     assert.equal((await resumeVerdict({ ...binding, provider: "grok", path: grokPath }, grokProcessProbe)).kind, "resumable", "an unrelated Grok Bot prefix match is not a CLI owner")
     child.kill("SIGTERM")
     await once(child, "exit")
     const grokExecutable = join(root, "grok-native")
     await standIn(grokExecutable)
-    child = spawn(grokExecutable, ["300"], { stdio: "ignore", detached: true })
+    child = spawn(grokExecutable, STAY, { stdio: "ignore", detached: true })
     const spawnedAt = Date.now()
     await once(child, "spawn")
     assert.equal((await resumeVerdict({ ...binding, provider: "grok", path: grokPath }, grokProcessProbe)).kind, "unavailable", "an unregistered live Grok process cannot be cleared by an empty registry")
