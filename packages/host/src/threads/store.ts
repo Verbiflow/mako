@@ -45,6 +45,7 @@ import {
   type SessionExecution,
 } from "../contracts/thread-execution.js"
 import { ThreadGroupSchema, type ThreadGroup } from "../contracts/thread-groups.js"
+import type { ThreadOrigin } from "../contracts/thread-splits.js"
 import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
@@ -198,8 +199,12 @@ export interface JournalFacts {
   harness: string
   threadPath?: string
   bindings: ReadonlyArray<{ provider: string; nativeId?: string; path?: string }>
-  /** The conversation this one forked from. `parent-thread` puts its new Session in the parent's Thread; without it the fork has its own Thread. */
-  ancestry?: { parentId: string; placement?: "parent-thread"; session?: SessionId }
+  /**
+   * The conversation this one forked from. `parent-thread` puts its new Session in the parent's Thread; without it the
+   * fork has its own Thread. `move`: it goes on from its parent rather than branching off, so it stays in the Thread
+   * even where a Thread is one conversation.
+   */
+  ancestry?: { parentId: string; placement?: "parent-thread"; move?: true; session?: SessionId }
   /** A journal started inside a Session that already exists (a `+` tab). */
   session?: SessionId
 }
@@ -1518,6 +1523,8 @@ export class ThreadStore {
       if (!added.changes) return
       for (const repository of repositories)
         this.sql("INSERT OR IGNORE INTO thread_worktree_repositories (path, checkout, repo_root, base) VALUES (?, ?, ?, ?)").run(repository.path, input.path, repository.repoRoot, repository.base)
+      // A Thread with a worktree of its own has left the place it shared, and whoever shared that place with it stays.
+      this.sql("DELETE FROM thread_places WHERE thread_id = ? OR place_thread = ?").run(thread.id, thread.id)
     })
   }
 
@@ -1582,6 +1589,21 @@ export class ThreadStore {
       const found = z.object({ thread_id: z.string(), from_thread: z.string(), session_id: z.string(), from_title: z.string().nullable() }).parse(row)
       return { thread: ThreadIdSchema.parse(found.thread_id), from: ThreadIdSchema.parse(found.from_thread), session: SessionIdSchema.parse(found.session_id), ...(found.from_title !== null && { fromTitle: found.from_title }) }
     })
+  }
+
+  /** Where a Thread came from, for its crumb: the Thread a split took it from, or the one it was forked from. */
+  threadOrigin(id: ThreadId): ThreadOrigin | undefined {
+    const thread = this.thread(id)
+    if (!thread) return undefined
+    const split = this.sql("SELECT from_thread, from_title FROM thread_splits WHERE thread_id = ?").get(thread.id)
+    if (split) {
+      const found = z.object({ from_thread: z.string(), from_title: z.string().nullable() }).parse(split)
+      return { kind: "split", from: this.thread(ThreadIdSchema.parse(found.from_thread))?.id ?? ThreadIdSchema.parse(found.from_thread), ...(found.from_title !== null && { title: found.from_title }) }
+    }
+    const first = thread.sessions[0]
+    const parent = first && this.forksOf([first]).get(first)
+    const from = parent && this.canonical(parent)
+    return from ? { kind: "fork", from: this.placeSession(from).thread } : undefined
   }
 
   /** A Thread of its own for a fork or a second conversation, in `source`'s place. */
@@ -1844,7 +1866,8 @@ export class ThreadStore {
       // A Thread that runs elsewhere (moved to the cloud) gains its new Session there, under the same owner; one that is
       // moving gains none until the move ends.
       const away = this.awayOwner(thread.sessions)
-      if (this.oneConversation) {
+      // A Thread that runs elsewhere stays whole until cloud Threads split: its machine's store is told the same Thread.
+      if (this.oneConversation && sameOwner(away, this.self)) {
         // A second conversation is a Thread of its own, beside this one.
         const session = this.mintBeside(thread.id, "new", "new", null, input.actor, away, input.session)
         return this.placeSession(session)
@@ -2018,8 +2041,8 @@ export class ThreadStore {
   }
 
   /**
-   * The Session each of `sessions` that is a fork was forked from, the rest left out: read in one query, then answered
-   * from memory until any commit (`revision`), as `executionsOf` is.
+   * The Session each of `sessions` that is a fork was forked from, in Mako or by its harness, the rest left out: read in
+   * one query, then answered from memory until any commit (`revision`), as `executionsOf` is.
    */
   forksOf(sessions: Iterable<SessionId>): Map<SessionId, SessionId> {
     this.syncVersion()
@@ -2035,7 +2058,7 @@ export class ThreadStore {
     }
     if (!unread.size) return found
     const read = new Map<string, SessionId>()
-    const rows = this.sql("SELECT id, parent_session FROM sessions WHERE origin = 'fork' AND parent_session IS NOT NULL AND id IN (SELECT value FROM json_each(?))").all(JSON.stringify([...unread]))
+    const rows = this.sql("SELECT id, parent_session FROM sessions WHERE origin IN ('fork', 'imported') AND parent_session IS NOT NULL AND id IN (SELECT value FROM json_each(?))").all(JSON.stringify([...unread]))
     for (const row of rows) {
       const parsed = ForkRowSchema.parse(row)
       read.set(parsed.id, SessionIdSchema.parse(parsed.parent_session))
@@ -2625,11 +2648,14 @@ export class ThreadStore {
   private mintDescendant(ancestry: NonNullable<JournalFacts["ancestry"]>, actor: Actor): string {
     const found = this.sql("SELECT session_id FROM journals WHERE conversation_id = ?").get(ancestry.parentId)
     const parent = found ? this.canonical(SessionRowSchema.parse(found).session_id) ?? null : null
-    if (this.oneConversation && parent) return this.mintBeside(this.placeSession(parent).thread, "fork", "fork", parent, actor, this.self, ancestry.session)
+    if (this.oneConversation && parent && !ancestry.move) return this.mintBeside(this.placeSession(parent).thread, "fork", "fork", parent, actor, this.self, ancestry.session)
     const home = parent && ancestry.placement === "parent-thread" ? this.forkHome(parent) : undefined
     if (!home) return this.mintSingleton("fork", parent, actor, ancestry.session)
     const session = this.mintSession("fork", parent, actor, this.self, ancestry.session)
     this.addMember(home, session, actor)
+    // It goes on as the Thread, and its archived source splits off at the next open: the Session first in order keeps the Thread.
+    if (this.oneConversation && ancestry.move)
+      this.sql("UPDATE memberships SET position = (SELECT min(position) - 1 FROM memberships WHERE thread_id = ?) WHERE session_id = ?").run(home, session)
     this.sql("UPDATE threads SET revision = revision + 1 WHERE id = ?").run(home)
     return session
   }

@@ -2422,7 +2422,6 @@ const inputs = {
   "mako:thread-file": () =>
     z.tuple([z.string(), z.string(), z.literal("preview").optional()]),
   "mako:thread-follow": () => z.tuple([z.string(), z.number()]),
-  "mako:thread-groups": () => z.tuple([]),
   "mako:thread-harness-check": () => z.tuple([z.string()]),
   "mako:thread-move": () =>
     z.tuple([
@@ -2442,6 +2441,7 @@ const inputs = {
   "mako:thread-move-ask-answer": () => z.tuple([z.string(), z.boolean()]),
   "mako:thread-move-asks": () => z.tuple([]),
   "mako:thread-open": () => z.tuple([z.string()]),
+  "mako:thread-origin": () => z.tuple([z.string()]),
   "mako:thread-original": () => z.tuple([z.string(), z.string()]),
   "mako:thread-owner-resolve": () => z.tuple([z.string()]),
   "mako:thread-page": () =>
@@ -2464,6 +2464,7 @@ const inputs = {
       z.object({ project: z.string().optional() }).optional(),
     ]),
   "mako:thread-run": () => z.tuple([z.string()]),
+  "mako:thread-splits": () => z.tuple([]),
   "mako:thread-stop": () =>
     z.tuple([
       z.union([
@@ -2981,12 +2982,12 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-entry", "threads"],
   ["mako:thread-file", "threads"],
   ["mako:thread-follow", "threads"],
-  ["mako:thread-groups", "threads"],
   ["mako:thread-harness-check", "conversations"],
   ["mako:thread-move", "conversations"],
   ["mako:thread-move-ask-answer", "conversations"],
   ["mako:thread-move-asks", "conversations"],
   ["mako:thread-open", "threads"],
+  ["mako:thread-origin", "threads"],
   ["mako:thread-original", "threads"],
   ["mako:thread-owner-resolve", "conversations"],
   ["mako:thread-page", "threads"],
@@ -2997,6 +2998,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-restore-plan", "conversations"],
   ["mako:thread-return", "conversations"],
   ["mako:thread-run", "conversations"],
+  ["mako:thread-splits", "threads"],
   ["mako:thread-stop", "threads"],
   ["mako:thread-titles", "threads"],
   ["mako:thread-titles-import", "threads"],

@@ -10,6 +10,14 @@ export interface ThreadSplit {
   fromTitle?: string
 }
 
+/** Where a Thread came from, as its crumb says it: the Thread it was forked from, or the one a split took it out of. */
+export interface ThreadOrigin {
+  kind: "fork" | "split"
+  from: string
+  /** `from`'s name when it was split: it may have none now. */
+  title?: string
+}
+
 /** What a window keeps of a Thread's new tab (`SessionDraft` in `src/state/thread-groups.ts`), as far as a split reads it. */
 export interface CarriedDraft {
   thread: string

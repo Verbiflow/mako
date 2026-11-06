@@ -54,11 +54,7 @@ try {
   assert.equal(adopted.thread, first.thread, "a harness fork found alone joins its parent's Thread once its row names the parent")
   assert.equal(adopter.takeExternalChanges(), undefined, "a host's own change isn't another host's")
   adopter.close()
-  for (let tries = 0; tries < 100 && events.length < 2; tries++) await delay(20)
   stop()
-  const group = events.find((event) => event.type === "thread-group" && event.change.thread === first.thread)
-  assert.ok(group?.type === "thread-group")
-  assert.deepEqual(group.change.group?.sessions.map((member) => member.id), [first.session, second.session], "the other host's windows learn the Thread's tabs")
   assert.deepEqual(development.place(ref("second", "first"), actor), { thread: first.thread, session: second.session }, "and serve the row in its new Thread")
   development.place(ref("first"), actor)
 

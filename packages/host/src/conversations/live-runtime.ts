@@ -434,7 +434,6 @@ export interface LiveAccess {
   startingSession(session: string): string
   /** Whether an existing journal is the same Session as the row being opened; see `LiveThreads.sameSession`. */
   sameSession(conversationId: string, ref: SourceRef): boolean
-  announceGroup(thread: string): void
   observe(event: LiveDriverEvent): void
   /** Updates into the conversation as its active binding's are taken in (`LiveEvents.take`). */
   takeUpdates(resident: Resident, updates: LiveBatch["updates"]): void

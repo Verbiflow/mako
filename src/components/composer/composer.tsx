@@ -95,8 +95,9 @@ import type { PromptAttachment } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { acp, acpStore, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { noteComposing } from "@/state/prewarm"
-import { openSessionDraft, sessionDraftKey, threadGroupsStore, useThreadGroups } from "@/state/thread-groups"
+import { openSessionDraft, sessionDraftKey, threadDraftsStore, useThreadDrafts } from "@/state/thread-drafts"
 import { asksBeforeSend, forgetAsking, receiveCarried, switchToNewest } from "@/state/stale-send"
+import { keepActiveTab } from "@/state/open-tabs"
 import { currentOnScreen, startInThread } from "@/state/thread-sessions"
 import { useTabDrag } from "@/state/tab-drag"
 import { readGoalLine } from "@/state/goals"
@@ -253,7 +254,7 @@ export function Composer() {
   const held = useThreads(openingHoldsSend)
   const [confirmingRoute, setConfirmingRoute] = useState(false)
   const liveDraftKey = useAcp((state) => activeAcp(state)?.draftKey)
-  const newSessionKey = useThreadGroups((state) => sessionDraftKey(openSessionDraft(state)))
+  const newSessionKey = useThreadDrafts((state) => sessionDraftKey(openSessionDraft(state)))
   const draftKey = liveDraftKey ?? viewingPath ?? newSessionKey ?? projectDraftKey(workspaceCwd)
   const draftReady = Boolean(liveDraftKey || viewingPath || newSessionKey || workspaceCwd)
   const status = useSession(
@@ -695,7 +696,7 @@ export function Composer() {
         viewingRef && viewingRef.path !== liveThreadPath
       )
       const harness = threadsStore.get().composerHarness
-      const sessionDraft = openSessionDraft(threadGroupsStore.get())
+      const sessionDraft = openSessionDraft(threadDraftsStore.get())
       // Wait out staging — a screenshot mid-copy must not race the send
       // and leave a dead [Attachment N] marker with no file behind it —
       // then put even inline-shaped images on disk, since a CLI reads
@@ -840,7 +841,7 @@ export function Composer() {
           activeAcp(acpStore.get())?.draftKey ??
           threadsStore.get().opening?.ref.path ??
           threadsStore.get().viewing?.ref.path ??
-          sessionDraftKey(openSessionDraft(threadGroupsStore.get())) ??
+          sessionDraftKey(openSessionDraft(threadDraftsStore.get())) ??
           projectDraftKey(sessionStore.get().meta?.cwd ?? "")
         // This callback still owns the submitted attachment bucket, even after navigation.
         const restored = restoreEmptyDraft(
@@ -1146,6 +1147,10 @@ export function Composer() {
     viewingRunning,
   })
   const hasContent = Boolean(draft.trim()) || attachments.items.length > 0
+  // A tab typed into stays: the next Thread looked at gets a tab of its own.
+  useEffect(() => {
+    if (hasContent) keepActiveTab()
+  }, [hasContent])
   const enterAction = composerEnterAction({
     canSteer: liveOwnsComposer && canSteer,
     steerOnEnter,
@@ -1206,7 +1211,7 @@ export function Composer() {
                 ? `Queue for ${harnessTitle(routedHarness)}`
                 : `Reply — ${harnessTitle(routedHarness)} answers`
         : newSessionKey
-          ? `Start a ${harnessTitle(newHarness)} session in this Thread`
+          ? `Ask ${harnessTitle(newHarness)} to start a new thread here`
           : `Ask ${harnessTitle(newHarness)} for a change`
 
   // The composer has no line over it. What waits on the person (asks, the

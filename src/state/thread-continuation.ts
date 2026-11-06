@@ -1,3 +1,4 @@
+import { openNextInOwnTab } from "@/state/open-tabs"
 import { settingsForSend, threadSettingsTarget, currentSettingsTarget } from "@/state/composer-settings"
 import { applyLiveSnapshot } from "@/state/live-recovery"
 import { getMako, hasBridge } from "@/lib/bridge"
@@ -149,8 +150,7 @@ export const threadContinuationActions = {
   async forkAt(
     ref: ThreadRef,
     anchor: MessageAnchor,
-    harness: string,
-    thread: "parent" | "new" = "parent"
+    harness: string
   ): Promise<boolean> {
     if (!hasBridge()) return false
     try {
@@ -164,10 +164,10 @@ export const threadContinuationActions = {
           revision: JSON.stringify([ref.revision, ref.bytes, ref.updatedAt]),
           anchor,
         },
-        thread,
       })
       const { acp } = await import("@/state/acp")
       applyLiveSnapshot(fork)
+      openNextInOwnTab()
       acp.activate(fork.session.id)
       threadsStore.set({ composerHarness: harness })
       return true

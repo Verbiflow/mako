@@ -2,25 +2,16 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { ArchiveIcon, FolderGit2Icon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
-import { ReadyBesideMark, ThreadMark, ThreadStatusEnd } from "@/components/rail/thread-status"
+import { ThreadMark, ThreadStatusEnd } from "@/components/rail/thread-status"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
-import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
+import { archivedThread, nativeThreadTarget, useThreadArchives } from "@/state/thread-lifecycle"
 import { ApexCrewLine } from "@/components/rail/fin-pips"
 import { useIsApex } from "@/state/fin-pips"
 import { ApexAsks } from "@/components/rail/apex-asks"
-import {
-  foldedThreadState,
-  foldRowHarness,
-  sameFoldedThreadState,
-  sessionStateText,
-  type FoldedThread,
-  type FoldRow,
-} from "@/lib/thread-fold"
-import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { renameThreadTitle, useThreadTitles } from "@/state/thread-titles"
-import { openFoldedThread } from "@/state/thread-sessions"
+import { openNextInOwnTab } from "@/state/open-tabs"
 import { onScreenSession } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
 import { followCheckouts } from "@/state/checkout-heads"
@@ -91,31 +82,12 @@ export function RowLine({ apex, children }: { apex: boolean; children: ReactNode
   return <span className={apex ? "relative -mr-1 flex h-5 w-auto min-w-0 items-center gap-2 pr-1" : "contents"}>{children}</span>
 }
 
-/** How many Sessions a folded row stands for. */
-export function SessionCount({ count }: { count: number }) {
-  return (
-    <span
-      aria-label={`${count} sessions`}
-      className="tabular flex h-4 min-w-4 shrink-0 items-center justify-center bg-fill-selected px-1 text-label leading-none text-muted-foreground"
-    >
-      {count}
-    </span>
-  )
-}
-
-function foldRowTarget(row: FoldRow): ThreadTarget {
-  return row.kind === "native" ? nativeThreadTarget(row.ref) : { kind: "live", id: row.key }
-}
-
 export const ThreadRow = memo(function ThreadRow({
   threadRef: ref,
-  folded,
   indent,
   showFolder,
 }: {
   threadRef: ThreadRef
-  /** Set when this row stands for a Thread with several Sessions. */
-  folded?: FoldedThread
   indent?: boolean
   showFolder?: boolean
 }) {
@@ -126,26 +98,11 @@ export const ThreadRow = memo(function ThreadRow({
   // the same promise a tab's dot makes: something is working behind this row.
   // Its status also reads the live store; this repaints the row when those facts move, so it never stays stale.
   useAcp((state) => threadLiveKey(state, ref))
-  const ownStatus = useThreads((state) => threadStatus(ref, state), sameThreadStatus)
-  const foldState = useThreads(
-    (state) => (folded ? foldedThreadState(folded.members, (member) => threadStatus(member, state)) : null),
-    sameFoldedThreadState
-  )
-  const status = foldState?.status ?? ownStatus
+  const status = useThreads((state) => threadStatus(ref, state), sameThreadStatus)
   const archived = useThreadArchives((state) => archivedThread(ref, state.keys))
   const target = nativeThreadTarget(ref)
-  const foldedLive = useAcp((state) =>
-    Boolean(
-      folded &&
-        state.activeKey &&
-        folded.members.some((member) =>
-          member.kind === "live" ? member.presence.key === state.activeKey : acpForThread(state, member.ref)?.key === state.activeKey
-        )
-    )
-  )
-  const thread = useThreadGroups((state) => folded?.thread ?? rowThread(ref, state.threadOf))
+  const thread = ref.threadId
   const named = useThreadTitles((state) => (thread ? state.byThread[thread]?.title : undefined))
-  const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
   const apex = useIsApex(thread)
   const working = status.kind === "working"
   const activeElsewhere = status.kind === "external-active"
@@ -178,41 +135,28 @@ export const ThreadRow = memo(function ThreadRow({
     )
   )
 
-  const open = () => {
-    if (folded) openFoldedThread(folded.thread, folded.members)
-    else void threads.view(ref)
-  }
+  const open = () => void threads.view(ref)
   // Opening on press, not release, lights the row a click's length sooner.
   const openedOnPress = useRef(false)
 
   // One selection at a time: while a thread is open in the viewer, IT is
   // the selection — the native tab keeps its state but not its highlight,
-  // because two lit rows read as a broken click. A folded row is lit by
-  // any of its Sessions, and by its new tab.
+  // because two lit rows read as a broken click.
   const focusedPath = selectedPath ?? livePath
-  const lit = draftOpen || (folded
-    ? selectedPath
-      ? folded.members.some((member) => member.kind === "native" && member.ref.path === selectedPath)
-      : foldedLive
-    : selectedPath
-      ? selectedPath === ref.path
-      : selectedLive || (focusedPath ? focusedPath === ref.path : active))
+  const lit = selectedPath
+    ? selectedPath === ref.path
+    : selectedLive || (focusedPath ? focusedPath === ref.path : active)
   const title = override ?? named ?? ref.title ?? "Untitled session"
-  // A folded row wears the agent of the Session its status comes from; any other row, its own.
-  const markHarness = foldState
-    ? (foldState.sessions.find((session) => session.status.kind === status.kind)?.harness ?? (folded ? foldRowHarness(folded.members[0]!) : ref.harness))
-    : (liveProvider ?? ref.harness)
+  const markHarness = liveProvider ?? ref.harness
   const menu: ThreadMenuProps = {
     target,
     title,
     archived,
     running: working || activeElsewhere || status.kind === "needs-permission",
-    // A folded row's status may be another Session's run; its stop lives in that tab.
-    controlled: !folded && (target.kind === "live" || working),
+    controlled: target.kind === "live" || working,
     path: ref.path,
     thread,
     cwd: ref.cwd,
-    archiveTargets: folded?.members.map(foldRowTarget),
     pinned: isPinned,
     onPin: () => togglePinned(ref.path),
     onRename: () => setEditing(override ?? named ?? ref.title ?? ""),
@@ -235,9 +179,12 @@ export const ThreadRow = memo(function ThreadRow({
           // Dropped on the composer instead, it becomes a chip there.
           if (thread) pressTab(event, { thread, title, shown, reference: threadToken(ref.harness, threadReferenceId(ref)) }, event.currentTarget)
         }}
-        onClick={() => {
+        onClick={(event) => {
           if (openedOnPress.current) openedOnPress.current = false
-          else open()
+          else {
+            if (event.metaKey || event.ctrlKey) openNextInOwnTab()
+            open()
+          }
         }}
         onKeyDown={(event) => {
           if (event.target !== event.currentTarget) return
@@ -246,18 +193,14 @@ export const ThreadRow = memo(function ThreadRow({
           open()
         }}
         onAuxClick={(event) => {
-          if (event.button === 1) open()
+          if (event.button !== 1) return
+          openNextInOwnTab()
+          open()
         }}
         // The row's full text, shown by the rail's own tip (`rail-tip.tsx`),
         // never a native `title`: on macOS those arrive late or not at all.
         data-tip={[
           title,
-          foldState
-            ? [
-                `${foldState.sessions.length} sessions`,
-                ...foldState.sessions.map((session) => `${harnessLabel(session.harness)} · ${sessionStateText(session.status)}`),
-              ].join("\n")
-            : undefined,
           keptSessionText(ref)?.line,
           ref.nativeArchived && !ref.archived ? `Archived in ${harnessLabel(ref.harness)}` : undefined,
           [
@@ -314,7 +257,6 @@ export const ThreadRow = memo(function ThreadRow({
           </span>
         )}
         <ThreadPurposeChip thread={thread} />
-        {folded ? <SessionCount count={folded.members.length} /> : null}
         {/* The branch itself is in the tip and on the chat's strip; the row
             spends its width on the title. */}
         {made ? (
@@ -362,7 +304,6 @@ export const ThreadRow = memo(function ThreadRow({
           <Detach path={ref.path} />
         </span>
         {checkout ? <AppMarkIcon checkout={checkout} /> : null}
-        {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
         <ThreadStatusEnd status={status} updatedAt={ref.updatedAt} />
         </RowLine>
         {apex ? <ApexCrewLine thread={thread} /> : null}

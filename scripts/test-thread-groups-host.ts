@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { ThreadPlacement } from "@mako/host/contracts/thread-identity"
+import { ThreadIdSchema, type ThreadPlacement } from "@mako/host/contracts/thread-identity"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
@@ -112,11 +112,6 @@ function placementOf(owner: LiveConversations, id: string): { thread: string; se
   return summary?.threadId && summary.sessionId ? { thread: summary.threadId, session: summary.sessionId } : undefined
 }
 
-function lastGroup(events: HostEvent[], thread: string): string[] | undefined {
-  const found = events.findLast((event) => event.type === "thread-group" && event.change.thread === thread)
-  return found?.type === "thread-group" ? found.change.group?.sessions.map((session) => session.id) : undefined
-}
-
 async function main(): Promise<void> {
   const threads = new ThreadStore(storePath, { realPath: (path) => path })
   const events: HostEvent[] = []
@@ -138,7 +133,7 @@ async function main(): Promise<void> {
     const fork = owner.fork(id, { id: forkId, provider: harness, point: { kind: "run", requestId: seed } })
     assert.equal(fork.threadId, home.thread, `${harness}: a fork joins its parent's Thread`)
     assert.notEqual(fork.sessionId, home.session, `${harness}: as its own Session`)
-    assert.deepEqual(lastGroup(events, home.thread), [home.session, fork.sessionId], `${harness}: windows hear the Thread's new tab`)
+    assert.deepEqual(threads.thread(ThreadIdSchema.parse(home.thread))?.sessions, [home.session, fork.sessionId], `${harness}: the fork is in the Thread`)
     assert.throws(() => owner.fork(id, { id: forkId, provider: harness, point: { kind: "run", requestId: seed }, thread: "new" }), /another Thread/,
       `${harness}: a fork ID is not reused for the other placement`)
     const apart = owner.fork(id, { id: randomUUID(), provider: harness, point: { kind: "run", requestId: seed }, thread: "new" })

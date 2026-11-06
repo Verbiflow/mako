@@ -1,34 +1,10 @@
 import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
-import { selectAcpPresence } from "@/state/acp-presence"
-import { acpStore } from "@/state/acp-state"
-import { threadGroupsStore } from "@/state/thread-groups"
 import { inCloud, nativeThreadTarget, threadLifecycle, type ThreadTarget } from "@/state/thread-lifecycle"
-import { currentOnScreen, currentThreadTabs, openSessionTab, type SessionTab } from "@/state/thread-sessions"
-import { threadsStore } from "@/state/threads"
+import { closeThreadTab, type SessionTab } from "@/state/thread-sessions"
 
 /**
- * What archiving a Thread with several Sessions acts on: every Session with
- * a row in the catalog or a live conversation, found in the whole list, not
- * the rows a filter or search left showing.
- */
-export function wholeThreadTargets(thread: string): ThreadTarget[] | undefined {
-  const group = threadGroupsStore.get().groups[thread]
-  if (!group) return undefined
-  const refs = threadsStore.get().threads
-  const live = selectAcpPresence(acpStore.get())
-  const targets = new Map<string, ThreadTarget>()
-  for (const member of group.sessions) {
-    const ref = refs.find((entry) => entry.sessionId === member.id)
-    const presence = ref ? undefined : live.find((entry) => entry.sessionId === member.id)
-    const target: ThreadTarget | undefined = ref ? nativeThreadTarget(ref) : presence && { kind: "live", id: presence.key }
-    if (target) targets.set(JSON.stringify(target), target)
-  }
-  return targets.size ? [...targets.values()] : undefined
-}
-
-/**
- * The last Session archive in this window, still undoable after its toast
+ * The last archive from a tab in this window, still undoable after its toast
  * is gone: from the command palette, until it's undone or another archive
  * takes its place.
  */
@@ -69,28 +45,18 @@ function tabTarget(tab: Extract<SessionTab, { kind: "session" }>): ThreadTarget 
   return tab.presence ? { kind: "live", id: tab.presence.key } : null
 }
 
-/**
- * Archive one Session of a Thread from its tab. Its run keeps going. The
- * Thread's other tabs stay, and the one on screen hands over to its
- * neighbour first.
- */
-export async function archiveSessionTab(tab: Extract<SessionTab, { kind: "session" }>, thread: string): Promise<boolean> {
+/** Archive a Thread from its tab. Its run keeps going, and the tab beside it takes the screen. */
+export async function archiveSessionTab(tab: Extract<SessionTab, { kind: "session" }>): Promise<boolean> {
   const target = tabTarget(tab)
   if (!target) return false
-  // One machine runs every Session of a cloud Thread, so the Thread is archived whole, from its row.
+  // One machine runs a cloud Thread, so it's archived whole, from its row: its cloud machine ends with it.
   if (inCloud(target)) {
-    toast("A thread in the cloud is archived whole", { description: "Archive it from its row in the sidebar: its cloud machine ends, and its history is kept." })
+    toast("A thread in the cloud is archived from its row", { description: "Archive it from the sidebar: its cloud machine ends, and its history is kept." })
     return false
   }
-  const here = currentOnScreen()
-  if (here.session === tab.id) {
-    const sessions = currentThreadTabs(thread).filter((candidate) => candidate.kind === "session")
-    const at = sessions.findIndex((candidate) => candidate.id === tab.id)
-    const neighbour = sessions[at + 1] ?? sessions[at - 1]
-    if (neighbour) openSessionTab(neighbour)
-  }
+  closeThreadTab(tab)
   if (!(await threadLifecycle.archive([target], true, false))) return false
   const running = tab.presence?.status === "running" || tab.presence?.status === "starting"
-  offerUndo("Session archived", async () => { await threadLifecycle.archive([target], false, false) }, running ? "Its run keeps going." : undefined)
+  offerUndo("Thread archived", async () => { await threadLifecycle.archive([target], false, false) }, running ? "Its run keeps going." : undefined)
   return true
 }

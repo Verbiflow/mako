@@ -3,7 +3,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { ChildStartSchema, type ChildStart } from "../contracts/agents.js"
 import type { LiveSnapshot, LiveStartOptions, LiveSummary } from "../contracts/live-conversations.js"
 import { CLOUD_FOLDER_WHERE } from "../contracts/listed-conversations.js"
-import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId } from "../contracts/thread-identity.js"
+import { SessionIdSchema, type Actor, type SessionId } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { JournalFacts, SourceRef } from "../threads/index.js"
 import { threadIdentity } from "@mako/sessions"
@@ -59,10 +59,8 @@ export class LiveThreads {
     const key = registrationKey(facts)
     if (this.registered.get(facts.conversationId) === key) return
     try {
-      const placed = threads.registerJournal(facts, actor ?? { kind: "service", name: "catalog" })
-      const first = !this.registered.has(facts.conversationId)
+      threads.registerJournal(facts, actor ?? { kind: "service", name: "catalog" })
       this.registered.set(facts.conversationId, key)
-      if (first && facts.session) this.announceGroup(placed.thread)
     } catch (error) {
       hostWarn("threads", "journal registration failed", { conversation: facts.conversationId, error: errorMessage({ error }) })
     }
@@ -185,16 +183,6 @@ export class LiveThreads {
     return away
   }
 
-  /** Tell every window what a Thread's tabs are now, after a Session joined it. */
-  announceGroup(thread: string): void {
-    const threads = this.dependencies.threads
-    if (!threads) return
-    try {
-      this.dependencies.emit({ type: "thread-group", change: { thread, group: threads.group(ThreadIdSchema.parse(thread)) ?? null } })
-    } catch (error) {
-      hostWarn("threads", "a Thread's tabs could not be announced", { thread, error: errorMessage({ error }) })
-    }
-  }
 }
 
 function registrationKey(facts: JournalFacts): string {

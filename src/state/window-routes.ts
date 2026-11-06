@@ -18,8 +18,10 @@ import { createHook, createStore } from "@/state/store"
 export interface WindowRoutes {
   /** A listed conversation, from its rail row or its tab. */
   open(presence: AcpPresence): void
-  /** The Thread on screen's new tab; false when it can't have one. */
+  /** A new Thread beside the one on screen; false when it can't have one. */
   newSession(): boolean
+  /** The last tab closed: nothing is on screen. */
+  closeThread(): void
   /** A new Thread in this project folder. */
   newThreadIn(cwd: string): void
   /** A Thread's menu, from its row's `…` or a right-click, in place of the host's: by its Thread, or its conversation. */

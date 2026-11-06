@@ -1,7 +1,5 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
-import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { ThreadRef } from "../src/lib/types"
 
 /**
@@ -21,27 +19,25 @@ const windowStorage = memoryStorage()
 Object.assign(globalThis, { localStorage: memoryStorage(), sessionStorage: windowStorage })
 
 const { threadsStore } = await import("../src/state/thread-store")
-const { threadGroupsStore } = await import("../src/state/thread-groups")
+const { openTabsStore } = await import("../src/state/open-tabs")
 const { viewer, viewerStore } = await import("../src/state/viewer")
 const { closeWorkbenchPane, engageWorkbenchPane, focusWorkbenchPane, openInPane, openTabInPane, takeComposerFocus, watchSessionPanes } = await import("../src/state/session-panes")
 const { currentThreadTabs } = await import("../src/state/thread-sessions")
 
-const thread = randomUUID()
 const sessions = [randomUUID(), randomUUID(), randomUUID()]
+const threadOf = new Map<string, string>(sessions.map((session) => [session, randomUUID()]))
+const thread = (session: string) => threadOf.get(session) ?? ""
 const [first, second, third] = sessions
 const refs: ThreadRef[] = sessions.map((sessionId, index) => ({
   harness: index === 1 ? "codex" : "claude",
   nativeId: `n${index}`,
   path: `/native/${index}.jsonl`,
-  threadId: thread,
+  threadId: thread(sessionId),
   sessionId,
 }))
-const group: ThreadGroup = {
-  id: ThreadIdSchema.parse(thread),
-  sessions: sessions.map((id) => ({ id: SessionIdSchema.parse(id), origin: "imported", started: true })),
-}
-threadGroupsStore.set({ groups: { [thread]: group }, threadOf: Object.fromEntries(sessions.map((id) => [id, thread])) })
 threadsStore.set({ threads: refs })
+// What's open: a tab beside the one on screen is what a dragged tab leaves behind.
+openTabsStore.set({ entries: sessions.map((session) => ({ kind: "thread", thread: thread(session), session })) })
 const stop = watchSessionPanes()
 
 /** The host's transcript for `session` arriving: it is now what the window views. */
@@ -57,7 +53,7 @@ function layout() {
 }
 
 function tab(session: string) {
-  const found = currentThreadTabs(thread).find((candidate) => candidate.id === session)
+  const found = currentThreadTabs(thread(session)).find((candidate) => candidate.id === session)
   assert.ok(found, `tab ${session}`)
   return found
 }
@@ -66,7 +62,7 @@ lands(first)
 
 // The tab on screen dragged right: it moves there with focus, and the pane
 // it left shows its neighbour.
-assert.equal(openInPane(tab(first), thread, "right"), true)
+assert.equal(openInPane(tab(first), thread(first), "right"), true)
 const secondary = viewerStore.get().panes[1]?.id ?? ""
 assert.notEqual(secondary, "primary")
 assert.deepEqual(layout(), [
@@ -90,7 +86,7 @@ assert.deepEqual(layout(), [
 ], "the binding goes once the active conversation catches up")
 
 // A tab clicked in the focused pane of two opens there.
-openTabInPane("primary", thread, tab(third))
+openTabInPane("primary", thread(third), tab(third))
 assert.deepEqual(layout()[0], { id: "primary", shows: third, focused: true })
 lands(third)
 assert.deepEqual(layout()[0], { id: "primary", shows: "active", focused: true })
@@ -109,8 +105,8 @@ assert.deepEqual(layout()[1], { id: secondary, shows: "active", focused: true },
 
 // With two panes, dropping on one shows the tab there. Dropping the Session
 // the other pane shows swaps them.
-viewer.bindPanes({ primary: { thread, tab: third } }, secondary)
-openInPane(tab(second), thread, "left")
+viewer.bindPanes({ primary: { thread: thread(third), tab: third } }, secondary)
+openInPane(tab(second), thread(second), "left")
 assert.deepEqual(layout(), [
   { id: "primary", shows: "active", focused: true },
   { id: secondary, shows: third, focused: false },
@@ -122,12 +118,12 @@ assert.deepEqual(layout(), [{ id: secondary, shows: third, focused: true }])
 lands(third)
 assert.deepEqual(layout(), [{ id: secondary, shows: "active", focused: true }], "one pane again, following the rail")
 
-// A lone Session can't be split beside itself.
+// With nothing else open, a Thread can't be split beside itself.
+openTabsStore.set({ entries: [] })
 const lone = randomUUID()
 const loneThread = randomUUID()
 refs.push({ harness: "grok", nativeId: "lone", path: "/native/lone.jsonl", threadId: loneThread, sessionId: lone })
 threadsStore.set({ threads: [...refs] })
-assert.equal(threadGroupsStore.get().groups[loneThread], undefined, "a Thread of one Session has no group")
 lands(lone)
 const loneTab = currentThreadTabs(loneThread).find((candidate) => candidate.id === lone)
 assert.ok(loneTab)
@@ -138,7 +134,7 @@ assert.equal(viewerStore.get().panes.length, 1)
 // beside what the chat showed before the press, and keeps focus.
 const beforePress = { thread: loneThread, tab: lone }
 lands(first)
-assert.equal(openInPane(tab(first), thread, "right", beforePress), true)
+assert.equal(openInPane(tab(first), thread(first), "right", beforePress), true)
 assert.deepEqual(layout().map(({ shows, focused }) => ({ shows, focused })), [
   { shows: lone, focused: false },
   { shows: "active", focused: true },
@@ -146,7 +142,7 @@ assert.deepEqual(layout().map(({ shows, focused }) => ({ shows, focused })), [
 
 // The split survives a reload of the window.
 assert.deepEqual(JSON.parse(windowStorage.getItem("mako:chat-panes") ?? "null"), {
-  focused: { thread, tab: first },
+  focused: { thread: thread(first), tab: first },
   resting: { split: "right", first: true, session: beforePress },
 })
 stop()

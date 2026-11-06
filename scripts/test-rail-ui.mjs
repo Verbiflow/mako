@@ -366,6 +366,64 @@ async function checkWindow() {
   await capture("rail-setup-chip-recorded.png")
   console.log("PASS: a setup Thread is marked on its row, and only it")
 
+  // 9. A Thread is one conversation: a row, and the strip holds what's open across Threads.
+  await window.loadURL(`${base}?mock`)
+  await until(`document.querySelectorAll('.thread-jump-scope [data-thread-row]').length >= 5`, "rows for the strip")
+  await evaluate(`Promise.all([import('/src/state/threads.ts'), import('/src/state/open-tabs.ts'), import('/src/lib/bridge.ts')]).then(([{threadsStore}, {openTabsStore}, {getMako}]) => {
+    openTabsStore.set({entries: [], active: undefined})
+    threadsStore.set({threads: threadsStore.get().threads.map((ref) => ({...ref, threadId: crypto.randomUUID(), sessionId: crypto.randomUUID()}))})
+    // The mock's reads say no Thread; a host's stamp theirs.
+    const mako = getMako()
+    const read = mako.openThread
+    mako.openThread = async (path) => {
+      const opened = await read(path)
+      const {threadId, sessionId} = threadsStore.get().threads.find((ref) => ref.path === path)
+      return {...opened, ref: {...opened.ref, threadId, sessionId}}
+    }
+    const from = threadsStore.get().threads[0].threadId
+    mako.threadOrigin = async (thread) => (thread === from ? null : {kind: "split", from, title: "Thread Environments and Cloud"})
+  })`)
+  const strip = () => evaluate(`[...document.querySelectorAll('.session-tab')].map((tab) => ({title: tab.textContent.trim(), on: tab.hasAttribute('data-active')}))`)
+  // The first row is the mock's live conversation, which no Thread places: it stands as the plain tab.
+  const stripRows = await evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].slice(1, 5).map((row) => row.dataset.flipKey)`)
+  const stripRow = (index) => `.thread-jump-scope [data-thread-row][data-flip-key=${JSON.stringify(stripRows[index])}]`
+  await click(stripRow(0))
+  await until(`document.querySelectorAll('.session-tab').length === 1`, "a Thread opened has a tab")
+  await click(stripRow(1))
+  await until(`document.querySelector(${JSON.stringify(stripRow(1))})?.hasAttribute('data-active')`, "the second row open")
+  assert.equal((await strip()).length, 1, "a Thread only looked at gives way to the next")
+  await until(`document.querySelector('[data-thread-crumb="split"]')?.textContent.startsWith('Split from')`, "the crumb says where it came from")
+  await evaluate(`document.querySelector('.composer-input').focus()`)
+  await page.insertText("Check the auth flow")
+  await until(`document.querySelector('.composer-input').value.length > 0`, "typed into")
+  await click(stripRow(2))
+  await until(`document.querySelectorAll('.session-tab').length === 2`, "a tab typed into stays, and the next opens beside it")
+  const cmdPoint = await evaluate(`(() => { const box = document.querySelector(${JSON.stringify(stripRow(3))}).getBoundingClientRect(); return {x: box.x + box.width / 2, y: box.y + box.height / 2} })()`)
+  await move(cmdPoint.x, cmdPoint.y)
+  await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, modifiers: 4, ...cmdPoint })
+  await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, modifiers: 4, ...cmdPoint })
+  await until(`document.querySelectorAll('.session-tab').length === 3`, "Cmd-click opens a tab of its own")
+  await click('[data-add-session="new"]')
+  await until(`document.querySelectorAll('.session-tab').length === 4 && document.body.textContent.includes('New thread beside')`, "+ starts a new Thread beside this one")
+  assert.deepEqual((await strip()).filter((tab) => tab.on).map((tab) => tab.title), ["New thread"], "and its tab is the one on screen")
+  assert.equal(await evaluate(`[...document.querySelectorAll('[aria-label$=" sessions"]')].filter((node) => /^\\d+ sessions$/.test(node.getAttribute('aria-label'))).length`), 0, "no row counts Sessions")
+  await capture("strip-new-thread.png")
+  await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'light'}))`)
+  await until(`document.documentElement.classList.contains('light')`)
+  await capture("strip-new-thread-light.png")
+  await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
+  await evaluate(`document.querySelector('[data-session-tab]').scrollIntoView({inline: 'nearest'})`)
+  await frames()
+  await click("[data-session-tab]")
+  await until(`document.querySelectorAll('.session-tab').length === 3`, "an empty new Thread goes when you leave it")
+  const closing = await strip()
+  await evaluate(`document.querySelector('.session-tab[data-active] [aria-label^="Close "]').click()`)
+  await until(`document.querySelectorAll('.session-tab').length === 2`, "× closes the tab")
+  assert.equal((await strip()).filter((tab) => tab.on).length, 1, "the tab beside it takes the screen")
+  assert.equal(await evaluate(`document.querySelectorAll(${JSON.stringify(stripRow(0))}).length`), 1, `the Thread stays in the rail: ${JSON.stringify(closing[0])}`)
+  await capture("strip-after-close.png")
+  console.log("PASS: a row is one conversation; the strip holds what's open, keeps what was typed into, and + starts a Thread beside this one")
+
   guard.done()
   console.log("Rail UI checks clean: stable folders, pointer hold, glides, scrolling, the Inbox, archived filter, reduced motion, setup Threads")
   app.exit(0)

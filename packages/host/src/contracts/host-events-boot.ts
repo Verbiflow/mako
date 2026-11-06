@@ -4,7 +4,6 @@ import type { CloudArchiveStep, ThreadArchiveSnapshot } from "./thread-lifecycle
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { MoveOutcome, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuilds } from "./plan-builds.js"
-import type { ThreadGroupChange } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { StoreFormats } from "./store-formats.js"
 import type { FileEventsService } from "./file-events-service.js"
@@ -185,7 +184,6 @@ export type HostEventBody =
   | { type: "threads"; threads: CatalogThreadRef[] }
   | { type: "thread-ref"; ref: CatalogThreadRef }
   /** A Thread gained or lost a Session; window-wide. */
-  | { type: "thread-group"; change: ThreadGroupChange }
   /** Every Thread Mako started for a job of its own, after one more was recorded; window-wide. */
   | { type: "thread-purposes"; purposes: ThreadPurpose[] }
   /** A shared store's format changed under this host: a newer Mako changed it, so this one now only reads it. Window-wide. */

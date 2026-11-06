@@ -271,3 +271,13 @@ function canonicalSessions(db: DatabaseSync): (session: string) => string {
     return current
   }
 }
+
+/**
+ * Whether a Thread is one conversation on this host (`docs/one-conversation.md`). An installed Mako's is, and `0` is the
+ * way back. A cloud machine's Threads stay whole: its Mac names them, and a device gives it Sessions to file in them. A
+ * checkout's host shares the person's store, so only an isolated one may ask: running a branch never rewrites it.
+ */
+export function wantsOneConversation(environment: { packaged: boolean; isolated: boolean }, cloudMachine: boolean, asked: string | undefined): boolean {
+  if (cloudMachine || asked === "0") return false
+  return environment.packaged || (asked === "1" && environment.isolated)
+}

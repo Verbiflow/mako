@@ -179,7 +179,7 @@ async function forkIntoWorktree(source: Source): Promise<{ fork: LiveSnapshot; l
     const { live } = source
     const last = live.requests?.findLast((request) => request.status === "completed")
     if (!last || live.session.status === "running") throw new Error("Wait for the answer to finish, then move it to its own branch.")
-    const fork = await getMako().liveFork(live.key, { id, provider: live.harness, point: { kind: "run", requestId: last.id }, thread: "parent", worktree: true, move: true })
+    const fork = await getMako().liveFork(live.key, { id, provider: live.harness, point: { kind: "run", requestId: last.id }, worktree: true, move: true })
     return { fork, leaving: { kind: "live", id: live.key } }
   }
   const { ref } = source.viewing
@@ -190,7 +190,6 @@ async function forkIntoWorktree(source: Source): Promise<{ fork: LiveSnapshot; l
     id,
     provider: ref.harness,
     point: { kind: "native", index: anchor.index, revision: JSON.stringify([ref.revision, ref.bytes, ref.updatedAt]), anchor },
-    thread: "parent",
     worktree: true,
     move: true,
   })

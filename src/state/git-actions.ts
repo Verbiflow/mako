@@ -4,8 +4,8 @@ import { acpStore, activeLiveAcp } from "@/state/acp-state"
 import { draftText, rememberDraft } from "@/state/drafts"
 import { useBranchPull } from "@/state/github"
 import { store as sessionStore, useSession } from "@/state/session"
-import { openSessionDraft, sessionDraftKey, threadGroupsStore } from "@/state/thread-groups"
-import { newSessionInThread } from "@/state/thread-sessions"
+import { openSessionDraft, sessionDraftKey, threadDraftsStore } from "@/state/thread-drafts"
+import { newThreadHere } from "@/state/thread-sessions"
 import { useWorktrees, useWorktreeSummaries, worktreeAt } from "@/state/worktrees"
 import { gitActionPrompt, gitCommands, gitRepositoryName, pullSetupReason, type GitAction, type GitCommand } from "@mako/host/contracts/git-actions"
 
@@ -43,9 +43,9 @@ export type GitHandoff = "here" | "new"
 export async function handGitAction(action: GitAction, where: GitHandoff): Promise<void> {
   const prompt = gitActionPrompt(forShownRepository(action))
   if (where === "new") {
-    if (!newSessionInThread()) throw new Error("This conversation isn't in a Thread, so there's no Thread to add a session to.")
-    const key = sessionDraftKey(openSessionDraft(threadGroupsStore.get()))
-    if (!key) throw new Error("The new session's tab did not open.")
+    if (!newThreadHere()) throw new Error("This conversation isn't in a Thread, so there's nothing to start a new thread beside.")
+    const key = sessionDraftKey(openSessionDraft(threadDraftsStore.get()))
+    if (!key) throw new Error("The new thread's tab did not open.")
     const current = draftText(key)
     if (!current.includes(prompt)) rememberDraft(key, current.trim() ? `${current}\n\n${prompt}` : prompt)
     window.dispatchEvent(new CustomEvent("mako:focus-composer"))

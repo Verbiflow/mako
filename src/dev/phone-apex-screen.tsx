@@ -11,7 +11,7 @@ export function PhoneApexScreen({ opened, inbox = false }: { opened?: string; in
       {open === "inbox" ? (
         <InboxScreen onBack={() => setOpen(undefined)} onOpen={(thread) => setOpen(thread.id)} />
       ) : open ? (
-        <ThreadScreen threadId={open} onBack={() => setOpen(undefined)} onSession={() => undefined} wide={false} />
+        <ThreadScreen threadId={open} onBack={() => setOpen(undefined)} onSession={() => undefined} onThread={() => undefined} onStarted={() => undefined} wide={false} />
       ) : (
         <ThreadList onOpen={(thread) => setOpen(thread.id)} onNew={() => undefined} onSettings={() => undefined} onInbox={() => setOpen("inbox")} wide={false} />
       )}

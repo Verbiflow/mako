@@ -68,16 +68,9 @@ export interface NotificationItem {
   seen: boolean
   /** The Mako Thread the subject's Session belongs to; its Sessions count once. */
   thread?: string
-  /** The Thread's other Sessions still working when this landed, by agent name. */
-  alongside?: readonly string[]
 }
 
 /** A subject's place in a Mako Thread, read when its outcome lands. */
-export interface NotificationSiblings {
-  thread: string
-  working: readonly string[]
-}
-
 export interface NotificationsState {
   /** Newest first, bounded. */
   items: NotificationItem[]
@@ -199,8 +192,8 @@ export interface NotificationEnvironment {
   open(subject: NotificationSubject): void
   /** Previews and side windows observe; only the desk announces. */
   announces(): boolean
-  /** The subject's Mako Thread and its other Sessions still working. */
-  siblings?(target: NotificationTarget): NotificationSiblings | undefined
+  /** The subject's Mako Thread. */
+  threadOf?(target: NotificationTarget): string | undefined
 }
 
 let environment: NotificationEnvironment | null = null
@@ -238,7 +231,7 @@ export function noteOutcome(outcome: AttentionOutcome): NotificationItem | null 
     prefs,
   })
   const body = attentionLine(outcome.kind, outcome.detail ? excerpt(outcome.detail) : undefined)
-  const siblings = env?.siblings?.(outcome.subject.target)
+  const thread = env?.threadOf?.(outcome.subject.target)
   const item: NotificationItem = {
     id,
     kind: outcome.kind,
@@ -247,8 +240,7 @@ export function noteOutcome(outcome: AttentionOutcome): NotificationItem | null 
     at: env?.now() ?? Date.now(),
     seen: decision.seen,
   }
-  if (siblings) item.thread = siblings.thread
-  if (siblings?.working.length) item.alongside = siblings.working
+  if (thread) item.thread = thread
   // One item per thread and kind on the unseen list; an older unseen item of
   // the same kind is superseded, not stacked.
   const kept = state.items.filter(
@@ -433,7 +425,7 @@ type AcpReader = () => { activeKey: string | null; conversations: Record<string,
 let acpStateReader: AcpReader | null = null
 let threadsReader: (() => string | null) | null = null
 let tabsReader: (() => string | null) | null = null
-let siblingsReader: ((target: NotificationTarget) => NotificationSiblings | undefined) | null = null
+let threadReader: ((target: NotificationTarget) => string | undefined) | null = null
 
 /**
  * Tell the centre how to read what is on screen. Kept as readers rather than
@@ -445,16 +437,16 @@ export function bindStageReaders(readers: {
   acp: AcpReader
   viewingPath: () => string | null
   activeTab: () => string | null
-  siblings?: (target: NotificationTarget) => NotificationSiblings | undefined
+  threadOf?: (target: NotificationTarget) => string | undefined
 }): void {
   acpStateReader = readers.acp
   threadsReader = readers.viewingPath
   tabsReader = readers.activeTab
-  siblingsReader = readers.siblings ?? null
+  threadReader = readers.threadOf ?? null
 }
 
 function headline(item: NotificationItem): string {
-  return notificationHeadline(item.kind, item.subject.agent, item.alongside)
+  return notificationHeadline(item.kind, item.subject.agent)
 }
 
 /**
@@ -518,7 +510,7 @@ export function deskNotificationEnvironment(options: {
     },
     open: options.open,
     announces: () => options.announces,
-    siblings: (target) => siblingsReader?.(target),
+    threadOf: (target) => threadReader?.(target),
   }
 }
 

@@ -22,7 +22,7 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { reconcileRoster } from "../src/lib/native-roster.ts"
-import { presenceThreadStatus, foldedThreadState, sessionStateText, type FoldRow } from "../src/lib/thread-fold.ts"
+import { presenceThreadStatus } from "../src/lib/presence-status.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { grokBackground } from "@mako/host/harnesses/grok/background"
 import { devinBackground } from "@mako/host/harnesses/devin/background"
@@ -177,17 +177,6 @@ function replay(capture: Captured, stopAt?: (message: SDKMessage, index: number)
   const presence = { key: "k", harness: "claude", cwd: "/", createdAt: 1, status: "background" as const, background: 2 }
   const status = presenceThreadStatus(presence)
   assert.deepEqual(status, { kind: "background", count: 2 })
-  assert.equal(sessionStateText(status), "waiting on 2 background tasks")
-  const folded = foldedThreadState(
-    [{ kind: "live", key: "a", presence: { ...presence, key: "a" } }, { kind: "live", key: "b", presence: { ...presence, key: "b", status: "running" } }] satisfies FoldRow[],
-    () => ({ kind: "idle" })
-  )
-  assert.equal(folded.status.kind, "working", "a running turn outranks waiting work in a folded row")
-  const waiting = foldedThreadState(
-    [{ kind: "live", key: "a", presence: { ...presence, key: "a" } }, { kind: "live", key: "b", presence: { ...presence, key: "b", status: "ready" } }] satisfies FoldRow[],
-    () => ({ kind: "idle" })
-  )
-  assert.equal(waiting.status.kind, "background", "waiting work outranks an idle session")
 }
 
 {

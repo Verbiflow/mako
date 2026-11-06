@@ -77,7 +77,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
       setOpen(false)
       void bringBack(live.key)
     }
-    const why = live.running ? "Threads come back between turns: wait for this turn to end, or stop it." : "What it did in the cloud comes into its worktree here, and every session picks up on this Mac. The cloud machine ends."
+    const why = live.running ? "Threads come back between turns: wait for this turn to end, or stop it." : "What it did in the cloud comes into its worktree here, and it picks up on this Mac. The cloud machine ends."
     return (
       <Popover
         open={open}
@@ -170,12 +170,12 @@ function ThreadRunPlace({ thread }: { thread: string }) {
           title={handOff ? "Hand off to the cloud" : "Move to the cloud"}
           detail={blocked ??
             (!inWorktree
-              ? "It goes onto its own branch first, taking only its own changes; the project folder keeps yours. Then its worktree and every session go to a cloud machine, at the same folder. Your Mac can close."
+              ? "It goes onto its own branch first, taking only its own changes; the project folder keeps yours. Then its worktree and conversation go to a cloud machine, at the same folder. Your Mac can close."
               : live.running
-              ? "Its turn pauses, and its worktree and every session go to a cloud machine at the same folder. The turn goes on there from where it paused. Your Mac can close."
+              ? "Its turn pauses, and its worktree and conversation go to a cloud machine at the same folder. The turn goes on there from where it paused. Your Mac can close."
               : handOff
-              ? "What it left running in the background stops, and its worktree and every session go to a cloud machine at the same folder, where it's told what stopped. Your Mac can close."
-              : "Its worktree and every session go to a cloud machine, at the same folder, and pick up where they left off. Your Mac can close.")}
+              ? "What it left running in the background stops, and its worktree and conversation go to a cloud machine at the same folder, where it's told what stopped. Your Mac can close."
+              : "Its worktree and conversation go to a cloud machine, at the same folder, and it picks up where it left off. Your Mac can close.")}
           disabled={blocked !== undefined}
           onClick={behind.length ? undefined : () => start(false)}
         />

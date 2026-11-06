@@ -1,33 +1,27 @@
-import { memo, useMemo, useState, type KeyboardEvent, type ReactNode } from "react"
+import { memo, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { ArchiveIcon, Columns2Icon, PencilLineIcon, PlusIcon, Rows2Icon, ScrollTextIcon, XIcon } from "lucide-react"
 import { ThreadMark } from "@/components/rail/thread-status"
 import { IconAction } from "@/components/ui/kit"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, MenuItem, MenuSeparator } from "@/components/ui/menu"
 import { formatChord } from "@/extend/commands"
-import { presenceThreadStatus } from "@/lib/thread-fold"
+import { presenceThreadStatus } from "@/lib/presence-status"
 import type { ThreadRef } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import {
   closeDraftTab,
-  newSessionInThread,
+  closeThreadTab,
+  newThreadHere,
   onScreenTab,
-  sessionPromptedAt,
-  sessionTabFacts,
   sessionTabTitle,
-  useMinute,
+  tabThread,
   type OnScreen,
   type SessionTab,
 } from "@/state/thread-sessions"
-import { lastWorked } from "@mako/host/contracts/session-choice"
-import { formatRelative } from "@/lib/format"
-import { harnessLabel } from "@/lib/harness-label"
-import { sessionDetail } from "@/lib/session-words"
-import { useAcp } from "@/state/acp"
-import { useThreadGroups } from "@/state/thread-groups"
 import { archiveSessionTab } from "@/state/session-archive"
 import { openInPane, openTabInPane } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
 import { sameThreadStatus, threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
+import { useThreadTitles } from "@/state/thread-titles"
 import { AGENT_TAB_ID, viewer } from "@/state/viewer"
 import { useWindowRoutes } from "@/state/window-routes"
 
@@ -55,19 +49,6 @@ function TabMark({ tab, harness, onScreen }: { tab: SessionTab; harness: string;
   return <ThreadMark status={shown ?? IDLE} harness={harness} lit={onScreen} cut={onScreen ? "var(--raised)" : "var(--shell)"} />
 }
 
-/**
- * When the person last worked in a Session, at the tab's end ("20d"), and its standing in the tab's tooltip, with the
- * tab it was forked from by name (`titles`, each of the strip's Sessions by ID): which tab is the Session left behind,
- * without opening each.
- */
-function useTabWorked(tab: SessionTab, thread: string | undefined, titles: ReadonlyMap<string, string>): { at: number; detail: string } | undefined {
-  const group = useThreadGroups((state) => (thread ? state.groups[thread] : undefined))
-  const prompted = useAcp((state) => (tab.kind === "session" ? sessionPromptedAt(state, tab.id) : undefined))
-  const now = useMinute()
-  if (tab.kind !== "session") return undefined
-  const facts = sessionTabFacts(tab, group, prompted)
-  return { at: lastWorked(facts), detail: sessionDetail(facts, now, harnessLabel(facts.harness), facts.forkOf === undefined ? undefined : titles.get(facts.forkOf)) }
-}
 function moveFocus(event: KeyboardEvent<HTMLButtonElement>) {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
   event.preventDefault()
@@ -84,15 +65,11 @@ function moveFocus(event: KeyboardEvent<HTMLButtonElement>) {
   next?.click()
 }
 
-/**
- * A Session tab's own actions. They act on this Session alone; the rail
- * row's menu acts on the whole Thread.
- */
-function SessionTabMenu({ tab, thread, title, alone, children }: {
+/** A Thread tab's own actions. */
+function ThreadTabMenu({ tab, thread, title, children }: {
   tab: Extract<SessionTab, { kind: "session" }>
   thread: string
   title: string
-  alone: boolean
   children: ReactNode
 }) {
   return (
@@ -110,60 +87,61 @@ function SessionTabMenu({ tab, thread, title, alone, children }: {
           <Rows2Icon className="size-3.5" />Open below
         </MenuItem>
         <MenuSeparator />
-        <MenuItem disabled={alone} onSelect={() => { void archiveSessionTab(tab, thread) }}>
-          <ArchiveIcon className="size-3.5" />Archive session
+        <MenuItem data-session-action="close-tab" onSelect={() => { closeThreadTab(tab) }}>
+          <XIcon className="size-3.5" />Close tab
+        </MenuItem>
+        <MenuItem onSelect={() => { void archiveSessionTab(tab) }}>
+          <ArchiveIcon className="size-3.5" />Archive thread
         </MenuItem>
       </ContextMenuContent>
     </ContextMenu>
   )
 }
 
-function SessionTabButton({
+function ThreadTabButton({
   tab,
-  thread,
   paneId,
   selected,
   stripSince,
-  closable,
   menu,
-  titles,
 }: {
   tab: SessionTab
-  thread?: string
   paneId: string
   selected: boolean
   stripSince: number
-  /** Each of the strip's Sessions' titles by ID: a fork's tooltip names its parent. */
-  titles: ReadonlyMap<string, string>
-  /** False while this is the Thread's only Session: archiving it is archiving the Thread, from its row. */
-  closable: boolean
   /** Its own menu: opening it in another pane, its transcript, archiving it. */
   menu: boolean
 }) {
   const [arrived] = useState(() => performance.now() - stripSince > ARRIVAL_MS)
   const composerHarness = useThreads((state) => state.composerHarness)
-  const title = tab.kind === "draft" && !selected ? "Draft" : sessionTabTitle(tab)
-  const worked = useTabWorked(tab, thread, titles)
+  const thread = tabThread(tab)
+  // A Thread's name comes from the host a beat after its tab.
+  useThreadTitles((state) => (thread ? state.byThread[thread]?.title : undefined))
+  const title = sessionTabTitle(tab)
   const harness =
     tab.kind === "draft"
       ? selected ? composerHarness : tab.draft.harness
       : (tab.presence?.harness ?? tab.ref?.harness)
   const open = () => openTabInPane(paneId, thread, tab)
-  const close = tab.kind === "draft" || closable
-    ? () => {
-        if (tab.kind === "draft") closeDraftTab(tab.draft)
-        else if (thread) void archiveSessionTab(tab, thread)
-      }
-    : undefined
+  const close = () => {
+    if (tab.kind === "draft") closeDraftTab(tab.draft)
+    else closeThreadTab(tab)
+  }
+  // Past what fits the strip scrolls, and the tab on screen stays in view.
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (selected) box.current?.scrollIntoView({ block: "nearest", inline: "nearest" })
+  }, [selected])
   const body = (
     <div
+      ref={box}
       data-active={selected || undefined}
       data-new={arrived || undefined}
       onAuxClick={(event) => {
-        if (event.button === 1) close?.()
+        if (event.button === 1) close()
       }}
       className={cn(
-        "session-tab group @container/tab relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center overflow-hidden",
+        "session-tab group @container/tab relative flex h-7 w-56 min-w-28 max-w-56 shrink items-center overflow-hidden",
         selected
           ? "bg-raised text-foreground"
           : "bg-shell text-faint hover:bg-fill-hover hover:text-muted-foreground"
@@ -176,7 +154,7 @@ function SessionTabButton({
         tabIndex={selected ? 0 : -1}
         data-tab-id={selected ? AGENT_TAB_ID : undefined}
         data-session-tab={tab.id}
-        title={tab.kind === "draft" ? `New session in this Thread${selected ? "" : ", not sent yet"}` : worked ? `${title}\n${worked.detail}` : title}
+        title={tab.kind === "draft" ? `New thread here${selected ? "" : ", not sent yet"}` : title}
         onPointerDown={(event) => {
           if (thread && menu) pressTab(event, { tab, thread, title }, event.currentTarget)
         }}
@@ -197,78 +175,71 @@ function SessionTabButton({
         <span className="truncate">{title}</span>
       </button>
       <span className="flex shrink-0 items-center gap-0.5 pr-1">
-        {worked ? <span className="hidden px-0.5 text-label font-normal tabular-nums text-faint @[10rem]/tab:inline" data-session-age>{formatRelative(worked.at)}</span> : null}
-        {close ? (
-          <button
-            type="button"
-            aria-label={tab.kind === "draft" ? "Close new tab" : `Archive ${title}`}
-            title={tab.kind === "draft" ? "Close. Unsent text is kept for the next new tab." : "Archive this session. Restore it from Archived."}
-            onClick={close}
-            className={cn(
-              "pressable -mr-0.5 flex size-5 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground",
-              selected
-                ? "opacity-80"
-                : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-80 group-focus-within:pointer-events-auto group-focus-within:opacity-80"
-            )}
-          >
-            <XIcon className="size-3" />
-          </button>
-        ) : null}
+        <button
+          type="button"
+          aria-label={tab.kind === "draft" ? "Close new thread" : `Close ${title}`}
+          title={tab.kind === "draft" ? "Close. Unsent text is kept for the next new tab." : "Close this tab. The thread stays in the sidebar."}
+          onClick={close}
+          className={cn(
+            "pressable -mr-0.5 flex size-5 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground",
+            selected
+              ? "opacity-80"
+              : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-80 group-focus-within:pointer-events-auto group-focus-within:opacity-80"
+          )}
+        >
+          <XIcon className="size-3" />
+        </button>
       </span>
     </div>
   )
   return tab.kind === "session" && thread && menu ? (
-    <SessionTabMenu tab={tab} thread={thread} title={title} alone={!closable}>{body}</SessionTabMenu>
+    <ThreadTabMenu tab={tab} thread={thread} title={title}>{body}</ThreadTabMenu>
   ) : body
 }
 
 /**
- * The agent slot of the workbench strip for a Thread: one tab per Session,
- * the new tab last, then `+`. A tab that joins while you watch slides in
- * from the `+` side. Mount one list per Thread, so switching Threads paints
- * the strip still.
+ * The agent slot of the workbench strip: what's open across Threads, then `+`. A tab that joins while you watch slides
+ * in from the `+` side.
  */
-export function SessionTabList({
+export function ThreadTabList({
   tabs,
   here,
   paneId,
   agentActive,
+  add = true,
 }: {
   tabs: readonly SessionTab[]
   here: OnScreen
   paneId: string
   agentActive: boolean
+  /** A pane without focus shows its one conversation, with no `+` of its own. */
+  add?: boolean
 }) {
   const [since] = useState(() => performance.now())
   const current = onScreenTab(here)
-  // A window that routes has no host of its own to archive a Session through, nor panes to open one in.
+  // A window that routes has no host of its own to archive through, nor panes to open one in.
   const routed = useWindowRoutes((state) => state.routes !== null)
-  const closable = !routed && tabs.filter((tab) => tab.kind === "session").length > 1
-  const titles = useMemo(() => new Map(tabs.flatMap((tab) => (tab.kind === "session" ? [[tab.id, sessionTabTitle(tab)] as const] : []))), [tabs])
   return (
     <>
       {tabs.map((tab) => (
-        <SessionTabButton
+        <ThreadTabButton
           key={tab.id}
           tab={tab}
-          thread={here.thread}
           paneId={paneId}
           selected={agentActive && tab.id === current}
           stripSince={since}
-          closable={closable}
           menu={!routed}
-          titles={titles}
         />
       ))}
-      <AddSessionButton />
+      {add ? <AddThreadButton /> : null}
     </>
   )
 }
 
-/** The strip's `+`: a new Session in this Thread. */
-function AddSessionButton() {
+/** The strip's `+`: a new Thread beside the one on screen, reachable however far the tabs scroll. */
+function AddThreadButton() {
   return (
-    <IconAction label="New session" keys={formatChord("mod+t")} size="xs" data-add-session="new" className="shrink-0" onClick={() => { newSessionInThread() }}>
+    <IconAction label="New thread here" keys={formatChord("mod+t")} size="xs" data-add-session="new" className="sticky right-0 z-[1] shrink-0 bg-shell" onClick={() => { newThreadHere() }}>
       <PlusIcon />
     </IconAction>
   )

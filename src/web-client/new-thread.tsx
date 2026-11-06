@@ -199,7 +199,7 @@ export function StartForm({ onStarted, adding, startIn, desk = false }: { onStar
     try {
       let started: Started
       if (adding) {
-        setStatus(`Starting ${webHarnessLabel(harness)} in this Thread…`)
+        setStatus(`Starting ${webHarnessLabel(harness)} beside this Thread…`)
         started = await addSession(client.gateway, client.deviceId, adding.owner, { thread: adding.thread, folder: adding.folder, harness, model, mode: access?.mode, message })
       } else if (place.kind === "mac") {
         setStatus(`Starting on ${place.name}…`)

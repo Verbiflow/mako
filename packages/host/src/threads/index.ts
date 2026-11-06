@@ -15,6 +15,7 @@ import { ThreadArchives } from "./archives.js"
 import { ThreadLifecycle, followNativeArchives, type LiveThreads, type NativeQueue, type TargetIdentity } from "./lifecycle.js"
 import { declareThreadLifecycleMethods } from "./lifecycle-methods.js"
 import { declareThreadGroupMethods } from "./group-methods.js"
+import { wantsOneConversation } from "./thread-split.js"
 import { declareThreadTitleMethods } from "./title-methods.js"
 import { declareChatFolderMethods } from "./chat-folder-methods.js"
 import { Lineage } from "./lineage.js"
@@ -73,6 +74,8 @@ export interface Threads {
 }
 
 export interface ThreadsDeps {
+  /** This host is a cloud machine's. */
+  cloudMachine: boolean
   /** Its data root, and `appData`, where a profile's Thread store is shared from. */
   environment: Pick<HostEnvironment, "dataRoot" | "appData" | "appName" | "development" | "userRoot"> & DaemonApp
   /** A fixture desk's Threads read the user's stores and write none. */
@@ -87,15 +90,14 @@ export interface ThreadsDeps {
   subscribed: JobDemand
 }
 
-export function openThreads({ environment, readOnly, ledger, harnesses, readFile, emit, jobs, subscribed }: ThreadsDeps): Threads {
+export function openThreads({ environment, cloudMachine, readOnly, ledger, harnesses, readFile, emit, jobs, subscribed }: ThreadsDeps): Threads {
   const { dataRoot, appData, userRoot } = environment
   const catalogCode = loadedCatalogCode()
   // How this build names itself in a store whose format it raises, so an older build can say which Mako changed it.
   const writer = storeWriter(environment)
   const memory = openSessionMemory(userRoot, ledger, readOnly, jobs, writer)
   const threadsPath = threadStorePath(userRoot)
-  // One conversation per Thread waits on the windows that draw it; until then only an isolated host may ask for it.
-  const oneConversation = process.env.MAKO_ONE_CONVERSATION === "1" && environment.isolated
+  const oneConversation = wantsOneConversation(environment, cloudMachine, process.env.MAKO_ONE_CONVERSATION)
   const { store, problem } = openThreadStore(threadsPath, { readOnly, writer, oneConversation })
   if (problem) hostWarn("threads", "Thread store problem", { problem })
   const formats = () => storeFormats({
@@ -171,7 +173,7 @@ function openSessionMemory(userRoot: string, ledger: SessionMemoryHost, readOnly
 
 export interface ThreadMethodsDeps {
   threads: Threads
-  live: LiveThreads & { announceGroup(thread: string): void }
+  live: LiveThreads
   native: NativeQueue
   /** Ends a headless run on a native session, given the token its stop control was shown. */
   nativeStops: { token(path: string): string | null; abort(path: string, token: string): void }
@@ -242,7 +244,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   })
   declareThreadLifecycleMethods(methods, lifecycle, archives, emit)
   followNativeArchives(lifecycle, (subscriber) => catalog.subscribe(subscriber), emit)
-  declareThreadGroupMethods(methods, store, (thread) => live.announceGroup(thread), threads.storeProblem, (message) => emit({ type: "notice", level: "error", message }))
+  declareThreadGroupMethods(methods, store, threads.storeProblem, (message) => emit({ type: "notice", level: "error", message }))
   declareThreadTitleMethods(methods, { store, emit })
   declareChatFolderMethods(methods)
   return lifecycle

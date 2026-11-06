@@ -335,7 +335,7 @@ export function ComposePull({
             </Action>
             {newSession ? (
               <Action tone="outline" size="sm" disabled={!branch} onClick={() => hand("new")}>
-                In a new session
+                In a new thread
               </Action>
             ) : null}
             {draftToggle}

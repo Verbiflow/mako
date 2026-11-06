@@ -13,7 +13,6 @@ import { loadEarlierLive } from "@/state/live-recovery"
 import { continueTurn, turnUnderWay } from "@/state/acp-queue"
 import { skipWorktree } from "@/state/acp-start"
 import { WorktreeOpening } from "@/components/viewer/worktree-opening"
-import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
 import { BackgroundWorkLine } from "./background-work-line"
 import { CrewCard } from "./crew-card"
@@ -210,7 +209,7 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
     const current = scopedAcp(state, scope)
     return { threadId: current?.threadId, sessionId: current?.sessionId, cwd: scopedLiveAcp(state, scope)?.session.cwd ?? current?.cwd }
   }, shallowEqual)
-  const worktree = useStartedWorktree(useThreadGroups((state) => rowThread(row, state.threadOf)), row.cwd)
+  const worktree = useStartedWorktree(row.threadId, row.cwd)
   const historyState = useAcp((state) => {
     const current = scopedAcp(state, scope)
     if (!current?.baseSource || current.hydrated === false || current.base) return null

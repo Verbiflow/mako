@@ -1,13 +1,13 @@
 import { IconAction } from "@/components/ui/kit"
 import { StillMark } from "@/components/transcript/message-avatar"
 import { MakoMark } from "@/components/ui/mako-mark"
-import { SessionTabList } from "@/components/stage/session-tabs"
+import { ThreadTabList } from "@/components/stage/thread-tabs"
 import { OpenFinTab } from "@/components/stage/child-tabs"
 import { useApexView } from "@/state/apex-fins"
 import { Fragment, useMemo, type ReactNode } from "react"
 import { CheckoutChip } from "@/components/stage/checkout-chip"
 import { AppControl } from "@/components/stage/app-control"
-import { onScreenTab, useOnScreen, useThreadTabs, type OnScreen } from "@/state/thread-sessions"
+import { onScreenTab, useOnScreen, useOpenTabs, useThreadTabs, type OnScreen } from "@/state/thread-sessions"
 import { closeWorkbenchPane } from "@/state/session-panes"
 import { activeAcp, useAcp } from "@/state/acp"
 import { usePrefs } from "@/state/prefs"
@@ -17,6 +17,8 @@ import { useThreads } from "@/state/threads"
 import { AGENT_TAB_ID, viewer, useViewer } from "@/state/viewer"
 import { cn } from "@/lib/utils"
 import { ClipboardListIcon, Columns2Icon, Rows2Icon, ScrollTextIcon, XIcon } from "lucide-react"
+
+const NOTHING_ON_SCREEN: OnScreen = {}
 
 export function StageStrip({
   paneId,
@@ -42,14 +44,16 @@ export function StageStrip({
   })
   const active = useOnScreen()
   const bound = pane?.session
-  // A Fin opened from its Apex's strip keeps that strip: the Apex's Sessions, none of them selected, and its tab.
+  // A Fin opened from its Apex keeps that strip: what's open, none of it selected, and the Fin's own tab.
   const inApex = useApexView((state) => (!bound && state.open && state.open.child === active.thread ? state.open : null))
-  // A chat without focus shows its own Session, and so do its tabs.
+  // A chat without focus shows its own conversation, and only that; what's open is the focused chat's.
   const here = useMemo<OnScreen>(
     () => (bound ? { thread: bound.thread, session: bound.tab } : inApex ? { thread: inApex.apex, cwd: active.cwd } : active),
     [active, bound, inApex]
   )
-  const sessionTabs = useThreadTabs(here)
+  const paneTabs = useThreadTabs(bound ? here : NOTHING_ON_SCREEN)
+  const openTabs = useOpenTabs(here)
+  const sessionTabs = bound ? paneTabs : openTabs
   const workspaceCwd = useSession((state) => state.meta?.cwd)
   // A pane without focus names only its Thread and tab; its folder is the tab's.
   const shownTab = sessionTabs.find((tab) => tab.id === onScreenTab(here))
@@ -67,8 +71,7 @@ export function StageStrip({
   )
   const agentHarness = viewingOwnsAgent ? viewing?.harness : liveHarness
   // A row the Thread store doesn't place is one conversation, so a rename
-  // in the rail names it here too. A Thread's name stays in the rail: the
-  // tab names the Session, as its agent titled it.
+  // in the rail names it here too.
   const agentTitle =
     (here.thread ? undefined : renamed) ??
     (viewingOwnsAgent ? viewing?.title : liveTitle) ??
@@ -120,14 +123,16 @@ export function StageStrip({
         const agent = id === AGENT_TAB_ID
         if (!agent && !document) return null
         const active = id === pane.activeId
-        if (agent && sessionTabs.length > 0)
+        // A conversation not placed in a Thread yet, or nothing at all, stands as the plain tab after what's open.
+        if (agent && (inApex || (sessionTabs.length > 0 && (bound || here.thread || here.draft))))
           return (
             <Fragment key={`${id}:${here.thread ?? ""}`}>
-              <SessionTabList
+              <ThreadTabList
                 tabs={sessionTabs}
                 here={here}
                 paneId={pane.id}
                 agentActive={active}
+                add={!bound}
               />
               {here.thread && !bound ? <OpenFinTab thread={here.thread} /> : null}
             </Fragment>
@@ -245,14 +250,14 @@ export function StageStrip({
 /**
  * The workbench's strip: its tabs, scrolling sideways when they don't fit
  * (each gives way to its least width first), and what stands at its end.
- * The web's desk draws a Thread's Session tabs in it, as the desktop does.
+ * The web's desk draws what's open in it, as the desktop does.
  */
 export function WorkbenchStrip({ children, end }: { children: ReactNode; end?: ReactNode }) {
   return (
     <div className="flex h-10 shrink-0 items-center bg-shell">
       <div
         role="tablist"
-        className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-2"
+        className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-2 [scrollbar-width:none]"
       >
         {children}
       </div>

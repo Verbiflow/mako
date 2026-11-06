@@ -6,7 +6,6 @@ import { ConversationTimeline } from "@/components/transcript/conversation-timel
 import { WorktreeOpening } from "@/components/viewer/worktree-opening"
 import { KeptOpening } from "@/components/viewer/kept-opening"
 import { keptSessionText } from "@/lib/kept-session"
-import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -214,7 +213,7 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
       status?.kind === "observed" ||
       status?.kind === "external-active")
   const lastExchangeId = exchanges.at(-1)?.id
-  const worktree = useStartedWorktree(useThreadGroups((state) => rowThread(ref, state.threadOf)), ref.cwd)
+  const worktree = useStartedWorktree(ref.threadId, ref.cwd)
   const kept = keptSessionText(ref)
   return (
     <ConversationTimeline

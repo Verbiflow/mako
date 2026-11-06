@@ -23,9 +23,3 @@ export const ThreadGroupSchema = z.object({
     .min(2),
 })
 export type ThreadGroup = z.infer<typeof ThreadGroupSchema>
-
-/** What changed about one Thread's grouping; `group` is null once it holds one Session. */
-export interface ThreadGroupChange {
-  thread: string
-  group: ThreadGroup | null
-}

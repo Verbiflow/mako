@@ -5,13 +5,15 @@ import type { ThreadRef } from "@/lib/types"
 import { acpStore, useAcp } from "@/state/acp"
 import type { ConversationScope } from "@/state/conversation-scope"
 import { hydrateLive } from "@/state/live-recovery"
-import { threadGroupsStore } from "@/state/thread-groups"
+import { threadDraftsStore } from "@/state/thread-drafts"
 import {
   currentOnScreen,
+  currentOpenTabs,
   currentThreadTabs,
   noteOpenedByScreen,
   onScreenTab,
   openSessionTab,
+  tabThread,
   useThreadTabs,
   type SessionTab,
 } from "@/state/thread-sessions"
@@ -21,10 +23,9 @@ import { readThreadForPane, useRememberedThreads } from "@/state/thread-viewing"
 import { AGENT_TAB_ID, viewer, viewerStore, type PaneSession, type PaneSide, type ViewerState } from "@/state/viewer"
 
 /**
- * Two chats side by side. Each pane shows one Session; the focused one is
+ * Two chats side by side. Each pane shows one Thread; the focused one is
  * the window's active conversation and has the composer, the other keeps
- * streaming from its own binding. A split is a view: the Thread's tabs and
- * membership don't change.
+ * streaming from its own binding. A split is a view: what's open doesn't change.
  */
 
 function same(left: PaneSession | undefined, right: PaneSession | undefined): boolean {
@@ -92,16 +93,17 @@ export function openInPane(tab: SessionTab, thread: string, side: PaneSide, show
       return true
     }
     // The tab on screen moves to the new pane; this one shows its neighbour.
-    const tabs = currentThreadTabs(thread)
+    const tabs = currentOpenTabs()
     const at = tabs.findIndex((candidate) => candidate.id === tab.id)
     const neighbour = tabs[at + 1] ?? tabs[at - 1]
-    if (!neighbour) {
-      toast("This thread has one session", { description: "Drag another thread here from the sidebar to see both." })
+    const beside = neighbour && tabThread(neighbour)
+    if (!beside) {
+      toast("Nothing else is open", { description: "Drag another thread here from the sidebar to see both." })
       return false
     }
     const added = viewer.openAgentPane(side, session)
     if (!added) return false
-    apply({ [only.id]: { thread, tab: neighbour.id }, [added]: session }, added)
+    apply({ [only.id]: { thread: beside, tab: neighbour.id }, [added]: session }, added)
     return true
   }
   const [first, second] = state.panes
@@ -184,7 +186,7 @@ export function watchSessionPanes(): () => void {
       viewer.bindPanes({ [focused.id]: undefined }, focused.id)
     }
   }
-  const stops = [viewerStore, threadsStore, acpStore, threadGroupsStore].map((store) => store.subscribe(settle))
+  const stops = [viewerStore, threadsStore, acpStore, threadDraftsStore].map((store) => store.subscribe(settle))
   const stopLayout = keepPaneLayout()
   return () => {
     for (const stop of stops) stop()
@@ -227,7 +229,7 @@ function savedLayout(): SavedLayout {
 /** Whether `session` can be shown yet; false once it is known to be gone. */
 function arrived(session: PaneSession): boolean | "gone" {
   if (tabFor(session)) return true
-  return threadsStore.get().loaded && threadGroupsStore.get().groups[session.thread] ? "gone" : false
+  return false
 }
 
 function keepPaneLayout(): () => void {
@@ -264,7 +266,7 @@ function keepPaneLayout(): () => void {
   const save = () => {
     if (focused || resting) return
     const threads = threadsStore.get()
-    const signature = `${threads.opening?.ref.path ?? threads.viewing?.ref.path ?? ""}\n${acpStore.get().activeKey ?? ""}\n${threadGroupsStore.get().open ?? ""}`
+    const signature = `${threads.opening?.ref.path ?? threads.viewing?.ref.path ?? ""}\n${acpStore.get().activeKey ?? ""}\n${threadDraftsStore.get().open ?? ""}`
     const state = viewerStore.get()
     if (signature === seen && state === seenViewer) return
     seen = signature
@@ -280,7 +282,7 @@ function keepPaneLayout(): () => void {
     restore()
     save()
   }
-  const stops = [viewerStore, threadsStore, threadGroupsStore, acpStore].map((store) => store.subscribe(update))
+  const stops = [viewerStore, threadsStore, threadDraftsStore, acpStore].map((store) => store.subscribe(update))
   restore()
   return () => {
     for (const stop of stops) stop()

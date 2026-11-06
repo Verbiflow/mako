@@ -7,7 +7,7 @@ import { workspaceTransitionStore } from "@/state/workspace-transition"
 import { promptClipboard } from "@/lib/prompt-clipboard"
 import type { Attachment } from "@/lib/attachments"
 import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
-import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
+import { loadThreadSplits } from "@/state/thread-drafts"
 import { applyThreadPurposes, loadThreadPurposes } from "@/state/thread-purposes"
 import { applyStoreFormats, loadStoreFormats } from "@/state/store-formats"
 import { applyFileEvents, loadFileEvents } from "@/state/file-events"
@@ -329,10 +329,6 @@ function apply(event: HostEvent) {
   }
   if (event.type === "workspace-moved") {
     void workspaceMoved(event)
-    return
-  }
-  if (event.type === "thread-group") {
-    applyThreadGroupChange(event.change)
     return
   }
   if (event.type === "thread-purposes") {
@@ -766,9 +762,9 @@ function adoptBoot(boot: BootPayload) {
 
 async function loadGroups() {
   try {
-    await loadThreadGroups()
+    await loadThreadSplits()
   } catch (error) {
-    toast.error("Threads with several sessions show as separate rows", { description: error instanceof Error ? error.message : String(error) })
+    toast.error("Couldn't read this Mac's Threads", { description: error instanceof Error ? error.message : String(error) })
   }
   try {
     await loadThreadPurposes()

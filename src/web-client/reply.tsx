@@ -94,7 +94,7 @@ export function ReplySheet({ reply, onDismiss }: { reply: CompactReply | undefin
             <GitBranchIcon aria-hidden className="size-[18px] text-muted-foreground" />
             <span className="flex min-w-0 flex-col">
               <span>Branch from here</span>
-              <span className="text-label text-faint">A new Session in this Thread, from after this reply</span>
+              <span className="text-label text-faint">A new thread beside this one, from after this reply</span>
             </span>
           </button>
         ) : null}

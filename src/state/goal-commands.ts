@@ -5,7 +5,7 @@ import { confirmAction } from "@/state/confirm"
 import { descriptorFor } from "@/state/descriptors"
 import type { GoalLine } from "@/state/goals"
 import { startInThread } from "@/state/thread-sessions"
-import { openSessionDraft, threadGroupsStore, type SessionDraft } from "@/state/thread-groups"
+import { openSessionDraft, threadDraftsStore, type SessionDraft } from "@/state/thread-drafts"
 import { threadsStore } from "@/state/thread-store"
 import { harnessLabel } from "@/lib/harness-label"
 import type { ThreadRef } from "@/lib/types"
@@ -59,7 +59,7 @@ export function commandRoute(cwd: string | undefined, words: CommandWords): Comm
       ? { kind: "conversation", key: conversation.key }
       : { kind: "elsewhere", reason: `This conversation runs in ${harnessLabel(conversation.harness)}. Pick ${harnessLabel(conversation.harness)} again to ${words.act}, or send a message to move it to ${harnessLabel(harness)} first.` }
   }
-  const draft = openSessionDraft(threadGroupsStore.get())
+  const draft = openSessionDraft(threadDraftsStore.get())
   if (draft) return { kind: "tab", draft, harness }
   return descriptorFor(threadsStore.get(), harness)?.live
     ? { kind: "new", harness, cwd: cwd ?? "" }

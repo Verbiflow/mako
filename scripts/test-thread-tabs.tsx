@@ -1,219 +1,196 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
-import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { ThreadRef } from "../src/lib/types"
 import type { AcpPresence } from "../src/state/acp-presence"
-import type { FoldRow } from "../src/lib/thread-fold"
 import { fixtureHarnesses } from "../src/dev/harness-fixtures"
 
 /**
- * A Thread with several Sessions: one rail row, tabs in the workbench, and
- * a new tab that exists only while it holds something. Production modules
- * and components, no host.
+ * A Thread is one conversation (`docs/one-conversation.md`): the strip holds what's open across Threads, and follows
+ * the screen. Production modules and components, no host.
  */
 
 const saved = new Map<string, string>()
-Object.assign(globalThis, {
-  localStorage: {
-    getItem: (key: string) => saved.get(key) ?? null,
-    setItem: (key: string, value: string) => saved.set(key, value),
-    removeItem: (key: string) => saved.delete(key),
-  },
-})
+const storage = {
+  getItem: (key: string) => saved.get(key) ?? null,
+  setItem: (key: string, value: string) => saved.set(key, value),
+  removeItem: (key: string) => saved.delete(key),
+}
+Object.assign(globalThis, { localStorage: storage })
 
 const { renderToStaticMarkup } = await import("react-dom/server")
-const { EMPTY_FOLD, foldThreads, foldedThreadState, presenceThreadStatus, sameFoldedThreadState, sessionRunning, sessionStateText } = await import("../src/lib/thread-fold")
-const { sessionTabTitle, threadSessionTabs } = await import("../src/state/thread-sessions")
-const { discardSessionDraft, leaveSessionDraft, putSessionDraft, rowThread, sessionDraftKey, threadGroupsStore } = await import("../src/state/thread-groups")
+const { closeEntries, draftBecameThread, entryKey, keepActiveTab, openNextInOwnTab, openTabsStore, showFinInPlace, showInTabs } = await import("../src/state/open-tabs")
+const { openTabsOf, sessionTabTitle, tabThread, threadSessionTabs } = await import("../src/state/thread-sessions")
+const { discardSessionDraft, leaveSessionDraft, putSessionDraft, sessionDraftKey, threadDraftsStore } = await import("../src/state/thread-drafts")
 const { threadArchiveKey } = await import("@mako/host/contracts/thread-lifecycle")
 const { rememberDraft } = await import("../src/state/drafts")
-const { SessionTabList } = await import("../src/components/stage/session-tabs")
+const { ThreadTabList } = await import("../src/components/stage/thread-tabs")
 const { TooltipProvider } = await import("../src/components/ui/tooltip")
 const { threadsStore } = await import("../src/state/thread-store")
 threadsStore.set({ descriptors: fixtureHarnesses })
 
-const thread = randomUUID()
-const [first, second, third] = [randomUUID(), randomUUID(), randomUUID()]
+interface Conversation { thread: string; session: string }
+const conversation = (): Conversation => ({ thread: randomUUID(), session: randomUUID() })
 
-function ref(path: string, harness: string, sessionId: string, title?: string): ThreadRef {
-  return { harness, nativeId: path, path, title, threadId: thread, sessionId }
+function ref(at: Conversation, path: string, harness = "claude", title?: string): ThreadRef {
+  return { harness, nativeId: path, path, title, threadId: at.thread, sessionId: at.session }
 }
 
-function presence(key: string, harness: string, sessionId: string, status: AcpPresence["status"] = "ready"): AcpPresence {
-  return { key, harness, cwd: "/repo", createdAt: 1, status, threadId: thread, sessionId }
+function presence(at: Conversation, key: string, title: string): AcpPresence {
+  return { key, harness: "codex", cwd: "/work", title, threadId: at.thread, sessionId: at.session, status: "running", createdAt: 1 }
 }
 
-const group: ThreadGroup = {
-  id: ThreadIdSchema.parse(thread),
-  sessions: [
-    { id: SessionIdSchema.parse(first), origin: "imported", started: true },
-    { id: SessionIdSchema.parse(second), origin: "fork", started: true },
-    { id: SessionIdSchema.parse(third), origin: "new", started: false },
-  ],
-}
-const groups = { [thread]: group }
-const threadOf = { [first]: thread, [second]: thread, [third]: thread }
+const reset = () => openTabsStore.set({ entries: [], active: undefined })
+const keys = () => openTabsStore.get().entries.map(entryKey)
+const [a, b, c, d] = [conversation(), conversation(), conversation(), conversation()]
 
-/* Rail fold ----------------------------------------------------------------- */
+// Reading down the rail leaves one tab: a Thread only looked at gives way to the next.
+reset()
+showInTabs(a)
+showInTabs(b)
+showInTabs(c)
+assert.deepEqual(keys(), [c.thread], "a Thread looked at takes the tab of the one before it")
+assert.equal(openTabsStore.get().active, c.thread)
 
-const parent = ref("/claude/p.jsonl", "claude", first, "Fix rail flicker")
-const alias = ref("/claude/alias.jsonl", "claude", first)
-const fork = presence("fork", "codex", second, "running")
-const rows: FoldRow[] = [
-  { kind: "native", key: parent.path, ref: parent },
-  { kind: "native", key: alias.path, ref: alias },
-  { kind: "live", key: fork.key, presence: fork },
+// Typed into, it stays, and the next one opens beside it.
+keepActiveTab()
+showInTabs(d)
+assert.deepEqual(keys(), [c.thread, d.thread], "a tab typed into stays")
+showInTabs(a)
+assert.deepEqual(keys(), [c.thread, a.thread], "and the one beside it is still a preview")
+
+// A Thread already open is focused, however it's opened.
+keepActiveTab()
+showInTabs(c)
+assert.deepEqual(keys(), [c.thread, a.thread], "opening what's open focuses it")
+assert.equal(openTabsStore.get().active, c.thread)
+
+// Asked for its own tab: a fork, a Fin, a Cmd-click. Beside the tab on screen, not at the end.
+openNextInOwnTab()
+showInTabs(b)
+assert.deepEqual(keys(), [c.thread, b.thread, a.thread], "a tab of its own opens beside the one on screen")
+showInTabs(d)
+assert.deepEqual(keys(), [c.thread, b.thread, d.thread, a.thread], "and stays when the next Thread is looked at")
+
+// What a Thread shows can change without it being another Thread: a move's fork, a cloud Thread's other conversation.
+const moved = randomUUID()
+showInTabs({ thread: b.thread, session: moved })
+assert.deepEqual(keys(), [c.thread, b.thread, d.thread, a.thread], "one tab per Thread")
+assert.deepEqual(openTabsStore.get().entries.find((entry) => entryKey(entry) === b.thread), { kind: "thread", thread: b.thread, session: moved, kept: true })
+
+// Nothing of a Thread's on screen: the strip stays as it was.
+showInTabs({})
+showInTabs({ thread: a.thread })
+assert.equal(openTabsStore.get().active, b.thread, "only a Thread's conversation has a tab")
+
+// Closing a tab names only the tab.
+closeEntries(new Set([b.thread]))
+assert.deepEqual(keys(), [c.thread, d.thread, a.thread])
+assert.equal(openTabsStore.get().active, undefined)
+
+// A Fin shown in place of its Apex has the strip's one Fin tab, not a place in the list.
+reset()
+showInTabs(a)
+showFinInPlace(b.thread)
+showInTabs(b)
+assert.deepEqual(keys(), [a.thread], "a Fin in place takes no tab of the list")
+showFinInPlace(undefined)
+
+// Closing the tab on screen: what replaces it opens a beat later, and the screen showing the closed one until then
+// doesn't open it again. Once it's gone, opening it is opening it.
+reset()
+showInTabs(a)
+keepActiveTab()
+openNextInOwnTab()
+showInTabs(b)
+closeEntries(new Set([b.thread]), b.thread)
+showInTabs(b)
+assert.deepEqual(keys(), [a.thread], "the screen catching up doesn't bring a closed tab back")
+showInTabs(a)
+assert.equal(openTabsStore.get().active, a.thread)
+showInTabs(b)
+assert.deepEqual(keys(), [a.thread, b.thread], "opened again, it has a tab again")
+
+// A new Thread: its tab comes first, and its first send turns that tab into the Thread, where it stood.
+reset()
+showInTabs(a)
+keepActiveTab()
+const draft = { id: randomUUID(), thread: a.thread, cwd: "/work", title: "Auth" }
+putSessionDraft(draft, true)
+showInTabs({ draft })
+assert.deepEqual(keys(), [a.thread, `draft:${a.thread}`], "a new Thread opens beside the one it came from")
+showInTabs(c)
+assert.deepEqual(keys(), [a.thread, `draft:${a.thread}`, c.thread], "and a Thread looked at doesn't take its tab")
+draftBecameThread(a.thread, b)
+assert.deepEqual(keys(), [a.thread, b.thread, c.thread], "its first send turns the tab into the Thread")
+draftBecameThread(a.thread, b)
+assert.deepEqual(keys(), [a.thread, b.thread, c.thread], "a repeated send doesn't open it twice")
+discardSessionDraft(a.thread)
+
+// A new Thread left empty goes; one with text stays, its text under its own key.
+putSessionDraft(draft, true)
+leaveSessionDraft()
+assert.equal(threadDraftsStore.get().drafts[a.thread], undefined, "an empty new Thread goes when you leave it")
+putSessionDraft(draft, true)
+rememberDraft(sessionDraftKey(draft)!, "Check the auth flow")
+leaveSessionDraft()
+assert.equal(threadDraftsStore.get().drafts[a.thread]?.id, draft.id, "one with text stays")
+assert.equal(threadDraftsStore.get().open, null)
+discardSessionDraft(a.thread)
+
+// The list across a reload.
+reset()
+showInTabs(a)
+keepActiveTab()
+const persisted = JSON.parse(saved.get("mako.open-tabs.v1") ?? "[]")
+assert.deepEqual(persisted, [{ kind: "thread", ...a, kept: true }], "what's open is kept for the next launch")
+
+// A Thread's conversations: its own rows, oldest first, an archived one gone unless on screen. Left whole, a cloud
+// Thread still has two.
+const other = conversation()
+const whole = { thread: a.thread, session: randomUUID() }
+const refs = [
+  { ...ref(whole, "/s/later"), startedAt: "2026-11-02T00:00:00.000Z" },
+  { ...ref(a, "/s/first"), startedAt: "2026-11-01T00:00:00.000Z" },
+  ref(other, "/s/other"),
 ]
-const fold = foldThreads(rows, groups, threadOf)
-assert.deepEqual([...fold.byLead.keys()], [parent.path], "the first Session's row stands for the Thread")
-assert.deepEqual(fold.byLead.get(parent.path)?.members.map((row) => row.key), [parent.path, fork.key], "members in tab order")
-assert.deepEqual([...fold.hidden].sort(), [alias.path, fork.key].sort(), "the fork and the alias leave the list")
-assert.equal(foldThreads(rows.slice(0, 1), groups, threadOf).byLead.size, 0, "a Thread with one row visible stays an ordinary row")
-assert.equal(foldThreads([{ kind: "native", key: "/solo", ref: { harness: "claude", nativeId: "solo", path: "/solo" } }], {}, {}), EMPTY_FOLD, "a row in no Thread folds nothing")
+assert.deepEqual(threadSessionTabs({ thread: a.thread, refs, presences: [] }).map((tab) => tab.id), [a.session, whole.session])
+const archived = new Set([threadArchiveKey({ kind: "file", path: "/s/first" })])
+assert.deepEqual(threadSessionTabs({ thread: a.thread, refs, presences: [], archived }).map((tab) => tab.id), [whole.session], "an archived one is left out")
+assert.deepEqual(threadSessionTabs({ thread: a.thread, refs, presences: [], archived, shown: a.session }).map((tab) => tab.id), [a.session, whole.session], "unless it's on screen")
 
-// A Thread another device runs, or a cloud machine: this Mac's store has no group for it, and the account's list names
-// its Thread on each Session. One row all the same, its Sessions oldest first, whatever order the rows came in.
-const theirs = randomUUID()
-const away = (key: string, harness: string, createdAt: number, elsewhere: string): AcpPresence =>
-  ({ key, harness, cwd: "/Users/ana/api", createdAt, status: "ready", threadId: theirs, sessionId: randomUUID(), elsewhere })
-const studio = [away("s-3", "cursor", 3_000, "Studio"), away("s-1", "claude", 1_000, "Studio"), away("s-2", "codex", 2_000, "Studio")]
-const remote = foldThreads([...rows, ...studio.map((row): FoldRow => ({ kind: "live", key: row.key, presence: row }))], groups, threadOf)
-assert.deepEqual([...remote.byLead.keys()].sort(), [parent.path, "s-1"].sort(), "this Mac's Thread and the Studio's are one row each")
-assert.deepEqual(remote.byLead.get("s-1")?.members.map((row) => row.key), ["s-1", "s-2", "s-3"], "the Studio's Sessions oldest first, its first standing for it")
-assert.ok(remote.hidden.has("s-2") && remote.hidden.has("s-3") && !remote.hidden.has("s-1"))
-// The tab strip files the same Sessions in the same order: one rule for which Sessions make a Thread.
-const studioTabs = threadSessionTabs({ thread: theirs, refs: [], presences: studio, draft: undefined })
-assert.deepEqual(studioTabs.map((tab) => tab.kind === "session" && tab.presence?.key), ["s-1", "s-2", "s-3"], "its tabs, in the fold's order")
-// A Session the account lists from another device that this Mac's store files in its own Thread follows the store.
-const placedHere = { ...away("here", "grok", 500, "a cloud machine"), sessionId: third }
-const filed = foldThreads([...rows, { kind: "live", key: placedHere.key, presence: placedHere }], groups, threadOf)
-assert.deepEqual(filed.byLead.get(parent.path)?.members.map((row) => row.key), [parent.path, fork.key, "here"], "in the group's place")
+// The strip drawn: across Threads, in the person's order, each by its conversation.
+const entries = [
+  { kind: "thread" as const, ...other },
+  { kind: "thread" as const, ...whole },
+  { kind: "draft" as const, place: b.thread },
+  { kind: "thread" as const, ...d },
+  { kind: "thread" as const, ...c },
+]
+const drafts = { [b.thread]: { id: randomUUID(), thread: b.thread, cwd: "/work", title: "Billing" } }
+const drawn = openTabsOf({ entries, refs, presences: [presence(d, "live-d", "Live one")], drafts })
+assert.deepEqual(drawn.map((tab) => tab.kind === "draft" ? "draft" : tab.id), [other.session, whole.session, "draft", d.session], "a tab whose Thread isn't listed yet waits; the others hold their order")
+assert.deepEqual(drawn.map(tabThread), [other.thread, a.thread, b.thread, d.thread])
+assert.equal(openTabsOf({ entries: [{ kind: "thread", thread: a.thread, session: randomUUID() }], refs, presences: [], drafts: {} })[0]?.id, a.session, "a conversation gone from its Thread falls back to the Thread's first")
 
-const members = fold.byLead.get(parent.path)?.members ?? []
-const read = foldedThreadState(members, () => ({ kind: "review", at: 1, unread: false }))
-assert.equal(read.status.kind, "working", "the row wears the most demanding status among its Sessions")
-assert.equal(read.readyBeside, false)
-// One Session finished while you were away, the other still running: the
-// Thread isn't done, so the mark says working and the answer sits beside it.
-const mixed = foldedThreadState(members, () => ({ kind: "review", at: 1, unread: true }))
-assert.equal(mixed.status.kind, "working", "work under way outranks an unread answer on the mark")
-assert.equal(mixed.readyBeside, true, "the unread answer is still shown")
-assert.equal(mixed.priority, 3, "the rail still ranks the Thread by its unread answer")
-assert.deepEqual(mixed.sessions.map((session) => [session.harness, sessionStateText(session.status)]), [["claude", "answer ready"], ["codex", "working"]])
-assert.deepEqual(mixed.sessions.map((session) => sessionRunning(session.status)), [false, true], "only the running Session's mark moves")
-const asking = foldedThreadState([members[0]!, { kind: "live", key: "ask", presence: presence("ask", "grok", third, "needs-permission") }], () => ({ kind: "review", at: 1, unread: true }))
-assert.equal(asking.status.kind, "needs-permission", "an approval outranks everything")
-assert.equal(asking.readyBeside, true)
-const done = foldedThreadState([members[0]!], () => ({ kind: "review", at: 1, unread: true }))
-assert.equal(done.readyBeside, false, "an unread answer that is the mark isn't drawn twice")
-assert.ok(sameFoldedThreadState(mixed, foldedThreadState(members, () => ({ kind: "review", at: 1, unread: true }))))
-assert.ok(!sameFoldedThreadState(mixed, read))
-assert.equal(presenceThreadStatus(presence("x", "grok", first, "needs-permission")).kind, "needs-permission")
+// A tab says the Thread's name, the same as its rail row.
+assert.equal(sessionTabTitle({ kind: "session", id: a.session, ref: ref(a, "/s/named", "claude", "From its agent") }), "From its agent")
+assert.equal(sessionTabTitle({ kind: "draft", id: "x", draft }), "New thread")
 
-// The rail folds on every catalog event; 2,000 rows with 100 multi-Session
-// Threads must stay well under a frame.
-const manyGroups: Record<string, ThreadGroup> = {}
-const manyThreadOf: Record<string, string> = {}
-const manyRows: FoldRow[] = []
-const sharedOwners = Array.from({ length: 100 }, () => randomUUID())
-for (let index = 0; index < 2_000; index++) {
-  const session = randomUUID()
-  const owner = sharedOwners[Math.floor(index / 3)] ?? randomUUID()
-  if (index < 300) {
-    const current = manyGroups[owner] ?? { id: ThreadIdSchema.parse(owner), sessions: [] }
-    current.sessions.push({ id: SessionIdSchema.parse(session), origin: "imported", started: true })
-    manyGroups[owner] = current
-    manyThreadOf[session] = owner
-  }
-  const row: ThreadRef = { harness: "codex", nativeId: String(index), path: `/codex/${index}`, threadId: owner, sessionId: session }
-  manyRows.push({ kind: "native", key: row.path, ref: row })
-}
-for (let warm = 0; warm < 20; warm++) foldThreads(manyRows, manyGroups, manyThreadOf)
-const timings: number[] = []
-for (let run = 0; run < 50; run++) {
-  const started = performance.now()
-  const result = foldThreads(manyRows, manyGroups, manyThreadOf)
-  timings.push(performance.now() - started)
-  assert.equal(result.byLead.size, 100)
-}
-timings.sort((left, right) => left - right)
-const median = timings[Math.floor(timings.length / 2)] ?? Infinity
-assert.ok(median < 1, `folding 2,000 rows took ${median.toFixed(3)}ms at the median`)
-
-/* Tabs ---------------------------------------------------------------------- */
-
-const draft = { id: randomUUID(), thread, cwd: "/repo", title: "Fix rail flicker" }
-const tabs = threadSessionTabs({ thread, group, refs: [parent, alias], presences: [fork], draft })
-assert.deepEqual(tabs.map((tab) => [tab.kind, tab.id]), [["session", first], ["session", second], ["draft", draft.id]], "Sessions in order, the empty one left out, the new tab last")
-assert.equal(tabs[0]?.kind === "session" && tabs[0].ref?.path, parent.path, "the first catalog row names a Session")
-
-const starting = { ...draft, session: third }
-const whileStarting = threadSessionTabs({ thread, group, refs: [parent], presences: [fork, presence("tab", "opencode", third, "starting")], draft: starting })
-assert.deepEqual(whileStarting.map((tab) => tab.kind), ["session", "session", "session"], "once its Session starts, the new tab is that Session's tab")
-
-const beforeEvent = threadSessionTabs({ thread, refs: [parent], presences: [presence("late", "devin", randomUUID())], draft: undefined })
-assert.equal(beforeEvent.length, 2, "a row naming the Thread shows before the group's event arrives")
-
-const archivedFork = new Set([threadArchiveKey({ kind: "live", id: fork.key })])
-assert.deepEqual(threadSessionTabs({ thread, group, refs: [parent], presences: [fork], archived: archivedFork }).map((tab) => tab.id), [first], "an archived Session leaves the strip")
-assert.deepEqual(threadSessionTabs({ thread, group, refs: [parent], presences: [fork], archived: archivedFork, shown: second }).map((tab) => tab.id), [first, second], "unless it is on screen")
-
-const elsewhere = randomUUID()
-const moved = { [first]: thread, [second]: elsewhere }
-assert.deepEqual(threadSessionTabs({ thread, refs: [parent], presences: [fork], threadOf: moved }).map((tab) => tab.id), [first], "a Session another Thread's group names leaves before its row is listed again")
-assert.deepEqual(threadSessionTabs({ thread: elsewhere, refs: [parent], presences: [fork], threadOf: moved }).map((tab) => tab.id), [second], "and shows in that Thread")
-assert.equal(rowThread(fork, moved), elsewhere)
-assert.equal(rowThread(fork, {}), thread, "a Session no group names keeps the Thread it was listed with")
-
-assert.deepEqual(
-  whileStarting.map((tab) => sessionTabTitle(tab)),
-  ["Fix rail flicker", "Codex", "OpenCode"],
-  "an untitled Session's tab names its agent, so two new ones never share a name"
-)
-
-/* New tab lifecycle ------------------------------------------------------- */
-
-putSessionDraft(draft, true)
-leaveSessionDraft()
-assert.equal(threadGroupsStore.get().drafts[thread], undefined, "an empty new tab goes when you leave it")
-
-putSessionDraft(draft, true)
-rememberDraft(sessionDraftKey(draft) ?? "", "compare the two rail fixes")
-leaveSessionDraft()
-assert.deepEqual(threadGroupsStore.get().drafts[thread], draft, "one holding text stays")
-assert.equal(threadGroupsStore.get().open, null)
-assert.ok(saved.get("mako.thread-session-drafts.v1")?.includes(draft.id), "and survives a restart")
-assert.equal(sessionDraftKey(draft), sessionDraftKey({ ...draft, id: randomUUID() }), "its text is kept per Thread, not per tab")
-
-/* Strip ----------------------------------------------------------------------- */
-
-const strip = renderToStaticMarkup(
+const markup = renderToStaticMarkup(
   <TooltipProvider>
-    <div role="tablist">
-      <SessionTabList tabs={tabs} here={{ thread, session: second }} paneId="main" agentActive />
-    </div>
+    <ThreadTabList tabs={drawn} here={{ thread: other.thread, session: other.session }} paneId="main" agentActive />
   </TooltipProvider>
 )
-assert.match(strip, /aria-selected="true"[^>]*data-tab-id="agent"[^>]*data-session-tab="[^"]+"/, "the Session on screen is the selected tab")
-assert.equal((strip.match(/role="tab"/g) ?? []).length, 3)
-assert.match(strip, />Fix rail flicker</)
-assert.match(strip, />Draft</, "a new tab off screen reads as a draft")
-assert.match(strip, /aria-label="New session"[^>]*data-add-session="new"/, "the + says what it does")
-assert.doesNotMatch(strip, /aria-haspopup="menu"/, "and opens a new tab directly: Sessions from elsewhere never join a Thread")
-assert.doesNotMatch(strip, /data-new/, "tabs painted with their strip do not animate")
-assert.match(strip, /aria-label="Archive Codex"/, "a Session tab archives that Session alone")
-assert.match(strip, /aria-label="Close new tab"/)
-
-const alone = renderToStaticMarkup(
+assert.equal(markup.match(/role="tab"/g)?.length, 4, "a tab for each thing open")
+assert.match(markup, /aria-label="Close /, "every tab closes")
+assert.match(markup, /aria-label="Close new thread"/)
+assert.match(markup, /data-add-session="new"/, "and `+` starts a new Thread here")
+assert.doesNotMatch(markup, /Session/, "a tab says nothing of Sessions")
+const resting = renderToStaticMarkup(
   <TooltipProvider>
-    <div role="tablist">
-      <SessionTabList tabs={tabs.filter((tab) => tab.id !== second)} here={{ thread, session: first }} paneId="main" agentActive />
-    </div>
+    <ThreadTabList tabs={drawn.slice(0, 1)} here={{ thread: other.thread, session: other.session }} paneId="other" agentActive add={false} />
   </TooltipProvider>
 )
-assert.doesNotMatch(alone, /aria-label="Archive /, "a Thread's only Session is archived from its row, as the Thread")
+assert.doesNotMatch(resting, /data-add-session/, "a pane without focus has no `+` of its own")
 
-discardSessionDraft(thread)
-assert.equal(threadGroupsStore.get().drafts[thread], undefined)
-console.log("thread tabs: ok")
+console.log("ok: the strip holds what's open across Threads, follows the screen, keeps what was typed into, and a new Thread's tab becomes it")

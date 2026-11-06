@@ -71,8 +71,9 @@ const reads = [
   "mako:thread-children",
   "mako:transcript-document",
   "mako:thread-archives",
-  "mako:thread-groups",
   "mako:thread-purposes",
+  "mako:thread-splits",
+  "mako:thread-origin",
   "mako:thread-titles",
   "mako:thread-app-marks",
   /** Reads the app's processes and files; what it records of them only moves its own read point forward. */
