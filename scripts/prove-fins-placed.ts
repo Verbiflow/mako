@@ -210,6 +210,11 @@ async function makeContainer(name: string, of: string): Promise<ContainerDevice>
   await docker(["volume", "create", volume])
   await docker(["run", "-d", "--init", "--platform", "linux/amd64", "--name", container, "-v", `${volume}:/data`, "-e", `MAKO_CLOUD_URL=${cloud.origin}`, "-e", "MAKO_GATEWAY_TRACE=1", "-e", "OPENCODE_DISABLE_MODELS_FETCH=1", "--add-host", "host.docker.internal:host-gateway", of, "--name", name])
   const inside = (command: string) => docker(["exec", container, "sh", "-c", command])
+  /** Its host's log and the container's own, kept in `--out` before the container goes. */
+  const keepLogs = async () => {
+    await inside("cat /data/logs/host.log").then((log) => writeFile(join(out, "place.host.log"), log), () => undefined)
+    await run("docker", ["logs", container]).then(({ stdout, stderr }) => writeFile(join(out, "place.container.log"), `${stdout}\n${stderr}`), () => undefined)
+  }
   const remove = async () => {
     await docker(["rm", "-f", container]).catch(() => undefined)
     await docker(["volume", "rm", volume]).catch(() => undefined)
@@ -228,11 +233,16 @@ async function makeContainer(name: string, of: string): Promise<ContainerDevice>
     })
     say("JOIN", { device: name, url: joined.url, code: joined.code })
     // Ten minutes for the code, then its host's own start.
+    let status = ""
     await until(`${name}'s host`, async () => {
-      const status = await inside("mako-host status --json 2>/dev/null").catch(() => "")
+      // What it says is read however the command ends: a host still starting answers with why.
+      status = await inside("mako-host status --json 2>&1 || true").catch((error: Error) => error.message)
       return /"connection": "connected"/.test(status) && /"host": "running/.test(status) ? true : undefined
-    }, 12 * 60_000)
+    }, 12 * 60_000).catch((error: Error) => {
+      throw new Error(`${error.message}; it last said: ${status.replace(/\s+/g, " ").slice(0, 600)}`)
+    })
   } catch (error) {
+    await keepLogs()
     await remove()
     throw error
   }
@@ -243,8 +253,7 @@ async function makeContainer(name: string, of: string): Promise<ContainerDevice>
     inside,
     log: async () => (await inside("cat /data/logs/host.log 2>/dev/null").catch(() => "")).split("\n").filter(Boolean),
     stop: async () => {
-      await inside("cat /data/logs/host.log").then((log) => writeFile(join(out, "place.host.log"), log), () => undefined)
-      await run("docker", ["logs", container]).then(({ stdout, stderr }) => writeFile(join(out, "place.container.log"), `${stdout}\n${stderr}`), () => undefined)
+      await keepLogs()
       await inside("mako-host leave").catch(() => undefined)
       await remove()
     },
