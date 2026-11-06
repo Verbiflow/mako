@@ -113,7 +113,7 @@ export function retriesBegun(before: readonly LiveRequest[], after: readonly Liv
 export function retryWords(retry: Pick<RequestRetry, "cause" | "until">, harness: string, now = Date.now()): string {
   switch (retry.cause) {
     case "rate-limited":
-      return retry.until === undefined ? `${harness} is at capacity or its usage limit` : `${harness} is at its usage limit until ${resetWords(retry.until, now)}`
+      return retry.until === undefined || retry.until <= now ? `${harness} is at capacity or its usage limit` : `${harness} is at its usage limit until ${resetWords(retry.until, now)}`
     case "provider-unavailable":
       return `${harness}'s service failed on its side`
     case "network":

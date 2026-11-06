@@ -78,6 +78,16 @@ for (const words of [
   assert.equal(usageLimitWords(words), false, words)
   assert.equal(transientCause(words, classifyProviderFailure(words).kind, false), undefined, words)
 }
+// So does a bare client error, which names no rule's words: the whole of what the person must fix, not a list of it.
+for (const status of ["400 Bad Request", "404 Not Found", "405 Method Not Allowed", "406 Not Acceptable", "409 Conflict", "410 Gone", "422 Unprocessable Entity"])
+  for (const words of [`You've hit your usage limit. ${status}`, `${status}: You've hit your usage limit.`]) {
+    assert.equal(permanentFailure(words), true, words)
+    assert.equal(usageLimitWords(words), false, words)
+    assert.equal(transientCause(words, classifyProviderFailure(words).kind, false), undefined, words)
+  }
+// A limit's own payment words are a plan's: they give way to it, and alone stay the person's.
+assert.equal(usageLimitWords("You've hit your usage limit. 402 Payment Required"), true)
+assert.equal(permanentFailure("402 Payment Required"), true)
 // What it wasn't before: a plan that doesn't cover a model is still the person's, and a model's context is still that.
 assert.equal(classifyProviderFailure("Your plan does not include this model").kind, "plan")
 assert.equal(classifyProviderFailure("prompt is too long: 214031 tokens > 200000 maximum").kind, "context-exhausted")
@@ -103,6 +113,7 @@ console.log("limit words: Cursor's and Claude's exact lines and every harness's 
   assert.equal(LiveRequestSchema.parse({ id: randomUUID(), text: "x", attachments: [], status: "held", retry }).retry?.until, until, "the journal keeps it")
   assert.match(retryWords(retry, "Cursor", NOW), /^Cursor is at its usage limit until /)
   assert.equal(retryWords({ cause: "rate-limited" }, "Cursor", NOW), "Cursor is at capacity or its usage limit")
+  assert.equal(retryWords({ cause: "rate-limited", until }, "Cursor", until + 1), "Cursor is at capacity or its usage limit", "a reset gone by isn't what it waits for")
 }
 // Words that read later each time they're read don't renew the wait: going to each attempt as it comes, each form ends.
 for (const words of ["You've hit your usage limit. Try again in 3 hours.", CLAUDE, "You've hit your usage limit. Try again in 30s."]) {
