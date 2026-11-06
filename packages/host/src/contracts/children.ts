@@ -1,7 +1,8 @@
 import { z } from "zod"
-import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, waitingStateWords, type Brief, type ChildState } from "./agents.js"
+import { LISTED_AFTER, LISTED_FINS, LISTED_WAITING_ON, type ListedFin, type ListedFinState } from "@mako/protocol/thread-listing"
+import { APEX_WORD, entryState, FIN_WORD, finsWord, LEGACY_APEX_WORD, waitingStateWords, type Brief, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
-import { isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
+import { CHILDREN_BINDING, isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster, type WaitingOn } from "./native-agents.js"
 import type { Waiting } from "@mako/protocol/attention"
 import { isLimitAsk } from "./fin-fallback.js"
 import { readFinReports, type FinReportCard } from "./fin-reports.js"
@@ -294,6 +295,112 @@ export function finAskWaiting(ask: Pick<FinAsk, "id" | "kind">, name: string, li
 /** Who answered a Fin's question, while it works on the answer: "You answered: Merge", "Apex answered: Merge". */
 export function answeredWords(answered: FinAnswered): string {
   return `${answered.by === "person" ? "You" : APEX_WORD} answered: ${answered.answer}`
+}
+
+type ListedWaitingOn = NonNullable<Extract<ListedFinState, { kind: "idle" }>["waitingOn"]>[number]
+
+const FIN_NOTE = 200
+const finNote = (text: string) => (text.length > FIN_NOTE ? `${text.slice(0, FIN_NOTE - 1)}…` : text)
+
+const listedWaitingOn = (item: WaitingOn): ListedWaitingOn => {
+  switch (item.kind) {
+    case "pull-request":
+      return { ...item, ref: finNote(item.ref) }
+    case "person":
+      return { kind: "person", what: finNote(item.what) }
+    case "other":
+      return { kind: "other", text: finNote(item.text) }
+  }
+}
+
+/**
+ * A Fin's state as its Apex's row says it: `ChildState` without a blocked Fin's ask or a done one's, which the row's
+ * `asking` says, its words cut to a row's length. Each field is named, since what a new one is the gateway refuses.
+ */
+function listedFinState(state: ChildState): ListedFinState {
+  switch (state.kind) {
+    case "queued":
+      return {
+        kind: "queued",
+        reason: state.reason,
+        ahead: state.ahead,
+        ...(state.after?.length && { after: state.after.slice(0, LISTED_AFTER).map(finNote) }),
+        ...(state.held && { held: finNote(state.held) }),
+        ...(state.refused && { refused: finNote(state.refused) }),
+        ...(state.apexStopped && { apexStopped: true as const }),
+      }
+    case "working":
+      return {
+        kind: "working",
+        ...(state.step && { step: finNote(state.step) }),
+        ...(state.phase && { phase: finNote(state.phase) }),
+        ...(state.answered && { answered: { by: state.answered.by, answer: finNote(state.answered.answer) } }),
+      }
+    case "blocked":
+      return { kind: "blocked", question: finNote(state.question), on: state.on }
+    case "ended":
+      return {
+        kind: "ended",
+        outcome: state.outcome,
+        ...(state.reason && { reason: finNote(state.reason) }),
+        ...(state.unfinished && { unfinished: true as const }),
+        ...(state.decision && { decision: { question: finNote(state.decision.question), on: state.decision.on } }),
+      }
+    case "starting":
+      return { kind: "starting", step: state.step }
+    case "idle":
+      return {
+        kind: "idle",
+        ...(state.waitingOn?.length && { waitingOn: state.waitingOn.slice(0, LISTED_WAITING_ON).map(listedWaitingOn) }),
+        ...(state.since !== undefined && { since: state.since }),
+      }
+  }
+}
+
+/**
+ * An Apex's Fins as its row lists them for every other device (`ListedFin`, link version 19 on): its roster, in the
+ * order every surface on its owner draws it. Undefined while it has none.
+ */
+export function listedFins(children: readonly NativeAgent[] | undefined): ListedFin[] | undefined {
+  const fins = orderedChildren((children ?? []).filter((agent) => agent.child)).slice(0, LISTED_FINS).map((agent): ListedFin => ({
+    thread: agent.child!.thread,
+    name: finNote(agent.child!.name ?? agent.title ?? FIN_WORD),
+    harness: agent.provider,
+    ...(agent.title && agent.title !== agent.child!.name && { title: finNote(agent.title) }),
+    state: listedFinState(childStateOf(agent)),
+    startedAt: new Date(agent.startedAt ?? agent.observedAt).toISOString(),
+  }))
+  return fins.length ? fins : undefined
+}
+
+const childrenOfFins = new WeakMap<readonly ListedFin[], readonly NativeAgent[]>()
+
+/**
+ * The roster entries a row's Fins stand for, on a device that isn't their Apex's owner: the same selectors read them
+ * (`rollup`, `pipsOf`, `childLine`), in `orderedChildren`' order, so every device counts, orders and names them as
+ * the owner does. The same array while the row's Fins are.
+ */
+export function finsAsChildren(fins: readonly ListedFin[] | undefined): readonly NativeAgent[] {
+  if (!fins?.length) return NO_CHILDREN
+  const held = childrenOfFins.get(fins)
+  if (held) return held
+  const children = orderedChildren(fins.map((fin): NativeAgent => {
+    const at = Date.parse(fin.startedAt)
+    return {
+      nativeId: `mako-child:${fin.thread}`,
+      title: fin.title ?? fin.name,
+      work: "agent",
+      background: true,
+      state: entryState(fin.state),
+      bindingId: CHILDREN_BINDING,
+      provider: fin.harness,
+      observedAt: at,
+      startedAt: at,
+      child: { thread: fin.thread, name: fin.name, origin: "started", state: fin.state },
+    }
+  }))
+  childrenOfFins.set(fins, children)
+  return children
 }
 
 const NO_CHILDREN: readonly NativeAgent[] = []
