@@ -39,10 +39,22 @@ import { scriptedModel } from "./scripted-model.ts"
  * hosts' logs go to `--out`. Both devices leave the account at the end, their hosts stop, and the root is removed
  * unless `--keep`.
  *
- *   npx tsx --tsconfig tsconfig.scripts.json scripts/prove-fins-placed.ts --root <empty folder> --out <folder> \
- *     --cloud https://… --relay-port <port> [--repository https://github.com/octocat/Hello-World] [--keep]
+ * With `--image`, the second device is a Linux machine: a container of that image (the `device` stage of
+ * `runtime/host/Dockerfile`), which joins as its entrypoint does and is reached only through the account, as any
+ * machine is. The report then also says, from inside the container, its system, the clone its host made and the
+ * Fin's worktree there; its host's log and the container's own go to `--out`, and the container and its volume are
+ * removed at the end. `prove-fins-placed-linux.ts` builds that image from this checkout and runs this with it.
  *
- * It prints `JOIN {"device","url","code"}` for each device, then `STEP …` lines, then `DONE {"ok",…}`.
+ * `--account` says which kind of account the codes are confirmed on, and the run fails if the devices joined another:
+ * `cloud` (the default), one with the cloud; or `free`, one without it, whose devices reach each other only where the
+ * cloud gives every account the device network.
+ *
+ *   npx tsx --tsconfig tsconfig.scripts.json scripts/prove-fins-placed.ts --root <empty folder> --out <folder> \
+ *     --cloud https://… --relay-port <port> [--image <device image>] [--account cloud|free]
+ *     [--repository https://github.com/octocat/Hello-World] [--keep]
+ *
+ * It prints `JOIN {"device","url","code"}` for each device, then `STEP …` lines, then `DONE {"ok",…}`. Each code is
+ * confirmed at its page within ten minutes, by a person signed in to the account or by whatever reads these lines.
  */
 const { values } = parseArgs({
   options: {
@@ -52,9 +64,13 @@ const { values } = parseArgs({
     "relay-port": { type: "string" },
     repository: { type: "string", default: "https://github.com/octocat/Hello-World" },
     keep: { type: "boolean", default: false },
+    image: { type: "string" },
+    account: { type: "string", default: "cloud" },
   },
 })
 if (!values.root || !values.out || !values.cloud || !values["relay-port"]) throw new Error("--root, --out, --cloud and --relay-port are required")
+if (values.account !== "cloud" && values.account !== "free") throw new Error("--account is cloud or free")
+const { image, account: accountKind } = values
 const root = resolve(values.root)
 const out = resolve(values.out)
 const cloud = new URL(values.cloud)
@@ -155,6 +171,83 @@ interface ProofDevice {
   call(channel: string, args: JsonValue[]): Promise<RuntimeValue>
   log(): Promise<string[]>
   stop(): Promise<void>
+}
+
+/** The second device as a Linux machine: a container of the device image, its host reached only through the account. */
+interface ContainerDevice {
+  name: string
+  container: string
+  heard: string[]
+  /** A command inside the container, as its user: what it printed. */
+  inside(command: string): Promise<string>
+  log(): Promise<string[]>
+  stop(): Promise<void>
+}
+
+async function docker(args: string[], input?: string): Promise<string> {
+  const child = run("docker", args, { maxBuffer: 64 * 1024 * 1024 })
+  if (input !== undefined) child.child.stdin?.end(input)
+  return (await child).stdout
+}
+
+async function makeContainer(name: string, of: string): Promise<ContainerDevice> {
+  const heard: string[] = []
+  // Reached from inside the container at this computer's address there, so it listens on every interface.
+  const model = await scriptedModel({
+    host: "0.0.0.0",
+    reply: async (text) => {
+      const word = [...text.matchAll(ONE_WORD)].at(-1)?.[1]
+      if (!word) return { text: "OK" }
+      if (word === WORDS.held) await heldGate
+      heard.push(word)
+      return { text: word }
+    },
+    aside: "Placed Fins proof",
+  })
+  const container = `mako-fins-proof-${tag.toLowerCase()}`
+  const volume = `${container}-data`
+  await docker(["volume", "create", volume])
+  await docker(["run", "-d", "--init", "--platform", "linux/amd64", "--name", container, "-v", `${volume}:/data`, "-e", `MAKO_CLOUD_URL=${cloud.origin}`, "-e", "MAKO_GATEWAY_TRACE=1", "-e", "OPENCODE_DISABLE_MODELS_FETCH=1", "--add-host", "host.docker.internal:host-gateway", of, "--name", name])
+  const inside = (command: string) => docker(["exec", container, "sh", "-c", command])
+  const remove = async () => {
+    await docker(["rm", "-f", container]).catch(() => undefined)
+    await docker(["volume", "rm", volume]).catch(() => undefined)
+    await model.close()
+  }
+  try {
+    // Its OpenCode answers from the scripted model on this computer, set before its host starts.
+    const settings = JSON.stringify({ $schema: "https://opencode.ai/config.json", enabled_providers: ["anthropic"], provider: { anthropic: { options: { baseURL: `http://host.docker.internal:${new URL(model.url).port}/v1`, apiKey: "placed-fins-proof" } } } }, null, 2)
+    await docker(["exec", "-i", container, "sh", "-c", "mkdir -p ~/.config/opencode && cat > ~/.config/opencode/opencode.json"], settings)
+    // It joins as its entrypoint does (`mako-host join --name`): the code is in its log, for whoever drives the proof to confirm.
+    const joined = await until(`${name}'s code`, async () => {
+      const printed = (await run("docker", ["logs", container])).stdout
+      const url = /^\s+(https?:\/\/\S+)$/m.exec(printed)?.[1]
+      const code = /confirm the code (\S+) there/.exec(printed)?.[1]
+      return url && code ? { url, code } : undefined
+    })
+    say("JOIN", { device: name, url: joined.url, code: joined.code })
+    // Ten minutes for the code, then its host's own start.
+    await until(`${name}'s host`, async () => {
+      const status = await inside("mako-host status --json 2>/dev/null").catch(() => "")
+      return /"connection": "connected"/.test(status) && /"host": "running/.test(status) ? true : undefined
+    }, 12 * 60_000)
+  } catch (error) {
+    await remove()
+    throw error
+  }
+  return {
+    name,
+    container,
+    heard,
+    inside,
+    log: async () => (await inside("cat /data/logs/host.log 2>/dev/null").catch(() => "")).split("\n").filter(Boolean),
+    stop: async () => {
+      await inside("cat /data/logs/host.log").then((log) => writeFile(join(out, "place.host.log"), log), () => undefined)
+      await run("docker", ["logs", container]).then(({ stdout, stderr }) => writeFile(join(out, "place.container.log"), `${stdout}\n${stderr}`), () => undefined)
+      await inside("mako-host leave").catch(() => undefined)
+      await remove()
+    },
+  }
 }
 
 /** A gate the second device's model waits at before it answers the held word, so its Fin finishes when the proof says. */
@@ -260,12 +353,16 @@ const StartedSchema = z.object({ child: z.string().optional(), name: z.string(),
 const ListedSchema = z.object({ children: z.array(z.object({ child: z.string(), name: z.string(), place: z.string().optional(), state: z.object({ kind: z.string() }).loose(), harness: z.string() }).loose()) }).loose()
 const ReadSchema = z.object({ text: z.string(), state: z.object({ kind: z.string() }).loose() }).loose()
 
-const devices: ProofDevice[] = []
+const devices: Array<Pick<ProofDevice, "name" | "stop">> = []
 let ok = false
 /** What the proof writes down: who took part, by their IDs, each step, and both hosts' lines for the calls between them. */
 interface ProofReport {
   run: string
   cloud: string
+  /** The kind of account the devices joined (`--account`), checked against what the cloud says of it. */
+  account: string
+  /** The device image the second device is a container of (`--image`); absent when both devices are hosts here. */
+  image?: string
   words: typeof WORDS
   devices?: Detail
   apex?: Detail
@@ -274,21 +371,47 @@ interface ProofReport {
   steps: Step[]
   ok: boolean
 }
-const report: ProofReport = { run: tag, cloud: cloud.origin, words: WORDS, steps, ok: false }
+const report: ProofReport = { run: tag, cloud: cloud.origin, account: accountKind, ...(image && { image }), words: WORDS, steps, ok: false }
 try {
   const names = { apex: `proof-apex-${tag.toLowerCase()}`, place: `Proof-Place-${tag}` }
   // The first device reaches the cloud through the relay; the second directly.
   const apex = await step("the first device joins and its host starts", () => makeDevice("apex", names.apex, relayUrl), (made) => ({ name: made.name, dataRoot: made.dataRoot }))
   devices.push(apex)
-  const place = await step("the second device joins and its host starts", () => makeDevice("place", names.place, cloud.origin), (made) => ({ name: made.name, dataRoot: made.dataRoot }))
+  const second = image
+    ? { kind: "container" as const, device: await step("the second device, a Linux container, joins and its host starts", () => makeContainer(names.place, image), (made) => ({ name: made.name, container: made.container, image })) }
+    : { kind: "local" as const, device: await step("the second device joins and its host starts", () => makeDevice("place", names.place, cloud.origin), (made) => ({ name: made.name, dataRoot: made.dataRoot })) }
+  const place = second.device
   devices.push(place)
+  if (second.kind === "container") {
+    const { inside } = second.device
+    await step("inside the container: its system, its host and its device", async () => ({
+      uname: (await inside("uname -srm")).trim(),
+      os: (await inside('. /etc/os-release && echo "$PRETTY_NAME"')).trim(),
+      node: (await inside("node --version")).trim(),
+      status: (await inside("mako-host status")).trim().split("\n"),
+    }))
+  }
 
   const linked = async (device: ProofDevice) => until(`${device.name}'s links`, async () => {
     const account = AccountSchema.parse(await device.call("mako:cloud-account", []))
     return account.state.status === "signed-in" && account.state.connection === "connected" && account.state.device ? { ...account.state.device, entitlements: account.state.account?.entitlements ?? [] } : undefined
   })
-  const [apexDevice, placeDevice] = await step("both devices are connected to the account", async () => [await linked(apex), await linked(place)] as const, ([first, second]) => ({ apex: first, place: second }))
-  report.devices = DetailSchema.parse(JSON.parse(JSON.stringify({ apex: apexDevice, place: placeDevice })))
+  // The account's own list of its devices, as every device and the web read it.
+  const DevicesSchema = z.object({ devices: z.array(z.object({ id: z.string(), name: z.string(), kind: z.string(), platform: z.string(), appVersion: z.string().nullable(), enrolledBy: z.string() }).loose()) }).loose()
+  const listed = await step("both devices are connected, and the account lists them", async () => {
+    const first = await linked(apex)
+    if (second.kind === "local") await linked(second.device)
+    const all = DevicesSchema.parse(await apex.call("mako:cloud-devices", [])).devices.map(({ id, name, kind, platform, appVersion, enrolledBy }) => ({ id, name, kind, platform, appVersion, enrolledBy }))
+    const other = all.find((device) => device.name === names.place)
+    if (!other) throw new Error(`the account doesn't list ${names.place}: it lists ${all.map((device) => device.name).join(", ")}`)
+    if (other.kind !== "runtime") throw new Error(`${names.place} is listed as ${other.kind}, not a runtime`)
+    if (image && !/linux/i.test(other.platform)) throw new Error(`${names.place} is listed on ${other.platform}, not Linux`)
+    const withCloud = first.entitlements.includes("cloud")
+    if (withCloud !== (accountKind === "cloud"))
+      throw new Error(`the codes were confirmed on ${withCloud ? "an account with the cloud" : "a free account"} (entitled to ${first.entitlements.join(", ") || "nothing"}), and --account ${accountKind} was asked`)
+    return { account: { kind: accountKind, entitlements: first.entitlements }, apex: first, place: other, devices: all }
+  })
+  report.devices = DetailSchema.parse(JSON.parse(JSON.stringify(listed)))
 
   const project = join(apex.home, "projects", new URL(values.repository).pathname.split("/").at(-1) ?? "project")
   await step("the project is cloned on the first device only", async () => {
@@ -327,6 +450,25 @@ try {
     return { request: wake.id, notices: wake.digest?.notices.map((notice) => notice.id), msFromStart: Date.now() - startedAt, heardOnPlace: [...place.heard], heardOnApex: [...apex.heard] }
   })
   if (!place.heard.includes(WORDS.fin) || apex.heard.includes(WORDS.fin)) throw new Error(`the Fin's turn ran on the wrong device: ${JSON.stringify(woken)}`)
+  if (second.kind === "container") {
+    const { inside, log } = second.device
+    await step("inside the container: the clone, the Fin's worktree and its turn", async () => {
+      const lines = await log()
+      const folder = /folder=(\S+)/.exec(lines.find((line) => line.includes("cloned a project")) ?? "")?.[1]
+      if (!folder) throw new Error("the container's host logged no clone")
+      const worktrees = (await inside(`git -C ${folder} worktree list`)).trim().split("\n")
+      if (!worktrees.some((line) => line.includes("[mako/placed]"))) throw new Error(`the Fin has no worktree of the clone: ${worktrees.join(" | ")}`)
+      return {
+        uname: (await inside("uname -srm")).trim(),
+        clone: folder,
+        remote: (await inside(`git -C ${folder} remote get-url origin`)).trim(),
+        worktrees,
+        edge: lines.filter((line) => line.includes("edge written")).map((line) => line.slice(0, 300)),
+        placed: lines.filter((line) => line.includes("host.agents-place")).map((line) => line.slice(0, 300)),
+        opencode: (await inside("command -v opencode; opencode --version 2>/dev/null")).trim().split("\n"),
+      }
+    })
+  }
 
   await step("the same start again answers the same Fin", async () => {
     const again = StartedSchema.parse(await apex.call("mako:agents-start", [caller, { brief: { objective: `Reply with the single word ${WORDS.fin}.` }, harness: "opencode", name: "placed", place: where, clientKey: `fin-${tag}` }]))
