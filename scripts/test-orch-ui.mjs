@@ -252,7 +252,7 @@ async function check() {
     first: document.querySelector('[data-exchange]')?.querySelector('[data-agent-words]') !== null,
     note: document.querySelector('[data-child-note]')?.innerText,
     selected: document.querySelector('[data-child-tab="${opened}"]').getAttribute('aria-selected'),
-    sessionSelected: [...document.querySelectorAll('[data-session-tab]')].some((tab) => tab.getAttribute('aria-selected') === 'true'),
+    tabSelected: [...document.querySelectorAll('[data-session-tab]')].find((tab) => tab.getAttribute('aria-selected') === 'true')?.textContent,
     approval: document.body.innerText.includes('Allow once'),
     lit: document.querySelector('[data-child-row][aria-current=true]')?.innerText.split('\\n')[0],
   }))()`)
@@ -264,7 +264,7 @@ async function check() {
   assert.equal(child.first, true, "the brief is the first card")
   assert.equal(child.note, undefined, "no line over the composer: the crumb says whose it is")
   assert.equal(child.selected, "true")
-  assert.equal(child.sessionSelected, false, "no Session of the Apex is selected while its Fin is shown")
+  assert.match(child.tabSelected ?? "", /Sheet motion on iPad/, "the Fin has the strip's selected tab, its Apex's beside it")
   assert.equal(child.approval, true)
   assert.equal(child.lit, "Sheet motion on iPad", "the panel keeps the Apex's Fins, the open one lit")
   await both("child")

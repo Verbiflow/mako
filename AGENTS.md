@@ -2416,7 +2416,7 @@ What a turn changed has one source: the attribution journal, keyed by the reques
 
 Changes › Turn reviews any turn of the open conversation, live or reopened (`conversations/live-turn-review.ts`). Its files are the request's record; each diff is the turn's checkpoints when both were saved, else the journal's versions either side of the turn's entries, so Review on the turn line works without checkpoints, and a conversation nobody has open is read from its journal without loading it (`storedRequest`). Who wrote each changed line comes from the same walk the record counts with (`attribution/line-walk.ts`, `turn-lines.ts`), as runs per side (`mako:live-turn-writers`), drawn in the diff's annotation slot only where another writer shares a change block; "Only this thread's lines" redraws each diff with every other writer's change on both sides. "Undo this turn" (and "undo this thread") takes the scope's own lines back out of the files as they are now and puts back the lines it removed, keeping everyone else's; a stretch someone edited on top of since, or where a writer put back a line the scope removed, is left whole and named; what Git or Mako wrote is nobody's and stays. It's refused while a turn or background work runs in the checkout (the journal's open activity, on any host, and this host's own runs), and when the files changed after the preview (`token`). It writes with the move's writer (`rewriteInPlace` in `worktree-move.ts`): every version stored, the checkout kept under `refs/mako/moves/<id>` for 14 days, the plan saved in `<conversations>/undos`, each file checked and renamed into place, then read back; a failure puts every file back, and a host that dies mid-write finishes or undoes it on the next start (`resumeMove`). The index is left as it is. Rewind stays the whole-workspace restore. `scripts/test-turn-review.ts` covers it, and `scripts/turn-review-screenshots.mjs` draws it.
 
-In a laptop's browser the web app is the desktop app, drawn by the desktop's own pieces (`src/web-client/desk.tsx`): the title strip (`TitleStrip`, without the traffic lights), the rail (`AgentThreads`), the Session tabs (`SessionTabList` in `WorkbenchStrip`), the transcript, the composer and the palette. The rail lists the account's Sessions as a Mac's window lists another device's (`listedSummary`, `desk-listing.ts`), so a Thread's Sessions fold into one row and file under their project; what it and the tabs open goes to the Session's address (`state/window-routes.ts`), and a window that routes offers its own Thread menu and nothing that needs a host of its own. What a Mac's rail shows of a row besides its state travels on the account's list from link version 12 (`ListedRail`: the project it's filed under and what that project has checked out, its Thread worktree's branch, the agents it ran in before, the background work its ended turn waits on), read by the Mac from what it holds (`ownedSessions`, `CheckoutHeadService.known`), and a window draws it with the same components as its own rows: the branch beside the project, the earlier agent's mark, the hourglass. Projects are in the same order on both: by when the person last sent a message there, from any device, as each Session's owner says it (`promptedAt`, link version 14). `?mock&app=busy` and `scripts/web-desk.html` draw the same busy Thread on both for side-by-side checks; `node scripts/test-web-desk-ui.mjs` holds the desk to the window's width and the rail to the desktop's.
+In a laptop's browser the web app is the desktop app, drawn by the desktop's own pieces (`src/web-client/desk.tsx`): the title strip (`TitleStrip`, without the traffic lights), the rail (`AgentThreads`), the tabs of what's open (`ThreadTabList` in `WorkbenchStrip`), the transcript, the composer and the palette. The rail lists the account's Sessions as a Mac's window lists another device's (`listedSummary`, `desk-listing.ts`), so each conversation is a row filed under its project; what it and the tabs open goes to the Session's address (`state/window-routes.ts`), and a window that routes offers its own Thread menu and nothing that needs a host of its own. What a Mac's rail shows of a row besides its state travels on the account's list from link version 12 (`ListedRail`: the project it's filed under and what that project has checked out, its Thread worktree's branch, the agents it ran in before, the background work its ended turn waits on), read by the Mac from what it holds (`ownedSessions`, `CheckoutHeadService.known`), and a window draws it with the same components as its own rows: the branch beside the project, the earlier agent's mark, the hourglass. Projects are in the same order on both: by when the person last sent a message there, from any device, as each Session's owner says it (`promptedAt`, link version 14). `?mock&app=busy` and `scripts/web-desk.html` draw the same busy Thread on both for side-by-side checks; `node scripts/test-web-desk-ui.mjs` holds the desk to the window's width and the rail to the desktop's.
 
 The web app reviews turns too (`src/web-client/review*.tsx`): Review on a turn's line, and Changes in a Thread's menu, open Changes over the Thread on a phone, over its pane on a tablet, and beside the transcript on a laptop's desk. Its files and every count are the request's record, read from the conversation the page already holds, so they are the line's own. Each file's diff comes from its owner through the gateway as stretches (`mako:live-turn-hunks`, `conversations/turn-hunks.ts`): the changed lines with three around each, from the journal's own line diff, bounded by `TURN_HUNK_LIMITS` (4,000 rows, 256 KB), its writers with it only where someone besides the turn wrote a line, never both versions whole; a host from before it is read with `live-turn-diff` and `live-turn-writers` and drawn the same. It reads the files nearest the screen first, four at once, keeps what it read by the record in memory and in IndexedDB (24 MB), and a file past 400 changed lines or 24,000 characters waits behind "Load diff". A comment on a line or range is the desk's own comment chip (`CommentDetail`): on the desk it goes into the composer, on a phone it waits over the Session's composer (`review-notes.ts`) and goes with the next message in Mako's context format, or with "Finish review", never by itself. Undo there is the desk's: the preview, then the undo with its token, refused by the Session's computer while a turn runs. `scripts/test-web-review.ts` covers it, and the phone's behaviour cases `open-review`, `comment-to-draft` and `finish-review` drive it on a real gateway and Mac.
 
@@ -2699,24 +2699,26 @@ the workspace name centred two inches away. Identity is the rail's footer and
 only there, and Settings is a row in the menu it opens. No glyph in the strip
 duplicates a doorway that already exists: the palette is Cmd+K and search is
 the one control there with no other way in. The rail is the vertical thread
-list; horizontal tabs inside the central workbench hold that thread's
-sessions, then its files and diffs. The rail never nests sessions: a Thread
-with several is one row wearing the live mark of the Session its most
-demanding status comes from (`src/lib/thread-fold.ts`), and clicking it
-opens the Session you last had open there. `+` and Cmd+T open the Thread's
-new tab; nothing is created until its first message is sent, an empty new
-tab disappears when you leave it, and one holding unsent text stays as a
-Draft tab, its text kept per Thread (`src/state/thread-sessions.ts`). An
-untitled Session's tab shows its agent's name, never a shared placeholder. A fork
-joins its parent's Thread as a tab unless Option-click asks for a new one.
-Moves are per Thread; no control offers to move one Session.
-
-This is changing: a Thread becomes one conversation (`docs/one-conversation.md`).
-The Thread store's split of every multi-Session Thread, forks and `+` as
-Threads beside their source, and shared places (`thread_places`, `placeOf`)
-are built behind `ThreadStoreOptions.oneConversation`, off except on an
-isolated host with `MAKO_ONE_CONVERSATION=1`; the windows' half is listed
-there. `npm run test:thread-split` covers the split.
+list, one row per conversation. A Thread is one conversation with one agent
+at a time, in one place (`docs/one-conversation.md`): a harness switch stays in
+it, a fork or a second conversation is a Thread of its own beside it, in its
+worktree (`thread_places`, `placeOf`), and a Session stays what it is inside the
+host, out of the UI. Horizontal tabs inside the central workbench hold what's
+open across Threads (`src/state/open-tabs.ts`), then its files and diffs. The
+list follows the screen, so whatever opens a Thread opens it there: one only
+looked at takes the tab of the one before it, a tab typed into or opened on
+purpose (Cmd-click, a fork, a Fin) stays, and a tab's × closes the tab, never the
+Thread. `+` and Cmd+T start a new Thread beside the one on screen; nothing is
+created until its first send, which turns its tab into that Thread, an empty one
+goes when you leave it, and one holding unsent text stays as a tab, its text
+kept per place. A header crumb says where a Thread came from ("Forked from …",
+"Split from …", `threadOrigin`). The place is the strip's checkout chip. Moves are
+per Thread. An installed host splits the multi-Session Threads an older build
+left when its store opens, with a copy kept first, and `MAKO_ONE_CONVERSATION=0`
+is the way back (`wantsOneConversation`); a checkout's host never splits the
+store it shares with the person, and a cloud machine's Threads stay whole, so
+one can still hold two conversations until those split. `npm run
+test:thread-split` covers the split, `npm run test:thread-tabs` the strip.
 
 The composer groups file attachments, screenshots, references, skills, and MCP
 settings under one + popover. `composer.controls` contributions render inside

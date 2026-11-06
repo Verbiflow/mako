@@ -36,7 +36,7 @@ function ref(at: Conversation, path: string, harness = "claude", title?: string)
 }
 
 function presence(at: Conversation, key: string, title: string): AcpPresence {
-  return { key, harness: "codex", cwd: "/work", title, threadId: at.thread, sessionId: at.session, status: "running", createdAt: 1 } as AcpPresence
+  return { key, harness: "codex", cwd: "/work", title, threadId: at.thread, sessionId: at.session, status: "running", createdAt: 1 }
 }
 
 const reset = () => openTabsStore.set({ entries: [], active: undefined })

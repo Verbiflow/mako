@@ -6,7 +6,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 /**
- * Which of a Thread's Sessions a message goes to, on every client, through the production pieces on the mock bridge
+ * Which of a Thread's Sessions a message goes to in a Thread left whole (a cloud Thread, until those split), on every client, through the production pieces on the mock bridge
  * (`src/dev/session-picker-check.tsx`'s Thread: an old Cursor fork, two Claude Code Sessions, the Cursor Session worked
  * in four hours ago), dark and light:
  *
@@ -15,8 +15,8 @@ import { fileURLToPath } from "node:url"
  *   newest first, the ones asleep folded. A send to the old fork the screen opened by itself asks first in a line
  *   above the composer: "Switch to the newest" takes the words there, "Send here" sends them. The fork picked from the
  *   sheet, a send goes without asking.
- * - A laptop's browser and the desktop app: each tab says when it was last worked in, the line over the field says
- *   where the words go, and only a Session the window opened by itself asks, in the composer's notice line.
+ * - A laptop's browser: the line over the field says where the words go, and only a Session the window opened by
+ *   itself asks, in the composer's notice line.
  * - The message that woke the fork says so above it in the transcript.
  *
  * Screenshots go to the directory given as the first argument (default: a temporary one), named
@@ -157,7 +157,7 @@ async function check() {
       const opened = await c.evaluate(`${current}.textContent`)
       assert.ok(opened.includes(FORK) && opened.includes("Fork · Asleep"), `nothing picks the newest for the person: it opens on its first, and says so: ${opened}`)
       assert.equal(await c.evaluate(sendsTo), `To Cursor fork · ${FORK}`, "the composer says where the words go")
-      assert.equal(await c.evaluate(`document.querySelector('${field}').placeholder`), "Message", "the line names the Session; the placeholder doesn't again")
+      assert.equal(await c.evaluate(`document.querySelector('${field}').placeholder`), "Ask anything", "the line names the Session; the placeholder doesn't again")
       await c.capture(`default-${theme}`)
 
       // The screen picked the old fork, not the person: a send asks first, the words kept.
@@ -220,23 +220,17 @@ async function check() {
   }
 
   /**
-   * A laptop's browser: the desktop's tabs, the line over the field and the notice line, in the web app. The address
-   * names no Session, so the Thread opens on its first, the old fork, and a send there asks; a tab the person picks
-   * never does.
+   * A laptop's browser: the line over the field and the notice line, in the web app. The address names no Session, so
+   * the Thread opens on its first, the old fork, and a send there asks.
    */
   async function laptop(theme) {
     const c = await client("laptop")
     const form = `scripts/session-picker.html?form=desk&theme=${theme}`
     const field = "main textarea"
     const asks = "Boolean(document.querySelector('[data-stale-send]'))"
-    const selected = "document.querySelector('[data-session-tab][aria-selected=\"true\"]')"
     try {
-      await c.open(form, `document.querySelectorAll('.session-tab').length === 4 && Boolean(document.querySelector('${field}')) && Boolean(document.querySelector('[data-sends-to]'))`)
-      const ages = await c.evaluate("[...document.querySelectorAll('[data-session-age]')].map(node => node.textContent)")
-      // By the last message, not the journal's write: the two Sessions read this evening still say their weeks.
-      assert.equal(ages.length, 4, `each tab says when it was worked in: ${JSON.stringify(ages)}`)
-      assert.equal(ages[3], "4h", JSON.stringify(ages))
-      assert.ok(ages.slice(0, 3).every((age) => !/^(now|\d+[mh])$/.test(age)), JSON.stringify(ages))
+      await c.open(form, `Boolean(document.querySelector('${field}')) && Boolean(document.querySelector('[data-sends-to]'))`)
+      assert.equal(await c.evaluate("document.querySelectorAll('.session-tab').length"), 1, "the Thread is one tab")
       const to = await c.evaluate("document.querySelector('[data-sends-to]').textContent")
       assert.ok(to.startsWith(`To Cursor fork · ${FORK}`) && to.includes("Asleep"), to)
       await c.capture(`default-${theme}`)
@@ -247,71 +241,18 @@ async function check() {
       assert.ok(asked.includes("Send to Cursor fork, idle 20 days?"), asked)
       await c.capture(`confirm-${theme}`)
       await c.press(c.button("[data-stale-send]", "Switch to the newest"))
-      await c.until(`${selected}?.textContent.includes(${JSON.stringify(NEWEST)})`, "the newest tab")
       await c.until(`document.querySelector('${field}')?.value.includes('Please continue')`, "the words carried")
       await c.until(`document.querySelector('[data-sends-to]')?.textContent.startsWith(${JSON.stringify(`To Cursor · ${NEWEST}`)})`, "the line over the field follows")
 
-      // The person picks the old fork's tab: a send there goes without asking.
-      await c.press("document.querySelectorAll('[data-session-tab]')[0]")
-      await c.until(`${selected}?.getAttribute('data-session-tab') === document.querySelectorAll('[data-session-tab]')[0].getAttribute('data-session-tab') && Boolean(document.querySelector('${field}'))`, "the fork's tab")
-      await c.write(field, "Please continue")
-      await c.enter()
-      await c.until(`document.querySelector('${field}')?.value === ''`, "sent")
-      assert.equal(await c.evaluate(asks), false, "a tab the person picked never asks")
-      await c.capture(`picked-${theme}`)
-
       await c.open(`${form}&session=fork&woke`, "Boolean(document.querySelector('[data-woke-after]'))")
       await c.capture(`woke-${theme}`)
-      console.log(`laptop ${theme}: tabs say their age, the field says where it sends, asks only before the screen's own pick, carries the words, says what woke it`)
+      console.log(`laptop ${theme}: the field says where it sends, asks only before the screen's own pick, carries the words, says what woke it`)
     } finally {
       c.window.destroy()
     }
   }
 
-  /**
-   * The desktop app's own window on its mock host: the busy Thread with its second Session an old fork of its first. A
-   * narrow pane cuts the tabs short; the line over the field says where the words go. The fork's tab picked, a send
-   * goes without asking; opened by the window itself, as a rail row with nothing to go on does, it asks.
-   */
-  async function desktop(theme) {
-    const c = await client("desktop")
-    const fork = "document.querySelectorAll('[data-session-tab]')[1]"
-    const asks = "Boolean(document.querySelector('[data-stale-send]'))"
-    try {
-      await c.open("index.html?mock&app=busy&aged", "document.querySelectorAll('.session-tab').length === 4")
-      await c.evaluate(`import("/src/state/prefs.ts").then(({ setPref, bindTheme }) => (setPref("theme", ${JSON.stringify(theme)}), bindTheme(), true))`)
-      await c.capture(`tabs-${theme}`)
-      await c.press(fork)
-      await c.until(`${fork}.getAttribute('aria-selected') === 'true' && Boolean(document.querySelector('textarea')) && Boolean(document.querySelector('[data-sends-to]'))`, "the old fork's tab")
-      const to = await c.evaluate("document.querySelector('[data-sends-to]').textContent")
-      assert.ok(to.startsWith("To Claude Code fork · I'll read the MetaHarness track plan for the review screen") && to.includes("Asleep") && to.includes("fork of I'll read the MetaHarness track plan and the phone composer"), to)
-      assert.ok((await c.evaluate(`${fork}.title`)).includes("Fork of I'll read the MetaHarness track plan and the phone composer · Asleep"), "its tooltip names its parent")
-      await c.write("textarea", "Please continue")
-      await c.enter()
-      await c.until("document.querySelector('textarea')?.value === ''", "sent")
-      assert.equal(await c.evaluate(asks), false, "a tab the person picked never asks")
-      await c.capture(`picked-${theme}`)
-
-      // As a folded rail row opens a Thread with nothing of the person's to go on: the window's own pick, the fork old again.
-      await c.open("index.html?mock&app=busy&aged", "document.querySelectorAll('.session-tab').length === 4")
-      await c.evaluate(`import("/src/state/prefs.ts").then(({ setPref, bindTheme }) => (setPref("theme", ${JSON.stringify(theme)}), bindTheme(), true))`)
-      await c.press(fork)
-      await c.until(`${fork}.getAttribute('aria-selected') === 'true' && Boolean(document.querySelector('textarea'))`, "the old fork's tab")
-      const session = await c.evaluate(`${fork}.getAttribute('data-session-tab')`)
-      await c.evaluate(`import("/src/state/thread-sessions.ts").then(({ noteOpenedByScreen }) => (noteOpenedByScreen(${JSON.stringify(session)}), true))`)
-      await c.write("textarea", "Please continue")
-      await c.enter()
-      await c.until(asks, "the notice asking first")
-      const asked = await c.evaluate("document.querySelector('[data-stale-send]').textContent")
-      assert.ok(asked.includes("idle 20 days?"), asked)
-      await c.capture(`confirm-${theme}`)
-      console.log(`desktop ${theme}: tabs say their age, the field says where it sends and the fork's parent, a pick sends, the window's own pick asks`)
-    } finally {
-      c.window.destroy()
-    }
-  }
-
-  const runs = { phone: (theme) => touchClient("phone", theme), tablet: (theme) => touchClient("tablet", theme), laptop, desktop }
+  const runs = { phone: (theme) => touchClient("phone", theme), tablet: (theme) => touchClient("tablet", theme), laptop }
   const kinds = process.env.MAKO_PICKER_ONLY ? process.env.MAKO_PICKER_ONLY.split(",") : Object.keys(runs)
   try {
     for (const theme of ["dark", "light"]) for (const kind of kinds) await runs[kind](theme)

@@ -1,7 +1,7 @@
 # A Thread is one conversation
 
-Status: the store's split is built and tested, and off (`ThreadStoreOptions.oneConversation`). The windows still draw
-Sessions as tabs. This page is the design for the whole change and says what landed first.
+Status: built, on for an installed host. This page is the design, with what building it changed. Its last section says
+what's left.
 
 The person accepted the proposal on 2026-11-03 (`capy-ux.md`, decisions 1, 2, 5 and 6): "To the user this is a much
 more understandable thing." It answers the incident of 2026-11-01, when "Please continue" went to a Cursor fork idle
@@ -18,8 +18,7 @@ A Thread is one conversation with one agent at a time, in one place.
 - **A second conversation opened with `+` or Cmd+T is a new Thread in the same place.**
 - **A Session stays what it is inside the host:** one logical conversation, its journals and native sessions, the unit
   of continuation and of moves. It leaves the UI.
-- **The rail stops folding.** Every row is one Thread, so `foldThreads`, `FoldGlyph`, `MarkStack` and `SessionCount`
-  have nothing to fold.
+- **The rail stops folding.** Every row is one conversation.
 - **The workbench's tabs hold what's open across Threads**: Threads, Fins and files, each Thread tab wearing its live
   mark. No Session tabs.
 - **The place is a chip in the Thread header**: the branch and worktree, its changes, its pull request.
@@ -169,53 +168,61 @@ Several Threads now work in one place: a split Thread's siblings, a fork, a `+` 
   (`held` asks every conversation holding the folder), and idle ones go on in the main checkout first
   (`conversations.leave`, by folder). Once the row goes, `detachWorktree` drops every `thread_places` row naming the
   owner, so no Thread inherits the owner's next worktree.
-- **Moving one Thread.** Moves are per Thread and carry that Thread's one conversation. A Thread that moves out of a
-  shared worktree (to the main checkout, another worktree, or the cloud) leaves the others where they are. A sibling
-  that moves drops its `thread_places` row. When the owner moves away and siblings remain, the row passes to the
-  sibling that worked there most recently, and the rest re-point to it; the worktree's folder and branch don't move.
-  Both are the next host step; until they land, a move takes the Thread's worktree row with it as today, and a
-  sibling keeps naming an owner that moved.
+- **Moving one Thread.** Moves are per Thread and carry that Thread's one conversation. A Thread that takes a worktree
+  of its own (`attachWorktree`) leaves the place it shared, and any Thread that named it as a place stays where it was:
+  a place is a checkout shared, and nobody follows the owner to a new one. An owner that goes to the cloud keeps its
+  `thread_worktrees` row here, so a sibling still finds the checkout; nothing needs passing on.
+- **A move by a fork.** A harness that can't resume in another folder moves by a fork, and the conversation it leaves is
+  archived. The Thread moved, it isn't a new one: the fork (`ForkInput.move`, `ancestry.move`) stays in the Thread, first
+  in its order, and the archived source splits off at the next open, so the Thread keeps its name, purpose and Fins.
 - **Archiving one Thread** archives its one Session. The worktree stays while any Thread in the place is unarchived.
 
 ## After the change
 
 - **`+` in a Thread, and Cmd+T,** start a draft for a new Thread in the current Thread's place: same folder, same
   branch, the harness last used there. Nothing is made until the first send; the send's `threadCreateSession`
-  returns the new Thread, which opens in the same tab. An empty draft goes when you leave it; one with text stays as a
-  draft row under the project, its text kept per place.
+  returns the new Thread, which opens in the same tab (`draftBecameThread`). An empty draft goes when you leave it; one
+  with text stays as a tab, its text kept per place. There is no separate draft row in the rail.
 - **Fork** (an exchange's Fork, the turn navigator's fork, a catalog fork) makes a Thread of its own in the parent's
-  place, crumb "Forked from …", opened in a new tab beside its parent. Option-click no longer means anything different;
-  it is dropped from the controls.
-- **A harness switch** changes the Thread's mark at the hand-off; the header ghosts the earlier harness; no new row,
-  no new tab.
+  place, crumb "Forked from …", opened in a new tab beside its parent. Option-click is gone.
+- **A harness switch** changes the Thread's mark at the hand-off; no new row, no new tab.
 - **Moves** are per Thread, as now. The place chip offers them; no control moves a Session.
-- **Fins** are Threads with a parent edge, as now. Opening one opens a tab with its crumb ("Apex › Fin").
+- **Fins** are Threads with a parent edge. Opening one gives it a tab of its own; none appears by itself.
+- **A Thread that runs elsewhere stays whole.** A cloud machine's store keeps its Threads as they are, because its Mac
+  names them and hands it Sessions to file in them, so `+` in a cloud Thread stays in that Thread (`createSession`). Each
+  of its conversations is a rail row and they share one tab, which shows the one last opened. The phone's Session
+  switcher (`SessionSwitcher`), the line over the composer (`sends-to.tsx`) and asking before a send to an old one
+  (`stale-send.ts`) stay for these alone, and show nothing for a Thread of one conversation.
 
 ## The tab model
 
 A tab is something open in this window, across Threads:
 
 ```ts
-type OpenTab =
-  | { kind: "thread"; thread: ThreadId }
-  | { kind: "draft"; place: ThreadId }          // a new Thread here, before its first send
-  | { kind: "file"; path: string; thread?: ThreadId }
-  | { kind: "diff"; thread: ThreadId; path?: string }
+type OpenEntry =
+  | { kind: "thread"; thread: string; session: string; kept?: boolean }
+  | { kind: "draft"; place: string }
 ```
 
-- **What it shows.** A Thread or Fin tab wears the Thread's live mark (the same mark as its rail row) and title. A file
-  tab names its file; a diff tab its Thread's changes.
-- **Opening.** Clicking a rail row shows the Thread in the active tab if that tab is a Thread tab nobody has typed into,
-  else focuses the Thread's tab if one is open, else opens a tab. Cmd-click and middle-click always open a new tab. A
-  fork, a Fin opened from the crew card and a file open new tabs.
-- **Persisting.** Per window in localStorage, `mako.open-tabs.v1.{profile}.{window}`: the list, the active tab and the
-  version. A tab whose Thread is gone (archived elsewhere, merged) opens the Thread it was merged into or closes.
-  The host's per-client workspace tabs (`workspaces/pool.ts`) stay what each conversation's workspace is; the strip is
-  the window's.
-- **What it replaces.** `session-tabs.tsx`, `threadSessionTabs`, the Draft tab and `lastViewed`. A Thread is opened, not
-  one of its Sessions, so the incident can't happen: the tab you type into is the conversation the rail row is.
+- **The list follows the screen.** `showInTabs` runs on every change of what's on screen (`watchThreadSessions`), so a
+  rail row, the Inbox, the crew card, search and an address all open a Thread without knowing about tabs. There is one
+  tab per Thread; `session` is the conversation it shows, which a move's fork or a Thread left whole can change. Files
+  stay the viewer's own tabs (`viewerStore`), drawn after these.
+- **What it shows.** A tab wears the Thread's live mark (the same mark as its rail row) and title.
+- **Opening.** A Thread with a tab is focused. Otherwise it takes the tab on screen if that tab was only looked at,
+  else opens beside it. Typing keeps a tab (`keepActiveTab`). Cmd-click, middle-click, a fork and a Fin open a tab of
+  their own and it stays (`openNextInOwnTab`).
+- **Closing.** × and Cmd+W close the tab: the Thread stays in the rail and keeps running, and the tab beside it takes the
+  screen. Archiving is in the tab's menu.
+- **Persisting.** `mako.open-tabs.v1`: `sessionStorage` for the window, across a reload, and `localStorage` for the next
+  launch. A renderer has no window ID to key it by, so a relaunch restores the last window's list. An entry whose Thread
+  isn't listed yet waits, drawn once it is; an archived Thread's tab closes.
+- **Two panes.** The focused chat's strip holds what's open; a chat without focus shows its one conversation.
+- **What it replaces.** `session-tabs.tsx`, `threadSessionTabs` as a strip, the Draft tab and `lastViewed`. A Thread is
+  opened, not one of its Sessions, so the incident can't happen: the tab you type into is the conversation the rail row
+  is.
 
-## What landed first, and what's left
+## What landed, and what's left
 
 Landed with this page:
 
@@ -227,19 +234,16 @@ Landed with this page:
 - `scripts/test-thread-split-migration.ts` (`npm run test:thread-split`, in `test:thread-store` and CI's orchestration
   job). `MAKO_SPLIT_REAL_COPY=<a copy>` adds a real store's copy to it.
 
-`oneConversation` is read from `MAKO_ONE_CONVERSATION=1` and only on an isolated host, so no host on the person's
-own data can split until the windows are ready.
+`oneConversation` is on for an installed host, `0` turns it off, and an isolated checkout's host may ask with `1`
+(`wantsOneConversation`). A checkout's host on the person's own `~/.mako` never splits: running a branch must not
+rewrite their Threads. A cloud machine's stays off.
 
-Left, in this order, each its own pull request behind the same switch, turned on by the last:
+`ThreadGroup` left the windows and the wire. `ThreadStore.groups()` stays for the catalog, which lists a Thread left
+whole.
 
-1. **The host's last pieces.** A `threadSplits` method for windows; passing the place's owner on when it moves away
-   (above); `forksOf` naming a harness's own forks for the crumb; `live-forks.ts` dropping `thread: "new"`.
-2. **The windows read one conversation per Thread.** `rowThread` stops consulting groups; the rail stops folding
-   (`foldThreads`, `FoldGlyph`, `MarkStack`, `SessionCount` go; `thread-row.tsx` and `active-threads.tsx` only lose
-   their fold branches); the notifications drop `threadSiblings`. `test:rail-ui` and `test:workspace-ui` cover it.
-3. **New Thread here.** `+` and Cmd+T start a draft in the place; forks open their own tab; Option-click goes;
-   `carryDrafts` runs once over `mako.thread-session-drafts.v1` with the host's splits.
-4. **The workbench's tabs** as above, replacing `session-tabs.tsx`, with the live mark from the rail's.
-5. **The place chip** in the header, reading `placeOf`'s worktree.
-6. **Turn it on.** `oneConversation` defaults on for every host (the isolation check goes); `AGENTS.md`'s Product
-   surface is rewritten to match; `ThreadGroup` and `threadGroups` retire once no window reads them.
+Left:
+
+- **Cloud Threads split.** It needs the Mac and the machine to agree on the new Threads' IDs, which `splitThreadId`
+  allows, and a release of the machine's image. Until then the phone's switcher stays for them.
+- **The crumb on the web.** `threadOrigin` asks the store on this Mac; a browser has no host of its own.
+- **`scripts/test-packaged-thread-sessions.mjs`** is a manual proof of the old tabs, in no CI job.
