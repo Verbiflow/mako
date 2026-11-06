@@ -45,6 +45,7 @@ export const GROK_VOCABULARY = defineVocabulary({
     scheduler_create: { kind: "other", label: "Schedule" },
     scheduler_delete: { kind: "other", label: "Remove schedule" },
     scheduler_list: { kind: "other", label: "Schedules" },
+    update_goal: { kind: "other", label: "Update goal" },
     send_feedback: { kind: "other", label: "Send feedback" },
     image_gen: { kind: "image" },
     image_edit: { kind: "image", label: "Edit image" },
