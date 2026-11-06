@@ -274,6 +274,7 @@
     "test:switch-interleavings": "tsx scripts/test-switch-interleavings.ts",
     "test:followed-stop-crash": "tsx scripts/test-followed-stop-crash.ts",
     "test:held-notice-crash": "tsx scripts/test-held-notice-crash.ts",
+    "test:loop-profile": "tsx scripts/test-loop-profile.ts",
     "test:fin-tuning": "tsx scripts/test-fin-tuning.ts && tsx scripts/test-fin-capacity.ts",
     "test:fin-capacity": "tsx scripts/test-fin-capacity.ts",
     "test:build-slots": "tsx scripts/test-build-slots.ts",
