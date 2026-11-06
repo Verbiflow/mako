@@ -131,7 +131,7 @@ async function somewhereToGo(harness: string): Promise<void> {
     await until(`${harness}: the notice`, () => world.agents.personAsk(apex.conversation) !== undefined)
     const notices = world.agents.roster(apex.conversation).filter((agent) => agent.child?.limitNotice)
     assert.equal(notices.length, 1, `${harness}: the person is told once`)
-    assert.match(notices[0]!.child!.limitNotice!.line, /ran out until .*This Thread moved to /, `${harness}: and what happened: ${notices[0]!.child!.limitNotice!.line}`)
+    assert.match(notices[0]!.child!.limitNotice!.line, /ran out until .*This Thread and [23] Fins moved to /, `${harness}: and what happened: ${notices[0]!.child!.limitNotice!.line}`)
     assert.equal(world.store.finTurn(world.store.journalPlacement(apex.conversation)!.thread), undefined, `${harness}: a turn that finished leaves nowhere closed to the next one, so the harness that ran out can have it back`)
   } finally {
     await world.close()

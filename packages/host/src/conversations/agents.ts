@@ -2719,9 +2719,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (settled && settled.state.kind !== "accepted") return retire(settled.state.kind === "failed" ? settled.state.error : settled.state.kind)
       const rerouted = edge && (store.rerouteEdge(edge.child, { from: harness, ...(until !== undefined && { until }), ...(from && { account: from.label }), to: step, at: now, line }) ?? edge)
       moved = store.finishFinMove(thread, this.generation, { visited: [placeKey(place), stepKey(step)] })
-      this.deps.live.recordNote(conversation, words.to, words.why)
       if (edge) this.movedNotes.set(edge.parent, [...(this.movedNotes.get(edge.parent) ?? []), `"${edge.name}" ${line.charAt(0).toLowerCase()}${line.slice(1)}.`])
-      this.noteMove(mover, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) }, words.to.replace(/^Moved to /, ""))
+      // The tree's line says an Apex's move, and more: its own line only when that line has been said already.
+      if (!this.noteMove(mover, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) }, words.to.replace(/^Moved to /, "")) || edge) this.deps.live.recordNote(conversation, words.to, words.why)
       hostLog("agents", "a Thread's account ran out; it goes on at the next step", { thread, from: harness, why: step.why, to: step.harness })
       if (edge) {
         this.forget(edge.parent)
@@ -2745,22 +2745,24 @@ export class Agents implements AgentOperations, ConversationChildren {
    * one with nowhere to go. One notice per account and reset (`limitNoticeId`). Kept as it happens, in the same step as
    * the move: a host that stops while it gathers leaves it to the next (`resume`).
    */
-  private noteLimit(fin: string, limit: { harness: string; account?: string; until?: number }, to?: string, apex = false): void {
+  private noteLimit(fin: string, limit: { harness: string; account?: string; until?: number }, to?: string, apex = false): boolean {
     const store = this.store()
-    if (!store) return
+    if (!store) return false
     const { harness, account, until } = limit
     const root = this.rootOf(fin)
     const now = this.now()
     const id = this.limits.get(root)?.id ?? limitNoticeId(limit, now)
     const first = { id, fin, harness, line: "", at: now, ...(until !== undefined && { until }), gathering: { ...(account && { account }), moved: [], stopped: 0 } }
-    if (store.gatherLimitNotice(root, first, to, apex)) this.gatherNotice(root, id)
+    if (!store.gatherLimitNotice(root, first, to, apex)) return false
+    this.gatherNotice(root, id)
+    return true
   }
 
-  /** A limit's mark on the tree's notice from `mover`: an Apex's, which has no roster entry of its own, on its first Fin's. */
-  private noteMove(mover: Mover, limit: { harness: string; account?: string; until?: number }, to?: string): void {
+  /** A limit's mark on the tree's notice from `mover`: an Apex's, which has no roster entry of its own, on its first Fin's. False when the notice was said already. */
+  private noteMove(mover: Mover, limit: { harness: string; account?: string; until?: number }, to?: string): boolean {
     if (mover.edge) return this.noteLimit(mover.edge.child, limit, to)
     const carrier = this.store()?.edges().children(mover.thread)[0]
-    if (carrier) this.noteLimit(carrier.child, limit, to, true)
+    return carrier ? this.noteLimit(carrier.child, limit, to, true) : false
   }
 
   private gatherNotice(root: string, id: string): void {

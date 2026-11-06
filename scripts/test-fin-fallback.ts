@@ -391,7 +391,7 @@ try {
     out()
     await until("the notice", () => r.world.agents.personAsk(r.apex.conversation) !== undefined, 8_000)
     const said = r.world.agents.personAsk(r.apex.conversation)!
-    assert.equal(said.line, `Claude (personal) ran out until ${resetWords(RESET, clock())}. This Thread moved to Codex. 2 Fins moved to Codex.`, "what ran out, until when and what moved where, in one line")
+    assert.equal(said.line, `Claude (personal) ran out until ${resetWords(RESET, clock())}. This Thread and 2 Fins moved to Codex.`, "what ran out, until when and what moved where, in one line")
     assert.deepEqual(said.ask.options?.map((option) => option.label), ["Got it"])
     assert.equal(r.world.agents.roster(r.apex.conversation).find((agent) => agent.child?.limitNotice)?.child?.limitNotice?.harness, "claude", "it names the harness that ran out, though the Fin carrying it has left")
     const carrying = r.world.agents.roster(r.apex.conversation).filter((agent) => agent.child?.limitNotice)
