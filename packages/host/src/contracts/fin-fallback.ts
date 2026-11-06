@@ -186,13 +186,13 @@ export function movedLine(move: FinMove, label: (harness: string) => string, now
   return `${words.to}: ${words.why}`
 }
 
-/** "Out of accounts: personal and work are at their limits until 3:10 PM PST": a Fin with no step left, stopped. */
+/** "Out of accounts until 3:10 PM PST: personal and work": a Fin with no step left, stopped. Its time first, so a cut line keeps it. */
 export function outOfAccountsLine(from: { harness: string; account?: string }, spent: readonly FallbackStep[], label: (harness: string) => string, until: number | undefined, now: number): string {
   const names = [from.account ?? label(from.harness), ...spent.map((step) => step.why === "account" ? (step.harness === from.harness ? step.label : `${label(step.harness)} (${step.label})`) : step.why === "connection" ? step.connectionName : label(step.harness))]
   const unique = [...new Set(names)]
   const listed = unique.length > 1 ? `${unique.slice(0, -1).join(", ")} and ${unique.at(-1)}` : unique[0]!
   const reset = until === undefined ? "" : ` until ${resetWords(until, now)}`
-  return `Out of accounts: ${listed} ${unique.length > 1 ? "are at their limits" : "is at its limit"}${reset}`
+  return `Out of accounts${reset}: ${listed}`
 }
 
 /** What one notice says of a limit, for a whole tree: what ran out, until when, what moved where and what stopped or waits. */
@@ -207,10 +207,15 @@ export interface LimitFacts {
   waiting: number
 }
 
+const LIMIT_ASK = "limit:"
+
 /** The episode's key: one notice per account and reset, however many Fins it stopped. */
 export function limitNoticeId(facts: Pick<LimitFacts, "harness" | "account" | "until">, now: number): string {
-  return `limit:${facts.harness}:${facts.account ?? ""}:${facts.until ?? new Date(now).toDateString()}`
+  return `${LIMIT_ASK}${facts.harness}:${facts.account ?? ""}:${facts.until ?? new Date(now).toDateString()}`
 }
+
+/** Whether an ask's id is a limit's notice, which asks nothing: "Got it" says it was seen. */
+export const isLimitAsk = (id: string) => id.startsWith(LIMIT_ASK)
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
@@ -220,7 +225,7 @@ export interface LimitNoticeWords {
   did: string
 }
 
-/** "Cursor ran out until Sun 12:00 AM PST" and "3 Fins moved to Claude Code. 7 reports are waiting." */
+/** "Cursor ran out until Sun 12:00 AM PST" and "3 Fins moved to Claude Code. 7 reports are waiting for their Apex." */
 export function limitNoticeWords(facts: LimitFacts, label: (harness: string) => string, now: number): LimitNoticeWords {
   const where = facts.account ? `${label(facts.harness)} (${facts.account})` : label(facts.harness)
   const by = new Map<string, number>()
@@ -230,7 +235,7 @@ export function limitNoticeWords(facts: LimitFacts, label: (harness: string) => 
     did: [
       ...[...by].map(([to, n]) => `${count(n, "Fin", "Fins")} moved to ${to}.`),
       ...(facts.stopped ? [`${count(facts.stopped, "Fin has", "Fins have")} nowhere to go.`] : []),
-      ...(facts.waiting ? [`${count(facts.waiting, "report is", "reports are")} waiting.`] : []),
+      ...(facts.waiting ? [`${count(facts.waiting, "report is waiting for its Apex", "reports are waiting for their Apex")}.`] : []),
     ].join(" "),
   }
 }

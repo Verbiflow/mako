@@ -544,7 +544,7 @@ try {
     const accountsRun = r.world.launches.filter((launch) => launch.conversation === finConversation).map((launch) => launch.account)
     assert.equal(accountsRun.lastIndexOf("personal"), 0, `never back to personal: ${accountsRun.join(", ")}`)
     const line = r.world.agents.roster(r.apex.conversation)[0]!.child!.moved!
-    assert.match(line, /^Out of accounts: work and personal are at their limits until /, line)
+    assert.match(line, /^Out of accounts until .+: work and personal$/, line)
     assert.equal(edgeOf(r).closedReason, line, "its stop says why in the same words")
     const stopped = r.world.agents.roster(r.apex.conversation)[0]!.child!.state!
     assert.equal(childGroup(stopped), "failed", "its work isn't finished, so it never reads as done")

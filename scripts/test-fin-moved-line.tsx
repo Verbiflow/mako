@@ -6,7 +6,7 @@ import { FinMovedLine } from "@/components/inspector/fin-moved-line"
 
 /** A Fin's moved line (`npm run test:fin-fallback`): whole on a phone, and only when it moved. */
 
-const OUT = "Out of accounts: personal and work are at their limits until 3:10 PM PST"
+const OUT = "Out of accounts until 3:10 PM PST: personal and work"
 const MOVED = "Moved to Claude (work): personal is at its limit until 3:10 PM PST"
 
 function fin(moved: string, state: NonNullable<NativeAgent["child"]>["state"]): NativeAgent {

@@ -69,9 +69,9 @@ const CHILDREN: ChildFixture[] = ([
 const LIMIT_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "limit"
 const LIMIT_UNTIL = "Sun 12:00 AM PST"
 const LIMIT_MOVED = `Moved to Claude Code: Cursor is at its limit until ${LIMIT_UNTIL}`
-const LIMIT_OUT = `Out of accounts: Cursor and Claude Code (work) are at their limits until ${LIMIT_UNTIL}`
+const LIMIT_OUT = `Out of accounts until ${LIMIT_UNTIL}: Cursor and Claude Code (work)`
 const LIMIT_RAN = `Cursor ran out until ${LIMIT_UNTIL}`
-const LIMIT_DID = "3 Fins moved to Claude Code. 1 Fin has nowhere to go. 7 reports are waiting."
+const LIMIT_DID = "3 Fins moved to Claude Code. 1 Fin has nowhere to go. 7 reports are waiting for their Apex."
 const LIMIT_NOTICE = { id: "limit:cursor::1793923200000", harness: "cursor", line: `${LIMIT_RAN}. ${LIMIT_DID}` }
 /** What each Fin of the scene becomes: a moved one runs on Claude Code now, and the one that couldn't stays on Cursor. */
 const LIMIT_FINS = new Map<string, (entry: NativeAgent) => NativeAgent>([

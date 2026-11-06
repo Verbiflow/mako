@@ -2,6 +2,8 @@ import { z } from "zod"
 import { APEX_WORD, FIN_WORD, finsWord, LEGACY_APEX_WORD, type Brief, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
 import { isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster } from "./native-agents.js"
+import type { WaitingFor } from "@mako/protocol/attention"
+import { isLimitAsk } from "./fin-fallback.js"
 import { readFinReports, type FinReportCard } from "./fin-reports.js"
 
 /** Who an agent's words in a Thread are from, as their header names them: a Fin's Apex, or an Apex's Fins (a digest of their reports). */
@@ -273,6 +275,15 @@ export const DONE_NEEDS_YOU = "Done · needs you"
 /** An open ask's words where the person reads it: its question, after `DONE_NEEDS_YOU` for a decision. */
 export function askWords(ask: Pick<OpenAsk, "question" | "done">): string {
   return ask.done ? `${DONE_NEEDS_YOU}: ${ask.question}` : ask.question
+}
+
+/**
+ * What a Fin's ask of the person makes its Apex's row, banner and mark say: the Fin's name before its line. A limit's
+ * notice asks nothing and is no Fin's: it needs the person, and its line already says what ran out.
+ */
+export function finAskWaiting(ask: Pick<FinAsk, "id" | "kind">, name: string, line: string): { for: WaitingFor; line: string } {
+  if (isLimitAsk(ask.id)) return { for: "needs-you", line }
+  return { for: ask.kind === "approval" ? "approval" : "question", line: `${name}: ${line}` }
 }
 
 /** Who answered a Fin's question, while it works on the answer: "You answered: Merge", "Apex answered: Merge". */

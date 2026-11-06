@@ -6,6 +6,7 @@ import type { AccountLimitOffer } from "@mako/host/contracts/account-usage"
 import { usageWindowName } from "@/lib/usage-window"
 import { accounts, useAccounts, type ProviderAccount } from "@/state/accounts"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
+import { loadFinDefaults, useFinDefaults } from "@/state/fin-defaults"
 import { shallowEqual } from "@/state/store"
 import type { ComposerNotice, ComposerNoticeAction } from "@/extend/notices"
 
@@ -85,8 +86,12 @@ export function useAccountLimitNotice(): ComposerNotice | null {
   const active = useAccounts((state) => harness ? state.accounts.find((account) => account.harness === harness && account.active)?.name : undefined)
   const label = useAccounts((state) => state.providers.find((provider) => provider.provider === harness)?.label)
   const busy = useAccounts((state) => Boolean(state.busy))
+  // Settings › Fins' switch, read here since nothing else loads it before Settings opens: unread, the notice says neither.
+  const onward = useFinDefaults((state) => state.reading?.moveOnLimit)
+  const unread = Boolean(offer) && onward === undefined
+  useEffect(() => { if (unread) void loadFinDefaults() }, [unread])
   if (!harness || !offer || !label || (active !== undefined && active !== offer.from.name)) return null
-  const text = limitText(offer, label)
+  const text = limitText(offer, label, onward)
   const to = offer.to && (offer.to.email ?? offer.to.name)
   return {
     id: "account-limit",
@@ -102,10 +107,11 @@ export function useAccountLimitNotice(): ComposerNotice | null {
   }
 }
 
-function limitText(offer: AccountLimitOffer, label: string): NoticeWords {
+function limitText(offer: AccountLimitOffer, label: string, onward: boolean | undefined): NoticeWords {
   const from = offer.from.email ?? offer.from.name
   const to = offer.to && (offer.to.email ?? offer.to.name)
-  const room = !offer.to ? "When it runs out, Fins go on with your next harness" : offer.to.window ? `${to} is at ${Math.round(offer.to.window.usedPercent)}%` : `${to} has room`
+  const nextHarness = onward === undefined ? undefined : onward ? "When it runs out, Fins go on with your next harness" : "When it runs out, Fins wait until it resets"
+  const room = !offer.to ? nextHarness : offer.to.window ? `${to} is at ${Math.round(offer.to.window.usedPercent)}%` : `${to} has room`
   if (offer.because === "refused") return { title: `${label} stopped the last turn on ${from}'s limits`, description: room }
   const window = offer.from.window
   return window

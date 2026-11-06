@@ -7,7 +7,7 @@ import { branchSince, checkoutSince } from "../base/checkout-since.js"
 import { cutAccount } from "./cut-account.js"
 import { finMovedText, finResumedText } from "../contracts/resume-account.js"
 import { usageLimitWords } from "../contracts/provider-failure.js"
-import { limitNoticeId, limitNoticeLine, limitNoticeWords, movedLine, movedWords, outOfAccountsLine, placeKey, stepKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep, type FinMove } from "../contracts/fin-fallback.js"
+import { isLimitAsk, limitNoticeId, limitNoticeLine, limitNoticeWords, movedLine, movedWords, outOfAccountsLine, placeKey, stepKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep, type FinMove } from "../contracts/fin-fallback.js"
 import { errorMessage } from "../base/error-message.js"
 import { z } from "zod"
 import { ACCESS_TIER_NAMES, accessModeId, sessionAccessTier, type AccessTier } from "../contracts/access.js"
@@ -1396,7 +1396,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const placed = this.store()?.journalPlacement(conversation)
     if (!placed) return { refused: "unavailable", why: "That conversation isn't a Thread here." }
     // A limit's notice answers nothing: it goes no further than the person having seen it.
-    if (input.ask.startsWith("limit:")) {
+    if (isLimitAsk(input.ask)) {
       const root = this.rootOf(placed.thread)
       if (!this.store()!.seeLimitNotice(root, input.ask)) return { refused: "conflict", why: "That notice has passed." }
       const edge = this.store()!.edges().of(input.fin)

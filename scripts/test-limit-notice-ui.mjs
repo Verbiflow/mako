@@ -109,9 +109,9 @@ async function check() {
     await setTheme(false)
     console.log(`SHOTS ${files.join(" ")}`)
   }
-  const LINE = "Cursor ran out until Sun 12:00 AM PST. 3 Fins moved to Claude Code. 1 Fin has nowhere to go. 7 reports are waiting."
+  const LINE = "Cursor ran out until Sun 12:00 AM PST. 3 Fins moved to Claude Code. 1 Fin has nowhere to go. 7 reports are waiting for their Apex."
   const MOVED = "Moved to Claude Code"
-  const OUT = "Out of accounts: Cursor and Claude Code (work) are at their limits until Sun 12:00 AM PST"
+  const OUT = "Out of accounts until Sun 12:00 AM PST: Cursor and Claude Code (work)"
 
   await viewport(1440, 900)
   console.log("LOADING the desk")
@@ -131,6 +131,7 @@ async function check() {
   const moved = await rows("[data-crew] [data-crew-row] [data-fin-moved]")
   assert.equal(moved.length, 3, `three moved, all of them on the card: ${moved}`)
   assert.ok(moved.every((line) => line.startsWith(MOVED)), `a moved Fin says so: ${moved}`)
+  assert.equal(await text("[data-crew] [data-limit-notice]"), `${LINE} Got it`, "the Thread itself says the notice, with its one answer")
   await shoot("crew-card", "[data-crew]")
   await evaluate("(() => { const el = document.querySelector('[data-crew-scroller]'); el.scrollTop = el.scrollHeight; return true })()")
   await settle()
@@ -140,6 +141,7 @@ async function check() {
   assert.equal(out.group, "failed", "a Fin out of accounts never reads as done")
   assert.ok(out.text.includes(OUT), "and says why, once")
   assert.equal(out.moved, false, "without the arrows: it didn't move")
+  assert.equal(await evaluate("[...document.querySelectorAll('[data-crew] [data-crew-row]')].find((each) => each.innerText.includes('Review screen hunks')).querySelector('[data-live-mark]')?.dataset.liveMark"), "failed", "its mark says it stopped, as its group does")
   assert.equal(await evaluate("[...document.querySelectorAll('[data-crew] [data-crew-row]')].find((each) => each.innerText.includes('Review screen hunks')).querySelector('[title^=Out]')?.title ?? ''"), OUT, "its whole line is one hover away, where the row cuts it")
   await shoot("crew-card-end", "[data-crew]")
   await evaluate("(() => { const el = document.querySelector('[data-crew-scroller]'); el.scrollTop = 0; return true })()")
@@ -154,6 +156,11 @@ async function check() {
   const warned = await text("[data-account-limit]")
   console.log("WARNING", warned)
   assert.match(warned, /When it runs out, Fins go on with your next harness/)
+  await evaluate("import('/src/state/fin-defaults.ts').then(({ chooseMoveOnLimit }) => chooseMoveOnLimit(false))")
+  await until("document.querySelector('[data-account-limit]')?.innerText.includes('Fins wait until it resets')", "the warning with the switch off")
+  assert.doesNotMatch(await text("[data-account-limit]"), /go on/, "with Settings' switch off, Fins don't go on")
+  await evaluate("import('/src/state/fin-defaults.ts').then(({ chooseMoveOnLimit }) => chooseMoveOnLimit(true))")
+  await until("document.querySelector('[data-account-limit]')?.innerText.includes('go on')", "the warning with the switch on")
   assert.doesNotMatch(warned, /Switch to/, "one account has nothing to switch to")
   await shoot("warning-before-the-limit", "[data-account-limit]")
   await evaluate(`import('/src/state/accounts.ts').then(({ accounts }) => accounts.declineOffer('claude'))`)
@@ -199,6 +206,8 @@ async function check() {
   await evaluate("[...document.querySelectorAll('button, a')].find((each) => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
   await until("Boolean(document.querySelector('[data-apex-count]'))", "the phone's Thread")
   await settle()
+  assert.equal(await evaluate("document.querySelectorAll('[data-limit-notice]').length"), 1, "a phone's Thread says the notice once")
+  assert.ok(await evaluate("Boolean(document.querySelector('[data-limit-notice] [data-limit-seen]'))"), "and Got it is there")
   // A long line ends in its ellipsis, short of the time: a `nowrap` line takes its whole width unless the row gives it one.
   const crew = await evaluate("[...document.querySelectorAll('button[data-crew-row]')].map((row) => ({ text: row.innerText, over: [...row.querySelectorAll('.truncate')].some((each) => each.getBoundingClientRect().right > row.children[1].getBoundingClientRect().right + 1) }))")
   assert.ok(crew.length > 0, "the phone's crew rows")
@@ -225,6 +234,35 @@ async function check() {
   await screen("laptop", phoneTheme)
   assert.equal(web.length, 3, "the laptop's browser shows the moves")
   console.log("PASS: the laptop's browser shows the moves")
+
+  // 6. An Apex whose only Needs you is the notice: where the rail points, the notice stands and Got it ends it.
+  await viewport(1440, 900)
+  await load(`${base}?mock&app=apex&fins=limit`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row again")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await until("Boolean(document.querySelector('[data-composer]'))", "the Apex's composer again")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-crew] [data-limit-notice]'))", "the notice on the card")
+  await evaluate("document.querySelector('[data-crew] [data-fin-ask] [data-fin-answer]').click(); true")
+  await until("!document.querySelector('[data-crew] [data-fin-ask]')", "the other ask answered")
+  await settle()
+  assert.equal(await evaluate("document.querySelectorAll('[data-crew-needs]').length"), 0, "no Fin needs the person now")
+  assert.equal(await text("[data-limit-notice]"), `${LINE} Got it`, "the notice alone still stands in the Thread")
+  await shoot("thread-notice", "[data-crew]")
+  // Banner and mark: it asks nothing, so it says so, and the banner's line isn't a name and a cut.
+  const banner = await evaluate(`Promise.all([import('/src/state/acp-live.ts'), import('/src/state/acp.ts'), import('/src/state/notifications.ts')]).then(([{ noteFinAsks }, { acpStore, activeAcp }, { notificationsStore }]) => { noteFinAsks({ ...activeAcp(acpStore.get()), key: 'banner-probe' }); const item = notificationsStore.get().items.find((each) => each.id.includes(':limit:')); return item && { kind: item.kind, body: item.body } })`)
+  assert.equal(banner?.kind, "needs-you", "a notice is no question")
+  assert.ok(banner?.body.startsWith("Cursor ran out until"), `its words lead the banner: ${banner?.body}`)
+  // Scrolled away, the line over the composer brings it back.
+  const thread = await evaluate("import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => activeAcp(acpStore.get()).threadId)")
+  await evaluate(`import('/src/state/crew-card-view.ts').then(({ mountCrewCard }) => mountCrewCard(${JSON.stringify(thread)}, false))`)
+  await until("Boolean(document.querySelector('[data-crew-away]'))", "the line over the composer")
+  assert.equal(await text("[data-crew-away]"), "Usage needs you", "the card away, the notice's line says so")
+  await evaluate(`import('/src/state/crew-card-view.ts').then(({ mountCrewCard }) => mountCrewCard(${JSON.stringify(thread)}, true))`)
+  await evaluate("document.querySelector('[data-limit-seen]').click(); true")
+  await until("!document.querySelector('[data-limit-notice]')", "Got it ending it in the Thread")
+  assert.ok((await evaluate("window.apexScene.responds()")).some((respond) => respond.ask.startsWith("limit:")), "and telling the host")
+  console.log("PASS: the Thread holds the notice, whatever else needs the person")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])
   console.log("Limit notice UI: passed")

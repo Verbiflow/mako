@@ -1,6 +1,6 @@
 import { toast } from "sonner"
 import type { AgentsRespondInput } from "@mako/host/contracts/agents"
-import { askWords, openAsk, rosterChildren } from "@mako/host/contracts/children"
+import { askWords, finAskWaiting, openAsk, rosterChildren } from "@mako/host/contracts/children"
 import type { FinAsk, NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
 import { getMako, hasBridge } from "@/lib/bridge"
 
@@ -31,7 +31,7 @@ export function personAsks(children: readonly NativeAgent[]): PersonAsk[] {
 /** The first of a conversation's Fins' asks that's the person's, as its Thread's mark says it: "Sheet motion: Approve: npm ci". */
 export function finAskLine(conversation: { nativeAgents?: NativeAgentRoster }): string | undefined {
   const ask = personAsks(rosterChildren(conversation.nativeAgents))[0]
-  return ask && `${ask.title}: ${askWords(ask)}`
+  return ask && finAskWaiting(ask.ask, ask.title, askWords(ask)).line
 }
 
 /** How the person answers: one of its options by its place, their own words, or for an approval, allow or refuse. */
