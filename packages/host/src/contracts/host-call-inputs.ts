@@ -1164,6 +1164,7 @@ const inputs = {
                   z.literal("migration"),
                   z.literal("auto-continue"),
                   z.literal("relay"),
+                  z.literal("pull-watch"),
                 ]),
               }),
             ]),

@@ -177,6 +177,34 @@ export function waitingWords(items: readonly WaitingOn[] | undefined): string | 
 }
 
 /**
+ * A waiting Fin's state words, where its row and strip say how it stands: "Waiting on acme/app#371 checks · 12m". A
+ * pull request is named by its repository whenever its report gave one, since the row stands apart from its siblings.
+ */
+export function waitingStateWords(items: readonly WaitingOn[], since: number | undefined, now: number | undefined): string {
+  const words = items.map((item) => {
+    if (item.kind === "other") return item.text.trim()
+    if (item.kind === "person") return `the person to ${item.what.trim()}`
+    const pull = pullRef(item.ref)
+    const repository = item.repository ?? pull?.repository
+    const number = item.number ?? pull?.number
+    const ref = number === undefined ? item.ref.trim() : `${repository ?? ""}#${number}`
+    return item.until ? `${ref} ${item.until}` : ref
+  })
+  const line = `Waiting on ${words.join(", ")}`
+  return since !== undefined && now !== undefined ? `${line} · ${waitedWords(now - since)}` : line
+}
+
+/** How long a Fin has waited, as its row says it: "<1m", "12m", "2h 5m", "3d". */
+function waitedWords(ms: number): string {
+  const minutes = Math.floor(Math.max(0, ms) / 60_000)
+  if (minutes < 1) return "<1m"
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 48) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+/**
  * One of a Fin's open pull requests, from what its host already holds: its branch's, as the worktree summaries last
  * read them from GitHub (`open` or `draft`), and any its reports name (`reported`, read nowhere else). Nothing polls.
  * `repository` is `owner/name`, absent only for a bare `#12` a report named in a Thread of no one known repository.
@@ -357,7 +385,10 @@ export const ReportSchema = z.object({
   question: z.string().max(4_000).optional(),
   /** Who decides a done report's question (`decisionOn`): its Apex when absent, or the person. */
   decides: z.enum(["apex", "person"]).optional(),
-  /** What it waits on outside its tree, for a question it asks: "#412 checks", the person's merge. Nothing watches it. */
+  /**
+   * What it waits on outside its tree: "#412 checks", the person's merge. With a question, on the state that asks it;
+   * on a progress report, its idle state's words. A pull request's outcome wakes it (`PullWatch`).
+   */
   waitingOn: z.array(WaitingOnSchema).max(WAITING_ON_LIMIT).optional(),
   /** The answers its question offers, each a tap on the person's phone. */
   options: z.array(AskOptionSchema).max(ASK_OPTIONS).optional(),
@@ -485,6 +516,7 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
     ? { kind: "ended", outcome: "done" }
     : { kind: "ended", outcome: ended.outcome === "unknown" ? "failed" : ended.outcome, ...(ended.reason && { reason: ended.reason }) }
   if (edge.closedAt) return { kind: "ended", outcome: "stopped" }
+  if (latest?.status === "progress" && latest.waitingOn?.length) return { kind: "idle", waitingOn: latest.waitingOn, since: latest.at }
   return { kind: "idle" }
 }
 
@@ -585,7 +617,7 @@ function entryState(state: ChildState): NativeAgent["state"] {
     case "working":
       return { kind: "working", ...((state.phase ?? state.step) && { activity: state.phase ?? state.step }) }
     case "idle":
-      return { kind: "waiting", reason: "Idle: a message gives it its next turn" }
+      return { kind: "waiting", reason: state.waitingOn?.length ? waitingStateWords(state.waitingOn, undefined, undefined) : "Idle: a message gives it its next turn" }
     case "blocked":
       return { kind: "waiting", reason: state.question }
     case "ended":

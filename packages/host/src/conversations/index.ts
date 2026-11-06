@@ -8,6 +8,7 @@ import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import type { Admission } from "../base/admission.js"
+import { readPull } from "../git/index.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostMethods } from "../transport/index.js"
@@ -345,6 +346,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
       capacity: new MacCapacity(),
       heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],
+      readPull: (target) => readPull(target),
     })
     deps.finCapacity?.subscribe(() => agents?.capacityChanged())
     agents.resume()
