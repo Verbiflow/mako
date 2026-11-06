@@ -1252,7 +1252,7 @@ that keeps the session only pins its binding (`ProviderBinding.account`,
 `LiveConversations.pinnedAccount`, a Fin's and an Apex's alike). It asks nothing
 of the harness it leaves, so it works on a Fin stopped, ended, failed or out of
 usage, keeping its Thread, name, edge, worktree, branch and reports. Its rules
-beside a Stop and a hold are in `docs/delivery-queue.md`, rules 9 to 11.
+beside a Stop and a hold are in `docs/delivery-queue.md`, rules 10 to 12.
 `agents_start` and `agents_send` attach another Thread as a person's `@` chip
 does (`context: [{ thread }]`, a ref, a Thread ID or a Fin's name; `agents_list`
 `scope: threads` finds a ref). What can be attached can be read and exported, so
