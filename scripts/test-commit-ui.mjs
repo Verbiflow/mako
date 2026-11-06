@@ -427,9 +427,9 @@ async function check() {
     }
     await click('[data-surface-id="files"]')
     await until(
-      "Boolean(document.querySelector('input[placeholder=\"Find a file\"]'))"
+      "Boolean(document.querySelector('input[placeholder^=\"Search\"]'))"
     )
-    await fill('input[placeholder="Find a file"]', "feature.ts")
+    await fill('input[placeholder^="Search"]', "feature.ts")
     await until(
       "Boolean(document.querySelector('button[title=\"feature.ts\"]'))"
     )
