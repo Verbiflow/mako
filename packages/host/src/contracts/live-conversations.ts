@@ -46,6 +46,8 @@ export interface LiveStartOptions {
   /** The access level to launch at when `modeId` is a native mode a launch-only harness enters live, such as Plan. */
   launchModeId?: string
   tuning?: SessionSettings
+  /** The account its binding runs on whatever is selected: a Fin's start placed on another account (`Agents.placeFor`). */
+  account?: string
   /** The Thread-store Session this conversation starts in: an empty one a window's `+` tab created. */
   session?: string
   /** Start a new Thread in its own Git worktree of `cwd`'s repository, made on this first send. */

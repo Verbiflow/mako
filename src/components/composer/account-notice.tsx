@@ -1,12 +1,15 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { accountReading, stopSwitches, waitText, type AccountReading } from "@/lib/account-switch"
 import type { LiveSessionState, UsageWindow } from "@/lib/types"
 import type { AccountLimitOffer } from "@mako/host/contracts/account-usage"
+import { retryWords } from "@mako/host/contracts/delivery-retry"
 import { usageWindowName } from "@/lib/usage-window"
 import { accounts, useAccounts, type ProviderAccount } from "@/state/accounts"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
+import { continueNext, nextPlace } from "@/state/fin-asks"
 import { loadFinDefaults, useFinDefaults } from "@/state/fin-defaults"
+import { promptDelivery } from "@/state/prompt-delivery"
 import { shallowEqual } from "@/state/store"
 import type { ComposerNotice, ComposerNoticeAction } from "@/extend/notices"
 
@@ -50,6 +53,51 @@ export function useAccountSwitchNotice(): ComposerNotice | null {
     actions,
     data: { "data-account-notice": reading.kind },
   }
+}
+
+/** The card of a Thread a limit holds, with somewhere to go: what holds it, and the one press that moves it. */
+export function limitContinueNotice(words: string, harness: string, to: string, busy: boolean, go: () => void): ComposerNotice {
+  return {
+    id: "limit-continue",
+    tone: "info",
+    icon: <HarnessIcon harness={harness} />,
+    title: words,
+    actions: [{ label: `Continue on ${to}`, primary: true, disabled: busy, title: "This Thread goes on there with its whole conversation, and what waits goes with it", onClick: go }],
+    data: { "data-limit-continue": to },
+  }
+}
+
+/**
+ * One card above the composer of a Thread a limit holds and Mako doesn't move by itself: a Thread with no Fins is the
+ * person's to decide. The host says where it would go (`Agents.nextPlace`); nowhere, and there's no card, only the
+ * queue's line saying when it goes again.
+ *
+ * A notice producer (`registerNotice`).
+ */
+export function useLimitContinueNotice(): ComposerNotice | null {
+  const key = useAcp((state) => activeLiveAcp(state)?.key)
+  const harness = useAcp((state) => activeLiveAcp(state)?.harness)
+  const retry = useAcp((state) => {
+    const current = activeLiveAcp(state)
+    return current && promptDelivery(current).queued.find((prompt) => prompt.retry?.cause === "rate-limited" && prompt.pause !== "stop")?.retry
+  })
+  const label = useAccounts((state) => state.providers.find((provider) => provider.provider === harness)?.label)
+  const [place, setPlace] = useState<{ key: string; to: string }>()
+  const [busy, setBusy] = useState(false)
+  const held = retry !== undefined
+  useEffect(() => {
+    if (!key || !held) return
+    let current = true
+    void nextPlace(key).then((to) => {
+      if (current) setPlace(to ? { key, to } : undefined)
+    })
+    return () => { current = false }
+  }, [key, held])
+  if (!key || !harness || !retry || place?.key !== key) return null
+  return limitContinueNotice(retryWords(retry, label ?? harness), harness, place.to, busy, () => {
+    setBusy(true)
+    void continueNext(key).finally(() => setBusy(false))
+  })
 }
 
 /** A notice's words: what holds, then what follows from it. */
