@@ -14,13 +14,121 @@
 //   out  `woke`                       the Mac woke
 //
 // It exits when its standard input closes, so it never outlives the host that started it.
+//
+// Started with `--keep-awake`, it instead keeps this Mac awake while the host's agents work, with a power assertion
+// named for them (what `pmset -g assertions` lists), and says where the Mac's power comes from:
+//
+//   out  `ready`                      started
+//   out  `power ac` | `power battery <percent>`   at start, and each time the power source or charge changes
+//   in   `hold idle <name>`           prevent idle sleep (`PreventUserIdleSystemSleep`); a closed lid still sleeps
+//   in   `hold lid <name>`            ask for sleep held off with the lid closed too (`PreventSystemSleep`, what `caffeinate -s`
+//                                     takes: on power only, and IOKit no longer documents it)
+//   out  `holding <idle|lid>`         held, or renamed if it already was
+//   in   `release`                    let the Mac sleep again
+//   out  `released`
+//   out  `failed <code>`              macOS refused the assertion
+//
+// An assertion lives no longer than the process that made it, so closing standard input releases it too.
 import Foundation
 import IOKit
+import IOKit.ps
 import IOKit.pwr_mgt
 
 setvbuf(stdout, nil, _IOLBF, 0)
 
 let arguments = CommandLine.arguments
+
+/** Calls `line` with each line the host writes, on the main run loop, and `closed` once it stops writing. */
+func readHost(_ line: @escaping (String) -> Void, closed: @escaping () -> Void) {
+  FileHandle.standardInput.readabilityHandler = { handle in
+    let data = handle.availableData
+    if data.isEmpty {
+      handle.readabilityHandler = nil
+      DispatchQueue.main.async(execute: closed)
+      return
+    }
+    let lines = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).map(String.init)
+    DispatchQueue.main.async {
+      for each in lines { line(each) }
+    }
+  }
+}
+
+/** Where this Mac's power comes from: `power ac`, or `power battery <percent>` (-1 when the charge can't be read). */
+func powerLine() -> String {
+  guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else { return "power ac" }
+  let providing = IOPSGetProvidingPowerSourceType(info)?.takeUnretainedValue() as String?
+  guard providing == kIOPSBatteryPowerValue else { return "power ac" }
+  let sources = (IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef]) ?? []
+  for source in sources {
+    guard let description = IOPSGetPowerSourceDescription(info, source)?.takeUnretainedValue() as? [String: Any],
+      description[kIOPSTypeKey] as? String == kIOPSInternalBatteryType,
+      let current = description[kIOPSCurrentCapacityKey] as? Int,
+      let capacity = description[kIOPSMaxCapacityKey] as? Int, capacity > 0
+    else { continue }
+    return "power battery \(current * 100 / capacity)"
+  }
+  return "power battery -1"
+}
+
+var assertion: IOPMAssertionID = 0
+/** What's held now: `idle`, `lid`, or nothing. */
+var holding: String?
+var lastPower = ""
+
+func releaseAssertion() {
+  guard holding != nil else { return }
+  IOPMAssertionRelease(assertion)
+  holding = nil
+}
+
+func holdAssertion(_ kind: String, _ name: String) {
+  if holding == kind {
+    IOPMAssertionSetProperty(assertion, kIOPMAssertionNameKey as CFString, name as CFString)
+    print("holding \(kind)")
+    return
+  }
+  releaseAssertion()
+  let type = kind == "lid" ? kIOPMAssertionTypePreventSystemSleep : kIOPMAssertionTypePreventUserIdleSystemSleep
+  let result = IOPMAssertionCreateWithName(type as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn), name as CFString, &assertion)
+  guard result == kIOReturnSuccess else {
+    print("failed \(result)")
+    return
+  }
+  holding = kind
+  print("holding \(kind)")
+}
+
+func sayPowerIfChanged() {
+  let line = powerLine()
+  if line == lastPower { return }
+  lastPower = line
+  print(line)
+}
+
+func keepAwake() -> Never {
+  print("ready")
+  sayPowerIfChanged()
+  if let source = IOPSNotificationCreateRunLoopSource({ _ in sayPowerIfChanged() }, nil)?.takeRetainedValue() {
+    CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+  }
+  readHost({ line in
+    let words = line.split(separator: " ", maxSplits: 2).map(String.init)
+    if words.count == 3, words[0] == "hold", words[1] == "idle" || words[1] == "lid" {
+      holdAssertion(words[1], words[2])
+    } else if words.first == "release" {
+      releaseAssertion()
+      print("released")
+    }
+  }, closed: {
+    releaseAssertion()
+    exit(0)
+  })
+  CFRunLoopRun()
+  exit(0)
+}
+
+if arguments.contains("--keep-awake") { keepAwake() }
 let hold: TimeInterval = {
   if let at = arguments.firstIndex(of: "--hold"), at + 1 < arguments.count, let seconds = Double(arguments[at + 1]) {
     return min(max(seconds, 1), 28)

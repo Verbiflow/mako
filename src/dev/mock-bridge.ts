@@ -12,6 +12,7 @@ import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { HandOffCandidate, HandOffResult, HandOffSettings, MoveCarried, ThreadContinueOffer, ThreadContinueOutcome, ThreadContinueStep, ThreadHandOff, ThreadMoveStep, ThreadReturnOptions, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import { ContinueRecorder } from "@mako/host/contracts/cloud-continues"
 import type { ConversationSettings } from "@mako/host/contracts/turn-continuation"
+import { KEEP_AWAKE_BATTERY_FLOOR, type KeepAwakeHold, type KeepAwakeSettings, type KeepAwakeState } from "@mako/host/contracts/keep-awake"
 import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
@@ -140,6 +141,24 @@ const STAGED_MEDIA = new Map<string, string>()
 const utilityChoices: UtilityWorkChoices = { commit: "auto" }
 /** Whether a fixture hands agents to the cloud as the Mac sleeps. */
 const mockHandOffOnSleep = { value: true }
+/**
+ * Keeping the fixture's Mac awake: on, as on a new Mac. `?awake=3` has three agents at work, `?awake=lid:3` with the lid
+ * held too, `?awake=battery:3` on a battery below the floor, `?awake=failed:3` with nothing held; nothing works without it.
+ */
+interface MockKeepAwake { settings: KeepAwakeSettings }
+const mockKeepAwakeScene = new URLSearchParams(globalThis.location?.search).get("awake") ?? ""
+const mockKeepAwake: MockKeepAwake = { settings: { on: true, lidClosed: mockKeepAwakeScene.startsWith("lid:") } }
+function mockKeepAwakeState(): KeepAwakeState {
+  const agents = Number(mockKeepAwakeScene.split(":").at(-1) || 0)
+  const hold: KeepAwakeHold = !mockKeepAwake.settings.on || agents === 0
+    ? { kind: "rest" }
+    : mockKeepAwakeScene.startsWith("battery:")
+      ? { kind: "low-battery", agents, percent: 14, floor: KEEP_AWAKE_BATTERY_FLOOR }
+      : mockKeepAwakeScene.startsWith("failed:")
+        ? { kind: "failed", agents }
+        : { kind: mockKeepAwake.settings.lidClosed ? "lid" : "idle", agents }
+  return { settings: mockKeepAwake.settings, hold }
+}
 /** The fixture's conversation settings, off as on a new Mac. */
 interface MockConversationSettings { value: ConversationSettings }
 const mockConversationSettings: MockConversationSettings = { value: { continueAfterRestart: false } }
@@ -3132,6 +3151,13 @@ export function installMockBridge() {
       mockConversationSettings.value = settings
       emit({ type: "conversation-settings", settings })
       return settings
+    },
+    keepAwake: async (): Promise<KeepAwakeState> => mockKeepAwakeState(),
+    setKeepAwake: async (change: Partial<KeepAwakeSettings>): Promise<KeepAwakeState> => {
+      mockKeepAwake.settings = { ...mockKeepAwake.settings, ...change }
+      const state = mockKeepAwakeState()
+      emit({ type: "keep-awake", state })
+      return state
     },
     handOffSettings: async (): Promise<HandOffSettings> => ({ onSleep: mockHandOffOnSleep.value }),
     setHandOffOnSleep: async (onSleep: boolean): Promise<HandOffSettings> => {
