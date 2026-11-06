@@ -1,5 +1,5 @@
 import { clockText } from "@/state/request-recovery"
-import { retryWords } from "@mako/host/contracts/delivery-retry"
+import { retryWords, waitsForReset } from "@mako/host/contracts/delivery-retry"
 import { harnessLabel } from "@/lib/harness-label"
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { draftText, rememberDraft, clearSubmittedDraft } from "@/state/drafts"
@@ -421,7 +421,7 @@ function QueueRow({
           {request.wake
             ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets`
             : request.retry
-              ? `Sends again by itself at ${clockText(request.retry.at)}: ${retryWords(request.retry, harness ? harnessLabel(harness) : "the agent")}`
+              ? `Sends again by itself${waitsForReset(request.retry) ? "" : ` at ${clockText(request.retry.at)}`}: ${retryWords(request.retry, harness ? harnessLabel(harness) : "the agent")}`
               : "Paused until you resume or edit this message"}
         </p>
       ) : null}
