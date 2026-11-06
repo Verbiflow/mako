@@ -56,6 +56,12 @@ async function check() {
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
   const page = window.webContents
   const guard = guardElectronCheck({ app, page, name: "The right rail UI check", ms: 150_000 })
+  page.debugger.attach("1.3")
+  /** The viewport drawn at, whatever the screen: a runner's 1024 px one clamps the window, and there the rail covers the chat. A page first: emulating a window that has drawn nothing crashes. */
+  const viewport = async (width, height) => {
+    await window.loadURL("about:blank")
+    await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile: false })
+  }
   const evaluate = (code) => page.executeJavaScript(code)
   const until = async (code, label = code) => {
     guard.at(label)
@@ -87,6 +93,7 @@ async function check() {
   const selectedRow = () => evaluate("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId")
 
   // The Apex, its twelve Fins, and the rail as a first boot opens it.
+  await viewport(1440, 900)
   await load("/?mock&app=apex")
   await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the Apex in the rail")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
@@ -202,7 +209,7 @@ async function check() {
   await until("!document.querySelector('[data-child-tab]') && Boolean(document.querySelector('[data-crew]'))", "the Apex in the browser again")
 
   // The phone: the crew card holds the Fins, the bar counts them, and no chip repeats one.
-  window.setContentSize(390, 844)
+  await viewport(390, 844)
   await load("/scripts/phone-apex.html?app=apex")
   await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone's list")
   await click("[data-thread]")

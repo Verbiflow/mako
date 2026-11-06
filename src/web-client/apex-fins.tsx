@@ -4,7 +4,7 @@ import { XIcon } from "lucide-react"
 import { LiveMark } from "@/components/ui/live-mark"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { useAcp } from "@/state/acp"
-import { unaddress, useAddressee, useThreadRollup } from "@/state/apex-fins"
+import { unaddress, useAddressee, useThreadChildren, useThreadRollup } from "@/state/apex-fins"
 import { AgentsSheet } from "./agents"
 import { FinOfApexContext } from "./fin-of-apex"
 import { WebHarnessIcon } from "./harness-icon"
@@ -39,10 +39,11 @@ export function FinOfApexNote({ conversation }: { conversation: string }) {
 
 /**
  * In an Apex's bar on the phone: how many Fins it has, which opens them in Agents. The Fins themselves stand in the
- * crew card and the list; a chip each repeated them over the card as they spawned.
+ * crew card and the list; a chip each repeated them over the card as they spawned. It counts the roster this window
+ * holds rather than the host's listed count, so it stands once the Agents it opens and the crew card can be drawn.
  */
 export function PhoneFinCount({ thread, conversation }: { thread: string; conversation: string }) {
-  const total = useThreadRollup(thread).total
+  const total = useThreadChildren(thread).length
   const [roster, setRoster] = useState(false)
   if (!total) return null
   return (
