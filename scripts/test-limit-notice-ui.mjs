@@ -81,6 +81,10 @@ async function check() {
     console.log(`SHOTS ${files.join(" ")}`)
   }
 
+  // A cold dev server reloads the page once its dependencies are bundled, aborting this load; the waits after it hold.
+  const load = (url) => window.loadURL(url).catch((error) => {
+    if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
+  })
   const text = (selector) => evaluate(`document.querySelector('${selector}')?.innerText.replace(/\\s+/g, ' ') ?? ''`)
   const rows = (selector) => evaluate(`[...document.querySelectorAll('${selector}')].map((node) => node.innerText.replace(/\\s+/g, ' '))`)
   /** The whole window, in both themes: for what's a screen, not one element. */
@@ -100,7 +104,7 @@ async function check() {
   const MOVED = "Moved to Claude Code"
   const OUT = "Out of accounts: Cursor and Claude Code (work) are at their limits until Sun 12:00 AM PST"
 
-  await window.loadURL(`${base}?mock&app=apex&fins=limit`)
+  await load(`${base}?mock&app=apex&fins=limit`)
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row")
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
@@ -168,7 +172,7 @@ async function check() {
   // 4. The phone: its row, its Inbox, its Thread and its Agents sheet, the moved line whole.
   const phoneTheme = (light) => evaluate(`document.documentElement.classList.toggle('light', ${light}); document.documentElement.classList.toggle('dark', ${!light}); document.documentElement.style.colorScheme = '${light ? "light" : "dark"}'; true`)
   window.setContentSize(390, 844)
-  await window.loadURL(`${base}scripts/phone-apex.html?app=apex&fins=limit`)
+  await load(`${base}scripts/phone-apex.html?app=apex&fins=limit`)
   await until("document.querySelectorAll('[data-fin-row]').length > 0", "the phone's rows")
   await settle()
   const phone = await rows("[data-fin-row]")
@@ -178,7 +182,7 @@ async function check() {
   await until("[...document.querySelectorAll('[data-inbox-item], [data-fin-row]')].some((each) => each.innerText.includes('ran out'))", "the phone's Inbox")
   await settle()
   await screen("phone-inbox", phoneTheme)
-  await window.loadURL(`${base}scripts/phone-apex.html?app=apex&fins=limit`)
+  await load(`${base}scripts/phone-apex.html?app=apex&fins=limit`)
   await until("document.querySelectorAll('[data-fin-row]').length > 0", "the phone's rows")
   await evaluate("[...document.querySelectorAll('button, a')].find((each) => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
   await until("Boolean(document.querySelector('[data-apex-count]'))", "the phone's Thread")
@@ -196,7 +200,7 @@ async function check() {
 
   // 5. The laptop's browser: the Apex's Fins and their moves are on its crew card, its only list.
   window.setContentSize(1280, 800)
-  await window.loadURL(`${base}scripts/web-desk.html?app=apex&thread=apex&fins=limit`)
+  await load(`${base}scripts/web-desk.html?app=apex&thread=apex&fins=limit`)
   await until("document.querySelectorAll('[data-crew] [data-crew-row]').length > 0 || document.body.innerText.includes('Mobile polish')", "the laptop's Apex")
   await settle()
   await new Promise((done) => setTimeout(done, 800))
