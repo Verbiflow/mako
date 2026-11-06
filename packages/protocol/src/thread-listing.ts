@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
 import { ContinueRepositorySchema, ListedContinueSchema } from "./continue-rows.js"
-import { ASKING_VERSION, CONTINUE_VERSION, FINS_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
+import { ASKING_VERSION, CONTINUE_VERSION, FIN_STATES_VERSION, FINS_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 import { WaitingForSchema } from "./attention.js"
 
@@ -122,7 +122,8 @@ const ListedWaitingOnSchema = z.discriminatedUnion("kind", [
 /**
  * Where one of a Session's Fins stands, as its owner's roster says it (`ChildState` in the host's contracts): all that
  * the selectors every device draws it with read, without the ask a blocked one or a done one's decision carries, which
- * the row's `asking` says, or what a blocked or ended one still waits on, which none of them reads.
+ * the row's `asking` says, or what a blocked or ended one still waits on, which none of them reads. A link of version
+ * 19 says less of it (`FIN_STATES_VERSION`).
  */
 export const ListedFinStateSchema = z.discriminatedUnion("kind", [
   z
@@ -382,17 +383,39 @@ export const SessionListingsSchema = z.object({
 })
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
+/** A Fin's state as link version 19 says it (`FIN_STATES_VERSION`): a stopped Fin's work reads as stopped, not unfinished. */
+function finStateOf19(state: ListedFinState): ListedFinState {
+  switch (state.kind) {
+    case "queued":
+      return { kind: "queued", reason: state.reason, ahead: state.ahead, ...(state.after && { after: state.after }), ...(state.held !== undefined && { held: state.held }) }
+    case "working":
+      return { kind: "working", ...(state.step !== undefined && { step: state.step }), ...(state.phase !== undefined && { phase: state.phase }) }
+    case "idle":
+      return { kind: "idle" }
+    case "ended":
+      return { kind: "ended", outcome: state.outcome, ...(state.reason !== undefined && { reason: state.reason }), ...(state.decision && { decision: state.decision }) }
+    default:
+      return state
+  }
+}
+
 /**
- * The rows a link of `version` takes, each with only the fields that version knows: from link version 18, every one
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 20, every one
  * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
  * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= FINS_VERSION) return [...rows]
+  if (version >= FIN_STATES_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
+    // At version 19 a gateway knows each Fin's state as 19 said it, and refuses a row saying more.
+    if (version >= FINS_VERSION) {
+      if (older.fins) older.fins = older.fins.map((fin) => ({ ...fin, state: finStateOf19(fin.state) }))
+      kept.push(older)
+      continue
+    }
     // Before version 19 a gateway knows no `fins`: the row says nothing of its Session's Fins but their asks.
     delete older.fins
     if (version >= ASKING_VERSION) {

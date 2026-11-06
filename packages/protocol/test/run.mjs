@@ -14,7 +14,7 @@ import { AccountEventSchema } from "../dist/account-events.js"
 import { AccessChoicesAnswerSchema, AccessChoosingSchema, applyAccessChoosing, sameAccessChoices } from "../dist/access-choices.js"
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
 import { ATTENTION_SUMMARY_FROM, ATTENTION_WORDS, AttentionKindSchema, asks, attentionFact, attentionHeadline, attentionKey, attentionLine, attentionSummary, foldedBody, needsYouWaiting, questionWaiting, requestWaiting, rowWaitingFor, factStands, noticeTag, readNotice } from "../dist/attention.js"
-import { ASKING_VERSION, CONTINUE_VERSION, FINS_VERSION, FORKS_VERSION } from "../dist/version.js"
+import { ASKING_VERSION, CONTINUE_VERSION, FIN_STATES_VERSION, FINS_VERSION, FORKS_VERSION } from "../dist/version.js"
 import { ContinueOfferSchema, ContinueStateSchema, cloudRuntimeOf, continueCloudThread, continueHandOver, continueRefusal, continueRefusalText, namedUuid as continueUuid } from "../dist/continues.js"
 import { ArchivedThreadSchema, LISTED_FINS, ListedSessionSchema, QuietDeviceSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
@@ -111,7 +111,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 19)
+    assert.equal(SUPPORTED_VERSIONS.max, 20)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -2343,7 +2343,8 @@ describe("a Session continued in the cloud while its device is off", () => {
 
   test("an Apex's row says its Fins from link 19, names and states only; an older link goes without; a reader passes over Fins it can't read, never the row", () => {
     assert.equal(FINS_VERSION, 19)
-    assert.equal(LINK_VERSION, FINS_VERSION)
+    assert.equal(FIN_STATES_VERSION, 20)
+    assert.equal(LINK_VERSION, FIN_STATES_VERSION)
     const { runsOn: _runsOn, listedAt: _listedAt, ...reported } = row
     const fin = (name, state) => ({ thread: "2b3c4d5e-6f70-4182-9a3b-4c5d6e7f8091", name, harness: "cursor", state, startedAt: "2026-11-04T21:46:08.000Z" })
     const apex = { ...reported, fins: [fin("li-openoutreach", { kind: "queued", reason: "place-full", ahead: 2 }), fin("li-protocol", { kind: "working", step: "Reading README.md" }), fin("li-flage", { kind: "ended", outcome: "done" })] }
@@ -2364,6 +2365,14 @@ describe("a Session continued in the cloud while its device is off", () => {
     const whole = { ...apex, fins: [fin("refused", { kind: "queued", reason: "place-full", ahead: 0, refused: "It didn't start: no room" }), fin("waits", { kind: "queued", reason: "tree-running", ahead: 0, apexStopped: true }), fin("answered", { kind: "working", answered: { by: "person", answer: "Merge" } }), fin("idle", { kind: "idle", waitingOn: [{ kind: "pull-request", ref: "#386", until: "checks" }, { kind: "person", what: "merge" }, { kind: "other", text: "the deploy" }], since: 1 }), fin("cut", { kind: "ended", outcome: "stopped", unfinished: true })] }
     assert.deepEqual(ReportedSessionSchema.parse(whole), whole, "all that the selectors read of a Fin's state")
     assert.throws(() => ReportedSessionSchema.parse({ ...apex, fins: [fin("x", { kind: "ended", outcome: "done", waitingOn: [{ kind: "person", what: "merge" }] })] }), "what an ended Fin waits on stays with its owner")
+    assert.deepEqual(rowsForLink([whole], FIN_STATES_VERSION), [whole], "from 20 a row's Fins are whole")
+    // What a gateway on 19 takes of a Fin's state, each kind strict: a row with any other field is refused.
+    const known19 = { queued: ["kind", "reason", "ahead", "after", "held"], starting: ["kind", "step"], working: ["kind", "step", "phase"], idle: ["kind"], blocked: ["kind", "question", "on"], ended: ["kind", "outcome", "reason", "decision"] }
+    const at19 = rowsForLink([{ ...whole, fins: [...whole.fins, ...ordered.fins] }], FINS_VERSION)[0]
+    for (const each of at19.fins) assert.deepEqual(Object.keys(each.state).filter((key) => !known19[each.state.kind].includes(key)), [], `${each.name}: a gateway on 19 refuses a field it doesn't know`)
+    assert.deepEqual(at19.fins.map((each) => each.state), [{ kind: "queued", reason: "place-full", ahead: 0 }, { kind: "queued", reason: "tree-running", ahead: 0 }, { kind: "working" }, { kind: "idle" }, { kind: "ended", outcome: "stopped" }, ...ordered.fins.map((each) => each.state)], "and it keeps all 19 knows")
+    assert.equal(whole.fins[4].state.unfinished, true, "the row itself is left whole")
+    assert.deepEqual(ReportedSessionSchema.parse(at19), at19)
     const listed = { ...row, fins: apex.fins }
     assert.deepEqual(ListedSessionSchema.parse(listed).fins, apex.fins)
     const newer = ListedSessionSchema.parse({ ...row, fins: [fin("x", { kind: "hibernating" })] })
