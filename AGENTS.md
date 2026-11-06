@@ -257,7 +257,16 @@ work is CPU time really spent since the last reading (`coresBusy`), never the
 load average, and the person's own work, the busy cores the Fins' own
 processes weren't measured to take, presses only while it leaves fewer idle
 cores than their reserve: on 2026-11-05 six short `git status` at a time
-held this 14-core Mac's load at 18 with 5 cores idle. The person
+held this 14-core Mac's load at 18 with 5 cores idle. Every check run holds
+one of the builds capacity keeps room for (`BuildSlots`), first come first
+served. A check that finishes frees its slot once its tree is gone, and its
+detached children are left alone: nobody asked for its build daemon to die,
+and what such a daemon takes shows only in busy cores. A check that's stopped
+frees its slot once its tree and every child its mark finds or a look saw are
+gone (`untilGone`, `strays`), and one that outlives SIGKILL keeps the slot
+while a waiting check says so. A check the last host left holds its slot by
+those same two rules, and finding it ends nothing. It's counted before any
+slot goes out, and a read of it that fails holds them all (`recoverSlots`). The person
 can fix a number per device instead of Auto (Settings › Fins), and
 `FinCapacity` reads the machine on the engine's 10 s tick. The cloud, a
 machine per Fin, is bounded by the plan and the daily spend ceiling only

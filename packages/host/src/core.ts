@@ -30,7 +30,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -674,6 +674,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     ...(finSlots() !== undefined && { fixed: finSlots()! }),
   })
   declareFinDefaultMethods(methods, finDefaults, () => finCapacity.reading(), () => finCapacity.changed())
+  // Every check run holds one of the builds capacity keeps room for, and the rest wait their turn.
+  const buildSlots = new BuildSlots(() => finCapacity.builds())
+  finCapacity.subscribe(() => buildSlots.changed())
   late.cloud = declareCloudAccountMethods(methods, {
     accessChoices: {
       heard: (answer) => void late.cloud?.id().then((account) => account && accessChoices.heard({ account, ...answer }), () => undefined),
@@ -839,6 +842,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     streams,
     finDefaults,
     finCapacity,
+    builds: () => buildSlots.reading(),
     invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     // A new conversation is on the account's list before its harness has started.
     opened: () => late.sessions?.showsChanged(),
@@ -1169,6 +1173,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   }
   const workspaceMovers = openWorkspaceMovers({
     git,
+    buildSlots,
     dataRoot: environment.dataRoot,
     workspaces,
     // On a cloud machine a named secret is met by its environment or by a file the account's store gave the checkout.
@@ -1225,7 +1230,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   ], (conversationId, event, body) => {
     const cwd = live.session(conversationId)?.cwd
     if (!cwd) return {}
-    const thread = callThreadOf(threads.store ?? undefined, conversationId, cwd, workspaces.environments?.launchedWith(conversationId))
+    const thread = callThreadOf(threads.store ?? undefined, conversationId, cwd, workspaces.environments?.launchedWith(conversationId), buildSlots.reading())
     return callGateAnswer(event, HookCall.safeParse(body).data, thread, conversationId)
   })
   trace("conversation tools ready")

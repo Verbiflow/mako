@@ -186,13 +186,13 @@ export function launchRouting(dependencies: Pick<Dependencies, "agents">, sessio
  * given Mako's tools has them to route to. Read at each call, so a
  * worktree_move or a recipe published mid-session counts from then on.
  */
-export function launchCalls(dependencies: Pick<Dependencies, "threads">, conversation: string, cwd: string, tools: ConversationTools | undefined, environment: ThreadEnvironment | undefined): (() => CallThread) | undefined {
+export function launchCalls(dependencies: Pick<Dependencies, "threads" | "builds">, conversation: string, cwd: string, tools: ConversationTools | undefined, environment: ThreadEnvironment | undefined): (() => CallThread) | undefined {
   if (!tools?.makoUrl) return undefined
-  return () => callThreadOf(dependencies.threads, conversation, cwd, environment)
+  return () => callThreadOf(dependencies.threads, conversation, cwd, environment, dependencies.builds?.())
 }
 
 /** The Thread a conversation's calls run in, as routing reads it now: its folder, its worktree and main checkout, its recipe. */
-export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "worktrees"> | undefined, conversation: string, cwd: string, environment: ThreadEnvironment | undefined): CallThread {
+export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "worktrees"> | undefined, conversation: string, cwd: string, environment: ThreadEnvironment | undefined, builds?: CallThread["builds"]): CallThread {
   const recipe = environment?.recipe
   const thread = store?.journalPlacement(conversation)?.thread
   const found = thread ? worktreeAt(store!.worktrees().filter((worktree) => worktree.thread === thread), cwd) : undefined
@@ -203,6 +203,7 @@ export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "work
     ...recipe?.kind === "ready" && { recipe: { kind: "ready" as const, processes: recipe.processes.map((process) => process.name) } },
     ...recipe?.kind === "none" && { recipe: { kind: "none" as const } },
     computer: true,
+    ...builds && { builds },
   }
 }
 
@@ -236,6 +237,8 @@ export function launchAccount(dependencies: Pick<Dependencies, "agents">, conver
   return () => dependencies.agents?.()?.pinnedAccount?.(conversation, harness)
 }
 export interface Dependencies {
+  /** This machine's build slots now, for the note a heavy suite started while each is in use hears (`build-slots-full`). */
+  builds?(): CallThread["builds"]
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */
   unattended?: boolean
   /** Held while a harness starts, so the host's routine work waits for it (`base/foreground.ts`). */

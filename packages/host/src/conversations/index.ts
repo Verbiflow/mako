@@ -172,6 +172,8 @@ export interface ConversationsDeps {
   invoke: HostMethods["invoke"]
   /** The person's model choices for Fins (Settings › Fins) and what they use on each harness. */
   finDefaults?: Pick<FinDefaultsStore, "reading">
+  /** This machine's build slots now, for a heavy suite's note (`build-slots-full`). */
+  builds?(): { slots: number; holders: string[] }
   /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
   finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
 }
@@ -198,6 +200,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   let agents: Agents | undefined
   const live = new LiveConversations({
     agents: () => agents,
+    ...(deps.builds && { builds: deps.builds }),
     unattended: deps.unattended,
     foreground: deps.foreground,
     work: deps.work,
