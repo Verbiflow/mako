@@ -179,6 +179,8 @@ try {
       assert.deepEqual(again.waiting, [continuation, behind, typed], `${label}: order is kept`)
       assert.equal(again.cut, undefined, `${label}: the continued turn is no longer the pause's`)
       assert.equal(request(cut)?.signIn, undefined)
+      // The pause reads the credential it stopped on after it's made: signing in before then would read as that one.
+      await until(() => Boolean(signInPause(live.snapshot(id)!.requests)?.hold.credential), `${label}: the new hold records a credential digest`)
 
       // Signed in for good: two presses admit one continuation, then the queue in order.
       revision = "private-credential-three"
