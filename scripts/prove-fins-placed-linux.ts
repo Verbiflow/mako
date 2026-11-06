@@ -23,6 +23,10 @@ import type { JsonValue } from "@mako/host/contracts/json"
  * container. Open each page signed in to the account the proof should run on and approve, within ten minutes, or have
  * whatever started this read the lines and confirm them. Nothing here signs in for anyone or holds a credential.
  *
+ * The approval: near the end it prints `ASK {"device","thread","name","title","question"}`. A Fin on the container
+ * asks to run a command, and the container has no window to allow it in. Open that Fin's Thread from the account's
+ * list, on the web or another device signed in to the account, and allow it, within ten minutes.
+ *
  * `--account` names the kind of account those codes are confirmed on, and the run fails if the devices joined
  * another kind. `cloud`, the default, is an account with the cloud: the case that works wherever placement does.
  * `free` is an account without it: it passes only against a cloud that gives every account the device network, and
@@ -37,11 +41,12 @@ import type { JsonValue } from "@mako/host/contracts/json"
  * (unless `--keep-image`), the build context and the scratch homes; both devices leave the account. Docker is left
  * running, and its build cache is kept.
  *
- * How long: about five minutes on a machine that built the image before (a minute to build from cached layers, three
- * to four to run, most of it the container's host and its first Fin starting under emulation). The first build on a
- * machine takes longer, since no layer is cached and the image's media tools are compiled from source.
+ * How long: three to five minutes on a machine that built the image before (a minute to build from cached layers,
+ * two to four to run, most of it the container's host and its first Fin starting under emulation), plus however long
+ * the codes and the approval wait for their person. The first build on a machine takes longer, since no layer is
+ * cached and the image's media tools are compiled from source.
  *
- * It prints `BUILD …` lines, then the proof's own `JOIN`, `STEP` and `DONE` lines, then `LINUX {"ok",…}`.
+ * It prints `BUILD …` lines, then the proof's own `JOIN`, `STEP`, `ASK` and `DONE` lines, then `LINUX {"ok",…}`.
  */
 const { values } = parseArgs({
   options: {

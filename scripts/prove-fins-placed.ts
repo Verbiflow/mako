@@ -17,7 +17,7 @@ import { invokeRuntime, runtimeInfo } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { assertOwnHarnessStores } from "./lib/proof-host.ts"
 import { assertScratchEnvironment, seedScratchHome } from "./scratch-harness-home.ts"
-import { scriptedModel } from "./scripted-model.ts"
+import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
 
 /**
  * A Fin placed on another device, live against a deployed cloud: two hosts of this checkout's build (`mako-host`, as a
@@ -25,13 +25,19 @@ import { scriptedModel } from "./scripted-model.ts"
  * joined to one account as two devices with a code each (`mako-host join --name`), their OpenCode answered by a
  * scripted model on this computer. Whoever drives it confirms each code at the page it prints, as the person would.
  *
- * Then, with nothing else asked of the driver:
+ * Then, with nothing asked of the driver until the last step:
  * - an Apex Thread starts on the first device, on OpenCode, in a clone of `--repository`;
  * - it starts a Fin with `place: device:<the second's name>`, which that device runs in its own clone of the same
  *   remote, in a worktree; the Fin's turn ends and its result wakes the Apex on the first device;
  * - the same start asked again answers the same Fin, and the Apex's list and read of it are answered by its device;
  * - a second Fin is held at its model while the first device is taken off the network (its relay cut, as a closed
- *   lid), finishes while it's off, and its notice waits on the second device; the first device, back, takes it once.
+ *   lid), finishes while it's off, and its notice waits on the second device; the first device, back, takes it once;
+ * - a third Fin starts there on `ask`, and its harness asks to run a command. The report says who hears that: its
+ *   Apex's device reads it as waiting on the person, its Apex can't allow it with `agents_answer`, and the person's
+ *   answer from the Apex's Thread is refused, with where to go. The second device has no window, so it prints
+ *   `ASK {"device","thread","name","title","question"}` and waits ten minutes for a person to allow the command where
+ *   they can: in that Fin's own Thread, which the account lists, on the web or from another device. Allowed, the
+ *   command runs there and the Fin's result wakes its Apex.
  *
  * Every word a turn is asked for is one only this run knows, so where each ran is plain: each device's scripted model
  * hears only its own device's turns. The report (`report.json`: each step with its time, the devices, Threads and
@@ -53,8 +59,9 @@ import { scriptedModel } from "./scripted-model.ts"
  *     --cloud https://… --relay-port <port> [--image <device image>] [--account cloud|free]
  *     [--repository https://github.com/octocat/Hello-World] [--keep]
  *
- * It prints `JOIN {"device","url","code"}` for each device, then `STEP …` lines, then `DONE {"ok",…}`. Each code is
- * confirmed at its page within ten minutes, by a person signed in to the account or by whatever reads these lines.
+ * It prints `JOIN {"device","url","code"}` for each device, then `STEP …` lines, one `ASK …`, then `DONE {"ok",…}`.
+ * Each code is confirmed at its page, and the ask answered in its Thread, within ten minutes, by a person signed in
+ * to the account or by whatever reads these lines.
  */
 const { values } = parseArgs({
   options: {
@@ -83,7 +90,7 @@ const say = (word: string, value?: JsonValue) => console.log(value === undefined
 const pause = (ms: number) => new Promise((done) => setTimeout(done, ms))
 // Letters alone: the scripted models hear "single word X" for X in capitals.
 const tag = Array.from({ length: 5 }, () => String.fromCharCode(65 + randomInt(26))).join("")
-const WORDS = { apex: `ALPHA${tag}`, fin: `FOXTROT${tag}`, held: `GOLF${tag}` }
+const WORDS = { apex: `ALPHA${tag}`, fin: `FOXTROT${tag}`, held: `GOLF${tag}`, asks: `HOTEL${tag}` }
 const ONE_WORD = /Reply with the single word ([A-Za-z0-9-]+)\./g
 const mako = join(process.cwd(), "packages", "host", "dist", "mako-host.js")
 
@@ -195,13 +202,7 @@ async function makeContainer(name: string, of: string): Promise<ContainerDevice>
   // Reached from inside the container at this computer's address there, so it listens on every interface.
   const model = await scriptedModel({
     host: "0.0.0.0",
-    reply: async (text) => {
-      const word = [...text.matchAll(ONE_WORD)].at(-1)?.[1]
-      if (!word) return { text: "OK" }
-      if (word === WORDS.held) await heldGate
-      heard.push(word)
-      return { text: word }
-    },
+    reply: answers(heard),
     aside: "Placed Fins proof",
   })
   const container = `mako-fins-proof-${tag.toLowerCase()}`
@@ -250,6 +251,26 @@ async function makeContainer(name: string, of: string): Promise<ContainerDevice>
   }
 }
 
+/**
+ * What a device's scripted model answers: the word its turn was asked for, noted in `heard`. The held word waits at
+ * the gate first; the asking word is answered first with a shell command, which a harness on `ask` puts to a person,
+ * and with the word once that command's result comes back.
+ */
+function answers(heard: string[]): (text: string) => Promise<ScriptedReply> {
+  let asked = false
+  return async (text) => {
+    const word = [...text.matchAll(ONE_WORD)].at(-1)?.[1]
+    if (!word) return { text: "OK" }
+    if (word === WORDS.held) await heldGate
+    if (word === WORDS.asks && !asked) {
+      asked = true
+      return { text: "Running it.", call: { id: `call_${tag.toLowerCase()}`, name: "shell", arguments: { command: `echo ${WORDS.asks}` } } }
+    }
+    heard.push(word)
+    return { text: word }
+  }
+}
+
 /** A gate the second device's model waits at before it answers the held word, so its Fin finishes when the proof says. */
 let releaseHeld: () => void = () => {}
 const heldGate = new Promise<void>((resolve) => {
@@ -261,13 +282,7 @@ async function makeDevice(key: string, name: string, reach: string): Promise<Pro
   const home = scratch.home
   const heard: string[] = []
   const model = await scriptedModel({
-    reply: async (text) => {
-      const word = [...text.matchAll(ONE_WORD)].at(-1)?.[1]
-      if (!word) return { text: "OK" }
-      if (word === WORDS.held) await heldGate
-      heard.push(word)
-      return { text: word }
-    },
+    reply: answers(heard),
     aside: "Placed Fins proof",
   })
   await mkdir(join(home, ".config", "opencode"), { recursive: true })
@@ -350,7 +365,8 @@ const SnapshotSchema = z.object({
   requests: z.array(z.object({ id: z.string(), status: z.string(), text: z.string().optional(), error: z.string().optional(), digest: z.object({ notices: z.array(z.object({ id: z.string() }).loose()) }).loose().optional() }).loose()).default([]),
 }).loose()
 const StartedSchema = z.object({ child: z.string().optional(), name: z.string(), state: z.string(), place: z.string().optional(), note: z.string().optional(), deduped: z.boolean().optional(), refused: z.string().optional(), why: z.string().optional() }).loose()
-const ListedSchema = z.object({ children: z.array(z.object({ child: z.string(), name: z.string(), place: z.string().optional(), state: z.object({ kind: z.string() }).loose(), harness: z.string() }).loose()) }).loose()
+const ListedSchema = z.object({ children: z.array(z.object({ child: z.string(), name: z.string(), place: z.string().optional(), state: z.object({ kind: z.string(), question: z.string().optional(), on: z.string().optional(), ask: z.object({ id: z.string(), kind: z.string() }).loose().optional() }).loose(), harness: z.string() }).loose()) }).loose()
+const RefusedSchema = z.object({ refused: z.string().optional(), why: z.string().optional() }).loose()
 const ReadSchema = z.object({ text: z.string(), state: z.object({ kind: z.string() }).loose() }).loose()
 
 const devices: Array<Pick<ProofDevice, "name" | "stop">> = []
@@ -513,9 +529,55 @@ try {
   })
   if (taken.wakes !== 1 || taken.sentByPlace !== 1) throw new Error(`the notice wasn't delivered exactly once: ${JSON.stringify(taken)}`)
 
+  // An approval on a device nobody sits at: who hears it, who may answer it, and where the person does.
+  const title = `Approval proof ${tag}`
+  const stripOf = async (child: string) => ListedSchema.parse(await apex.call("mako:agents-list", [caller, {}])).children.find((strip) => strip.child === child)
+  const asker = await step("a Fin on ask starts on the second device, and its harness asks to run a command", async () => {
+    const answer = StartedSchema.parse(await apex.call("mako:agents-start", [caller, { brief: { objective: `Run the command you're given. Reply with the single word ${WORDS.asks}.` }, harness: "opencode", name: "asker", title, access: "ask", place: where, clientKey: `asker-${tag}` }]))
+    if (answer.refused || !answer.child) throw new Error(`the start was refused: ${answer.refused}: ${answer.why}`)
+    const child = answer.child
+    // Its Apex's device reads it as blocked once the notice of its ask is taken.
+    const strip = await until("its ask to reach its Apex's device", async () => {
+      const found = await stripOf(child)
+      return found?.state.kind === "blocked" ? found : undefined
+    })
+    return { child, name: answer.name, note: answer.note, state: strip.state, heardOnPlace: [...place.heard] }
+  })
+  if (place.heard.includes(WORDS.asks)) throw new Error("the command ran with nobody asked")
+  await step("its Apex's device takes the ask as the person's to answer", async () => {
+    const asks = (line: string) => line.includes(asker.child) && (line.includes("ask routed") || line.includes("notice sent") || line.includes("notice taken"))
+    const wake = (await digests()).find((request) => request.digest?.notices.some((notice) => notice.id.includes(asker.child)))
+    return { state: asker.state, apexWoken: wake ? { request: wake.id, status: wake.status, says: wake.text?.slice(0, 600) } : false, place: (await place.log()).filter(asks).map((line) => line.slice(0, 400)), apex: (await apex.log()).filter(asks).map((line) => line.slice(0, 400)) }
+  })
+  await step("its Apex can't allow it with agents_answer", async () => {
+    const answer = RefusedSchema.parse(await apex.call("mako:agents-answer", [caller, { to: asker.child, allow: true, clientKey: `allow-${tag}` }]))
+    if (!answer.refused) throw new Error(`its Apex's answer was taken: ${JSON.stringify(answer)}`)
+    if (place.heard.includes(WORDS.asks)) throw new Error("the command ran on its Apex's word")
+    return answer
+  })
+  await step("the person's answer from the Apex's Thread is refused, and says where to go", async () => {
+    const ask = asker.state.ask?.id
+    if (!ask) throw new Error(`the Fin's state names no ask: ${JSON.stringify(asker.state)}`)
+    const answer = RefusedSchema.parse(await apex.call("mako:agents-respond", [apexConversation, { fin: asker.child, ask, allow: true, request: randomUUID() }]))
+    if (!answer.refused) throw new Error(`the person's answer from the Apex's Thread was taken: ${JSON.stringify(answer)}`)
+    if (place.heard.includes(WORDS.asks)) throw new Error("the command ran on an answer its device never took")
+    return answer
+  })
+  const askedAt = Date.now()
+  await step("the person allows it in the Fin's own Thread, and its result wakes the Apex", async () => {
+    say("ASK", { device: names.place, thread: asker.child, name: asker.name, title, ...(asker.state.question && { question: asker.state.question }) })
+    // Ten minutes for whoever answers it: there's no window on that device to answer it in.
+    await until("the person's answer", async () => (place.heard.includes(WORDS.asks) ? true : undefined), 10 * 60_000)
+    const wake = await until("the Apex's wake with its result", async () => (await digests()).find((request) => request.text?.includes(WORDS.asks) && request.status === "completed"))
+    const strip = await stripOf(asker.child)
+    if (strip?.state.kind !== "ended") throw new Error(`the Fin read otherwise after its answer: ${JSON.stringify(strip?.state)}`)
+    return { msToAnswer: Date.now() - askedAt, request: wake.id, state: strip.state, heardOnPlace: [...place.heard], heardOnApex: [...apex.heard], permission: (await place.log()).filter((line) => /permission/i.test(line) && !/gateway trace/.test(line)).slice(-6).map((line) => line.slice(0, 300)) }
+  })
+  if (apex.heard.includes(WORDS.asks)) throw new Error("the asking Fin's turn ran on the wrong device")
+
   // What each host logged of the calls between them, with the correlation IDs the gateway carried.
-  const between = (lines: string[]) => lines.filter((line) => /agents-(place|capabilities|notice|list|read)|start placed|notice (sent|waits|taken)|edge written|cloned a project|"wake"|\bwake\b/.test(line)).map((line) => line.slice(0, 600))
-  report.apex = DetailSchema.parse(JSON.parse(JSON.stringify({ ...apexThread, fin: fin.child, held: held.child })))
+  const between = (lines: string[]) => lines.filter((line) => /agents-(place|capabilities|notice|list|read|answer|respond)|ask routed|start placed|notice (sent|waits|taken)|edge written|cloned a project|"wake"|\bwake\b/.test(line)).map((line) => line.slice(0, 600))
+  report.apex = DetailSchema.parse(JSON.parse(JSON.stringify({ ...apexThread, fin: fin.child, held: held.child, asker: asker.child })))
   report.log = { apex: between(await apex.log()), place: between(await place.log()) }
   const cloned = (await place.log()).find((line) => line.includes("cloned a project"))?.slice(0, 400)
   if (cloned) report.worktree = cloned
