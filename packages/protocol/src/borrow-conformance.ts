@@ -158,11 +158,12 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
     assert.deepEqual(await box.value(lease.id), value)
     const elsewhere = await broker.deviceBorrower(REPOSITORY, "conformance-other", true)
     assert.equal(refusalOf(await elsewhere.borrow(need("c-1"))), "out-of-scope", "a device the grant doesn't name")
-    // Another Thread named by the same device's credential, one the account doesn't list there: refused for a new
-    // lease, and refused the lease the listed Thread holds, however it's asked for.
+    // Another Thread named by the same device's credential, one the account doesn't list there: issued nothing, and
+    // the lease the listed Thread holds doesn't open for it. Each holds on its own.
     const claimed = await broker.deviceBorrower(REPOSITORY, "conformance-box", false)
-    assert.ok(refused(await claimed.value(lease.id)) || "refusal" in (await claimed.borrow(need("c-1"))), "an unlisted Thread reads nothing")
-    assert.ok("refusal" in (await claimed.borrow(need("c-2"))), "and is issued nothing")
+    assert.ok("refusal" in (await claimed.borrow(need("c-1"))), "an unlisted Thread is refused the need the listed one holds")
+    assert.ok("refusal" in (await claimed.borrow(need("c-2"))), "and is issued nothing new")
+    assert.ok(refused(await claimed.value(lease.id)), "and the listed Thread's lease doesn't open for it")
   })
 
   scenario("a lease held under a grant that changed away from its borrower is refused when it's asked for again", async (broker) => {
@@ -172,7 +173,7 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
     const box = await broker.deviceBorrower(REPOSITORY, "conformance-box", true)
     const lease = leaseOf(await box.borrow(need("c-1")))
     granted(await person.grant(vaultCopy(person.account, "env", { devices: ["conformance-other"], version: 2 }), canary()))
-    assert.notEqual("lease" in (await box.borrow(need("c-1"))) ? "lease" : "refused", "lease", "the cached lease isn't handed back")
+    assert.ok("refusal" in (await box.borrow(need("c-1"))), "the cached lease isn't handed back")
     assert.ok(refused(await box.value(lease.id)), "and its value no longer opens")
   })
 
