@@ -162,6 +162,21 @@ export const ROOM_WATCH_JOB = "read this device's capacity"
 /** How long an ask its Apex may answer waits on the Apex alone before the person is asked too. */
 export const APEX_ANSWER_MS = 60_000
 
+/**
+ * The rows of a harness each exact id can mean: a Fin's reach looks up every row it lists, so a walk of all of them for
+ * each would be a walk of their square. An id with no row of its own may be a short one, which only that walk can tell.
+ */
+function referenceIndex(rows: readonly ThreadRef[]): Map<string, ThreadRef[]> {
+  const byId = new Map<string, ThreadRef[]>()
+  for (const row of rows)
+    for (const id of new Set([row.nativeId, threadReferenceId(row)])) {
+      const held = byId.get(id)
+      if (held) held.push(row)
+      else byId.set(id, [row])
+    }
+  return byId
+}
+
 /** What a message into a Fin's Thread attaches: what `reachOf` passed, or with `passedOn` what the person's own message granted. */
 interface Attaching {
   refs?: readonly string[]
@@ -218,11 +233,12 @@ const READ_CHARS = 8_000
 
 /**
  * The Fin's brief a cut turn still has to carry: the brief cut short, or the brief sent again and cut short too, unless
- * its harness said it had it. Whether it goes as itself or as a Continue is decided as it's sent, by the harness's
- * transcript (`LiveDispatch`): a bare Continue would leave a Fin that never had it with nothing to do.
+ * its harness said it had it. A digest cut at its hand-off is the same: its reports read as heard, so nothing else would
+ * send them. Whether it goes as itself or as a Continue is decided as it's sent, by the harness's transcript
+ * (`LiveDispatch`): a bare Continue would leave a Fin that never had it with nothing to do.
  */
 function cutBrief(op: string | undefined, cut: LiveRequest): string | undefined {
-  const root = cut.continues?.brief ?? (op !== undefined && cut.id === namedUuid(`${op}\nbrief`) ? cut.id : undefined)
+  const root = cut.continues?.brief ?? (cut.digest || (op !== undefined && cut.id === namedUuid(`${op}\nbrief`)) ? cut.id : undefined)
   return cut.nativeDelivery?.evidence.kind !== "accepted" ? root : undefined
 }
 
@@ -233,7 +249,7 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching"
+  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching"
 >
 
 export interface AgentsDeps {
@@ -610,9 +626,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     })
     this.wakes = new AgentWakes({
       ready: (conversation) => this.ready(conversation),
-      // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against.
+      // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against. A digest
+      // sent again says what the one it repeats said, so later news goes on its own.
       unsent: (conversation) => (deps.live.snapshot(conversation)?.requests ?? []).flatMap((request) =>
-        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
+        request.digest && !request.continues?.brief && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
       carried: (conversation, notice) => Boolean(deps.live.snapshot(conversation)?.requests.some((request) =>
         request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
       admit: (conversation, request, text, notices, actor, hold, lines) => {
@@ -3619,10 +3636,21 @@ export class Agents implements AgentOperations, ConversationChildren {
   private reachOf(apex: Apex): (ref: string) => boolean {
     const store = this.store()!
     if (!store.edges().of(apex.thread)) return () => true
+    // Each harness's rows, once: a list is capped after it's filtered, so one of everything can hide all of a harness.
+    const listed = new Map<string, { rows: ThreadRef[]; byId: Map<string, ThreadRef[]> }>()
+    const listOf = (harness: string) => {
+      const held = listed.get(harness)
+      if (held) return held
+      const rows = this.deps.references?.list({ harness }) ?? []
+      const list = { rows, byId: referenceIndex(rows) }
+      listed.set(harness, list)
+      return list
+    }
     const keysOf = (ref: string): string[] => {
       const token = parseThreadToken(ref)
       if (!token) return []
-      const row = this.deps.references && findThreadReference(this.deps.references.list({ harness: token.harness }), token.harness, token.id)
+      const { rows, byId } = listOf(token.harness)
+      const row = findThreadReference(byId.get(token.id) ?? rows, token.harness, token.id)
       return [token.id, ...(row ? [row.nativeId, threadReferenceId(row)] : [])].map((id) => `${token.harness}\0${id}`)
     }
     const tree = treeEdges(store.edges(), apex.thread)
@@ -3654,11 +3682,13 @@ export class Agents implements AgentOperations, ConversationChildren {
     return this.nativesOf(thread).map((native) => threadToken(native.harness, native.nativeId).slice(1))
   }
 
-  /** The native sessions a Thread ran in, oldest first. */
+  /**
+   * The native sessions a Thread ran in, oldest first, from what's listed: a Fin's reach walks every Thread of its
+   * tree, and reading each conversation in for this read 74 journals back at once.
+   */
   private nativesOf(thread: ThreadId): { harness: string; nativeId: string }[] {
     const conversation = this.conversationOf(thread)
-    const snapshot = conversation ? this.deps.live.snapshot(conversation) : undefined
-    const bindings = (snapshot?.control?.bindings ?? []).flatMap((binding) => (binding.nativeId ? [{ harness: binding.provider, nativeId: binding.nativeId }] : []))
+    const bindings = conversation ? this.deps.live.nativeIds(conversation).map(({ provider, nativeId }) => ({ harness: provider, nativeId })) : []
     if (bindings.length) return bindings
     const store = this.store()!
     return (store.thread(thread)?.sessions ?? []).flatMap((session) => store.sessionContents(session).natives.flatMap(({ path }) => {
