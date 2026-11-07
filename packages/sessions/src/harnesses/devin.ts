@@ -13,9 +13,9 @@ const SETTINGS_ONLY = "3000.10.23 doesn't define it for the capture's account, w
 export const DEVIN_VOCABULARY = defineVocabulary({
   harness: "devin",
   checked: {
-    version: "3000.12.17",
+    version: "3000.12.28",
     on: "2026-11-07",
-    against: "Devin's CLI store and IDE journal through audit:tools as of 2026-10-08, and its 3000.12.17 tool definitions through harness:native-tools (no tool added or removed since 3000.10.23; grep reworded in 3000.12.17; Ask mode offers the MCP tools; Smart mode, recorded since 3000.12.17, offers Bypass's)",
+    against: "Devin's CLI store and IDE journal through audit:tools as of 2026-10-08, and its 3000.12.28 tool definitions through harness:native-tools (no tool added or removed since 3000.10.23; grep reworded in 3000.12.17, read's image_size added in 3000.12.28; Ask mode offers the MCP tools; Smart mode, recorded since 3000.12.17, offers Bypass's)",
   },
   mcp: ["s.t"],
   tools: {
@@ -54,7 +54,7 @@ export const DEVIN_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "3000.12.17",
+      version: "3000.12.28",
       on: "2026-11-07",
       against: "the binary through harness:self-report (every declared name, and every skill and MCP place listed), and the docs devin 3000.10.23 ships (extensibility, subagents, permissions, mcp) and devin skills paths as read on 2026-10-06",
     },
@@ -99,7 +99,7 @@ export const DEVIN_VOCABULARY = defineVocabulary({
       {
         holds: "stream",
         entry: { type: "user", cutOff: true },
-        why: "Devin 3000.12.17 keeps nothing of a turn that failed before its model answered, its prompt included: neither sessions.db nor Devin.app's acp-messages holds it, and its revert lists no step for it (the server-error and rewound-past-marker decode pairs, 2026-11-07). Earlier builds kept the prompt.",
+        why: "From 3000.12.17 (3000.12.28 too), Devin keeps nothing of a turn that failed before its model answered, its prompt included: neither sessions.db nor Devin.app's acp-messages holds it, and its revert lists no step for it (the server-error and rewound-past-marker decode pairs, 2026-11-07). Earlier builds kept the prompt.",
       },
       {
         holds: "order",

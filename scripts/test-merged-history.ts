@@ -384,7 +384,7 @@ try {
   }
   console.log("PASS: a failed turn is covered as it ended, and keeps what it streamed that its record never kept")
 
-  // Devin 3000.12.17 keeps nothing of a turn that failed before its model answered, its prompt included, and Devin.app's
+  // Devin, from 3000.12.17, keeps nothing of a turn that failed before its model answered, its prompt included, and Devin.app's
   // journal keeps no call's output. Mako's own history stays whole: the journal's blocks supply both, on refresh, held by
   // its session, and read back from it after a reload, with no mismatch logged for what Devin declares it drops.
   {
@@ -412,7 +412,7 @@ try {
     const journal = new LiveJournal(root, id)
     journal.commit({
       ...snapshot, blocks: turns, threadPath: at,
-      session: { ...snapshot.session, harness: "devin", nativeId: at, executionContext: { ...snapshot.session.executionContext!, transport: "acp", runtime: { kind: "reported", version: "3000.12.17", via: "fixture" } } },
+      session: { ...snapshot.session, harness: "devin", nativeId: at, executionContext: { ...snapshot.session.executionContext!, transport: "acp", runtime: { kind: "reported", version: "3000.12.28", via: "fixture" } } },
       requests: [{ id: failedAsk, text: "Say hello.", attachments: [], status: "failed" }],
       control: { ...snapshot.control!, bindings: [{ id, provider: "devin", nativeId: at, path: at, includesBase: true, coveredBlocks: turns.length }] },
     })

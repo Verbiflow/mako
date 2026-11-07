@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.12.17"
+    "version": "3000.12.28"
   },
   "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#field-enthusiasm",
+      "path": ".local/share/devin/cli/sessions.db#diligent-newsstand",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/e98b676c-335e-48fa-a2e7-c9c54d3ae33b.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/934edce6-2113-4a4d-ac78-16efe5410968.db",
       "known": [
         {
           "side": "-",

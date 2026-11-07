@@ -972,7 +972,7 @@ const devin: Recorder = {
   unavailable: () => existsSync(DEVIN_APP) ? undefined : `a Devin pair keeps Devin.app's journal of the session, which only Devin.app's own message store writes, and ${DEVIN_APP} isn't installed here`,
   cannot: {
     // The declared stream-only prompt (`DEVIN_VOCABULARY.storage.stream`) is what keeps such a turn in Mako's history.
-    "rewound-past-marker": "Devin 3000.12.17 keeps no turn that failed before its model answered, so its revert lists no step to go back to",
+    "rewound-past-marker": "From 3000.12.17, Devin keeps no turn that failed before its model answered, so its revert lists no step to go back to",
   },
   async record(sandbox, scenario) {
     const config = sandbox.env.XDG_CONFIG_HOME

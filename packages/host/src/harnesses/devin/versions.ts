@@ -6,20 +6,21 @@ import { scriptInstall } from "../update-source.js"
  * The Devin CLIs Mako runs. A standalone install goes to `tested` through
  * Devin's versioned setup script (`static.devin.ai/cli/<version>/setup.sh`,
  * which answered for 3000.10.23 on October 12, 3000.11.205 on October 25,
- * 3000.11.234 on October 30 and 3000.12.17 on November 7); the copies in Devin.app and Zed update
+ * 3000.11.234 on October 30, and 3000.12.28 on November 7; 3000.12.17 answered that morning
+ * and was withdrawn by evening, as was 3000.12.20); the copies in Devin.app and Zed update
  * with those apps. No oldest: Devin's pairs ran on its own model, which
  * spent usage, until they were sealed against a stand-in for its API server
  * (`scripts/scripted-windsurf.ts`), so only the builds tested were recorded
- * (3000.10.23, 3000.11.205, 3000.11.234, then 3000.12.17).
+ * (3000.10.23, 3000.11.205, 3000.11.234, then 3000.12.28).
  * Where Devin's ACP handshake advertises a capability, that answers instead
  * of a version.
  */
 export const DEVIN_VERSIONS: HarnessVersions = {
-  tested: "3000.12.17",
+  tested: "3000.12.28",
   feed: { manifest: "https://static.devin.ai/cli/current/manifest.json" },
   checked: {
     on: "2026-11-07",
-    how: "the version every record names: the vocabulary, native-tools/devin-3000.12.17.json, the decode pairs and devin-concepts.json",
+    how: "the version every record names: the vocabulary, native-tools/devin-3000.12.28.json, the decode pairs and devin-concepts.json",
   },
 }
 

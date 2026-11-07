@@ -236,7 +236,7 @@ function frames(from: number, to: number): RecordRef {
 }
 
 {
-  // A request that failed, then the same words sent again: each request is its own. Devin 3000.12.17 keeps nothing of the
+  // A request that failed, then the same words sent again: each request is its own. Devin, from 3000.12.17, keeps nothing of the
   // failed turn, its prompt included, so the record's one prompt is the retry's; the failed one stays where it streamed.
   const said = (entries: readonly Entry[]) => entries.map((entry) => entry.type === "user" ? `user ${entry.requestId ?? "-"} ${entry.text}` : entry.type === "text" ? `text ${entry.text}` : entry.type)
   const devinRecord: Entry[] = [user("Say hello.", { id: "u-retry" }), text("Hello.", "t-retry")]
