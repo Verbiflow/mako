@@ -14,9 +14,9 @@ import { cutOffTurn, DIRECT_MESSAGES, RETRY_MARKERS, SETUP_NOTICES, STOP_MARKER 
 export const GROK_VOCABULARY = defineVocabulary({
   harness: "grok",
   checked: {
-    version: "1.0.70",
-    on: "2026-10-25",
-    against: "the model request of grok agent stdio 1.0.70 in every Mako mode (scripts/fixtures/native-tools; unchanged since 1.0.46), and ~/.grok/sessions updates.jsonl through audit:tools as of 2026-10-06",
+    version: "1.0.77",
+    on: "2026-11-07",
+    against: "the model request of grok agent stdio 1.0.77 in every Mako mode (scripts/fixtures/native-tools; unchanged from 1.0.46 to 1.0.70; 1.0.77 rewords spawn_subagent and use_tool, and lets use_tool take its arguments or its whole call from a JSON file, `tool_input_file` or `file`, which Mako reads only inline, as `tool_input`; Anthropic models see only that form), and ~/.grok/sessions updates.jsonl through audit:tools as of 2026-10-06",
   },
   mcp: ["s__t"],
   tools: {
@@ -54,8 +54,8 @@ export const GROK_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "1.0.70",
-      on: "2026-10-25",
+      version: "1.0.77",
+      on: "2026-11-07",
       against: "the binary through harness:self-report (every declared name, and every skill and MCP place listed), and the user guide grok 1.0.46 ships in ~/.grok/docs, grok --help and an initialize-only ACP call as read on 2026-10-06",
     },
     instructions: {
