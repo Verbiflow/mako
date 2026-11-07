@@ -188,8 +188,8 @@ const ActivityRow = z.object({
   status: CallStatusSchema.nullable().optional(), run: z.string().nullable().optional(),
 })
 const Count = z.object({ count: z.number() })
-const ThreadEntries = z.object({ count: z.number(), seq: z.number().nullable() })
-const ThreadNewest = z.object({ at: z.number().nullable() })
+const ThreadChangeRow = z.object({ seq: z.number(), moved: z.number() })
+const ChangeSeqRow = z.object({ change_seq: z.number() })
 const ThreadWriteRow = z.object({ seq: z.number(), root: z.string(), path: z.string(), at: z.number(), kind: z.string(), certainty: z.string() })
 const TurnChangesRow = z.object({ summary: z.string() })
 const TurnSeqRow = z.object({ turn: z.string(), seq: z.number() })
@@ -345,6 +345,68 @@ function lineAuthors(row: z.infer<typeof BlobRow> | undefined): Int32Array | und
  */
 export const JOURNAL_FORMAT = createHash("sha256").update(`${SCHEMA_VERSION}\n${MIGRATION}\n${JSON.stringify(ADDED_COLUMNS)}`).digest("hex").slice(0, 16)
 
+/**
+ * What changed for each Thread, kept by triggers so every writer is counted, a host of another build and a bulk update
+ * alike. Not in `MIGRATION`: the shared journal's folder is named for that (`SHARED_FORMAT`), so a change there would
+ * leave every host on a new, empty journal. Nothing needs these to read true, only to read less: where they're missing,
+ * as under an older owner, `threadVersion` says so and a Thread is read whole on any write.
+ */
+const CHANGE_TRACKING = `
+  CREATE TABLE IF NOT EXISTS change_clock (id INTEGER PRIMARY KEY CHECK (id = 1), seq INTEGER NOT NULL);
+  INSERT OR IGNORE INTO change_clock (id, seq) VALUES (1, 0);
+  CREATE TABLE IF NOT EXISTS thread_changes (thread TEXT PRIMARY KEY, seq INTEGER NOT NULL, moved INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS activity_changes (
+    session TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, thread TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY (session, kind, id)
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS activity_changes_thread ON activity_changes(thread, seq);
+  CREATE TRIGGER IF NOT EXISTS activity_inserted AFTER INSERT ON activity BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    INSERT INTO activity_changes VALUES (NEW.session, NEW.kind, NEW.id, NEW.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (session, kind, id) DO UPDATE SET thread = excluded.thread, seq = excluded.seq;
+    INSERT INTO thread_changes (thread, seq) VALUES (NEW.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+  END;
+  CREATE TRIGGER IF NOT EXISTS activity_updated AFTER UPDATE ON activity BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    INSERT INTO activity_changes VALUES (NEW.session, NEW.kind, NEW.id, NEW.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (session, kind, id) DO UPDATE SET thread = excluded.thread, seq = excluded.seq;
+    INSERT INTO thread_changes (thread, seq) VALUES (NEW.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+    INSERT INTO thread_changes (thread, seq, moved) SELECT OLD.thread, (SELECT seq FROM change_clock), 1 WHERE OLD.thread <> NEW.thread
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq, moved = moved + 1;
+  END;
+  CREATE TRIGGER IF NOT EXISTS activity_deleted AFTER DELETE ON activity BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    DELETE FROM activity_changes WHERE session = OLD.session AND kind = OLD.kind AND id = OLD.id;
+    INSERT INTO thread_changes (thread, seq, moved) VALUES (OLD.thread, (SELECT seq FROM change_clock), 1)
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq, moved = moved + 1;
+  END;
+  CREATE TRIGGER IF NOT EXISTS entries_inserted AFTER INSERT ON entries WHEN NEW.thread IS NOT NULL BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    INSERT INTO thread_changes (thread, seq) VALUES (NEW.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+  END;
+  CREATE TRIGGER IF NOT EXISTS entries_updated AFTER UPDATE OF thread, certainty, root, path, kind, at ON entries BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    INSERT INTO thread_changes (thread, seq) SELECT NEW.thread, (SELECT seq FROM change_clock) WHERE NEW.thread IS NOT NULL
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+    INSERT INTO thread_changes (thread, seq) SELECT OLD.thread, (SELECT seq FROM change_clock) WHERE OLD.thread IS NOT NULL
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+  END;
+  CREATE TRIGGER IF NOT EXISTS entries_deleted AFTER DELETE ON entries WHEN OLD.thread IS NOT NULL BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    INSERT INTO thread_changes (thread, seq) VALUES (OLD.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+  END;
+`
+
+/** What a Thread's work has reached: `key` moves with anything that could change it; `seq` and `moved` are only there when changes are tracked. */
+export interface ThreadVersion {
+  key: string
+  seq?: number
+  moved?: number
+}
+
 /** A row as SQLite returns it, before its schema reads it. */
 type Row = Record<string, SQLOutputValue>
 
@@ -368,6 +430,8 @@ export class JournalStore {
   readonly id: string
   readonly device: string
   private readonly db: DatabaseSync
+  /** Whether this journal keeps `CHANGE_TRACKING`: once it does, it always will. */
+  private tracked = false
   private readonly statements = new Map<string, StatementSync>()
 
   private constructor(path: string, db: DatabaseSync, id: string, device: string) {
@@ -393,6 +457,7 @@ export class JournalStore {
       const columns = db.prepare(`PRAGMA table_info(${added.table})`).all().map((row) => z.object({ name: z.string() }).parse(row).name)
       if (!columns.includes(added.column)) db.exec(added.add)
     }
+    db.exec(CHANGE_TRACKING)
     const meta = new Map(db.prepare("SELECT key, value FROM meta").all().map((row) => MetaRow.parse(row)).map((row) => [row.key, row.value]))
     let id = meta.get("journal")
     if (!id || meta.get("schema") !== SCHEMA_VERSION) {
@@ -727,15 +792,25 @@ export class JournalStore {
   }
 
   /**
-   * What moves when a Thread's own work does, however busy the journal: `version` moves with every write by anyone.
-   * Each part reads an index alone, so it costs the same for a Thread of 84,000 calls.
+   * What moves when a Thread's own work does, however busy the journal, and costs one lookup for a Thread of 84,000
+   * calls. Without change tracking, the journal's own version: any write by anyone, as true and far less often still.
    */
-  threadVersion(thread: string): string {
-    const entries = ThreadEntries.parse(this.statement("SELECT count(*) AS count, max(seq) AS seq FROM entries WHERE thread=?").get(thread))
-    const newest = ThreadNewest.parse(this.statement("SELECT max(started_at) AS at FROM activity WHERE thread=?").get(thread)).at
-    // Through the open rows alone: there are few, and a Thread's own rows are all of its history.
-    const open = Count.parse(this.statement("SELECT count(*) AS count FROM activity INDEXED BY activity_open WHERE ended_at IS NULL AND thread=?").get(thread)).count
-    return `${entries.count}:${entries.seq ?? 0}:${newest ?? 0}:${open}:${this.carriedVersion(thread)}`
+  threadVersion(thread: string): ThreadVersion {
+    if (!this.changesTracked()) return { key: `all:${this.version()}:${this.carriedVersion(thread)}` }
+    const row = ThreadChangeRow.parse(this.statement("SELECT coalesce(max(seq), 0) AS seq, coalesce(max(moved), 0) AS moved FROM thread_changes WHERE thread=?").get(thread))
+    return { key: `${row.seq}:${row.moved}:${this.carriedVersion(thread)}`, seq: row.seq, moved: row.moved }
+  }
+
+  private changesTracked(): boolean {
+    this.tracked ||= Count.parse(this.statement("SELECT count(*) AS count FROM sqlite_master WHERE name IN ('thread_changes', 'activity_changes', 'activity_updated')").get()).count === 3
+    return this.tracked
+  }
+
+  /** Up to `limit` of a Thread's calls changed after `seq`, in the order they changed. */
+  activityChanged(thread: string, seq: number, limit: number): { seq: number; activity: StoredActivity }[] {
+    return this.statement(`SELECT a.*, c.seq AS change_seq FROM activity_changes c JOIN activity a ON a.session = c.session AND a.kind = c.kind AND a.id = c.id
+      WHERE c.thread = ? AND c.seq > ? ORDER BY c.seq LIMIT ?`).all(thread, seq, limit)
+      .map((row) => ({ seq: ChangeSeqRow.parse(row).change_seq, activity: this.activityOf(row) }))
   }
 
   /** Up to `limit` of a Thread's writes after `seq`: where and when, no more, for a walk over all of them. */

@@ -8,7 +8,7 @@ import { QUIET_FOLDERS } from "../base/quiet-folders.js"
 import type { FileResolution, MovedPaths, Touch, TouchKind } from "../contracts/file-references.js"
 import { candidatesOf, RENAME_LOG, RenameHistory, resolveSpelling, spellingLine, SuffixIndex, type Place, type ReferenceContext } from "../files/index.js"
 import { decodeText } from "./content.js"
-import type { JournalStore, StoredActivity, StoredEffect, StoredRoot } from "./journal-store.js"
+import type { JournalStore, StoredActivity, StoredEffect, StoredRoot, ThreadVersion } from "./journal-store.js"
 import { diffLines, splitLines } from "./line-diff.js"
 
 /** Whose message the spellings are in: its Thread, and the folders it works in now. */
@@ -109,11 +109,8 @@ const STRENGTH = { wrote: 0, read: 1, named: 2 } as const satisfies Record<Touch
  */
 export class ThreadFiles {
   private readonly indexes = new Map<string, Indexed>()
-  /**
-   * Each Thread's work as last read, with its version then: its own calls, oldest first, and the start of the first
-   * that was still open, from which the next read goes on.
-   */
-  private readonly work = new Map<string, { version: string; work: ThreadWork; own: Worked[]; from: number }>()
+  /** Each Thread's work as last read, with what it had reached: its own calls by their key, which later changes replace. */
+  private readonly work = new Map<string, { version: ThreadVersion; work: ThreadWork; own: Map<string, Worked> }>()
   /** The reads under way, which a second question for the same Thread shares. */
   private readonly reading = new Map<string, Promise<ThreadWork>>()
   private readonly repositories = new Map<string, Promise<string | undefined>>()
@@ -238,7 +235,7 @@ export class ThreadFiles {
     }
     const version = store.threadVersion(thread)
     const known = this.work.get(thread)
-    if (known?.version === version) return known.work
+    if (known?.version.key === version.key) return known.work
     const under = this.reading.get(thread)
     if (under) return under
     const read = inSlices(this.readWork(store, roots, thread, version)).finally(() => this.reading.delete(thread))
@@ -246,7 +243,7 @@ export class ThreadFiles {
     return read
   }
 
-  private *readWork(store: JournalStore, roots: readonly StoredRoot[], thread: string, version: string): Steps<ThreadWork> {
+  private *readWork(store: JournalStore, roots: readonly StoredRoot[], thread: string, version: ThreadVersion): Steps<ThreadWork> {
     const known = this.work.get(thread)
     const carried = this.carriedOf(store, thread)
     const byId = new Map(roots.map((root) => [root.id, root.path]))
@@ -263,29 +260,36 @@ export class ThreadFiles {
       seq = page.at(-1)!.seq
       yield
     }
-    const own = known ? known.own.filter((item) => item.start < known.from) : []
-    let from = known?.from ?? 0
-    let openAt: number | undefined
-    // Calls that began together can straddle a page: the next starts at their time and leaves out those it had.
-    let edge = new Set<string>()
-    for (let at = from, limit = WORK_PAGE; ;) {
-      const page = store.activityFrom(thread, at, limit)
-      for (const item of page) {
-        if (edge.has(activityKey(item))) continue
-        if (item.end === null) openAt ??= item.start
-        own.push({ start: item.start, cwd: item.cwd, checkout: item.checkout, status: item.status, named: item.named, effects: item.effects })
+    // Only what changed since, any call of any age, when all that happened can be known; else all of it.
+    const after = known?.version.seq
+    const keeps = known && after !== undefined && known.version.moved === version.moved
+    const own = keeps ? known.own : new Map<string, Worked>()
+    if (keeps) {
+      for (let seq = after; ;) {
+        const page = store.activityChanged(thread, seq, WORK_PAGE)
+        for (const change of page) own.set(activityKey(change.activity), worked(change.activity))
+        if (page.length < WORK_PAGE) break
+        seq = page.at(-1)!.seq
+        yield
       }
-      if (page.length) from = page.at(-1)!.start
-      if (page.length < limit) break
-      if (from !== at) edge = new Set()
-      for (const item of page) if (item.start === from) edge.add(activityKey(item))
-      limit = from === at ? limit * 2 : WORK_PAGE
-      at = from
-      yield
+    } else {
+      // Calls that began together can straddle a page: the next starts at their time and leaves out those it had.
+      let edge = new Set<string>()
+      for (let at = 0, limit = WORK_PAGE; ;) {
+        const page = store.activityFrom(thread, at, limit)
+        for (const item of page) if (!edge.has(activityKey(item))) own.set(activityKey(item), worked(item))
+        if (page.length < limit) break
+        const last = page.at(-1)!.start
+        if (last !== at) edge = new Set()
+        for (const item of page) if (item.start === last) edge.add(activityKey(item))
+        limit = last === at ? limit * 2 : WORK_PAGE
+        at = last
+        yield
+      }
     }
-    const work = { activity: [...own, ...carried.activity], writes, names: carried.names, roots: carried.roots }
+    const work = { activity: [...own.values(), ...carried.activity], writes, names: carried.names, roots: carried.roots }
     this.work.delete(thread)
-    this.work.set(thread, { version, work, own, from: openAt ?? from })
+    this.work.set(thread, { version, work, own })
     if (this.work.size > WORK_THREADS) this.work.delete(this.work.keys().next().value!)
     return work
   }
@@ -435,6 +439,10 @@ export class ThreadFiles {
 
 function activityKey(item: StoredActivity): string {
   return `${item.session}\n${item.kind}\n${item.id}`
+}
+
+function worked(item: StoredActivity): Worked {
+  return { start: item.start, cwd: item.cwd, checkout: item.checkout, status: item.status, named: item.named, effects: item.effects }
 }
 
 /**
