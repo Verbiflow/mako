@@ -168,6 +168,8 @@ export interface AgentStrip {
   openPRs?: FinPullRequest[]
   /** Where it runs, when that isn't this device: `device:<name>`. */
   place?: string
+  /** For an Apex on another device: its device's count of what it has said of the Fin, so an older notice changes nothing after this (`Placed.said`). */
+  said?: { owner: number; seq: number }
   startedAt: number
 }
 /**

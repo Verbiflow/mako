@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { PROTOCOL_VERSION, problem, serveRuntime, type Actor, type ClientSession, type ServedRuntime } from "@mako/protocol"
+import { PROTOCOL_VERSION, problem, serveRuntime, type Actor, type ClientSession, type Json, type ServedRuntime } from "@mako/protocol"
 import { createFakeGateway, type FakeGateway } from "@mako/protocol/fake-gateway"
 import { unwatchedWork } from "@mako/host/base/event-loop"
 import type { AccessTier } from "@mako/host/contracts/access"
@@ -55,6 +55,8 @@ interface Account {
   /** Calls held on their way once, by channel, until the promise settles; `held` names those waiting there. */
   delay: Map<string, Promise<void>>
   held: Set<string>
+  /** Every call that left, with what it carried, as a replay would find it. */
+  sent: { channel: string; args: readonly Json[] }[]
 }
 
 function linkOf(account: Account, self: string): PlaceLink {
@@ -75,6 +77,7 @@ function linkOf(account: Account, self: string): PlaceLink {
         account.held.delete(channel)
       }
       if (account.drop.delete(channel)) throw new RuntimeDisconnectedError(true)
+      account.sent.push({ channel, args })
       const send = gatewayHostCalls(await session, { runtimeId: runtime, actor }).call(channel, args)
       const answer = decodeRuntimeValue(await sendWithRepeats(channel, send, { runtime }))
       if (account.lose.delete(channel)) throw new RuntimeDisconnectedError(true)
@@ -120,7 +123,7 @@ async function device(account: Account, name: string, script: Script, options: P
 }
 
 function account(): Account {
-  return { gateway: createFakeGateway(), devices: [], lose: new Set(), drop: new Set(), delay: new Map(), held: new Set() }
+  return { gateway: createFakeGateway(), devices: [], lose: new Set(), drop: new Set(), delay: new Map(), held: new Set(), sent: [] }
 }
 
 function started(answer: AgentsStartResult): AgentsStarted {
@@ -836,6 +839,59 @@ async function activitySurvivesTheApexRestart(): Promise<void> {
   }
 }
 
+/**
+ * Nothing old lowers the running count. The person gives a placed Fin more work on its own device, which the Apex's
+ * device learns by asking; then the Fin's device can't be reached and the Apex's host restarts; then the Fin's first
+ * notice, from before that work, is replayed. The Fin still reads working, the tree still runs one, and a second start
+ * is refused: the newest word of the Fin's device is kept on the edge, so an older one changes nothing.
+ */
+async function anOldNoticeLowersNothing(): Promise<void> {
+  const cloud = account()
+  const mac = await device(cloud, "MacBook", () => "Noted.", { budget: { running: 1, started: 100 } })
+  const studio = await device(cloud, "Studio", async (turn) => {
+    if (turn.text.includes("from the person")) await turn.world.hold(turn.conversation)
+    return "Done."
+  })
+  const spare = await device(cloud, "Spare", () => "Done.")
+  try {
+    const apex = await mac.world.apex("claude")
+    const fin = started(await mac.world.agents.start(apex.caller, { ...PROBE, cwd: mac.world.root }))
+    await until("its first result", () => wakesOf(mac, apex.conversation).length === 1)
+    await mac.world.settle(40)
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "ended")
+    // The notice that said so, as Studio sent it: what a replay would carry.
+    const old = cloud.sent.filter((call) => call.channel === "mako:agents-notice").at(-1)?.args[0]
+    assert.ok(old !== undefined, "Studio's notice of the first result")
+    const conversation = conversationOf(studio, fin.child!)
+    // The person, on Studio, gives it more work: the Apex's device hears nothing of that until it asks.
+    studio.world.say(conversation, "extra work, from the person")
+    await until("the person's turn at work on Studio", () => studio.world.live.atWork(conversation))
+    const listed = await mac.world.agents.list(apex.caller, {})
+    assert.ok("tree" in listed && listed.tree.running === 1, `asked, the Apex's device counts it: ${JSON.stringify(listed)}`)
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "working")
+    // Studio out of reach, the Apex's host restarted: what it keeps is what it knows.
+    studio.offline()
+    await mac.world.restart()
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "working", "its work on Studio survives the restart")
+    // SAFETY: the call's first argument is the notice input Studio built, as the host's schema took it, crossed as JSON.
+    const replay = await mac.world.agents.notice(JSON.parse(JSON.stringify(old)) as AgentsNoticeInput)
+    assert.deepEqual(replay, { heard: true, deduped: true }, "the old notice is the same notice")
+    assert.equal(stateOn(mac, apex.conversation, "probe"), "working", "and changes nothing: it's older than Studio's last word")
+    const again = await mac.world.agents.list(apex.caller, {})
+    assert.ok("tree" in again && again.tree.running === 1, `the tree still runs one: ${JSON.stringify(again)}`)
+    const second = await mac.world.agents.start(apex.caller, { brief: { objective: "another" }, name: "second", harness: "codex", place: "device:Spare", clientKey: "second", cwd: mac.world.root })
+    assert.ok("refused" in second && second.refused === "budget", `a second start is refused on the budget of one: ${JSON.stringify(second)}`)
+    assert.equal(spare.world.store.edges().all.length, 0, "nothing started on Spare")
+    assert.equal(atWorkOn(studio), 1)
+    console.log("old notice: the person's work on Studio, counted when the Apex's device asked, survived the Apex's restart with Studio unreachable, and a replay of the Fin's earlier notice lowered nothing: the tree ran one, and a second start was refused")
+  } finally {
+    studio.world.release(conversationOf(studio, studio.world.store.edges().all[0]!.child))
+    await mac.close()
+    await studio.close()
+    await spare.close()
+  }
+}
+
 function remotes(): void {
   const same = ["git@github.com:Acme/App.git", "https://github.com/acme/app", "https://github.com/acme/app.git/", "ssh://git@github.com/acme/app.git"]
   for (const spelling of same) assert.equal(remoteKey(spelling), "github.com/acme/app", spelling)
@@ -866,6 +922,7 @@ const CASES = {
   "stop-start-lost": () => stopBeatsAStartStillOnItsWay("lost"),
   "stop-start-slow": () => stopBeatsAStartStillOnItsWay("slow"),
   activity: activitySurvivesTheApexRestart,
+  "old-notice": anOldNoticeLowersNothing,
 } satisfies Record<string, () => Promise<void> | void>
 
 try {

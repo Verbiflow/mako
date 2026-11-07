@@ -102,6 +102,12 @@ export const PlacedSchema = z.object({
   epoch: z.number().int().positive().optional(),
   /** Its Apex stopped it while its device couldn't be reached: kept until that device says it stopped, or its Apex sends it on. */
   stop: z.object({ at: z.number(), why: z.string().max(2_000) }).optional(),
+  /**
+   * The newest word of its device on how it stands that this device took (`AgentsNoticeInput.standing`, a list's
+   * strips): the host that said it, by its generation, and that host's count of sayings. Kept with `working`, written
+   * together, so an older word, a notice replayed or one that was on its way, changes nothing, after a restart too.
+   */
+  said: z.object({ owner: z.number(), seq: z.number() }).optional(),
 })
 export type Placed = z.infer<typeof PlacedSchema>
 

@@ -627,8 +627,12 @@ and answer that reaches it, set it, with a count (`Placed.epoch`) the Fin's
 device records as heard (`RemoteParent.heard`). Every notice says how the
 Fin stands as it's sent (`standing`: whether it holds a place, the count it
 had heard, and which saying of its host's this is); the Apex's device takes
-only the newest, and only one that had heard everything it sent, so a
+only the newest, by a mark it keeps on the edge with `working`, written
+together (`Placed.said`), so a notice replayed or late changes nothing,
+after a restart too, and only one that had heard everything it sent, so a
 report from before a message never ends the turn that message started. A
+place's answer to a list carries the same mark on each strip (`said`), so
+a notice from before the list changes nothing after it. A
 Fin whose standing changes with nothing to report (its turn ended after a
 report it made itself, or the person sent it on there) says its last report
 again with how it stands now (`restate`). Each place is also asked how the
@@ -651,8 +655,9 @@ roster of the Apex takes the Fin's own conversation and standing from it
 quiet. So the person answers a placed Fin's approvals in its own Thread, on
 that device, on the web or from another device, with the Apex's device off
 too. Its Apex never grants them: it calls at no more than the device's
-ceiling (`PLACED_CEILING`, `auto`: decision B2's recommended answer, kept
-in one place until the person decides), which is below full access.
+ceiling (`PLACED_CEILING`, `auto`: the person's decision of 2026-11-06,
+"Auto edits, Full by choice", kept in one place until the per-device
+ceiling's Settings replace it), which is below full access.
 `scripts/test-placed-rows.ts` holds the fold, the Apex-off case and what
 opens; `test:placed-fin-ui` draws the row on the device running it, under
 its Apex on the desk, the laptop browser and the phone, waiting on an

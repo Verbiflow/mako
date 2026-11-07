@@ -1626,6 +1626,9 @@ const inputs = {
                 working: z.boolean().optional(),
                 epoch: z.number().optional(),
                 stop: z.object({ at: z.number(), why: z.string() }).optional(),
+                said: z
+                  .object({ owner: z.number(), seq: z.number() })
+                  .optional(),
               })
               .optional(),
           })
