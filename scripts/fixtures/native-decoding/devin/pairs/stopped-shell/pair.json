@@ -1,13 +1,13 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.234"
+    "version": "3000.12.17"
   },
   "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#vigorous-month",
+      "path": ".local/share/devin/cli/sessions.db#believed-canoe",
       "known": [
         {
           "side": "-",
@@ -23,7 +23,7 @@
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/902cec75-8200-4fc4-9439-ad99e26e628d.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/24977c46-d864-4717-ba75-ca65829dc046.db",
       "known": [
         {
           "side": "-",

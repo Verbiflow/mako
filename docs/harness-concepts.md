@@ -11,7 +11,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 | Cursor | 2026-10-30 | SDK 1.2.0 | its own listing (skills, MCP) |
 | OpenCode | 2026-10-30 | 2.2.3 | its own listing (skills, MCP) |
 | Grok | 2026-10-25 | 1.0.70 | its own listing (skills, MCP) |
-| Devin | 2026-10-30 | 3000.11.234 | its own listing (skills, MCP) |
+| Devin | 2026-11-07 | 3000.12.17 | its own listing (skills, MCP) |
 
 ## Instructions
 
