@@ -1,6 +1,6 @@
 import type { PendingPrompt } from "@/state/prompt-delivery"
 import type { ComposerTarget } from "@/state/composer-settings"
-import type { LiveSnapshot, LiveStartOptions, ThreadRef } from "@/lib/types"
+import type { LiveSnapshot, LiveStartOptions, LiveSummary, ThreadRef } from "@/lib/types"
 import type { LiveProjection } from "@/state/live-projection"
 import type { Entry } from "@mako/sessions/entries"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
@@ -67,6 +67,8 @@ interface AcpConversationBase {
   parent?: LiveSnapshot["parent"]
   /** `LiveSummary.children`: an Apex's Fins counted, until its roster arrives. */
   children?: LiveSnapshot["children"]
+  /** `LiveSummary.fins`: an Apex's Fins as another device's row lists them, while this window holds no roster of it. */
+  fins?: LiveSummary["fins"]
   control?: LiveSnapshot["control"]
   requests?: LiveSnapshot["requests"]
   harnessTurns?: LiveSnapshot["harnessTurns"]
@@ -134,6 +136,11 @@ export type AcpConversation = StartingAcpConversation | LiveAcpConversation
 export interface AcpState {
   activeKey: string | null
   conversations: Record<string, AcpConversation>
+  /**
+   * Each Thread of several Sessions, its Sessions in its store's order (`ThreadGroup.sessions`), as `thread-groups.ts`
+   * keeps them: the last is the newest, whose Fins every surface draws (`threadChildren`).
+   */
+  threadSessions?: Readonly<Record<string, readonly string[]>>
 }
 
 export const acpStore = createStore<AcpState>({

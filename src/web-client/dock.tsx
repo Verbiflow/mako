@@ -1,9 +1,9 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import { FinOfApexNote } from "./apex-fins"
-import { FinAskCard } from "./fin-ask"
+import { FinAskCard, LimitContinueCard } from "./fin-ask"
 import { FinsNeedYou } from "@/components/composer/fin-asks"
 import { sendDirect, useAddressee, useThreadAsks, useThreadRollup } from "@/state/apex-fins"
-import { agentAskWords, type AgentAsk } from "@mako/host/contracts/agent-asks"
+import { agentAskLine, agentAskWords, type AgentAsk } from "@mako/host/contracts/agent-asks"
 import { FIN_WORD } from "@mako/host/contracts/agents"
 import { useCrewCardVisible } from "@/state/crew-card-view"
 import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
@@ -153,8 +153,9 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
       {ask ? <AskCard key={ask.kind === "question" ? ask.id : ask.kind === "agent" ? ask.ask.id : ask.permission.id} ask={ask} conversation={conversation} harness={harness} answerTyped={answerTyped} /> : null}
       {card !== null ? <FinsNeedYou thread={threadId} compact /> : null}
       {fin ? <FinAskCard key={`${fin.fin}:${fin.ask.id}`} apex={conversation} ask={fin} more={finAsks.length - 1} answerTyped={answerTyped} /> : null}
+      {!ask && !fin ? <LimitContinueCard /> : null}
       {unsent.length ? (
-        <ul role="list" aria-label="Messages not sent" className="mx-auto flex w-full max-w-content flex-col gap-1.5 px-3 pb-1">
+        <ul role="list" aria-label="Messages not sent" className="mx-auto flex w-full max-w-content flex-col gap-1.5 px-2 pb-1">
           {unsent.map((message) => (
             <li key={message.id} className="web-unsent">
               <p className="min-w-0 flex-1 truncate text-ui">{message.text}</p>
@@ -169,7 +170,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
           ))}
         </ul>
       ) : null}
-      <div className="mx-auto w-full max-w-content px-3">
+      <div data-dock-queue className="mx-auto w-full max-w-content px-2">
         <PromptQueue onEdit={editing.begin} />
       </div>
       <ReviewTray conversation={conversation} />
@@ -369,7 +370,7 @@ function AgentAskCard({ ask, conversation, harness }: { ask: AgentAsk; conversat
       <p className="web-ask-asker">{`${harness} asks`}</p>
       <p className="web-ask-title">
         <ShieldQuestionIcon className="size-4 shrink-0 text-attention" />
-        <span className="min-w-0 break-words">{words.title}</span>
+        <span className="min-w-0 break-words">{agentAskLine(ask.want)}</span>
       </p>
       <div className="web-ask-scroll">
         <p className="web-ask-hint">{words.detail}</p>
@@ -379,7 +380,7 @@ function AgentAskCard({ ask, conversation, harness }: { ask: AgentAsk; conversat
           <CheckIcon className="size-4 shrink-0" />
           {words.allow}
         </button>
-        <button type="button" data-agent-answer="keep" data-refuse disabled={busy} data-chosen={chosen === false || undefined} onClick={() => answer(false)} className="web-ask-option">
+        <button type="button" data-agent-answer="keep" disabled={busy} data-chosen={chosen === false || undefined} onClick={() => answer(false)} className="web-ask-option">
           <XIcon className="size-4 shrink-0" />
           {words.keep}
         </button>

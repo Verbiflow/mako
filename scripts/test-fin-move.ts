@@ -496,7 +496,7 @@ async function landing(): Promise<void> {
     assert.equal(f.world.live.pinnedAccount(conversation, "codex"), undefined)
     await f.world.close()
     const launched: (string | undefined)[] = []
-    const g = await fixture("codex", { launchedOn: (_harness, account) => void launched.push(account) })
+    const g = await fixture("codex", { resumesUnderAccount: [], launchedOn: (_harness, account) => void launched.push(account) })
     await g.world.settle(40, 20_000)
     const handed = g.fin().conversation
     const was = g.world.live.snapshot(handed)!.control!
@@ -506,8 +506,7 @@ async function landing(): Promise<void> {
     assert.equal((await settled).state.kind, "accepted")
     const now = g.world.live.snapshot(handed)!.control!
     assert.notEqual(now.activeBindingId, was.activeBindingId, "a harness that can't go on hands over to a session of its own")
-    assert.equal(g.world.live.pinnedAccount(handed, "codex"), "spare")
-    assert.equal(g.world.agents.pinnedAccount(handed, "codex"), "spare", "every later launch reads it")
+    assert.equal(g.world.live.pinnedAccount(handed, "codex"), "spare", "every later launch reads it")
     assert.ok(launched.includes("spare"), "and the hand-over's own launch runs on it")
     assert.equal(now.merges.filter((merge) => merge.status === "pending").length, 1, "with the conversation")
     await g.world.close()
@@ -986,15 +985,32 @@ async function grantsAndQuestions(): Promise<void> {
     await f.world.close()
   }
   {
-    // A steer the harness took is delivered too; what Mako sends by itself isn't anyone answering.
+    // A steer the harness took is delivered too, so with the question heard, it answers it; what Mako sends by itself
+    // isn't anyone answering.
     const f = await fixture("claude", { hold: true, apex: "codex" })
     await until("its turn", () => f.world.live.session(f.fin().conversation)?.status === "running")
     const { conversation } = f.fin()
     await f.world.agents.report(f.world.caller(conversation), { status: "needs-input", summary: "Choose", question: "Which one?", options: [{ label: "steered-late" }], clientKey: "ask" })
+    await until("the question to reach its Apex", () => f.world.prompts.some((prompt) => prompt.conversation === f.apex.conversation && prompt.text.includes("Which one?")))
     assert.ok(!("refused" in await f.world.agents.send(f.apex.caller, { to: "labels", text: "steered-words", deliver: "steer", clientKey: "steer" })))
     await until("the steer", () => f.world.steers.some((steer) => steer.text.includes("steered-words")))
     const late = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "steered-late", clientKey: "late" })
     assert.ok("refused" in late && late.refused === "conflict", JSON.stringify(late))
+    f.world.release(conversation)
+    await f.world.settle(40, 20_000, "ignore")
+    await f.world.close()
+  }
+  {
+    // An Apex's steer that crosses a question it hasn't heard answers nothing: it stays open to answer (rule 13).
+    const f = await fixture("claude", { hold: true, apex: "codex" })
+    await until("its turn", () => f.world.live.session(f.fin().conversation)?.status === "running")
+    const { conversation } = f.fin()
+    await f.world.agents.report(f.world.caller(conversation), { status: "needs-input", summary: "Choose", question: "Which one?", options: [{ label: "still-unheard" }], clientKey: "ask" })
+    assert.ok(!("refused" in await f.world.agents.send(f.apex.caller, { to: "labels", text: "crossing-words", deliver: "steer", clientKey: "steer" })))
+    await until("the steer", () => f.world.steers.some((steer) => steer.text.includes("crossing-words")))
+    assert.ok(!f.world.prompts.some((prompt) => prompt.conversation === f.apex.conversation && prompt.text.includes("Which one?")), "its Apex hasn't heard the question yet")
+    const answer = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "still-unheard", clientKey: "open" })
+    assert.ok(!("refused" in answer), JSON.stringify(answer))
     f.world.release(conversation)
     await f.world.settle(40, 20_000, "ignore")
     await f.world.close()
@@ -1098,10 +1114,10 @@ function onePath(): void {
     }
   }
   walk(host)
-  /** Who may call it, each for what it is: `continueOn` itself, reconnects, which stay on their own harness, and #398's `moveWaiting`, until it retires into `continueOn`. */
+  /** Who may call it, each for what it is: `continueOn` itself, and reconnects, which stay on their own harness. */
   const allowed = new Map([
     ["conversations/continue-on.ts", /live\.transfer\(id, \{ \.\.\.continuation\.input/],
-    ["conversations/live-conversations.ts", /this\.transfer\(id, \{ id: to\.id, provider: to\.provider|this\.transfer\(id, input, actor, continues\)|this\.transfer\(id, \{\s+id: requestId,\s+provider: resident\.snapshot\.session\.harness|this\.transfer\(id, \{ id: requestId, bindingId, provider: binding\.provider/],
+    ["conversations/live-conversations.ts", /this\.transfer\(id, input, actor, continues\)|this\.transfer\(id, \{\s+id: requestId,\s+provider: resident\.snapshot\.session\.harness|this\.transfer\(id, \{ id: requestId, bindingId, provider: binding\.provider/],
     ["conversations/live-auto-continue.ts", /this\.access\.transfer\(id, \{ id: request\.id, provider: reconnect\.provider/],
   ])
   for (const path of files) {

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // A limit's one notice on the production components and the mock bridge's Apex scene as an account ran out
 // (`?mock&app=apex&fins=limit`), on the desk, the phone and the laptop's browser. Screenshots of each surface, dark and
@@ -15,7 +15,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-limit-notice-ui-"))
+  const root = testScratch("mako-limit-notice-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-limit-notice-ui", main: fileURLToPath(import.meta.url) }))
   const { createServer } = await import("vite")
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, fs: { strict: false }, watch: { ignored: ["**"] } } })
@@ -31,7 +31,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Limit notice UI evidence: ${process.env.MAKO_LIMIT_UI_SHOTS ?? join(root, "shots")}`)
 }
 
 async function check() {
@@ -205,6 +204,8 @@ async function check() {
   await until("document.querySelectorAll('[data-fin-row]').length > 0", "the phone's rows")
   await evaluate("[...document.querySelectorAll('button, a')].find((each) => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
   await until("Boolean(document.querySelector('[data-apex-count]'))", "the phone's Thread")
+  // The notice stands in the crew card, which mounts after the bar does: the card is what a read of it waits for.
+  await until("Boolean(document.querySelector('[data-crew]'))", "the phone's crew card")
   await settle()
   assert.equal(await evaluate("document.querySelectorAll('[data-limit-notice]').length"), 1, "a phone's Thread says the notice once")
   assert.ok(await evaluate("Boolean(document.querySelector('[data-limit-notice] [data-limit-seen]'))"), "and Got it is there")
@@ -263,6 +264,41 @@ async function check() {
   await until("!document.querySelector('[data-limit-notice]')", "Got it ending it in the Thread")
   assert.ok((await evaluate("window.apexScene.responds()")).some((respond) => respond.ask.startsWith("limit:")), "and telling the host")
   console.log("PASS: the Thread holds the notice, whatever else needs the person")
+
+  // 7. A Thread Mako doesn't move by itself: one card, saying what holds it, and one press.
+  const HOLD_AT_LIMIT = `import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => { const state = acpStore.get(); const current = activeAcp(state); const at = Date.now() + 3 * 60 * 60_000; acpStore.set({ conversations: { ...state.conversations, [current.key]: { ...current, requests: [...(current.requests ?? []), { id: 'held-at-limit', text: 'Keep going.', attachments: [], status: 'held', retry: { at, until: at, attempt: 1, since: Date.now(), cause: 'rate-limited', reason: "You've hit your usage limit" } }] } } }) })`
+  await evaluate(HOLD_AT_LIMIT)
+  await until("Boolean(document.querySelector('[data-limit-continue]'))", "the card")
+  assert.match(await text("[data-limit-continue]"), /Codex can take this.*Continue on Codex.*Not now/, "only the choice, as its queue row says what holds it")
+  assert.equal(await evaluate("document.querySelectorAll('[data-limit-continue]').length"), 1, "one card")
+  await shoot("continue-card", "[data-limit-continue]")
+  // Another account to switch to is the same decision: one winner, not a stack.
+  await evaluate("Promise.all([import('/src/state/accounts.ts'), import('/src/state/acp.ts')]).then(([{ accountsStore }, { acpStore, activeAcp }]) => { const harness = activeAcp(acpStore.get()).harness; accountsStore.set({ limitOffers: { [harness]: { harness, because: 'refused', from: { name: 'personal' }, to: { name: 'work' } } } }) })")
+  await until("!document.querySelector('[data-limit-continue]')", "the account offer to win")
+  await evaluate("import('/src/state/accounts.ts').then(({ accountsStore }) => accountsStore.set({ limitOffers: {} }))")
+  await until("Boolean(document.querySelector('[data-limit-continue]'))", "the card back")
+  await evaluate("[...document.querySelectorAll('[data-limit-continue] button')].find((each) => each.innerText.includes('Continue on')).click(); true")
+  await until("window.apexScene.continues().length === 1", "the press to reach the host")
+  assert.deepEqual(await evaluate("window.apexScene.continues()"), [await evaluate("import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => activeAcp(acpStore.get()).key)")], "for this Thread, once")
+  // The laptop's browser and a phone's dock have it too: being away from the desk is when it's needed.
+  for (const [name, width, height, mobile, path] of [["laptop-continue", 1280, 800, false, "scripts/web-desk.html?app=apex&thread=apex&fins=limit"], ["phone-continue", 390, 844, true, "scripts/phone-apex.html?app=apex&fins=limit"]]) {
+    await viewport(width, height, mobile)
+    await load(`${base}${path}`)
+    if (mobile) {
+      await until("document.querySelectorAll('[data-fin-row]').length > 0", `${name}: its rows`)
+      await evaluate("[...document.querySelectorAll('button, a')].find((each) => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
+    }
+    await until("Boolean(document.querySelector('[data-apex-count], [data-crew]'))", `${name}: its Thread`)
+    // A phone's page opens the Thread before its conversation is the active one.
+    for (const deadline = Date.now() + 30_000; !(await evaluate("import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => Boolean(activeAcp(acpStore.get())))")); await new Promise((done) => setTimeout(done, 100))) assert.ok(Date.now() < deadline, `${name}: its conversation`)
+    await evaluate(HOLD_AT_LIMIT)
+    await until("Boolean(document.querySelector('[data-limit-continue]'))", `${name}: the card`)
+    assert.match(await text("[data-limit-continue]"), /Continue on Codex.*Not now/, `${name}: the same offer`)
+    await shoot(name, "[data-limit-continue]")
+    await evaluate("[...document.querySelectorAll('[data-limit-continue] button')].find((each) => each.innerText.includes('Not now')).click(); true")
+    await until("!document.querySelector('[data-limit-continue]')", `${name}: Not now ends it`)
+  }
+  console.log("PASS: a Thread a limit holds gets one card, on the desk, the laptop's browser and a phone")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])
   console.log("Limit notice UI: passed")

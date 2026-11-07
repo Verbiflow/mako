@@ -14,11 +14,15 @@ export type AgentAskWant = z.infer<typeof AgentAskWantSchema>
 export const AgentAskSchema = z.object({ id: z.string(), at: z.number(), want: AgentAskWantSchema })
 export type AgentAsk = z.infer<typeof AgentAskSchema>
 
+/** An ask's two answers as an approval's options, on the path a Fin's asks take to its Apex and the person. */
+export const AGENT_ASK_ALLOW = "allow"
+export const AGENT_ASK_KEEP = "keep"
+
 /** What a row says while the ask waits, in a line. */
 export function agentAskLine(want: AgentAskWant): string {
   switch (want.kind) {
     case "move":
-      return "Wants to move this thread to the cloud"
+      return "Wants to move this Thread to the cloud"
   }
 }
 
@@ -33,7 +37,7 @@ export interface AgentAskWords {
 
 export function agentAskWords(want: AgentAskWant, name: string): AgentAskWords {
   return {
-    title: `${name} ${agentAskLine(want).toLowerCase()}`,
+    title: `${name} ${agentAskLine(want).replace(/^W/, "w")}`,
     description: want.handsOff ? "with its worktree, branch and sessions" : "onto its own branch first, then the cloud",
     detail: want.handsOff
       ? "Its worktree, branch and every session go to a cloud machine. A turn still running pauses here and goes on there."

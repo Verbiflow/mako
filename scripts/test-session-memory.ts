@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { mock } from "node:test"
 import type { ThreadRef } from "@mako/sessions"
 import { planContinuation } from "@mako/host/contracts/thread-continuation"
 import { heldReason } from "@mako/host/contracts/session-hold"
@@ -358,6 +359,37 @@ async function reconnectAfterOwnTurn() {
 }
 
 /**
+ * A hold is read on every flush of every conversation at work, so it's prepared once a connection: preparing it each
+ * time was 4% of the host's thread at 8 sessions. A ledger read from a newer Mako's format can reopen, and the
+ * statement goes with the connection it came from.
+ */
+function holdReadsPrepareOnce() {
+  const path = join(root, "hold-reads.sqlite")
+  const NEWER = { writableBy: SESSION_MEMORY_SCHEMA + 1, readableBy: SESSION_MEMORY_SCHEMA }
+  const newer = () => new SessionMemory(path, { pid: 300, startedAt: 3, label: "Mako 0.163.0" }, { ...clock, format: NEWER, writer: "0.163.0" })
+  const raised = newer()
+  raised.hold("codex", "first", "conversation")
+  raised.close()
+  // Opened with no writer about, it reads a snapshot, which reopens once the file moves.
+  const reader = new SessionMemory(path, { pid: 100, startedAt: 1, label: "the installed Mako app" }, { ...clock, alive: () => true })
+  const prepare = mock.method(DatabaseSync.prototype, "prepare")
+  const prepared = () => prepare.mock.calls.filter((call) => String(call.arguments[0]).includes("FROM holds WHERE provider")).length
+  try {
+    for (let read = 0; read < 20; read += 1) assert.equal(reader.heldBy("codex", "first")?.conversationId, "conversation")
+    assert.ok(prepared() <= 1, `a hold's read is prepared once (${prepared()})`)
+    const again = newer()
+    again.hold("codex", "second", "another")
+    again.close()
+    const before = prepared()
+    assert.equal(reader.heldBy("codex", "second")?.conversationId, "another", "and reads what's written after it, on the connection it reopened")
+    assert.equal(prepared(), before + 1, "prepared again for that connection")
+  } finally {
+    prepare.mock.restore()
+    reader.close()
+  }
+}
+
+/**
  * A newer Mako changed the ledger's format while this build's host was
  * away. The host starts on it read-only: a new conversation runs, what it
  * would remember stays in its journal, and a reconnect, which must hold the
@@ -487,6 +519,7 @@ const installed = new SessionMemory(ledger, { pid: 100, startedAt: 1, label: "th
 const dev = new SessionMemory(ledger, { pid: 200, startedAt: 2, label: "Mako's dev host" }, clock)
 
 try {
+  holdReadsPrepareOnce()
   upgradeLegacyRoutes()
 hostDataRoots()
   retireLegacyRoutes()

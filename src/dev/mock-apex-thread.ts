@@ -66,8 +66,8 @@ const CHILDREN: ChildFixture[] = ([
  * `&fins=limit`: the tree on 2026-11-05, as the host says it. Cursor ran out: three of its Fins moved to Claude Code,
  * one had nowhere to go and stopped with its work unfinished, and the first moved carries the tree's one notice.
  */
-/** `&ask=move`: the Apex's own agent asks, below full access, to move its Thread to the cloud (`test-agent-ask-ui.mjs`). */
-const ASK_SCENE = new URLSearchParams(globalThis.location?.search).get("ask") === "move"
+/** `&ask=move`: the Apex's own agent asks, below full access, to move its Thread; `&ask=fin`: its Fin "Dictation fallback" does, which goes to the Apex first (`test-agent-ask-ui.mjs`). */
+const ASK_SCENE = new URLSearchParams(globalThis.location?.search).get("ask")
 const LIMIT_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "limit"
 const LIMIT_UNTIL = "Sun 12:00 AM PST"
 const LIMIT_MOVED = `Moved to Claude Code: Cursor is at its limit until ${LIMIT_UNTIL}`
@@ -120,7 +120,7 @@ function shown(state: ChildState, child: string, at: number): ChildShowing {
       return { thread: {}, journal: {} }
     case "ended": {
       const decision = state.decision
-      if (!decision) return { thread: { ended: { outcome: state.outcome, ...(state.reason && { reason: state.reason }), at } }, journal: {} }
+      if (!decision?.ask) return { thread: { ended: { outcome: state.outcome, ...(state.reason && { reason: state.reason }), at } }, journal: {} }
       const { options, recommended, action } = decision.ask
       const latest = { id: decision.ask.id, child: ThreadIdSchema.parse(child), status: "done" as const, summary: "It's finished and green.", question: decision.question, ...(options && { options }), ...(recommended !== undefined && { recommended }), ...(action && { action }), ...(decision.on === "person" && { decides: "person" as const }), ownerGeneration: 1, at }
       return { thread: {}, journal: { latest } }
@@ -165,11 +165,15 @@ function movedTo(step: FallbackStep, account: string): FinRerouted {
 }
 const PASSED_OVER = new Map([["token-refresh", "Your Fins default for Grok, grok-4.6-mini, isn't listed by Grok anymore: it runs on Grok 4.7 instead."]])
 
+const SPAWNED_BEFORE_MS = 80 * 3_600_000
+
 /** One Fin's roster entry, made by `childEntry` from its edge and what its Thread shows, as the host makes it. */
 export function apexFin(index: number, state: ChildState = CHILDREN[index]!.state): NativeAgent {
   const fixture = CHILDREN[index]!
   const now = Date.now()
-  const createdAt = now - fixture.minutes * 60_000
+  // Spawned days ago, each at work or standing as it does for its own `minutes`: a row's time is the second, never the first.
+  const stoodSince = now - fixture.minutes * 60_000
+  const createdAt = stoodSince - SPAWNED_BEFORE_MS
   const child = childThread(index)
   const apex = SessionIdSchema.parse(APEX_SESSION)
   const edge: ThreadParent = {
@@ -195,7 +199,8 @@ export function apexFin(index: number, state: ChildState = CHILDREN[index]!.stat
       model: fixture.model,
       ...(RUNS_ON.has(fixture.name) && { runsOn: RUNS_ON.get(fixture.name) }),
       startedAt: createdAt,
-      updatedAt: now,
+      updatedAt: stoodSince,
+      ...(state.kind === "working" && { workSince: stoodSince }),
       ...(fixture.toolUses && { toolUses: fixture.toolUses }),
       ...(started(fixture) && { session: SessionIdSchema.parse(childSession(index)), conversation: childConversation(index), nativeId: `apex-fin-${index}`, path: `/mock/apex-fin-${index}.jsonl` }),
       ...thread,
@@ -424,7 +429,7 @@ export function apexSnapshot(): LiveSnapshot {
       merges: [],
       transfers: [],
       actions: [],
-      ...(ASK_SCENE && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a5", at: STARTED, want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a6", handsOff: true } }] }),
+      ...(ASK_SCENE === "move" && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a5", at: STARTED, want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a6", handsOff: true } }] }),
     },
     nativeAgents: { agents: apexFins(), limited: false },
   }
@@ -479,7 +484,14 @@ export function finSnapshot(index: number): LiveSnapshot {
       ...(waits ? [{ type: "tool" as const, id: `apex-fin-ci-${index}`, toolKind: "execute" as const, title: "npm ci", input: "{\"command\":\"npm ci\"}", status: "pending" as const }] : []),
       ...(fixture.state.kind === "ended" && fixture.state.reason ? [{ type: "text" as const, text: fixture.state.reason }] : []),
     ],
-    control: { activeBindingId: childConversation(index), bindings: [], merges: [], transfers: [], actions: [] },
+    control: {
+      activeBindingId: childConversation(index),
+      bindings: [],
+      merges: [],
+      transfers: [],
+      actions: [],
+      ...(ASK_SCENE === "fin" && index === 3 && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000b5", at: STARTED, want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000b6", handsOff: true } }] }),
+    },
   }
 }
 

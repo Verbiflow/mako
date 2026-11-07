@@ -34,7 +34,8 @@ import {
   type TurnContinuation,
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
-import { childGroup, childStateOf, rollup } from "../contracts/children.js"
+import { digestAsks } from "../contracts/agents.js"
+import { childGroup, childStateOf, DIGEST_WAITS, rollup, WAKE_COALESCE_MS } from "../contracts/children.js"
 import { latestPendingQuestion, retireQuestionsForInput, type PendingAsk } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
@@ -408,6 +409,11 @@ export class LiveConversations {
     return this.closing.closeForExit(ids)
   }
 
+  /** The listing's line for every conversation, without its Fins: what a job that looks often reads. */
+  listed(): LiveSummary[] {
+    return this.records.listing()
+  }
+
   summaries(): LiveSummary[] {
     const agents = this.dependencies.agents?.()
     const listing = this.records.listing()
@@ -443,6 +449,11 @@ export class LiveConversations {
   /** The session as the listing has it, without reading an unloaded conversation's transcript back. */
   session(id: string): LiveSessionState | undefined {
     return this.records.session(id)
+  }
+
+  /** The harness Sessions the conversation is bound to, from what's already listed: this never reads it in. */
+  nativeIds(id: string): readonly { provider: string; nativeId: string }[] {
+    return this.records.nativeIds(id)
   }
 
   /** What memory holds of the conversation now; `undefined` for one only on disk, which this never reads in. */
@@ -498,8 +509,10 @@ export class LiveConversations {
     const resident = this.records.get(id)
     const request = resident?.snapshot.requests.find((candidate) => candidate.id === requestId)
     if (!resident || !request || (request.status !== "queued" && request.status !== "held")) return false
+    // A question joining a digest the budget holds takes it along, within the burst's window (`digestAsks`).
+    const wake = request.wake?.after === DIGEST_WAITS && digestAsks(digest.notices) ? { ...request.wake, at: Math.min(request.wake.at, Date.now() + WAKE_COALESCE_MS) } : request.wake
     const next: LiveRequest = digest.notices.length
-      ? { ...request, text, digest: { ...digest, ...(request.digest?.resting && { resting: true as const, ...(request.digest.nextTry !== undefined && { nextTry: request.digest.nextTry }) }) }, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
+      ? { ...request, wake, text, digest: { ...digest, ...(request.digest?.resting && { resting: true as const, ...(request.digest.nextTry !== undefined && { nextTry: request.digest.nextTry }) }) }, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
       : { ...request, status: "canceled" }
     const previous = resident.snapshot
     resident.snapshot = { ...previous, requests: previous.requests.map((candidate) => (candidate === request ? next : candidate)) }
@@ -624,7 +637,7 @@ export class LiveConversations {
       }
     const question = latestPendingQuestion(conversationControl(resident), resident.snapshot.requests)
     const open = question?.native.questions.filter((item) => !question.answered?.includes(item.id)) ?? []
-    return question && open.length ? { request: question.id, kind: "question", options: [], questions: open } : undefined
+    return question && open.length ? { request: question.id, kind: "question", options: [], questions: open } : this.asks.pending(id)
   }
 
   /**
@@ -1217,6 +1230,25 @@ export class LiveConversations {
     return resident.snapshot
   }
 
+  /**
+   * A pin from before the binding kept one (a Fin started on another account, kept on its edge alone) comes onto its
+   * binding, so what a launch reads is the same. A binding with a pin of its own, or on another harness, keeps to it.
+   */
+  adoptPin(id: string, harness: string, account: string): void {
+    const resident = this.records.load(id)
+    const binding = resident && activeBinding(resident)
+    if (!resident || binding?.provider !== harness || binding.account !== undefined) return
+    const control = conversationControl(resident)
+    const previous = resident.snapshot
+    resident.snapshot = { ...previous, control: { ...control, bindings: control.bindings.map((each) => (each.id === binding.id ? { ...each, account } : each)) } }
+    try {
+      this.flush(resident)
+    } catch (error) {
+      resident.snapshot = previous
+      throw error
+    }
+  }
+
   /** The account `id` is pinned to on `harness`, whatever is selected: a move's, on its binding, for a Fin and an Apex alike. */
   pinnedAccount(id: string, harness: string): string | undefined {
     const resident = this.records.get(id)
@@ -1450,6 +1482,8 @@ export class LiveConversations {
     requestId: string,
     response: LivePermissionResponse
   ): Promise<void> {
+    // An agent's ask through Mako's tools is answered on the path a harness's approval is (`agents_answer`, the person).
+    if (this.asks.open(id).some(ask => ask.id === requestId)) return this.asks.answer(id, requestId, response)
     if (conversationControl(this.records.require(id)).questions?.some(question => question.id === requestId)) {
       await this.questions.answer(id, requestId, response)
       return
@@ -1683,43 +1717,22 @@ export class LiveConversations {
   }
 
   /**
-   * A request waiting out a usage limit (held with its `retry`: a turn's continuation Mako made, or a message its
-   * harness refused) goes on now where the limit doesn't hold: `send` sends it as `text` on this conversation's
-   * harness (a Fin pinned to another account, or on a connection's model), `hand-off` withdraws it and starts the
-   * conversation on `provider` with `text`, what waited behind it following there. All in one step, and only while it
-   * still waits for its time on this host: a Stop's latch (`pause`), a send, a removal or another owner having it
-   * leaves it as it is, and the answer is false. What goes is then the handoff's to guard, as every send is.
+   * The words a waiting request goes with, as a move says what happened above them (`Agents.moveOn`), only while it still
+   * says `was`: a request no longer waiting, or that someone edited since, stays as it is, and the answer is false.
    */
-  moveWaiting(id: string, requestId: string, to: { kind: "send"; text: string; tuning?: SessionSettings } | { kind: "hand-off"; id: string; provider: string; text: string; tuning?: SessionSettings; modeId?: string }, actor?: Actor): boolean {
+  rewordWaiting(id: string, requestId: string, was: string, text: string, displayText?: string): boolean {
     const resident = this.records.get(id)
     const waiting = resident?.snapshot.requests.find((request) => request.id === requestId)
-    if (!resident || !waiting || waiting.status !== "held" || !waiting.retry || waiting.pause === "stop" || !this.moves.executes(resident)) return false
+    if (!resident || !waiting || (waiting.status !== "queued" && waiting.status !== "held") || waiting.text !== was) return false
     const previous = resident.snapshot
-    if (to.kind === "send") {
-      const tuning = to.tuning ?? waiting.tuning
-      const sent: LiveRequest = { ...waiting, text: to.text, displayText: undefined, ...(tuning && { tuning }), status: "queued", retry: undefined, inputDigest: promptFingerprint(to.text, waiting.attachments, tuning) }
-      resident.snapshot = { ...previous, requests: previous.requests.map((request) => (request === waiting ? sent : request)) }
-      try {
-        this.flush(resident)
-      } catch (error) {
-        resident.snapshot = previous
-        throw error
-      }
-      this.release(resident)
-      return true
-    }
-    // A switch takes nothing queued with it; what waited behind is held for the step that starts it, then waits there.
-    const behind = new Set(previous.requests.filter((request) => request.status === "queued").map((request) => request.id))
-    resident.snapshot = { ...previous, requests: previous.requests.map((request) => request === waiting ? { ...request, status: "canceled" as const, retry: undefined } : behind.has(request.id) ? { ...request, status: "held" as const } : request) }
+    const said: LiveRequest = { ...waiting, text, displayText, inputDigest: promptFingerprint(text, waiting.attachments, waiting.tuning) }
+    resident.snapshot = { ...previous, requests: previous.requests.map((request) => (request === waiting ? said : request)) }
     try {
-      this.transfer(id, { id: to.id, provider: to.provider, text: to.text, attachments: waiting.attachments, ...(to.tuning && { tuning: to.tuning }), ...(to.modeId && { modeId: to.modeId }) }, actor)
+      this.flush(resident)
     } catch (error) {
       resident.snapshot = previous
-      this.flush(resident)
       throw error
     }
-    resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (behind.has(request.id) && request.status === "held" ? { ...request, status: "queued" as const } : request)) }
-    this.flush(resident)
     return true
   }
 

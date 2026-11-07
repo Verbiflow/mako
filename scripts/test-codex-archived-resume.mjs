@@ -2,18 +2,18 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { chmod, readFile, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // Resuming a thread Codex archived: Codex refuses until it's unarchived, and
 // Mako leaves the archive to Codex. The refusal reaches the caller and no
 // unarchive is ever sent; the catalog routes replies to such a thread into a
 // new session instead.
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-codex-archived-test-"))
+  const root = testScratch("mako-codex-archived-test-")
   try {
     await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-codex-archived-test", main: fileURLToPath(import.meta.url) }))
     const executable = join(root, "codex")

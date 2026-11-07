@@ -49,9 +49,12 @@ jobs:
           package-manager-cache: false
       - run: npm ci
       - run: npm run build:control-runtime
+      # The host call schemas are generated from the handlers' types: one edited by hand drops what a type declares.
+      - run: node scripts/generate-host-inputs.mjs --check
       - run: npm run test:protocol
       # A window's connection banner follows its host's event stream, never one call's failure or slowness.
       - run: npx tsx scripts/test-host-liveness.ts
+      - run: npm run test:loop-profile
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
       # Every whole file a harness writes, through one publisher: a writer killed mid-write, writers in several
@@ -66,6 +69,8 @@ jobs:
       # A picture or page another host read (a cloud Thread's machine, another device, another host here) loads in this host's windows.
       - run: npx tsx scripts/test-owned-files.ts
       - run: npx tsx scripts/test-cloud-returns.ts
+      # Keeping a Mac awake while its agents work, against a stand-in for the native helper.
+      - run: npm run test:keep-awake
 
   # The renderer's and the live state's own suites, in Node without a window: the transcript as live and saved
   # draw it, the stage's thread identity, the live controls and notices, how a message is delivered and recovered,
@@ -91,6 +96,8 @@ jobs:
       - run: npm run test:transcript-events
       - run: npm run test:stage
       - run: npm run test:fin-words
+      - run: npm run test:fin-row-time
+      - run: npm run test:steer-notices
       - run: npm run test:fin-decisions
       - run: npm run test:live-controls
       - run: npm run test:prompt-delivery
@@ -173,6 +180,8 @@ jobs:
       - run: npm run test:switch-interleavings
       - run: npm run test:followed-stop-crash
       - run: npm run test:held-notice-crash
+      # The outage of 2026-11-05 on all six: a tree moving, one digest with nowhere to go, the person told once, a Stop holding.
+      - run: npm run test:limit-replay
       - run: npm run test:held-digest
       - run: npm run test:fin-fallback
       # A prompt reaches its harness only once its journal holds it as sent; one it couldn't record goes once after a crash.
@@ -366,8 +375,10 @@ jobs:
 
   # A long Apex Thread on the desk, the web app and the phone opens at its end with no blank room, and a message sent
   # there, between turns and in one, overlaps no row in any frame it paints (`test:transcript-send-ui`). Geometry
-  # only, read where each frame paints; no timing passes or fails it. Then the highlight pool's workers end once no
-  # view holds them, an abandoned render's too (`test:highlight-pool-ui`). On a Mac, where the tests' Electron runs.
+  # only, read where each frame paints; no timing passes or fails it. Its rows stand apart through Fin reports with
+  # the virtualizer's observer working and with the rows taken from it, and only the second logs (`test:transcript-rows-ui`).
+  # Then the highlight pool's workers end once no view holds them, an abandoned render's too (`test:highlight-pool-ui`).
+  # On a Mac, where the tests' Electron runs.
   transcript-ui:
     runs-on: macos-15
     timeout-minutes: 20
@@ -382,6 +393,9 @@ jobs:
       - run: npm ci
       - run: npm run build:control-runtime
       - run: npm run test:transcript-send-ui
+        env:
+          MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
+      - run: npm run test:transcript-rows-ui
         env:
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:highlight-pool-ui
@@ -488,7 +502,7 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npx tsgo -b packages/host
-      - run: npm run bench:host-load -- --scale today --cpu-prof "$RUNNER_TEMP/host-load-profile"
+      - run: npm run bench:host-load -- --scale today --peak-limit-mb 1500 --cpu-prof "$RUNNER_TEMP/host-load-profile"
 
   # Codex's own sandbox on the setup the daily harness bump records Codex with, at the tested build: workspace-write
   # writes the workspace and nothing else, read-only writes nothing, and neither reaches the network.

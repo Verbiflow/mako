@@ -37,6 +37,7 @@ const inputs = {
         clientKey: z.string(),
       }),
     ]),
+  "mako:agents-continue-next": () => z.tuple([z.string(), z.string()]),
   "mako:agents-diagnostics": () => z.tuple([]),
   "mako:agents-direct": () =>
     z.tuple([
@@ -115,6 +116,7 @@ const inputs = {
         clientKey: z.string(),
       }),
     ]),
+  "mako:agents-next-place": () => z.tuple([z.string()]),
   "mako:agents-read": () =>
     z.tuple([
       z.union([
@@ -647,6 +649,9 @@ const inputs = {
   "mako:git-status": () => z.tuple([]),
   "mako:git-unstage": () => z.tuple([z.array(z.string())]),
   "mako:git-unstage-all": () => z.tuple([]),
+  "mako:github-authorship": () => z.tuple([]),
+  "mako:github-authorship-save": () =>
+    z.tuple([z.union([z.literal("you"), z.literal("mako")])]),
   "mako:github-status": () => z.tuple([]),
   "mako:github-token": () => z.tuple([]),
   "mako:github-token-remove": () => z.tuple([]),
@@ -682,6 +687,14 @@ const inputs = {
   "mako:install-update": () => z.tuple([]),
   "mako:installation-state": () => z.tuple([]),
   "mako:integrations": () => z.tuple([]),
+  "mako:keep-awake": () => z.tuple([]),
+  "mako:keep-awake-set": () =>
+    z.tuple([
+      z.object({
+        on: z.boolean().optional(),
+        lidClosed: z.boolean().optional(),
+      }),
+    ]),
   "mako:launch-prewarm": () => z.tuple([z.string()]),
   "mako:lifecycle-command": () =>
     z.tuple([
@@ -1078,6 +1091,7 @@ const inputs = {
               .optional(),
           })
           .optional(),
+        account: z.string().optional(),
         session: z.string().optional(),
         worktree: z.boolean().optional(),
         worktreeStart: z
@@ -1197,8 +1211,8 @@ const inputs = {
                   z.literal("harness"),
                   z.literal("apex"),
                   z.literal("rule"),
-                  z.literal("asked"),
                   z.literal("mako"),
+                  z.literal("asked"),
                   z.literal("fins"),
                   z.literal("used"),
                   z.literal("connection"),
@@ -2650,11 +2664,13 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:activate-tab", "workspaces"],
   ["mako:agent-ask-answer", "conversations"],
   ["mako:agents-answer", "conversations"],
+  ["mako:agents-continue-next", "conversations"],
   ["mako:agents-diagnostics", "conversations"],
   ["mako:agents-direct", "conversations"],
   ["mako:agents-link", "conversations"],
   ["mako:agents-list", "conversations"],
   ["mako:agents-move", "conversations"],
+  ["mako:agents-next-place", "conversations"],
   ["mako:agents-read", "conversations"],
   ["mako:agents-redirect", "conversations"],
   ["mako:agents-report", "conversations"],
@@ -2768,6 +2784,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:git-status", "git"],
   ["mako:git-unstage", "git"],
   ["mako:git-unstage-all", "git"],
+  ["mako:github-authorship", "usage"],
+  ["mako:github-authorship-save", "usage"],
   ["mako:github-status", "git"],
   ["mako:github-token", "usage"],
   ["mako:github-token-remove", "usage"],
@@ -2790,6 +2808,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:install-update", "application"],
   ["mako:installation-state", "application"],
   ["mako:integrations", "tools"],
+  ["mako:keep-awake", "conversations"],
+  ["mako:keep-awake-set", "conversations"],
   ["mako:launch-prewarm", "tools"],
   ["mako:lifecycle-command", "application"],
   ["mako:lifecycle-state", "application"],

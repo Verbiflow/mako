@@ -30,6 +30,8 @@ const reads = [
   "mako:handoff-candidates",
   "mako:handoff-settings",
   "mako:conversation-settings",
+  /** Where keeping this Mac awake stands; reads what `KeepAwake` holds. */
+  "mako:keep-awake",
   "mako:git-status",
   "mako:git-diff",
   "mako:git-diff-all",
@@ -170,6 +172,8 @@ const reads = [
   "mako:cloud-carried-files",
   /** Who the account's own GitHub token belongs to, read from the cloud; never the token. */
   "mako:github-token",
+  /** Who the account's cloud commits and pull requests are authored as, read from the cloud. */
+  "mako:github-authorship",
   /** Waits on a sign-in the host finishes by itself, whoever is waiting. */
   "mako:account-login-wait",
   "mako:native-authoring-catalog",
@@ -262,6 +266,8 @@ const replays = [
   "mako:agents-direct",
   /** The person's answer to a Fin's ask is settled by its request id: a repeat answers once. */
   "mako:agents-respond",
+  /** A move is settled by its id: a repeat is the same move. */
+  "mako:agents-continue-next",
   /** Cancelling a turn that has already stopped stops nothing. */
   "mako:live-cancel",
   /** Stopping a background task that has already ended stops nothing. */
@@ -313,6 +319,8 @@ const replays = [
   /** The same token saved twice is kept once; removing it twice leaves it off. */
   "mako:github-token-save",
   "mako:github-token-remove",
+  /** Choosing who cloud commits are authored as a second time is the same choice. */
+  "mako:github-authorship-save",
   /** Setting the mode a session already has is a no-op. */
   "mako:live-mode",
   /** The ledger keeps one mode per thread; the same write twice is one write. */
@@ -325,6 +333,8 @@ const replays = [
   "mako:handoff-settings-set",
   /** The same settings saved twice are one choice. */
   "mako:conversation-settings-set",
+  /** The same choice saved twice is one choice. */
+  "mako:keep-awake-set",
   /** `LiveAutoContinue.continueNow`: the request id is the continuation's; a repeat finds it and changes nothing. */
   "mako:live-continue-turn",
   /** `ThreadStore.renameThread` and `clearThreadTitle`: the operation id is receipted. */

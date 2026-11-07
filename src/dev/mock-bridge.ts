@@ -12,6 +12,7 @@ import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { HandOffCandidate, HandOffResult, HandOffSettings, MoveCarried, ThreadContinueOffer, ThreadContinueOutcome, ThreadContinueStep, ThreadHandOff, ThreadMoveStep, ThreadReturnOptions, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import { ContinueRecorder } from "@mako/host/contracts/cloud-continues"
 import type { ConversationSettings } from "@mako/host/contracts/turn-continuation"
+import { KEEP_AWAKE_BATTERY_FLOOR, type KeepAwakeHold, type KeepAwakeSettings, type KeepAwakeState } from "@mako/host/contracts/keep-awake"
 import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
@@ -140,6 +141,24 @@ const STAGED_MEDIA = new Map<string, string>()
 const utilityChoices: UtilityWorkChoices = { commit: "auto" }
 /** Whether a fixture hands agents to the cloud as the Mac sleeps. */
 const mockHandOffOnSleep = { value: true }
+/**
+ * Keeping the fixture's Mac awake: on, as on a new Mac. `?awake=3` has three agents at work, `?awake=lid:3` with the lid
+ * held too, `?awake=battery:3` on a battery below the floor, `?awake=failed:3` with nothing held; nothing works without it.
+ */
+interface MockKeepAwake { settings: KeepAwakeSettings }
+const mockKeepAwakeScene = new URLSearchParams(globalThis.location?.search).get("awake") ?? ""
+const mockKeepAwake: MockKeepAwake = { settings: { on: true, lidClosed: mockKeepAwakeScene.startsWith("lid:") } }
+function mockKeepAwakeState(): KeepAwakeState {
+  const agents = Number(mockKeepAwakeScene.split(":").at(-1) || 0)
+  const hold: KeepAwakeHold = !mockKeepAwake.settings.on || agents === 0
+    ? { kind: "rest" }
+    : mockKeepAwakeScene.startsWith("battery:")
+      ? { kind: "low-battery", agents, percent: 14, floor: KEEP_AWAKE_BATTERY_FLOOR }
+      : mockKeepAwakeScene.startsWith("failed:")
+        ? { kind: "failed", agents }
+        : { kind: mockKeepAwake.settings.lidClosed ? "lid" : "idle", agents }
+  return { settings: mockKeepAwake.settings, hold }
+}
 /** The fixture's conversation settings, off as on a new Mac. */
 interface MockConversationSettings { value: ConversationSettings }
 const mockConversationSettings: MockConversationSettings = { value: { continueAfterRestart: false } }
@@ -353,6 +372,7 @@ export function installMockBridge() {
   let wakeApex: (() => void) | undefined
   const respondCalls: Array<AgentsRespondInput & { conversation: string }> = []
   const agentAskAnswers: Array<{ conversationId: string; ask: string; allow: boolean }> = []
+  const continueCalls: string[] = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -498,6 +518,16 @@ export function installMockBridge() {
       /** The person's answers to Fins' asks, as the Apex's host heard them. */
       responds: () => [...respondCalls],
       agentAsks: () => [...agentAskAnswers],
+      /** The Apex's own agent asks now, as the host's control-only batch says it. */
+      raiseAgentAsk: () => {
+        const snapshot = liveSnapshots.get(APEX_CONVERSATION)
+        if (!snapshot?.control) return
+        const control = { ...snapshot.control, asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a7", at: Date.now(), want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a8", handsOff: true } }] }
+        const next = { ...snapshot, revision: snapshot.revision + 1, control }
+        liveSnapshots.set(APEX_CONVERSATION, next)
+        emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], control })) })
+      },
+      continues: () => [...continueCalls],
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
        * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
@@ -3140,6 +3170,13 @@ export function installMockBridge() {
       emit({ type: "conversation-settings", settings })
       return settings
     },
+    keepAwake: async (): Promise<KeepAwakeState> => mockKeepAwakeState(),
+    setKeepAwake: async (change: Partial<KeepAwakeSettings>): Promise<KeepAwakeState> => {
+      mockKeepAwake.settings = { ...mockKeepAwake.settings, ...change }
+      const state = mockKeepAwakeState()
+      emit({ type: "keep-awake", state })
+      return state
+    },
     handOffSettings: async (): Promise<HandOffSettings> => ({ onSleep: mockHandOffOnSleep.value }),
     setHandOffOnSleep: async (onSleep: boolean): Promise<HandOffSettings> => {
       mockHandOffOnSleep.value = onSleep
@@ -3464,6 +3501,11 @@ export function installMockBridge() {
         emit({ type: "live-batch", batch: { id: conversation, revision: next.revision, updates: [event] } })
       }
       return { to: direct.to, fin: direct.fin, delivery: direct.delivery }
+    },
+    agentsNextPlace: async () => ({ label: "Codex", harness: "codex" }),
+    agentsContinueNext: async (conversation: string) => {
+      continueCalls.push(conversation)
+      return true
     },
     // As the host answers it: the Fin goes on, and its entry says so in the Apex's next batch.
     agentsRespond: async (conversation: string, input: AgentsRespondInput): Promise<AgentsAnswered | AgentRefused> => {

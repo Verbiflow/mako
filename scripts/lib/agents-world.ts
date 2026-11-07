@@ -12,6 +12,7 @@ import { withExecutionAdmission, type AccountAdmission } from "@mako/host/harnes
 import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
 import type { LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import { HostJobs } from "@mako/host/base/host-jobs"
+import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
 import type { ProviderBinding, ResumeVerdict } from "@mako/host/contracts/conversation-control"
@@ -220,6 +221,7 @@ export class AgentsWorld {
   readonly events: HostEvent[] = []
   /** Every launch admission resolved, in order, with the account it ran on (`WorldOptions.accounts`). */
   readonly launches: WorldLaunch[] = []
+  private readonly inputs = new HostCallInputs()
   /** When each of `events` was emitted, by its place. */
   readonly eventAt: number[] = []
   private asking = new Map<string, { observationId: string; answered: (response: LivePermissionResponse) => void }>()
@@ -281,7 +283,7 @@ export class AgentsWorld {
       resumeVerdict: this.options.resumeVerdict ?? (async () => ({ kind: "resumable", record: "same" })),
     })
     this.live = live
-    const continuing = continueOn({ live, resolveLaunch: async (_provider, _cwd, tuning) => tuning, switched: () => {}, resumesUnderAccount: (harness) => this.options.resumesUnderAccount?.includes(harness) === true })
+    const continuing = continueOn({ live, resolveLaunch: async (_provider, _cwd, tuning) => tuning, switched: () => {}, resumesUnderAccount: (harness) => this.options.resumesUnderAccount?.includes(harness) ?? (this.options.continuation?.[harness]?.kind ?? "resumes") === "resumes"})
     this.continueOn = (id, continuation, actor, stillDecided) => {
       const to = continuation.kind === "words" ? continuation.input.provider : continuation.kind === "move" ? continuation.move.to.harness : continuation.reply.provider
       this.continued.push({ conversation: id, to, kind: continuation.kind, by: actor?.kind ?? "person" })
@@ -299,7 +301,8 @@ export class AgentsWorld {
         // host starts on its own conversations: a start the last one left preparing never reaches the next host's.
         await this.options.preparing?.(options)
         if (options.parent && !options.resume && !agents.startWanted(options.parent.op)) throw new Error("Its Apex stopped it before it started.")
-        await live.start(harness, cwd, options)
+        // Parsed as the host parses it, so what a schema drops never reaches the start here either.
+        await live.start(...this.inputs.of("mako:live-start").parse([harness, cwd, options]))
         await this.options.replying?.(options)
       },
       harnesses: () => HARNESSES,
@@ -594,7 +597,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, wakeDue: () => [], snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, pinnedAccount: () => undefined, submit: none,
     act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
-    turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false, recordNote: () => false, moveWaiting: () => false,
+    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {},
   }
 }
 

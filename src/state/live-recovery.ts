@@ -3,7 +3,7 @@ import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveAction, LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
-import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation } from "@/state/acp-state"
+import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation, type LiveAcpConversation } from "@/state/acp-state"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { noteFinAsks, noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
@@ -129,6 +129,8 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     threadId: snapshot.threadId ?? existing?.threadId,
     sessionId: snapshot.sessionId ?? existing?.sessionId,
     parent: snapshot.parent ?? existing?.parent,
+    // An Apex listed from another device keeps its row's Fins once opened, until its own roster says them.
+    fins: snapshot.fins ?? existing?.fins,
     createdAt: snapshot.createdAt,
     updatedAt: Date.now(),
     kind: "live",
@@ -395,7 +397,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
     }
     replaceAcpConversation(batch.id, next)
     notifyCompletion(current.requests, requests)
-    if (changesSession(batch) || batch.permissions || requests)
+    if (changesSession(batch) || batch.permissions || requests || agentAsksMoved(current, next))
       syncThreadStatus(next, current.session.status, current.threadPath)
     if (batch.nativeAgents) noteFinAsks(next)
     return
@@ -505,10 +507,16 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
   if (next && (batch.session ?? batch.sessionChanges)?.settings) acknowledgeComposerSettings(next)
   if (
     next?.kind === "live" &&
-    (changesSession(batch) || batch.permissions || changedRequests)
+    (changesSession(batch) || batch.permissions || changedRequests || agentAsksMoved(current, next))
   )
     syncThreadStatus(next, current.session.status, current.threadPath)
   if (next?.kind === "live" && batch.nativeAgents) noteFinAsks(next)
+}
+
+/** An agent's ask raised or answered: a batch of control alone says it, and it's said to the person as an approval is. */
+function agentAsksMoved(before: Pick<LiveAcpConversation, "control">, after: Pick<LiveAcpConversation, "control">): boolean {
+  const ids = (conversation: Pick<LiveAcpConversation, "control">) => conversation.control?.asks?.map((ask) => ask.id).join() ?? ""
+  return ids(before) !== ids(after)
 }
 
 function notifyCompletion(
@@ -595,7 +603,12 @@ export function hydrateLiveSummaries(
 function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void {
   for (const summary of summaries) {
     const previous = acpStore.get().conversations[summary.session.id]
-    if (previous?.hydrated && !reconnect) continue
+    if (previous?.hydrated && !reconnect) {
+      // Opened here, it reads its owner's stream; its Fins still come from the list while this window holds no roster of them.
+      if (previous.kind === "live" && summary.elsewhere !== undefined && previous.fins !== summary.fins)
+        replaceAcpConversation(summary.session.id, { ...previous, fins: summary.fins, children: summary.children ?? previous.children })
+      continue
+    }
     if (reconnect && previous?.kind === "live") {
       replaceAcpConversation(summary.session.id, {
         ...previous,
@@ -615,6 +628,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
         sessionId: summary.sessionId ?? previous.sessionId,
         parent: summary.parent ?? previous.parent,
         children: summary.children,
+        fins: summary.fins,
         permission: null,
         failureSeen: carriedFailureSeen(previous, summary.session),
       })
@@ -658,6 +672,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
       sessionId: summary.sessionId,
       parent: summary.parent,
       children: summary.children,
+      fins: summary.fins,
       revision: summary.revision,
       hydrated: false,
       createdAt: summary.createdAt,

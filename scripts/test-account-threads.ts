@@ -8,12 +8,16 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { MAX_EVENT_BYTES, NUMBERED_LIVE_VERSION, serveRuntime, type Payload } from "@mako/protocol"
-import { rowsForLink, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
+import { LISTED_FINS, ListedSessionSchema, ReportedSessionSchema, rowsForLink, type ListedFin, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
+import { randomUUID } from "node:crypto"
+import { entryState, type ChildState } from "@mako/host/contracts/agents"
+import { childLine, childStateOf, childWord, finsAsChildren, listedFins, orderedChildren, rollup } from "@mako/host/contracts/children"
+import { CHILDREN_BINDING, type NativeAgent } from "@mako/host/contracts/native-agents"
 import { AccountSessions } from "@mako/protocol/account-sessions"
 import { MovesUnderWay } from "@mako/host/conversations/moves-under-way"
 import { SENT_EVERY_MS, SentProgress } from "@mako/host/conversations/cloud-moves"
 import type { MoveSent } from "@mako/host/contracts/cloud-threads"
-import { ACTIVITY_REPORT_MS, conversationShown, finAsking, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
+import { ACTIVITY_REPORT_MS, conversationShown, FINS_COALESCE_MS, finAsking, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
 import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
@@ -377,6 +381,10 @@ test("an Apex's row waits on its Fin's ask that's the person's, saying what it s
   const working = conversationShown({ session: { id: "apex", status: "running" }, working: "running", waitingOn: () => undefined, background: 2, asking: () => asks })
   assert.deepEqual({ state: working.state, waitingOn: working.waitingOn, waitingFor: working.waitingFor, under: working.asking?.under, background: working.background }, { state: "waiting", waitingOn: "push-wording: Which tone? Plain or friendly?", waitingFor: "question", under: "working", background: undefined })
   assert.equal(conversationShown({ session: { id: "apex", status: "ready" }, working: undefined, waitingOn: () => undefined, asking: () => asks }).asking?.under, "idle", "an Apex at rest under it rests")
+  // What its own agent asked through Mako's tools leaves it working and waits on the person; its Fins stay on its row.
+  const fins: ListedFin[] = [{ thread: ThreadIdSchema.parse(randomUUID()), name: "first", harness: "cursor", state: { kind: "working" }, startedAt: new Date(NOW).toISOString() }]
+  const asked = conversationShown({ session: { id: "apex", status: "running" }, working: "running", waitingOn: () => undefined, background: 2, asking: () => asks, asked: () => ({ for: "needs-you", line: "Wants to move this Thread to the cloud" }), fins: () => fins })
+  assert.deepEqual([asked.state, asked.waitingFor, asked.waitingOn, asked.background, asked.asking, asked.fins], ["waiting", "needs-you", "Wants to move this Thread to the cloud", undefined, undefined, fins])
   const own = conversationShown({ session: { id: "apex", status: "running" }, working: "waiting", waitingOn: () => ({ for: "approval", line: "Approve: git push" }), asking: () => asks })
   assert.deepEqual({ state: own.state, waitingOn: own.waitingOn, asking: own.asking }, { state: "waiting", waitingOn: "Approve: git push", asking: undefined }, "its own ask first")
   const approval = finAsking({ fin, name: "sheet-motion", line: "Approve: npm ci", ask: { kind: "approval", id: "a-1" }, more: 0 })
@@ -622,6 +630,79 @@ test("a batch that moves what a list shows of its conversation is reported on th
   const later = new SessionPublisher({ rows: () => rows, shown: () => ({ state: "working" }), now: () => now, reportNow: () => {}, schedule: (run, afterMs) => { soon.push({ run, afterMs }) } })
   later.own(batch())
   assert.equal(soon.length, 0, "no link yet: nothing to report on")
+})
+
+test("an Apex's row says its Fins; a change to them alone waits a quarter second for the others with it, and anything else still goes at once", async () => {
+  let rows = [row(1)]
+  const fin = (name: string, state: ListedFin["state"]): ListedFin => ({ thread: ThreadIdSchema.parse(randomUUID()), name, harness: "cursor", state, startedAt: new Date(NOW).toISOString() })
+  let shown: ConversationShown = { state: "working", fins: [fin("one", { kind: "working", step: "Reading a" })] }
+  const sent: SessionsReport[] = []
+  const soon: Array<{ run: () => void; afterMs: number }> = []
+  let serving: SessionLink | undefined
+  const publisher = new SessionPublisher({
+    rows: () => rows,
+    shown: (conversation) => (conversation === "c-1" ? shown : undefined),
+    now: () => NOW,
+    reportNow: () => publisher.report(serving),
+    schedule: (run, afterMs) => { soon.push({ run, afterMs }) },
+  })
+  serving = { link: await newLink(), served: { version: 19, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  publisher.report(serving)
+  // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
+  const batch = () => ({ type: "live-batch", batch: { id: "c-1", revision: 3, updates: [] } }) as never
+  publisher.own(batch())
+  soon.shift()?.run()
+  for (const step of ["Reading b", "Reading c", "Editing d"]) {
+    shown = { ...shown, fins: [fin("one", { kind: "working", step })] }
+    publisher.own(batch())
+  }
+  assert.deepEqual(soon.map((each) => each.afterMs), [FINS_COALESCE_MS], "three steps of a Fin: one report, a quarter second on")
+  rows = [{ ...row(1), fins: shown.fins }]
+  soon.shift()?.run()
+  assert.deepEqual(soon.map((each) => each.afterMs), [0], "then on the next turn, as any change")
+  soon.shift()?.run()
+  assert.deepEqual(sent.at(-1)?.listed.map((each) => each.fins?.[0]?.state), [{ kind: "working", step: "Editing d" }], "what stands when it goes is what's said")
+  shown = { state: "waiting", waitingOn: "Approve: git push", fins: shown.fins }
+  publisher.own(batch())
+  assert.deepEqual(soon.map((each) => each.afterMs), [0], "the Apex's own change goes on the next turn, its Fins with it")
+  assert.deepEqual(conversationShown({ session: { id: "apex", status: "running" }, working: "running", waitingOn: () => undefined, fins: () => shown.fins }).fins, shown.fins, "the row says the Fins its roster lists")
+  assert.equal(conversationShown({ session: { id: "apex", status: "running" }, working: "running", waitingOn: () => undefined, fins: () => undefined }).fins, undefined)
+})
+
+test("a row's Fins read on another device count, order and say each Fin as its owner's roster does, for any roster", () => {
+  const cut = (line: string | undefined) => line?.slice(0, 100)
+  // SAFETY: a blocked Fin's ask, filled only as far as `listedFinState` reads it (it drops the ask whole).
+  const states: ChildState[] = [
+    { kind: "queued", reason: "place-full", ahead: 3 }, { kind: "queued", reason: "tree-running", ahead: 0 }, { kind: "starting", step: "launching" },
+    { kind: "working", step: `Running ${"x".repeat(400)}` }, { kind: "working", phase: "Reading the brief" }, { kind: "working" }, { kind: "idle" },
+    { kind: "blocked", question: "Which branch?", on: "person", ask: { id: "a-1", kind: "question" } as never }, { kind: "blocked", question: "Plain or friendly?", on: "lead" },
+    { kind: "blocked", question: "Approve: npm ci", on: "approval" }, { kind: "ended", outcome: "done" }, { kind: "ended", outcome: "failed", reason: "exit 1" }, { kind: "ended", outcome: "stopped" },
+    { kind: "queued", reason: "tree-running", ahead: 0, after: ["li-protocol", "x".repeat(300)] }, { kind: "queued", reason: "tree-running", ahead: 1, after: ["li-flage"], held: "li-flage" },
+    { kind: "queued", reason: "place-full", ahead: 0, refused: `It didn't start: ${"x".repeat(300)}` }, { kind: "queued", reason: "tree-running", ahead: 0, apexStopped: true },
+    { kind: "ended", outcome: "done", decision: { question: "Merge #371?", on: "person", ask: { id: "d-1", kind: "question" } } }, { kind: "ended", outcome: "done", decision: { question: "Pick one", on: "lead", ask: { id: "d-2", kind: "question" } } },
+    { kind: "ended", outcome: "stopped", reason: "out of usage", unfinished: true }, { kind: "working", answered: { by: "person", answer: `Merge ${"x".repeat(390)}` } },
+    { kind: "idle", waitingOn: [{ kind: "pull-request", ref: "Verbiflow/mako#386", repository: "Verbiflow/mako", number: 386, until: "checks" }, { kind: "person", what: "merge" }, { kind: "other", text: "the deploy" }], since: NOW - 60_000 },
+    // What a roster says that no selector reads: it stays with the owner.
+    { kind: "blocked", question: "Which?", on: "person", waitingOn: [{ kind: "person", what: "merge" }] }, { kind: "ended", outcome: "done", waitingOn: [{ kind: "other", text: "the deploy" }] },
+  ]
+  let seed = 7
+  const next = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2 ** 31), seed % n)
+  for (let run = 0; run < 300; run++) {
+    const roster: NativeAgent[] = Array.from({ length: next(LISTED_FINS) + 1 }, (_, index) => {
+      const state = states[next(states.length)]!
+      const at = NOW - next(10_000) * 1_000
+      return { nativeId: `mako-child:${index}`, title: `fin-${index}`, work: "agent", background: true, state: entryState(state), bindingId: CHILDREN_BINDING, provider: ["cursor", "claude", "codex"][next(3)]!, observedAt: at, startedAt: at, child: { thread: ThreadIdSchema.parse(randomUUID()), name: `fin-${index}`, origin: "started", state } }
+    })
+    const fins = listedFins(roster)!
+    assert.ok(ReportedSessionSchema.parse({ ...row(1), fins }), "what the owner lists, the protocol carries")
+    const elsewhere = finsAsChildren(ListedSessionSchema.parse({ ...row(1), runsOn: { kind: "device", deviceId: uuid(9) }, listedAt: new Date(NOW).toISOString(), fins }).fins)
+    assert.deepEqual(rollup(orderedChildren(elsewhere)), rollup(roster), "the same counts every surface shows")
+    assert.deepEqual(orderedChildren(elsewhere).map((agent) => agent.child?.thread), orderedChildren(roster).map((agent) => agent.child?.thread), "in the same order")
+    assert.deepEqual(elsewhere.map((agent) => childWord(childStateOf(agent))), orderedChildren(roster).map((agent) => childWord(childStateOf(agent))), "each with the same word")
+    assert.deepEqual(elsewhere.map((agent) => cut(childLine(childStateOf(agent), NOW))), orderedChildren(roster).map((agent) => cut(childLine(childStateOf(agent), NOW))), "and the same line, as far as a row keeps of it")
+    assert.ok(finsAsChildren(fins) === finsAsChildren(fins), "the same entries while the row's Fins are")
+  }
+  assert.equal(listedFins([]), undefined, "an Apex with no Fins says none")
 })
 
 test("what a conversation's batch is checked against is what its row says", () => {
@@ -946,6 +1027,100 @@ test("a renewed token reaches the catalog while it's too busy to take the scope,
 /** A tier whose `sessions` are all in the account, as one Thread. */
 const tierCount = (sessions: number) => ({ sessions, threads: 1, readable: sessions, held: sessions, whole: sessions, inCloud: sessions, threadsInCloud: 1 })
 const activity = (failures: SyncFailure[] = []) => ({ sending: [], paused: false, pushes: 1, bytes: 10, failed: failures.length, lastSuccessAt: NOW, failures })
+
+test("a tick works out the scope only when something it's made from moved, and always hears the catalog", async () => {
+  const synced = { ...tierCount(1), inCloud: 1 }
+  let catalog: CatalogSyncStatus = { paused: false, tiers: { now: synced, day: synced, week: synced }, stale: 0, copies: activity(), originals: activity() }
+  let listed: ReportedSession[] = [{ ...row(1), nativeId: "n-1" }]
+  let now = NOW
+  let children = 0
+  let version = "1"
+  let scopes = 0
+  let known = new Set(["n-1"])
+  const given: string[] = []
+  const link = (authorization: string): RecordsLink => ({ id: "d-1/records", base: "https://cloud.test/v1/devices/d-1/records", authorization })
+  let links: UploadLinks = { state: "on", copies: link("Bearer a"), originals: link("Bearer a") }
+  const uploads = new SessionUploads({
+    rows: () => listed,
+    path: (_harness, nativeId) => (known.has(nativeId) ? `/rail/${nativeId}.jsonl` : undefined),
+    agents: () => (children += 1, new Map()),
+    scopeVersion: () => version,
+    links: async () => links,
+    power: async () => ({ onBattery: false, percent: 100, lowPower: false }),
+    scope: async () => void (scopes += 1),
+    copies: async (taken) => void given.push(String(taken?.authorization)),
+    originals: async () => {},
+    status: async () => catalog,
+    backfill: async () => undefined,
+    now: () => now,
+  })
+  const tick = async () => {
+    now += 5_000
+    await uploads.tick()
+  }
+  await uploads.tick()
+  assert.equal(uploads.status().state, "synced")
+  const first = children
+  for (let at = 0; at < 5; at += 1) await tick()
+  assert.equal(children, first, "five quiet ticks don't work out the scope")
+
+  catalog = { ...catalog, copies: activity([{ at: NOW, harness: "codex", nativeId: "n-1", message: "refused" }]) }
+  await tick()
+  assert.equal(uploads.status().state, "failing", "the catalog's word is heard on the next tick, quiet or not")
+  assert.equal(children, first, "without working out the scope")
+  catalog = { ...catalog, copies: activity() }
+  await tick()
+
+  listed = [...listed, { ...row(2), nativeId: "n-2" }]
+  known = new Set([...known, "n-2"])
+  await tick()
+  assert.equal(children, first + 1, "a new Session is looked at on the next tick")
+  version = "2"
+  await tick()
+  assert.equal(children, first + 2, "and so is anything the version says moved: a new Fin, or a file newly listed")
+
+  now += 60_000
+  await uploads.tick()
+  assert.equal(children, first + 3, "a minute on it looks again, as the power is read again")
+
+  links = { state: "on", copies: link("Bearer b"), originals: link("Bearer b") }
+  await tick()
+  assert.deepEqual(given.at(-1), "Bearer b", "a renewed token goes on the next tick")
+})
+
+test("signing out and into another account during a quiet stretch reads the new account at once", async () => {
+  const synced = { ...tierCount(1), inCloud: 1 }
+  const catalog: CatalogSyncStatus = { paused: false, tiers: { now: synced, day: synced, week: synced }, stale: 0, copies: activity(), originals: activity() }
+  let now = NOW
+  const given: (string | undefined)[] = []
+  const link = (authorization: string): RecordsLink => ({ id: "d-1/records", base: "https://cloud.test/v1/devices/d-1/records", authorization })
+  let links: UploadLinks = { state: "on", copies: link("Bearer a"), originals: link("Bearer a") }
+  const uploads = new SessionUploads({
+    rows: () => listed,
+    path: (_harness, nativeId) => `/rail/${nativeId}.jsonl`,
+    scopeVersion: () => "same",
+    links: async () => links,
+    power: async () => ({ onBattery: false, percent: 100, lowPower: false }),
+    scope: async () => {},
+    copies: async (taken) => void given.push(taken?.authorization),
+    originals: async () => {},
+    status: async () => catalog,
+    backfill: async () => undefined,
+    now: () => now,
+  })
+  const listed: ReportedSession[] = [{ ...row(1), nativeId: "n-1" }]
+  await uploads.tick()
+  assert.equal(uploads.status().state, "synced")
+  links = { state: "off", reason: "signed-out" }
+  now += 5_000
+  await uploads.tick()
+  assert.deepEqual(uploads.status(), { state: "off", reason: "signed-out" }, "signing out stops it at once")
+  links = { state: "on", copies: link("Bearer b"), originals: link("Bearer b") }
+  now += 5_000
+  await uploads.tick()
+  assert.deepEqual(given, ["Bearer a", undefined, "Bearer b"])
+  assert.equal(uploads.status().state, "synced", "and the status says so, not a minute on")
+})
 
 test("the Sessions not synced are one line each, its copy's or its records', the longest failing first, with how many in all and how many only retrying", () => {
   const failing = (nativeId: string, since: number, kind: SyncFailure["kind"]): SyncFailure => ({ at: NOW, since, harness: "codex", nativeId, kind, message: `${nativeId} failed`, correlationId: `c-${nativeId}` })
