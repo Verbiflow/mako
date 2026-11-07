@@ -483,6 +483,8 @@ export interface ChildThread {
   awaiting?: string
   /** When its work now began: its turn's start, or with `awaiting`, when that turn ended. Absent when nothing says. */
   workSince?: number
+  /** The requests its turn took: the one that began it and any steered into it. A process Mako follows has none. */
+  workInputs?: readonly string[]
   /** An approval or question in it waits, on whom, and what answers it. */
   waiting?: { question: string; on: "lead" | "person" | "approval"; ask?: FinAsk }
   /** How its last turn or run ended; absent while one runs or before any ended. */
@@ -498,6 +500,8 @@ export interface ChildJournal {
   /** The last answer to a question in its report: who gave it, when, and the ask it answers, which it settles alone. */
   answered?: FinAnswered & {
     ask: string
+    /** The request that carried it to the Fin. */
+    request?: string
     at: number
     /** It reached the Fin, so the question no longer holds it. */
     delivered?: true
@@ -506,14 +510,24 @@ export interface ChildJournal {
   }
 }
 
-/** An answer lands a moment either side of the turn it starts. */
-const ANSWER_TURN_SLACK_MS = 5_000
-
-/** Whether a row says who answered: an answer to this turn. A plain message from its Apex may close a question (`inputDelivered`), and it's still the next job and not an answer. */
+/**
+ * Whether a row says who answered: an answer to this turn, by the request that carried it, however long that waited
+ * and however soon the next turn began. A process has no requests to tell by, so only an answer since its turn began
+ * counts. A plain message from its Apex may close a question (`inputDelivered`), and it's still the next job and not an answer.
+ */
 function answerShown(journal: ChildJournal, thread: ChildThread): boolean {
   const answer = journal.answered
   if (!answer || (answer.routine && answer.by !== "person")) return false
-  return thread.workSince === undefined || answer.at >= thread.workSince - ANSWER_TURN_SLACK_MS
+  if (thread.workInputs) return answer.request !== undefined && thread.workInputs.includes(answer.request)
+  return thread.workSince === undefined || answer.at >= thread.workSince
+}
+
+/**
+ * When a turn failed: the last anything was heard of it, its provider's activity or else its sending. A request keeps
+ * no time of its own for this, and its admission is only when it was asked for, an hour ago for a Fin's long turn.
+ */
+export function turnFailedAt(request: { createdAt?: number; dispatchedAt?: number }, activityAt: number | undefined, start: number): number {
+  return Math.max(request.dispatchedAt ?? request.createdAt ?? start, activityAt ?? 0)
 }
 
 /** Its last report's first sentence: what a strip and the digest show it at. */

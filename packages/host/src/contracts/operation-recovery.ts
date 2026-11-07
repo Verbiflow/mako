@@ -55,15 +55,18 @@ export function describeActionRecovery(action: LiveAction) {
   }
 }
 
-/** Whether Mako sent this by itself, a Fin's digest or an Apex's message: what becomes of it is Mako's to handle, and it does. */
-export function actionSentByMako(action: LiveAction): boolean {
-  return action.input.kind !== "compact" && sentByMako(action.input.text)
+/**
+ * Whether Mako sent this by itself, a Fin's digest or an Apex's message: what becomes of it is Mako's to handle, and it
+ * does. The host's word, since anyone can paste Mako's header; only a receipt kept before the host said goes by its words.
+ */
+export function actionSentByMako(action: Pick<LiveAction, "input" | "sender">): boolean {
+  if (action.input.kind === "compact") return false
+  return action.sender ? action.sender === "native" : sentByMako(action.input.text)
 }
 
 /**
  * The action whose notice stands above the composer: the person's newest, while its notice says something true. A
- * steer Mako sent raises nothing, whatever became of it, and hides nothing of theirs. Read from the words so one
- * already kept stops raising it too.
+ * steer Mako sent raises nothing, whatever became of it, and hides nothing of theirs.
  */
 export function actionNotice(actions: readonly LiveAction[] | undefined, requests: readonly Pick<LiveRequest, "id">[]): LiveAction | undefined {
   const action = actions?.filter((each) => !actionSentByMako(each)).at(-1)

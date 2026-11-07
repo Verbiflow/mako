@@ -1,6 +1,6 @@
-import { sentByMako } from "./children.js"
 import type { LiveAction } from "./live-actions.js"
 import type { LiveBatch } from "./live-conversations.js"
+import { actionSentByMako } from "./operation-recovery.js"
 import type { Actor } from "./thread-identity.js"
 
 /** A request as `personPromptedAt` reads it: who sent it, and when it was admitted. */
@@ -15,7 +15,7 @@ export type PromptedRequest = { actor?: Pick<Actor, "kind">; createdAt?: number 
  */
 export function personPromptedAt(
   requests: readonly PromptedRequest[] | undefined,
-  actions?: readonly Pick<LiveAction, "input" | "createdAt">[]
+  actions?: readonly Pick<LiveAction, "input" | "sender" | "createdAt">[]
 ): number | undefined {
   let latest: number | undefined
   for (const request of requests ?? []) {
@@ -23,7 +23,7 @@ export function personPromptedAt(
     if (latest === undefined || request.createdAt > latest) latest = request.createdAt
   }
   for (const action of actions ?? []) {
-    if (action.input.kind === "compact" || sentByMako(action.input.text)) continue
+    if (action.input.kind === "compact" || actionSentByMako(action)) continue
     if (latest === undefined || action.createdAt > latest) latest = action.createdAt
   }
   return latest
