@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import type { Secrets } from "../base/secrets.js"
+import { GrantedSecrets } from "../base/secret-grants.js"
 import { publishFile } from "../base/published-files.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import {
@@ -197,14 +198,21 @@ export class ModelConnections {
    * each key opened for that launch alone. A connection whose key won't open
    * is left out; the rest still go.
    */
-  async routes(capability: ModelRoutesCapability): Promise<RoutedLaunch> {
+  async routes(capability: ModelRoutesCapability, launch?: { thread: string; repository: string; correlationId: string }): Promise<RoutedLaunch> {
     const routes: ModelRoute[] = []
     const keys = new Map<string, string>()
     for (const connection of await this.read().catch(() => [])) {
       if (!connection.enabled || !routeAccepted(capability, connection.kind, connection.wire)) continue
       if (connection.credential) {
         try {
-          const record = await this.secrets.read("saved-key", connection.credential.name)
+          const lent = launch && this.secrets instanceof GrantedSecrets
+            ? await this.secrets.lend("saved-key", connection.credential.name, { thread: launch.thread, repository: launch.repository }, `the ${connection.name ?? connection.id} connection's key for a launch`, `${launch.correlationId}:${connection.id}`)
+            : undefined
+          if (lent && "refusal" in lent) {
+            hostWarn("model-connections", "a connection's key wasn't lent", { id: connection.id, refused: lent.refusal.refused })
+            continue
+          }
+          const record = lent ? lent.record : await this.secrets.read("saved-key", connection.credential.name)
           if (!record) {
             hostWarn("model-connections", "a connection's key is missing", { id: connection.id })
             continue

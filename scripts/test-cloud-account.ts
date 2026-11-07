@@ -18,6 +18,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, test } from "node:test"
 import diagnosticsChannel from "node:diagnostics_channel"
+import { setTimeout as delay } from "node:timers/promises"
 import { Pool, fetch as undiciFetch } from "undici"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
 import { z } from "zod"
@@ -513,7 +514,9 @@ test("after a sleep, a call to the cloud never waits on a pooled connection the 
 test("a call that fails says whether it ever left this Mac, and on which connection", async () => {
   // A server that takes connections and never answers, behind a pool of one connection: the first call goes out on a
   // new connection and hears nothing; the second never goes out at all.
-  const silent = createTcpServer((socket) => socket.on("data", () => undefined))
+  let heard = (): void => undefined
+  const wentOut = new Promise<void>((resolve) => { heard = resolve })
+  const silent = createTcpServer((socket) => socket.on("data", () => heard()))
   silent.listen(0, "127.0.0.1")
   await once(silent, "listening")
   const sockets = new Set<Socket>()
@@ -527,10 +530,10 @@ test("a call that fails says whether it ever left this Mac, and on which connect
   const pool = new Pool(new URL(url).origin, { connections: 1 })
   after(() => pool.destroy())
   const traces = new RequestTraces("x-test-correlation")
-  const call = async (id: string) => {
+  const call = async (id: string, signal: AbortSignal) => {
     const trace = traces.follow(id)
     try {
-      await undiciFetch(url, { method: "HEAD", headers: { "x-test-correlation": id }, dispatcher: pool, signal: AbortSignal.timeout(400) })
+      await undiciFetch(url, { method: "HEAD", headers: { "x-test-correlation": id }, dispatcher: pool, signal })
       return "answered"
     } catch {
       return trace.describe()
@@ -538,9 +541,18 @@ test("a call that fails says whether it ever left this Mac, and on which connect
       trace.end()
     }
   }
-  const [first, second] = await Promise.all([call(randomUUID()), call(randomUUID())])
-  assert.match(first, /^went out after \d+ ms on a new connection; no answer in \d+ ms$/)
-  assert.match(second, /^waited \d+ ms and never went out: no connection took it$/)
+  // Each stops in turn, not on a timer of its own: the first's abort frees the connection, and a second still waiting
+  // goes out on a new one.
+  const [stopFirst, stopSecond] = [new AbortController(), new AbortController()]
+  const first = call(randomUUID(), stopFirst.signal)
+  const second = call(randomUUID(), stopSecond.signal)
+  await Promise.race([wentOut, first])
+  // Long enough for the second to have gone, had a connection been free.
+  await delay(50)
+  stopSecond.abort()
+  assert.match(await second, /^waited \d+ ms and never went out: no connection took it$/)
+  stopFirst.abort()
+  assert.match(await first, /^went out after \d+ ms on a new connection; no answer in \d+ ms$/)
   // A call no trace follows is left alone, and nothing listens once none is on its way.
   assert.equal(diagnosticsChannel.channel("undici:request:create").hasSubscribers, false)
 })

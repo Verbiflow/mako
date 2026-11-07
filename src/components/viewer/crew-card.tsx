@@ -1,5 +1,6 @@
 import {
   memo,
+  use,
   useCallback,
   useLayoutEffect,
   useMemo,
@@ -36,6 +37,7 @@ import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { FinMark } from "@/components/stage/child-tabs"
 import { NOT_OPENABLE } from "@/components/rail/apex-asks"
+import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { LiveMark } from "@/components/ui/live-mark"
 import { Shimmer } from "@/components/ui/shimmer"
 import { useTickingText } from "@/components/ui/second-clock"
@@ -427,10 +429,12 @@ const CrewLineRow = memo(function CrewLineRow({
             <CornerUpLeftIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
           {moved ? (
-            <span data-fin-moved title={moved} className="flex shrink-0 items-center gap-1">
+            <span data-fin-moved title={moved} className="flex min-w-0 items-center gap-1">
               <ArrowRightLeftIcon className="size-3 shrink-0" aria-hidden />
-              {moved.split(":")[0]}
-              {line ? " ·" : null}
+              <span className="min-w-0 truncate">
+                {moved.split(":")[0]}
+                {line ? " ·" : null}
+              </span>
             </span>
           ) : null}
           {pr ? (
@@ -574,10 +578,14 @@ export function CrewCard({
           : index
     },
   })
+  // A Fin opens in place on the desk; the web's Thread screen opens it by its own address.
+  const routed = use(RoutedOpenContext)
   const onOpen = useCallback(
-    (agent: NativeAgent) =>
-      thread ? openFinInApex(thread, apexTitle, agent) : undefined,
-    [thread, apexTitle]
+    (agent: NativeAgent) => {
+      if (routed) routed(agent)
+      else if (thread) openFinInApex(thread, apexTitle, agent)
+    },
+    [routed, thread, apexTitle]
   )
   const stoppable = children.filter((agent) => agent.stoppable).length
   const stopAll = useCallback(() => {

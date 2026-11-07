@@ -10,6 +10,7 @@ import { conversationFiles } from "@/state/file-tree"
 import { EASE_OUT, EASE_SWIFT, reducedMotion } from "./motion"
 import { closeFiles, followFilesHistory, leftFiles, readInFiles, useFilesOpen, type FilesOpen } from "./files-open"
 import { leftReview, reviewOpenStore } from "./review-open"
+import { WebSideRail } from "./side-rail"
 import type { WebForm } from "./route"
 
 const FileView = lazy(() => import("@/components/viewer/file-view").then((module) => ({ default: module.FileView })))
@@ -76,7 +77,8 @@ function FilesScreen({ open, touch }: { open: FilesOpen; touch: boolean }) {
   const onOpenFile = useCallback((path: string, line?: number) => readInFiles(path, line), [])
   return (
     <div className="rv-screen">
-      <div className="rv-bar">
+      {!touch ? <WebSideRail active="files" conversation={open.conversation} /> : null}
+      {!touch && !open.path ? null : <div className="rv-bar">
         {open.path ? (
           <button type="button" aria-label="Back to the files" className="web-icon-button" onClick={() => readInFiles(undefined)}>
             <ArrowLeftIcon className="size-5" />
@@ -86,10 +88,12 @@ function FilesScreen({ open, touch }: { open: FilesOpen; touch: boolean }) {
           {open.path ? <FileIcon path={open.path} className="size-3.5 text-faint" /> : null}
           <span className="truncate text-title font-semibold">{open.path ? open.path.slice(open.path.lastIndexOf("/") + 1) : "Files"}</span>
         </span>
-        <button type="button" aria-label="Close Files" className="web-icon-button" onClick={closeFiles}>
-          <XIcon className="size-5" />
-        </button>
-      </div>
+        {touch ? (
+          <button type="button" aria-label="Close Files" className="web-icon-button" onClick={closeFiles}>
+            <XIcon className="size-5" />
+          </button>
+        ) : null}
+      </div>}
       {/* The tree stays mounted under a file, so Back lands where it was. */}
       <div className={open.path ? "hidden" : "flex min-h-0 flex-1 flex-col"}>
         <FilesBrowser source={source} open={openSet} onOpenChange={setFolders} active={open.path} onOpenFile={onOpenFile} changed={changed} touch={touch} />

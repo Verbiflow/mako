@@ -1,3 +1,4 @@
+import { windowRoutesStore } from "@/state/window-routes"
 import { childGroup, childStateOf, finsAsChildren, rollup, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { entryState, type AgentsDirected, type AgentsRedirected, type AgentsRedirectInput, type ChildState } from "@mako/host/contracts/agents"
@@ -210,29 +211,18 @@ export const useApexView = createHook(apexViewStore)
 
 /** Open `child` in place, inside the Apex's Thread: its live conversation, else its saved transcript. */
 export function openFinInApex(apex: string, apexTitle: string, child: NativeAgent): void {
+  const { routes } = windowRoutesStore.get()
+  if (routes?.fin) return routes.fin(apex, child)
   const thread = child.child?.thread
   if (!thread) return
   // What will open is found first: a row with nothing behind it opens nothing, and sets no view.
   const state = acpStore.get()
   const opening = finOpening(state, child)
   if (!opening) return
-  // A Fin on another device opens as that device's Thread, where the window has an address for one (a browser's desk).
-  if (opening.kind === "conversation") {
-    const listed = state.conversations[opening.key]
-    const elsewhere = listed?.kind === "live" && listed.elsewhere !== undefined && listed.threadId
-    const route = finRoutes.get().elsewhere
-    if (elsewhere && route) return route(listed.threadId!, listed.sessionId)
-  }
   apexViewStore.set({ open: { apex, apexTitle, child: thread, shown: false } })
   if (opening.kind === "conversation") acp.activate(opening.key)
   else void threads.view(opening.ref, "native")
 }
-
-/**
- * Where a window opens a Fin's Thread that runs elsewhere, when it opens Threads by address rather than by activating
- * a conversation: a browser's desk sets it while it's on screen. Without one, the conversation is activated in place.
- */
-export const finRoutes = createStore<{ elsewhere?: (thread: string, session: string | undefined) => void }>({})
 
 /** Back to the Apex: the Session last shown in it. */
 export function backToApex(): void {
@@ -247,7 +237,7 @@ export function backToApex(): void {
   if (conversation) acp.activate(conversation.key)
 }
 
-/** Keeps the Fin view honest: it ends once anything else is on screen. */
+/** Keeps the Fin view honest: it ends once anything else is on screen, a saved conversation with no Thread of its own too. */
 export function watchApexView(): () => void {
   const sync = () => {
     const open = apexViewStore.get().open
@@ -255,7 +245,7 @@ export function watchApexView(): () => void {
     const here = currentOnScreen().thread
     if (here === open.child) {
       if (!open.shown) apexViewStore.set({ open: { ...open, shown: true } })
-    } else if (open.shown && here !== undefined) apexViewStore.set({ open: null })
+    } else if (open.shown && (here !== undefined || threadsStore.get().viewing)) apexViewStore.set({ open: null })
   }
   const stops = [acpStore.subscribe(sync), threadsStore.subscribe(sync), apexViewStore.subscribe(sync)]
   return () => stops.forEach((stop) => stop())
