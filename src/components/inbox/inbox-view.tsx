@@ -1,3 +1,4 @@
+import { agentAskWords } from "@mako/host/contracts/agent-asks"
 import { memo, useEffect, useRef, useState } from "react"
 import { CheckIcon, ChevronRightIcon, XIcon } from "lucide-react"
 import { childStateOf } from "@mako/host/contracts/children"
@@ -11,6 +12,7 @@ import { formatRelative } from "@/lib/format"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { acpStore } from "@/state/acp-state"
+import { answerAgentAsk } from "@/state/agent-asks"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
 import {
   answerApproval,
@@ -19,6 +21,7 @@ import {
   sameItems,
   useInbox,
   useInboxView,
+  type AgentAskInboxItem,
   type ApprovalInboxItem,
   type FinInboxItem,
   type InboxAsk,
@@ -203,6 +206,8 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
           <FinAnswers item={item} sending={sending} send={(answer) => settle(answerFin(item.apex.conversation, item.ask, answer))} />
         ) : item.kind === "approval" && item.answerable ? (
           <ApprovalAnswers item={item} sending={sending} send={(option) => settle(answerApproval(item, option))} />
+        ) : item.kind === "agent-ask" && item.ask.want.kind !== "back" ? (
+          <AgentAskAnswers item={item} sending={sending} send={(allow) => settle(answerAgentAsk(item.conversation, item.ask, allow))} />
         ) : null}
         <span className="flex-1" />
         <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">
@@ -247,6 +252,20 @@ function FinAnswers({ item, sending, send }: { item: FinInboxItem; sending: bool
           </button>
         )
       })}
+    </>
+  )
+}
+
+function AgentAskAnswers({ item, sending, send }: { item: AgentAskInboxItem; sending: boolean; send: (allow: boolean) => void }) {
+  const words = agentAskWords(item.ask.want, harnessLabel(item.harness))
+  return (
+    <>
+      <button type="button" data-inbox-answer="allow" disabled={sending} onClick={() => send(true)} className={cn(BUTTON, PRIMARY)}>
+        {words.allow}
+      </button>
+      <button type="button" data-inbox-answer="keep" disabled={sending} onClick={() => send(false)} className={cn(BUTTON, QUIET)}>
+        {words.keep}
+      </button>
     </>
   )
 }

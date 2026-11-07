@@ -43,7 +43,7 @@ import { openFiles } from "./files-open"
 import { openReview } from "./review-open"
 import { useCopyMissing } from "./copies"
 import { FinOfApexContext, OpenChildContext, childSession } from "./fin-of-apex"
-import { PhoneChildChips } from "./apex-fins"
+import { PhoneFinCount } from "./apex-fins"
 import { transcriptChunk } from "./chunks"
 import { ApexMark } from "@/components/ui/apex-mark"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
@@ -120,18 +120,24 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
     )
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-surface" data-thread-screen={thread.id}>
-      <ThreadBar
-        onBack={wide ? undefined : onBack}
-        title={thread.title}
-        subtitle={syncing ?? subtitle(thread, session)}
-        place={session.row.runsOn.kind === "cloud" ? "cloud" : session.quietSince ? "quiet" : "device"}
-        headingRef={heading}
-        actions={thread.archived ? undefined : <ThreadActions thread={thread} session={session} onArchived={onBack} onAdd={addingTo && thread.sessions.length === 1 ? () => setAdding(true) : undefined} />}
-      />
-      {thread.sessions.length > 1 ? <SessionSwitcher thread={thread} current={session} wide={wide} onSession={onSession} onAdd={addingTo ? () => setAdding(true) : undefined} /> : null}
       <OpenChildContext value={openChild}>
+        <ThreadBar
+          onBack={wide ? undefined : onBack}
+          title={thread.title}
+          subtitle={syncing ?? subtitle(thread, session)}
+          place={session.row.runsOn.kind === "cloud" ? "cloud" : session.quietSince ? "quiet" : "device"}
+          headingRef={heading}
+          actions={
+            thread.archived ? undefined : (
+              <>
+                <PhoneFinCount thread={thread.id} conversation={session.row.conversation} />
+                <ThreadActions thread={thread} session={session} onArchived={onBack} onAdd={addingTo && thread.sessions.length === 1 ? () => setAdding(true) : undefined} />
+              </>
+            )
+          }
+        />
+        {thread.sessions.length > 1 ? <SessionSwitcher thread={thread} current={session} wide={wide} onSession={onSession} onAdd={addingTo ? () => setAdding(true) : undefined} /> : null}
         <RoutedOpenContext value={openChild}>
-          <PhoneChildChips thread={thread.id} conversation={session.row.conversation} />
           <ThreadBody thread={thread} session={session} openedBy={sessionId === undefined ? "screen" : "person"} onSession={onSession} />
         </RoutedOpenContext>
       </OpenChildContext>

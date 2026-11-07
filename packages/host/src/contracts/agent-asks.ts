@@ -44,15 +44,15 @@ export type AgentAsk = z.infer<typeof AgentAskSchema>
 export function agentAskLine(want: AgentAskWant): string {
   switch (want.kind) {
     case "move":
-      return "Wants to move this thread to the cloud"
+      return "Wants to move this Thread to the cloud"
     case "back":
-      return "Wants to bring this thread back to your Mac"
+      return "Wants to bring this Thread back to your Mac"
     case "rename":
-      return `Wants to rename this thread to ${want.title}`
+      return `Wants to rename this Thread to ${want.title}`
     case "archive":
-      return "Wants to archive this thread"
+      return "Wants to archive this Thread"
     case "restore":
-      return "Wants to restore this thread"
+      return "Wants to restore this Thread"
     case "setting":
       return settingLine(want.setting)
     case "harness":

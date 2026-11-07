@@ -78,7 +78,8 @@ export interface SettingsInput {
 
 export type SettingsResult =
   | { outcome: "read"; settings: { handOff: JsonValue; conversations: JsonValue; harnessOrder: JsonValue } }
-  | { outcome: "set"; setting: string; value: boolean | string | string[] }
+  /** `note`: kept, but it can't take effect yet, and why. */
+  | { outcome: "set"; setting: string; value: boolean | string | string[]; note?: string }
   | { outcome: "asked"; ask: string; next: string }
   | { refused: "unavailable" | "no-thread" | "bad-value" | "failed"; why: string }
 
@@ -94,7 +95,8 @@ export interface HarnessActInput {
 export type HarnessActResult =
   | { outcome: "read"; harnesses: JsonValue }
   | { outcome: "started"; action: string; harness: string; next: string }
-  | { outcome: "finished"; action: string; harness: string }
+  /** `result`: what it came to, when the host says: installed, updated, or unchanged because it was already there. */
+  | { outcome: "finished"; action: string; harness: string; result?: string }
   | { outcome: "asked"; ask: string; next: string }
   | { refused: "unavailable" | "no-thread" | "no-harness" | "cloud-machine" | "failed"; why: string }
 
@@ -198,7 +200,7 @@ export const HARNESS_TOOL: ThreadToolDefinition = {
 
 export const AUTOMATION_TOOL: ThreadToolDefinition = {
   channel: "mako:automations-act",
-  replay: "replay",
+  replay: "never",
   filled: [],
   mcp: {
     name: "automation",
@@ -219,7 +221,7 @@ export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, 
 export const AFTER_ACT = {
   asked: "Asked the person: their answer is in a card above the composer. Keep working; it happens once they allow it.",
   archived: "Archived. If your work is done, end your turn: the Thread stays archived until the person restores it.",
-  started: "It's under way and goes on without you. Read harness again to see it land; Settings › Harnesses shows it too.",
+  started: "It's under way and goes on without you, and it may still fail. Read harness again: its result says how it ended. Settings › Harnesses shows it too.",
 } as const
 
 /** What a move's answer tells an agent to do next. */

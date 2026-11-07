@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { AgentAsk } from "@mako/host/contracts/agent-asks"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { agentAskLine, agentAskWords } from "@mako/host/contracts/agent-asks"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { AUTOMATION_TOOL, HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
@@ -16,7 +17,7 @@ const person = { kind: "person" as const }
 const ActSchema = z.object({ action: z.enum(["rename", "archive", "restore"]), title: z.string().optional(), clientKey: z.string() })
 const operationOf = (call: { args: unknown[] } | undefined) => z.object({ id: z.string() }).parse(call?.args[0]).id
 
-function world(tier: "full" | "auto" = "full", fails = false) {
+function world(tier: "full" | "auto" = "full", fails = false, archiveAnswer: JsonValue = { revision: 1, keys: [] }) {
   const calls: Array<{ channel: string; args: unknown[] }> = []
   const kept = new Map<string, AgentAsk[]>()
   const gate = new AgentAskGate({
@@ -35,6 +36,7 @@ function world(tier: "full" | "auto" = "full", fails = false) {
     invoke: async (channel, args) => {
       if (fails) throw new Error("That Thread no longer exists")
       calls.push({ channel, args })
+      return channel === "mako:thread-archive" ? archiveAnswer : undefined
     },
     gate,
   })
@@ -75,8 +77,8 @@ function world(tier: "full" | "auto" = "full", fails = false) {
   assert.equal(calls.length, 1, "a repeat of an answer finds nothing")
   assert.equal(kept.get("mine")?.length, 0)
   const archive = await tool.act(agent("s-mine"), { action: "archive", clientKey: "k4" })
-  assert.equal(agentAskLine(kept.get("mine")![0]!.want), "Wants to archive this thread")
-  assert.equal(agentAskWords(kept.get("mine")![0]!.want, "Codex").title, "Codex wants to archive this thread")
+  assert.equal(agentAskLine(kept.get("mine")![0]!.want), "Wants to archive this Thread")
+  assert.equal(agentAskWords(kept.get("mine")![0]!.want, "Codex").title, "Codex wants to archive this Thread")
   await gate.answer("mine", askOf(archive), true)
   assert.equal(calls.at(-1)?.channel, "mako:thread-archive")
 }
@@ -91,6 +93,14 @@ function world(tier: "full" | "auto" = "full", fails = false) {
   assert.equal(calls.length, 0)
   assert.deepEqual(await tool.act(person, { action: "restore", conversation: "elsewhere", clientKey: "k" }), { outcome: "restored" })
   assert.deepEqual(await world("full", true).tool.act(agent("s-mine"), { action: "archive", clientKey: "k" }), { refused: "failed", why: "That Thread no longer exists" })
+  // A cloud Thread's archive is its object's to refuse, which the host answers rather than throws.
+  const stayed = world("full", false, { revision: 1, keys: [], cloud: { kind: "refused", thread: "t-1", reason: "Its machine still has unsaved work.", anyway: true } })
+  assert.deepEqual(await stayed.tool.act(agent("s-mine"), { action: "archive", clientKey: "k" }), { refused: "failed", why: "Its machine still has unsaved work." })
+  assert.deepEqual(await stayed.tool.act(agent("s-mine"), { action: "restore", clientKey: "r" }), { refused: "failed", why: "Its machine still has unsaved work." })
+  // Allowed below full access, a refusal reaches the person's answer instead of passing as done.
+  const asked = world("auto", false, { revision: 1, keys: [], cloud: { kind: "refused", thread: "t-1", reason: "Its machine still has unsaved work." } })
+  const archiving = await asked.tool.act(agent("s-mine"), { action: "archive", clientKey: "k" })
+  await assert.rejects(asked.gate.answer("mine", "ask" in archiving ? archiving.ask : "", true), /unsaved work/)
 }
 
 {
@@ -137,18 +147,26 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
     },
   })
   let tier: "full" | "auto" = "auto"
+  let savedOrder = ["claude"]
+  const answers = new Map<string, JsonValue>()
   const tool = new SettingsTool({
     conversationOf: (session) => (session === "s-mine" ? "mine" : undefined),
     tier: () => tier,
     invoke: async (channel, args) => {
       calls.push({ channel, args })
-      return channel === "mako:harness-order-saved" ? ["claude"] : { saved: true }
+      const said = answers.get(channel)
+      if (said !== undefined) return said
+      if (channel === "mako:handoff-settings-set") return { onSleep: args[0] === true }
+      if (channel === "mako:conversation-settings-set") return z.record(z.string(), z.json()).parse(args[0])
+      if (channel === "mako:harness-order") savedOrder = z.array(z.string()).parse(args[0])
+      return channel === "mako:harness-order-saved" ? savedOrder : { saved: true }
     },
     gate,
   })
   gate.runs = { setting: async (_id, want) => void (await tool.run(want.setting)) }
   const read = await tool.call(agent("s-mine"), { action: "read", clientKey: "k" })
   assert.deepEqual(read, { outcome: "read", settings: { handOff: { saved: true }, conversations: { saved: true }, harnessOrder: ["claude"] } })
+  answers.clear()
   calls.length = 0
   const asked = await tool.call(agent("s-mine"), { action: "set", setting: "hand-off-on-sleep", value: true, clientKey: "k" })
   assert.equal("outcome" in asked && asked.outcome, "asked")
@@ -164,8 +182,19 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
   ]
   for (const [setting, value, channel, args] of cases) {
     assert.deepEqual(await tool.call(agent("s-mine"), { action: "set", setting, value, clientKey: "k" }), { outcome: "set", setting, value })
-    assert.deepEqual(calls.at(-1), { channel, args })
+    assert.ok(calls.some((call) => call.channel === channel && JSON.stringify(call.args) === JSON.stringify(args)), channel)
   }
+  // What the host kept is what's said: a host that can't hand off keeps it off, and says why.
+  answers.set("mako:handoff-settings-set", { onSleep: false, unavailable: "This Mako doesn't hand agents to the cloud." })
+  assert.deepEqual(await tool.call(agent("s-mine"), { action: "set", setting: "hand-off-on-sleep", value: true, clientKey: "k" }), { refused: "failed", why: "This Mako doesn't hand agents to the cloud." })
+  // Kept, but it can't take effect yet: said beside the answer.
+  answers.set("mako:handoff-settings-set", { onSleep: true, unavailable: "Sign in to Mako Cloud to hand agents to the cloud." })
+  assert.deepEqual(await tool.call(agent("s-mine"), { action: "set", setting: "hand-off-on-sleep", value: true, clientKey: "k" }), { outcome: "set", setting: "hand-off-on-sleep", value: true, note: "Sign in to Mako Cloud to hand agents to the cloud." })
+  answers.set("mako:conversation-settings-set", { continueAfterRestart: true })
+  assert.equal(await tool.call(agent("s-mine"), { action: "set", setting: "continue-after-restart", value: false, clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "failed")
+  answers.set("mako:harness-order-saved", ["claude"])
+  assert.equal(await tool.call(agent("s-mine"), { action: "set", setting: "harness-order", value: ["codex", "claude"], clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "failed", "an order the host didn't keep isn't set")
+  answers.clear()
   for (const bad of [{ setting: "telemetry", value: true }, { setting: "hand-off-on-sleep", value: "yes" }, { setting: "harness-order", value: [] }, {}])
     assert.equal(await tool.call(agent("s-mine"), { action: "set", clientKey: "k", ...bad }).then((answer) => "refused" in answer && answer.refused), "bad-value", JSON.stringify(bad))
   assert.equal(await tool.call(agent("nobody"), { action: "set", setting: "commit-model", value: "m", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-thread")
@@ -188,6 +217,7 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
   })
   let tier: "full" | "auto" = "auto"
   let hold: Promise<void> = Promise.resolve()
+  let answer: JsonValue = { versions: true }
   const deps = {
     conversationOf: (session: string) => (session === "s-mine" ? "mine" : undefined),
     tier: () => tier,
@@ -195,32 +225,68 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
       calls.push([channel, ...z.array(z.union([z.string(), z.boolean()])).parse(args).map(String)])
       if (args[0] === "nope") throw new Error("nope does not install through Mako")
       await hold
-      return { versions: true }
+      return answer
     },
     gate,
     startedAfterMs: 20,
   }
   const tool = new HarnessTool({ ...deps, machine: false })
-  gate.runs = { harness: async (_id, want) => void (await tool.run(want.action, want.harness)) }
-  assert.deepEqual(await tool.act(agent("s-mine"), { action: "read", clientKey: "k" }), { outcome: "read", harnesses: { versions: true } })
-  const asked = await tool.act(agent("s-mine"), { action: "install", harness: "codex", clientKey: "k" })
+  gate.runs = { harness: (_id, want) => tool.allowed(want.action, want.harness) }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "read", clientKey: "h1" }), { outcome: "read", harnesses: { versions: true } })
+  const asked = await tool.act(agent("s-mine"), { action: "install", harness: "codex", clientKey: "h2" })
   assert.equal("outcome" in asked && asked.outcome, "asked")
   assert.equal(calls.length, 1, "nothing installed on the agent's word alone")
   assert.equal(agentAskLine(kept.get("mine")![0]!.want), "Wants to install codex")
   await gate.answer("mine", "ask" in asked ? asked.ask : "", true)
   assert.deepEqual(calls.at(-1), ["mako:harness-install", "codex"])
   tier = "full"
-  assert.deepEqual(await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "k" }), { outcome: "finished", action: "update", harness: "grok" })
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "h3" }), { outcome: "finished", action: "update", harness: "grok" })
   hold = new Promise(() => undefined)
   // The tool's timer never keeps a host alive; this one keeps the test's process up to hear it.
   const alive = setInterval(() => undefined, 10)
-  const long = await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "k" })
+  const long = await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "h4" })
   clearInterval(alive)
   assert.equal("outcome" in long && long.outcome, "started", "an install that outlasts the call says it's under way")
   hold = Promise.resolve()
-  assert.equal(await tool.act(agent("s-mine"), { action: "install", harness: "nope", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "failed", "one refused at once says so")
-  assert.equal(await tool.act(agent("s-mine"), { action: "install", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-harness")
-  assert.equal(await new HarnessTool({ ...deps, machine: true }).act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "cloud-machine")
+  assert.equal(await tool.act(agent("s-mine"), { action: "install", harness: "nope", clientKey: "h5" }).then((answer) => "refused" in answer && answer.refused), "failed", "one refused at once says so")
+  // The host answers a failed install or update as a receipt, not a rejection: the agent hears it failed, in its words.
+  answer = { result: { at: 1, outcome: "failed", message: "npm error EACCES" } }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "h6" }), { refused: "failed", why: "npm error EACCES" })
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "install", harness: "grok", clientKey: "h7" }), { refused: "failed", why: "npm error EACCES" })
+  answer = { result: { at: 1, outcome: "failed" } }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "h8" }), { refused: "failed", why: "Updating grok failed." })
+  // One that failed after the call said it started: `read` hands the receipt on, which `next` tells the agent to do.
+  const late = Promise.withResolvers<void>()
+  hold = late.promise
+  answer = { result: { at: 2, outcome: "failed", message: "disk full" } }
+  const running = setInterval(() => undefined, 10)
+  const started = await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "h9" })
+  clearInterval(running)
+  assert.equal("outcome" in started && started.outcome, "started")
+  late.resolve()
+  hold = Promise.resolve()
+  answer = { grok: { result: { at: 2, outcome: "failed", message: "disk full" } } }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "read", clientKey: "h10" }), { outcome: "read", harnesses: { grok: { result: { at: 2, outcome: "failed", message: "disk full" } } } })
+  // A repeat with the same key is the same action: it gets the first outcome and installs nothing again.
+  answer = { result: { at: 3, outcome: "installed" } }
+  const before = calls.length
+  const first = await tool.act(agent("s-mine"), { action: "install", harness: "devin", clientKey: "once" })
+  assert.deepEqual(first, { outcome: "finished", action: "install", harness: "devin", result: "installed" })
+  answer = { result: { at: 4, outcome: "failed", message: "already installed" } }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "install", harness: "devin", clientKey: "once" }), first, "a replay answers the first outcome")
+  assert.equal(calls.length, before + 1, "and runs nothing")
+  // Allowed below full access, a failure reaches the person's answer instead of passing as done.
+  tier = "auto"
+  answer = { result: { at: 5, outcome: "failed", message: "npm error EACCES" } }
+  const failing = await tool.act(agent("s-mine"), { action: "update", harness: "devin", clientKey: "allowed" })
+  await assert.rejects(gate.answer("mine", "ask" in failing ? failing.ask : "", true), /EACCES/)
+  tier = "full"
+  // What it came to is said: installed, updated, or already there.
+  answer = { result: { at: 3, outcome: "unchanged" } }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "h11" }), { outcome: "finished", action: "update", harness: "grok", result: "unchanged" })
+  answer = { versions: true }
+  assert.equal(await tool.act(agent("s-mine"), { action: "install", clientKey: "h12" }).then((answer) => "refused" in answer && answer.refused), "no-harness")
+  assert.equal(await new HarnessTool({ ...deps, machine: true }).act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "h13" }).then((answer) => "refused" in answer && answer.refused), "cloud-machine")
   assert.equal(hostCallReplay(HARNESS_TOOL.channel), HARNESS_TOOL.replay)
   assert.ok(HARNESS_TOOL.mcp.description.length < 700, "its description stays short")
 }
@@ -239,27 +305,55 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
     },
   })
   let tier: "full" | "auto" = "auto"
+  let runAnswer: JsonValue = { status: "completed" }
+  // Whether the switch can turn on: a trigger Mako can't run here stays off.
+  let switches = true
   const tool = new AutomationTool({
     conversationOf: (session) => (session === "s-mine" ? "mine" : undefined),
     tier: () => tier,
     invoke: async (channel, args) => {
       calls.push([channel, ...args])
+      if (channel === "mako:run-automation") return runAnswer
+      if (channel === "mako:automation-enabled") return [{ id: "nightly", enabled: args[1] === true && switches }]
       return channel === "mako:automations" ? [{ id: "nightly" }] : []
     },
     gate,
   })
-  gate.runs = { automation: async (_id, want) => void (await tool.run(want.action, want.id)) }
-  assert.deepEqual(await tool.act(agent("s-mine"), { action: "list", clientKey: "k" }), { outcome: "listed", automations: [{ id: "nightly" }] })
-  const asked = await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "k" })
+  gate.runs = { automation: (_id, want) => tool.allowed(want.action, want.id) }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "list", clientKey: "a1" }), { outcome: "listed", automations: [{ id: "nightly" }] })
+  const asked = await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "a2" })
   assert.equal("outcome" in asked && asked.outcome, "asked")
   assert.ok(calls.every(([channel]) => channel === "mako:automations"), "nothing ran on the agent's word alone")
   await gate.answer("mine", "ask" in asked ? asked.ask : "", true)
   assert.deepEqual(calls.at(-1), ["mako:run-automation", "nightly"])
   tier = "full"
-  assert.deepEqual(await tool.act(agent("s-mine"), { action: "off", id: "nightly", clientKey: "k" }), { outcome: "done", action: "off", id: "nightly" })
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "off", id: "nightly", clientKey: "a3" }), { outcome: "done", action: "off", id: "nightly" })
   assert.deepEqual(calls.at(-1), ["mako:automation-enabled", "nightly", false])
-  assert.equal(await tool.act(agent("s-mine"), { action: "on", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-automation")
-  assert.equal(await tool.act(agent("s-mine"), { action: "run", id: "gone", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-automation", "a run of nothing never says done")
+  // A launch that failed, or a run that never began, is said: Run now answers with how it went.
+  runAnswer = { status: "failed", error: "No harness can run it" }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "a4" }), { refused: "failed", why: "No harness can run it" })
+  runAnswer = { status: "not-run", why: "It's running already." }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "a5" }), { refused: "failed", why: "It's running already." })
+  runAnswer = { status: "completed" }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "a6" }), { outcome: "done", action: "run", id: "nightly" })
+  assert.equal(await tool.act(agent("s-mine"), { action: "on", clientKey: "a7" }).then((answer) => "refused" in answer && answer.refused), "no-automation")
+  assert.equal(await tool.act(agent("s-mine"), { action: "run", id: "gone", clientKey: "a8" }).then((answer) => "refused" in answer && answer.refused), "no-automation", "a run of nothing never says done")
+  // A replay under one key gets the first outcome and launches nothing, however long ago it finished.
+  const runs = () => calls.filter(([channel]) => channel === "mako:run-automation").length
+  const launched = runs()
+  const once = await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "again" })
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "again" }), once)
+  assert.equal(runs(), launched + 1, "the same key runs it once")
+  // The switch says what it did: a trigger Mako can't run here stays off.
+  switches = false
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "on", id: "nightly", clientKey: "slack" }), { refused: "failed", why: "This automation's trigger can't run here, so it stays off." })
+  switches = true
+  // Allowed below full access, a failure reaches the person's answer instead of passing as done.
+  tier = "auto"
+  runAnswer = { status: "failed", error: "No harness can run it" }
+  const failing = await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "allowed" })
+  await assert.rejects(gate.answer("mine", "ask" in failing ? failing.ask : "", true), /No harness/)
+  tier = "full"
   assert.equal(hostCallReplay(AUTOMATION_TOOL.channel), AUTOMATION_TOOL.replay)
   assert.ok(AUTOMATION_TOOL.mcp.description.length < 700, "its description stays short")
 }

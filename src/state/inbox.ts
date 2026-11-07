@@ -1,6 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react"
 import { finsWord } from "@mako/host/contracts/agents"
 import { askWords } from "@mako/host/contracts/children"
+import { agentAskLine, type AgentAsk } from "@mako/host/contracts/agent-asks"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { LivePermissionRequest, ThreadRef } from "@/lib/types"
 import { workspaceName } from "@/lib/format"
@@ -79,7 +80,19 @@ export interface WaitingInboxItem {
   open: InboxTarget
 }
 
-export type InboxAsk = FinInboxItem | ApprovalInboxItem | WaitingInboxItem
+/** What a Thread's agent asked through Mako's tools (`AgentAsk`), kept in its conversation and answered as its card is. */
+export interface AgentAskInboxItem {
+  kind: "agent-ask"
+  key: string
+  title: string
+  harness: string
+  question: string
+  since: number
+  conversation: string
+  ask: AgentAsk
+}
+
+export type InboxAsk = FinInboxItem | ApprovalInboxItem | AgentAskInboxItem | WaitingInboxItem
 
 /** An answer not yet read, or a failure: opening its Thread is reading it. */
 export interface ReadInboxItem {
@@ -113,6 +126,16 @@ function refTitle(ref: ThreadRef): string {
 }
 
 const approvals = new WeakMap<LivePermissionRequest, ApprovalInboxItem>()
+const agentAskItems = new WeakMap<AgentAsk, AgentAskInboxItem>()
+
+function agentAskItem(conversation: LiveAcpConversation, ask: AgentAsk): AgentAskInboxItem {
+  const held = agentAskItems.get(ask)
+  const title = liveTitle(conversation)
+  if (held?.title === title) return held
+  const item: AgentAskInboxItem = { kind: "agent-ask", key: `agent-ask:${conversation.key}:${ask.id}`, title, harness: conversation.harness, question: agentAskLine(ask.want), since: ask.at, conversation: conversation.key, ask }
+  agentAskItems.set(ask, item)
+  return item
+}
 
 function approvalOf(conversation: LiveAcpConversation, permission: LivePermissionRequest, apex: ApprovalInboxItem["apex"]): ApprovalInboxItem {
   const held = approvals.get(permission)
@@ -213,6 +236,12 @@ function buildModel(acp: AcpState, threads: ThreadsState): InboxModel {
     asks.push(...items)
     if (items.length && conversation.threadPath) coveredPaths.add(conversation.threadPath)
   }
+  // What an agent asked is its conversation's own, beside its Fins' asks and whatever else it waits on.
+  for (const conversation of conversations) {
+    if (conversation.kind !== "live" || conversation.session.connection !== "connected") continue
+    for (const ask of conversation.control?.asks ?? []) asks.push(agentAskItem(conversation, ask))
+    if (conversation.control?.asks?.length && conversation.threadPath) coveredPaths.add(conversation.threadPath)
+  }
   const apexTitle = (thread: string) => {
     const apex = conversations.find((conversation) => conversation.threadId === thread && conversation.kind === "live")
     return apex ? liveTitle(apex) : threadTitle(thread) ?? "Apex"
@@ -264,6 +293,7 @@ function sameItem(left: InboxAsk | ReadInboxItem, right: InboxAsk | ReadInboxIte
   if (left.key !== right.key || left.kind !== right.kind || left.title !== right.title) return false
   if (left.kind === "fin") return right.kind === "fin" && left.ask === right.ask && left.since === right.since && left.apex.title === right.apex.title
   if (left.kind === "approval") return right.kind === "approval" && left.permission === right.permission
+  if (left.kind === "agent-ask") return right.kind === "agent-ask" && left.ask === right.ask
   if (left.kind === "waiting") return right.kind === "waiting" && left.question === right.question && left.since === right.since
   return (right.kind === "review" || right.kind === "failed") && left.at === right.at && left.detail === right.detail
 }
@@ -348,7 +378,7 @@ export function openInboxItem(item: InboxAsk | ReadInboxItem): void {
     else openFinInApex(item.apex.thread, item.apex.title, item.agent)
     return
   }
-  const target = item.kind === "approval" ? ({ kind: "conversation", key: item.conversation } as const) : item.open
+  const target = item.kind === "approval" || item.kind === "agent-ask" ? ({ kind: "conversation", key: item.conversation } as const) : item.open
   if (target.kind === "conversation") conversation(target.key)
   else void threads.view(target.ref)
 }

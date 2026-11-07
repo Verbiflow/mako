@@ -11,6 +11,11 @@ import { bringBack } from "@/state/cloud-moves"
  * and device shows the one ask. A notice producer (`registerNotice`); the web app's dock draws the same words.
  */
 export function useAgentAskNotice(): ComposerNotice | null {
+  return useAskNotice(bringBack)
+}
+
+/** `pressBack`: how this form brings a Thread back, once the person allows its agent's ask to come back. */
+export function useAskNotice(pressBack: (conversationId: string) => void): ComposerNotice | null {
   const labels = useHarnessLabels()
   const live = useAcp((state) => activeLiveAcp(state))
   const ask = agentAskOf(live ?? undefined)
@@ -30,7 +35,7 @@ export function useAgentAskNotice(): ComposerNotice | null {
         primary: true,
         onClick: () =>
           void answerAgentAsk(live.key, ask, true).then((answered) => {
-            if (answered && ask.want.kind === "back") return bringBack(live.key)
+            if (answered && ask.want.kind === "back") pressBack(live.key)
           }),
       },
       { label: words.keep, onClick: () => void answerAgentAsk(live.key, ask, false) },

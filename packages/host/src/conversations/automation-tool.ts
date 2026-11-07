@@ -5,6 +5,7 @@ import type { AgentCaller } from "../contracts/agents.js"
 import type { JsonValue } from "../contracts/json.js"
 import { AFTER_ACT, type AutomationActInput, type AutomationActResult } from "../contracts/thread-tools.js"
 import type { AgentAskGate } from "./agent-ask-gate.js"
+import { OnceByKey } from "./once-by-key.js"
 
 export interface AutomationToolDeps {
   /** The conversation a Session's agent runs in here. */
@@ -18,10 +19,18 @@ export interface AutomationToolDeps {
 type Change = "run" | "on" | "off"
 
 const AutomationIds = z.array(z.object({ id: z.string() }).loose())
+const EnabledSchema = z.array(z.object({ id: z.string(), enabled: z.boolean() }).loose())
+const FiredSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("completed") }),
+  z.object({ status: z.literal("failed"), error: z.string() }),
+  z.object({ status: z.literal("not-run"), why: z.string() }),
+])
 
 /** An agent's or a shell's look at the person's automations, and Run now and the switch on each, through Settings' calls. */
 export class AutomationTool {
   readonly #deps: AutomationToolDeps
+  /** A run is a new conversation, and nothing else settles a repeat of one. */
+  readonly #once = new OnceByKey<AutomationActResult>()
 
   constructor(deps: AutomationToolDeps) {
     this.#deps = deps
@@ -39,13 +48,27 @@ export class AutomationTool {
       const ask = this.#deps.gate.ask(own, { kind: "automation", action: input.action, id: input.id })
       return { outcome: "asked", ask: ask.id, next: AFTER_ACT.asked }
     }
-    return this.run(input.action, input.id).catch((error: Error) => ({ refused: "failed", why: error.message }))
+    const { action, id } = input
+    return this.#once.run(`${caller.kind === "agent" ? caller.session : "person"}\0${input.clientKey}\0${action}\0${id}`, () => this.run(action, id).catch((error: Error) => ({ refused: "failed", why: error.message })))
   }
 
-  /** Run now, or the switch, as Settings › Automations presses them. */
+  /** The person allowed the ask: what the call would have run, and its failure is their answer's to say. */
+  async allowed(action: Change, id: string): Promise<void> {
+    const answer = await this.run(action, id)
+    if ("refused" in answer) throw new Error(answer.why)
+  }
+
+  /** Run now, or the switch, as Settings › Automations presses them; what's said is what the host says happened. */
   async run(action: Change, id: string): Promise<AutomationActResult> {
-    if (action === "run") await this.#deps.invoke("mako:run-automation", [id])
-    else await this.#deps.invoke("mako:automation-enabled", [id, action === "on"])
+    if (action !== "run") {
+      const kept = EnabledSchema.safeParse(await this.#deps.invoke("mako:automation-enabled", [id, action === "on"])).data?.find((each) => each.id === id)
+      if (kept?.enabled !== (action === "on")) return { refused: "failed", why: `This automation's trigger can't run here, so it stays ${kept?.enabled ? "on" : "off"}.` }
+      return { outcome: "done", action, id }
+    }
+    // A launch that failed, or a run that never began, resolves with how it went.
+    const fired = FiredSchema.safeParse(await this.#deps.invoke("mako:run-automation", [id])).data
+    if (fired?.status === "failed") return { refused: "failed", why: fired.error }
+    if (fired?.status === "not-run") return { refused: "failed", why: fired.why }
     return { outcome: "done", action, id }
   }
 }
