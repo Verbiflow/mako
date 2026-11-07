@@ -1398,6 +1398,29 @@ export class LiveConversations {
     }
   }
 
+  /** `continueRestarted`, each conversation read in first a slice at a time (`readIn`): what a host starting calls. */
+  async continueRestartedInSlices(): Promise<void> {
+    await this.readIn(this.restarts.left().map((turn) => turn.conversationId))
+    this.continueRestarted()
+  }
+
+  /**
+   * Reads conversations in from their journals a slice at a time, one after
+   * another (`LiveRecords.loadSliced`), for work that then reads them at
+   * once: read whole as a host started, a day of Fins' journals held its loop
+   * for 4.8 s. Other work runs between two journals too: a read that ends
+   * within its slice resolves without letting it, and ten small journals
+   * read back to back held the loop as long as reading them at once. One
+   * that can't be read is left to the read that follows, which fails as it
+   * would have.
+   */
+  async readIn(ids: Iterable<string>): Promise<void> {
+    for (const id of ids) {
+      await this.records.loadSliced(id).catch(() => undefined)
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+  }
+
   /** Whether `id` is switching provider or reopening its session (`transfer`): a message waits for it to settle. */
   switching(id: string): boolean {
     const resident = this.records.load(id)
