@@ -139,6 +139,11 @@ export type AcpConversation = StartingAcpConversation | LiveAcpConversation
 export interface AcpState {
   activeKey: string | null
   conversations: Record<string, AcpConversation>
+  /**
+   * Each Thread of several Sessions, its Sessions in its store's order (`ThreadGroup.sessions`), as `thread-groups.ts`
+   * keeps them: the last is the newest, whose Fins every surface draws (`threadChildren`).
+   */
+  threadSessions?: Readonly<Record<string, readonly string[]>>
 }
 
 export const acpStore = createStore<AcpState>({

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { KEPT, testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * A Fin placed on another device, as every form draws it (decision D6), through production components on the mock
@@ -12,7 +12,8 @@ import { fileURLToPath } from "node:url"
  * not openable, opening nothing, when it doesn't; on the phone and in a laptop's browser, under its Apex and, waiting
  * on an approval, a row of its own under Needs you that opens on Loft; with Loft quiet; and with the Apex's own device
  * off, the Fin's row still saying what it asks. Screenshots of each, dark and light, land in the printed directory
- * (or `MAKO_PLACED_UI_SHOTS`). Pass a dev server's URL to use it; with none it serves its own.
+ * (`MAKO_PLACED_UI_SHOTS`; without it they go with the run's scratch folder once it passes). Pass a dev server's URL
+ * to use it; with none it serves its own.
  *
  * The desk's rail shots keep the right sidebar open; before the crew card and the opened Fin, the sidebar is closed
  * by the person's own command (Toggle the right sidebar), since a display narrower than the window asked for (a
@@ -27,7 +28,8 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-placed-ui-"))
+  // Gone when the run ends however it ends; with `MAKO_PLACED_UI_SHOTS` the shots land outside it and stay.
+  const root = testScratch("mako-placed-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-placed-ui", main: fileURLToPath(import.meta.url) }))
   const given = process.argv.slice(2).find((arg) => /^https?:/.test(arg))
   let server
@@ -47,7 +49,7 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Placed Fin UI evidence: ${process.env.MAKO_PLACED_UI_SHOTS ?? join(root, "shots")}`)
+  console.log(`Placed Fin UI evidence: ${process.env.MAKO_PLACED_UI_SHOTS ?? `the run's scratch, kept under ${KEPT} when it fails`}`)
 }
 
 const APEX_THREAD = "1ead1ead-0000-4000-8000-000000001ead"

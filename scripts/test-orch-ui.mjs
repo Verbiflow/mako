@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // An Apex's Fins on the desk and the phone, through production components on the mock bridge (`?mock&app=apex`):
 // the rail lists only the Fins that need the person, under the Apex's row and its pips; a Fin's tab opens it in place with its brief and its
@@ -20,7 +20,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-orch-ui-"))
+  const root = testScratch("mako-orch-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-orch-ui", main: fileURLToPath(import.meta.url) }))
   const given = process.argv.slice(2).find((arg) => /^https?:/.test(arg))
   let server
@@ -40,7 +40,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Orchestration UI evidence: ${root}`)
 }
 
 async function check() {

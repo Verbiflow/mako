@@ -208,6 +208,8 @@ export const NativeAgentSchema = NativeAgentObservationSchema.extend({
   observedAt: z.number(),
   /** Host epoch ms of the first observation; elapsed time counts from it. */
   startedAt: z.number().optional(),
+  /** A Fin's: when it came to stand as it does (`childSince`), which a row's time counts from. Absent while that isn't known. */
+  since: z.number().optional(),
   /** Host epoch ms of the observation that settled it. */
   settledAt: z.number().optional(),
 })

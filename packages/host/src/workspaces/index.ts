@@ -1,6 +1,7 @@
 import type { BuildSlots } from "./build-slots.js"
 import { sessionAccessTier } from "../contracts/access.js"
 import type { GitHubPerson } from "../contracts/github-person.js"
+import type { PullRequestsAs } from "../contracts/github-authorship.js"
 import type { Git } from "@mako/git"
 import { realpathSync } from "node:fs"
 import { rm, stat } from "node:fs/promises"
@@ -265,6 +266,8 @@ export interface WorkspaceMoversDeps {
   warn(message: string, facts: Record<string, string | number | boolean | undefined>): void
   /** On a cloud machine: whether its pull requests go as its person, asked now; undefined elsewhere. */
   person?(): Promise<GitHubPerson | undefined>
+  /** On a cloud machine: who its pull requests go as, as its agent last wrote it; undefined elsewhere. */
+  pullRequestsAs?(): Promise<PullRequestsAs | undefined>
 }
 
 export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers {
@@ -343,7 +346,7 @@ function worktreesChanged(worktrees: Workspaces["worktrees"], emit: (event: Host
   emit({ type: "github-changed" })
 }
 
-function agentTools({ git, workspaces, live, emit, person }: WorkspaceMoversDeps, moves: WorkspaceMoves, leaves: WorktreeLeaves, appTools: EnvironmentTools | undefined): MakoTools[] {
+function agentTools({ git, workspaces, live, store, emit, person, pullRequestsAs }: WorkspaceMoversDeps, moves: WorkspaceMoves, leaves: WorktreeLeaves, appTools: EnvironmentTools | undefined): MakoTools[] {
   const { worktrees } = workspaces
   const cwd = (id: string) => live.session(id)?.cwd
   const changed = () => worktreesChanged(worktrees, emit)
@@ -357,6 +360,8 @@ function agentTools({ git, workspaces, live, emit, person }: WorkspaceMoversDeps
     },
     changed,
     person,
+    pullRequestsAs,
+    threadOf: (id) => store?.journalPlacement(id)?.thread,
   })
   return [
     (server, conversationId) => registerWorkspaceTools(server, workspace, conversationId),

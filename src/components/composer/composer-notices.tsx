@@ -171,7 +171,7 @@ function NoticeStack({ entries }: { entries: readonly Entry[] }) {
       aria-label="Notices"
       data-composer-notices={entries.length}
       data-expanded={expanded || undefined}
-      className="relative shrink-0 px-2 pt-2"
+      className="relative shrink-0 px-3 pt-2"
       onPointerEnter={() => {
         clearTimeout(fold.current)
         setOpen(true)
@@ -196,7 +196,7 @@ function NoticeStack({ entries }: { entries: readonly Entry[] }) {
           inert={!expanded}
           data-notice-list
           className={cn(
-            "overlay-panel absolute inset-x-2 bottom-full z-20 mb-1 flex flex-col-reverse gap-px p-1",
+            "overlay-panel absolute inset-x-3 bottom-full z-20 mb-1 flex flex-col-reverse gap-px p-1",
             "transition-[opacity,translate] duration-150 ease-[var(--ease-out)] motion-reduce:transition-none",
             expanded ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-1 opacity-0"
           )}
@@ -208,7 +208,7 @@ function NoticeStack({ entries }: { entries: readonly Entry[] }) {
         <span
           aria-hidden
           data-notice-peek={next.notice.tone}
-          className={cn("absolute inset-x-5 top-[3px] h-3 transition-colors duration-150", LIPS[next.notice.tone])}
+          className={cn("absolute inset-x-6 top-[3px] h-3 transition-colors duration-150", LIPS[next.notice.tone])}
         />
       ) : null}
       <div className={cn("relative bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]", ARRIVE)}>
