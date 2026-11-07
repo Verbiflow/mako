@@ -25,6 +25,9 @@ export function authorshipWords(as: CommitAuthor, hasToken: boolean | undefined)
   return hasToken ? "Commits name you, and pull requests open with your GitHub token." : "Commits name you."
 }
 
+/** What a saved token does under `As Mako`, on the row that keeps it. */
+export const TOKEN_KEPT_WORDS = "Your token is kept, but not used while commits and pull requests are as Mako."
+
 /** The line under `As you` while no token is saved, pointing at "Open pull requests as me". */
 export const FALLBACK_WORDS = `Pull requests are opened by ${MAKO_GITHUB_APP} until you add a token in Open pull requests as me.`
 

@@ -214,10 +214,18 @@ async function checkWindow() {
     await until(has(phoneGroup, "Commits name you, and pull requests open with your GitHub token."), "the phone with a token")
     assert.ok(!(await text(phoneGroup)).includes(FALLBACK))
     await capture(`phone-as-you-token-${theme}`)
+    // As Mako with a token kept: the row says what the footer does, on the phone as on the desk.
+    await fixture(`view=phone&scene=on&authorship=mako${tone}`, { width: 390, height: 844 })
+    await until(has(phoneGroup, "Your token is kept, but not used while commits and pull requests are as Mako."), "the phone's kept token")
+    assert.ok(!(await text(phoneGroup)).includes("GitHub shows you as the author"), "not the opposite of its footer")
+    await capture(`phone-as-mako-token-${theme}`)
 
-    // Each failure, on the laptop's and the phone's forms.
+    // Each failure, on the laptop's and the phone's forms, and neither choice shown until it's known.
     const forms = [["web", "desk", { width: 1100, height: 760 }], ["phone", "phone", { width: 390, height: 844 }]]
     for (const [form, view, size] of forms) {
+      await fixture(`view=${view}&scene=off&authorship=slow${tone}`, size)
+      await until(`Boolean(document.querySelector('[aria-label="Commits and pull requests"]'))`, `the ${form}'s reading`)
+      assert.equal(await evaluate(`document.querySelectorAll('[aria-label="Commits and pull requests"] [aria-checked="true"], [aria-label="Commits and pull requests"] [aria-pressed="true"]').length`), 0, "As you isn't said before it's known")
       await fixture(`view=${view}&scene=off&authorship=missing${tone}`, size)
       await until(has("body", UNAVAILABLE), `the ${form}'s cloud without the setting`)
       const without = await text("body")

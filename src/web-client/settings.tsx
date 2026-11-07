@@ -9,7 +9,7 @@ import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMI
 import type { CommitAuthor } from "@mako/host/contracts/github-authorship"
 import { PullRequestsAsMe } from "@/components/settings/pull-requests-as-me"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
-import { AUTHORSHIP_UNAVAILABLE, AUTHORSHIP_UNREAD, authorshipChoosable, authorshipWords, FALLBACK_WORDS, useGitHubAuthorship, type GitHubAuthorships } from "@/state/github-authorship"
+import { AUTHORSHIP_UNAVAILABLE, AUTHORSHIP_UNREAD, authorshipChoosable, authorshipWords, FALLBACK_WORDS, TOKEN_KEPT_WORDS, useGitHubAuthorship, type GitHubAuthorships } from "@/state/github-authorship"
 import { webGitHubTokens } from "./github-tokens"
 import { webGitHubAuthorships } from "./github-authorship"
 import { useForm } from "./route"
@@ -111,7 +111,7 @@ export function TouchPullRequests({ tokens, authorships }: { tokens: GitHubToken
   const [token, setToken] = useState("")
   const listing = phase.kind === "ready" ? phase.listing : null
   const expiry = listing ? expiryWords(listing.expiresAt) : undefined
-  const as = authorship.phase.kind === "ready" ? authorship.phase.authorship.as : "you"
+  const as = authorship.phase.kind === "ready" ? authorship.phase.authorship.as : undefined
   const hasToken = phase.kind === "ready" ? Boolean(listing) : undefined
   const cancel = () => {
     setAsking(false)
@@ -139,7 +139,7 @@ export function TouchPullRequests({ tokens, authorships }: { tokens: GitHubToken
       <div className="flex flex-col gap-2.5 px-4 py-3">
         <div>
           <p className="text-ui">Commits and pull requests</p>
-          <p className="text-label text-faint">{authorship.phase.kind === "ready" ? authorshipWords(as, hasToken) : authorship.phase.kind === "failed" ? AUTHORSHIP_UNREAD : authorship.phase.kind === "unavailable" ? AUTHORSHIP_UNAVAILABLE : "From cloud Threads"}</p>
+          <p className="text-label text-faint">{as ? authorshipWords(as, hasToken) : authorship.phase.kind === "failed" ? AUTHORSHIP_UNREAD : authorship.phase.kind === "unavailable" ? AUTHORSHIP_UNAVAILABLE : "From cloud Threads"}</p>
         </div>
         {authorshipChoosable(authorship.phase) ? (
           <div role="radiogroup" aria-label="Commits and pull requests" className="grid grid-cols-2 gap-1 bg-raised p-1">
@@ -171,7 +171,7 @@ export function TouchPullRequests({ tokens, authorships }: { tokens: GitHubToken
       ) : null}
       <Row
         label="Open pull requests as me"
-        detail={listing ? "GitHub shows you as the author" : "From cloud Threads"}
+        detail={listing ? (as === "mako" ? TOKEN_KEPT_WORDS : "GitHub shows you as the author") : "From cloud Threads"}
         icon={<GitPullRequestIcon className="size-4" />}
         end={
           <Switch

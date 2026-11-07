@@ -4,7 +4,7 @@ import { FIELD, Action, ListCard, ListCardRow, Segmented, SettingRow, Toggle } f
 import { cn } from "@/lib/utils"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
-import { AUTHORSHIP_UNAVAILABLE, AUTHORSHIP_UNREAD, authorshipChoosable, authorshipWords, FALLBACK_WORDS, useGitHubAuthorship, type GitHubAuthorships } from "@/state/github-authorship"
+import { AUTHORSHIP_UNAVAILABLE, AUTHORSHIP_UNREAD, authorshipChoosable, authorshipWords, FALLBACK_WORDS, TOKEN_KEPT_WORDS, useGitHubAuthorship, type GitHubAuthorships } from "@/state/github-authorship"
 
 const inputClass = cn(FIELD, "flex-1 font-mono placeholder:font-sans")
 
@@ -43,7 +43,7 @@ export function PullRequestsAsMe({ tokens, authorships, repository }: { tokens: 
           title="Open pull requests as me"
           description={
             asMako
-              ? listing ? "Your token is kept, but not used while commits and pull requests are as Mako." : "Used once commits and pull requests are as you."
+              ? listing ? TOKEN_KEPT_WORDS : "Used once commits and pull requests are as you."
               : listing ? "Cloud Threads push, open and merge with your GitHub token, so GitHub shows you as the author." : "Use your own GitHub token, so GitHub shows you as the author instead of the app."
           }
         >
@@ -116,10 +116,10 @@ function CommitAuthorship({ authorship, hasToken, asking, onAddToken }: {
   onAddToken: () => void
 }) {
   const { phase, saving, error, choose, read } = authorship
-  const as = phase.kind === "ready" ? phase.authorship.as : "you"
+  const as = phase.kind === "ready" ? phase.authorship.as : undefined
   return (
     <>
-      <SettingRow title="Commits and pull requests" description={phase.kind === "ready" ? authorshipWords(as, hasToken) : phase.kind === "unavailable" ? AUTHORSHIP_UNAVAILABLE : phase.kind === "failed" ? AUTHORSHIP_UNREAD : undefined}>
+      <SettingRow title="Commits and pull requests" description={as ? authorshipWords(as, hasToken) : phase.kind === "unavailable" ? AUTHORSHIP_UNAVAILABLE : phase.kind === "failed" ? AUTHORSHIP_UNREAD : undefined}>
         {phase.kind === "failed" ? <Action size="xs" onClick={read}>Try again</Action> : null}
         {authorshipChoosable(phase) ? (
           <Segmented
@@ -138,7 +138,7 @@ function CommitAuthorship({ authorship, hasToken, asking, onAddToken }: {
           <Action size="xs" tone="outline" onClick={onAddToken}>Add token</Action>
         </ListCardRow>
       ) : null}
-      {error ? <ListCardRow className="text-label text-negative">{error}</ListCardRow> : null}
+      {error ? <ListCardRow className="text-label text-negative"><p role="alert">{error}</p></ListCardRow> : null}
     </>
   )
 }
