@@ -98,6 +98,11 @@ holds all of it, type imports included.
 `packages/host/src/host-main.ts` is the program: what belongs to the process. It reads
 the configuration (`processHostConfig` in `host-config.ts`; no socket exits
 64), opens the log, takes the data root's lock, and owns signals and the exit.
+A `mako-host` command that took the lock to read (a `join` ending, a `status`
+of an older build) is waited out, `CLI_HOLD_MS` at most, unless something
+answers on the host's socket, which is a host and refuses at once; `status`
+itself takes no lock (`device-cli.ts`), since a reading must never turn a
+starting host away, as one polled with `status` inside a container did.
 `createHost(config, owner)` in `create-host.ts` is the host. Its `start()` opens
 each domain in `electron/domains/` in dependency order, declares every method,
 then listens on the socket; its `stop()` releases everything in one fixed

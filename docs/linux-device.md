@@ -32,7 +32,7 @@ cloud, with nothing more to set:
 
 ```sh
 mako-host          # the host, as this device
-mako-host status   # the device, its account, and whether its links are connected
+mako-host status   # the device, its account, and whether its links are connected; takes no lock, so it's safe while the host starts
 mako-host leave    # sign out, and remove the device from the account
 ```
 
