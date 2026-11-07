@@ -61,6 +61,7 @@ import type { DiagnosticEvents } from "@mako/host/contracts/telemetry"
 import type { CommitAuthor } from "@mako/host/contracts/github-authorship"
 import { aesSealer, fileSecrets, wrappedKey, type Secrets } from "@mako/host/base/secrets"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
+import { ranOut } from "./lib/ran-out.ts"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-cloud-account-"))
 after(() => rm(scratch, { recursive: true, force: true }))
@@ -516,11 +517,14 @@ test("after a sleep, a call to the cloud never waits on a pooled connection the 
   const stalled = mac.accounts.signIns().then(() => "answered", () => "dropped")
   assert.equal(await Promise.race([stalled, new Promise((resolve) => setTimeout(() => resolve("waiting"), 1_500))]), "waiting", "on the dropped connection, a call waits")
   const woke = performance.now()
-  mac.accounts.wake()
-  await mac.accounts.signIns()
+  // What the call waited for rather than the runner's clock: one sent on the stalled connection waits out a probe.
+  const { waits: wokeWaits } = await ranOut(async () => {
+    mac.accounts.wake()
+    await mac.accounts.signIns()
+  })
   const ms = performance.now() - woke
   console.log(`  a call to the cloud right after waking: ${ms.toFixed(0)} ms`)
-  assert.ok(ms < 1_000, `answered on a new connection in ${ms.toFixed(0)} ms`)
+  assert.ok(wokeWaits.every((wait) => wait < 1_000), `answered on a new connection in ${ms.toFixed(0)} ms; ran out: ${wokeWaits.join(", ")}`)
   assert.equal(await stalled, "dropped", "the call stranded before the wake ends rather than hanging")
   // Its log line says how far it got, which the cloud can't: it went out, on a connection kept from earlier calls, and
   // nothing came back.
@@ -682,11 +686,13 @@ test("a dropped connection comes back by itself; an expired token reconnects at 
   await mac.until(connected, "reconnected after a drop")
 
   const refreshes = cloud.calls.filter((call) => call === "POST /v1/devices/token").length
-  const started = Date.now()
   const before = cloud.sockets()[0]
-  cloud.closeAll(4001)
-  while (cloud.sockets().length !== 1 || cloud.sockets()[0] === before) await sleep(10)
-  assert.ok(Date.now() - started < 500, "no backoff for an expired token")
+  const { waits: expiredWaits } = await ranOut(async () => {
+    cloud.closeAll(4001)
+    while (cloud.sockets().length !== 1 || cloud.sockets()[0] === before) await sleep(10)
+  })
+  // A backoff's step is a second or more; the test's own look every 10 ms is the rest.
+  assert.ok(expiredWaits.every((ms) => ms < 1_000), `no backoff for an expired token: ${expiredWaits.join(", ")}`)
   assert.ok(connected(mac.accounts.account().state), "and no flicker to offline while it reconnects")
   assert.equal(cloud.calls.filter((call) => call === "POST /v1/devices/token").length, refreshes + 1, "after exactly one refresh")
 })
@@ -1164,9 +1170,12 @@ test("a runtime link silent while it sends what another device watches is asked 
   z.object({ _socket: z.instanceof(Socket) }).loose().parse(socket)._socket.pause()
   const stalled = Date.now()
   await sleep(SILENT_WHILE_WORKING_MS + 100)
-  mac.accounts.liveSent()
-  await waitFor(() => cloud.enrolments.length === 2, "replaced by a new link")
-  assert.ok(Date.now() - stalled < SILENT_WHILE_WORKING_MS + PROBE_ANSWER_MS + 1_500, `found in ${Date.now() - stalled} ms`)
+  const { waits: stallWaits } = await ranOut(async () => {
+    mac.accounts.liveSent()
+    await waitFor(() => cloud.enrolments.length === 2, "replaced by a new link")
+  })
+  // Found by its probe going unanswered (1.5 s), and by no longer wait: what ran out, not the runner's clock.
+  assert.deepEqual(stallWaits.filter((ms) => ms >= 1_000), [1_500], `found in ${Date.now() - stalled} ms, by its probe`)
 })
 
 test("a device removed while its runtime is connected signs out, and its runtime stops", async () => {
