@@ -220,8 +220,10 @@ class SharedPasses<T> {
   private next: Promise<T> | undefined
 
   ask(read: () => Promise<T>): Promise<T> {
+    // First: one that ended leaves its successor promised, not yet started, and a caller it wakes asks in that gap.
+    if (this.next) return this.next
     if (!this.running) return this.start(read)
-    this.next ??= this.running.catch(() => undefined).then(() => {
+    this.next = this.running.catch(() => undefined).then(() => {
       this.next = undefined
       return this.start(read)
     })

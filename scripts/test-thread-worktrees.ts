@@ -972,6 +972,29 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   open()
   await Promise.all(walking)
   assert.equal(walks, 2, "those who asked during one share one after it")
+  // One who asks as soon as a walk ends, with the next already promised, shares that one too: never two at once.
+  walks = 0
+  let walkingNow = 0
+  let mostAtOnce = 0
+  let letGo!: () => void
+  const walked = new Promise<void>((resolve) => {
+    letGo = resolve
+  })
+  shared.list = async () => {
+    walks++
+    mostAtOnce = Math.max(mostAtOnce, ++walkingNow)
+    await walked
+    walkingNow--
+    return { root, worktrees: [] }
+  }
+  let onEnd: Promise<unknown> | undefined
+  const firstWalk = shared.inventory().then(() => (onEnd = shared.inventory()))
+  const promised = shared.inventory()
+  await Promise.resolve()
+  letGo()
+  await firstWalk
+  await Promise.all([promised, onEnd])
+  assert.deepEqual([walks, mostAtOnce], [2, 1], "one asking as a walk ends shares the walk already promised")
   shared.list = async () => {
     throw new Error("listing failed")
   }
