@@ -2647,6 +2647,18 @@ deliberate action and never rides along with a commit.
   home path. "Waiting on 4 agents" beside "3 Fins working" is what happens
   without this; `npm run test:fin-counts-ui` draws every surface from one
   roster and requires the same numbers, and `test:fin-words` holds the words.
+- **A Fin's row says how long it has stood as it does, never how old it is.** `childSince` is the one rule, carried
+  as the entry's `since`: a working Fin's current turn, from when its request was dispatched (`dispatchedAt`), since a
+  message can wait long after it's admitted; one waiting on its own Fins from when its turn ended; each other state
+  from when it got there. A working Fin with no known turn says no time. Its line always says something (`At work`
+  with nothing else known), and "answered" only for an answer to this turn, in plain words: a plain message from its
+  Apex may close a question (rule 13), and it's still the next job and not an answer. `npm run test:fin-row-time` holds the rule, and
+  `test:orch-deliver` and `test:crew-card-ui` the real turn and every form.
+- **The notice above the composer speaks for what the person did.** A steer Mako sent by itself (a Fin's digest, an
+  Apex's message) raises nothing, whatever became of it, and hides nothing of theirs: what the harness didn't take goes
+  as the next turn, which is Mako's to handle. `actionNotice` picks the person's newest, and `sentByMako` tells them
+  apart by Mako's header, so a row already kept stops raising it. What stands over the composer keeps to its edges, on
+  every form: `npm run test:steer-notices` and `test:composer-edges-ui` hold both.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, at its last line; an agent's
   fin, still, with its harness as the badge, on its reply's byline; and a

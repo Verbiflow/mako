@@ -260,6 +260,7 @@ export class LiveDispatch {
       nativeDelivery,
       usageFrom: usageFrom && (usageFrom.tokens || usageFrom.cost || usageFrom.unrecorded) ? usageFrom : undefined,
       status: "dispatching" as const,
+      dispatchedAt: Date.now(),
       ...request.digest && { digest: { ...request.digest, sentAt: Date.now() } },
       mode: resident.snapshot.session.currentMode ?? undefined,
       context: [

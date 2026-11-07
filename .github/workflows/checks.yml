@@ -96,6 +96,8 @@ jobs:
       - run: npm run test:transcript-events
       - run: npm run test:stage
       - run: npm run test:fin-words
+      - run: npm run test:fin-row-time
+      - run: npm run test:steer-notices
       - run: npm run test:fin-decisions
       - run: npm run test:live-controls
       - run: npm run test:prompt-delivery

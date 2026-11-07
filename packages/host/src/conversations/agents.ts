@@ -63,7 +63,9 @@ import {
   type Report,
   type ThreadParent,
   type TreeBudget,
+  turnFailedAt,
 } from "../contracts/agents.js"
+import type { LiveAction } from "../contracts/live-actions.js"
 import {
   afterStart,
   APEX_DIGEST_FINS,
@@ -152,6 +154,15 @@ const SWITCH_WAIT_MS = WAIT_LIMIT_MS / 2
 /** Who a pull request's outcome reaches its Fin as: Mako, never the person. */
 const PULL_WATCH_ACTOR: Actor = { kind: "service", name: "pull-watch" }
 /** Whether a message is Mako's note of a pull request's outcome. */
+/** What a turn took: the request that began it and those steered into it, unless they were refused. */
+function inputsOf(request: string, actions: readonly LiveAction[] | undefined): string[] {
+  const steered = (actions ?? []).flatMap(({ input, state }) => {
+    if (input.kind === "compact" || input.requestId !== request || state.kind === "failed" || state.kind === "not-accepted") return []
+    return [input.kind === "steer-queued" ? input.queuedRequestId : input.id]
+  })
+  return [request, ...steered]
+}
+
 function isPullNote(request: Pick<LiveRequest, "actor">): boolean {
   return request.actor?.kind === "service" && request.actor.name === "pull-watch"
 }
@@ -1670,7 +1681,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     // An Apex's message answers only what reached it: one that crossed the question is just a message, and the question goes on.
     if (actor?.kind === "agent" && !this.reachedApex(edge, latest)) return hostLog("agents", "a message crossed a question its Apex hasn't heard", { op: edge.op, ask, request })
-    const claim = store.claimAnswer({ ask, child: ThreadIdSchema.parse(edge.child), op: request, by: actor?.kind === "agent" ? "lead" : "person", answer: text.slice(0, 400), request, text, ...(actor?.kind === "agent" && { actor }), at: this.now() })
+    const claim = store.claimAnswer({ ask, child: ThreadIdSchema.parse(edge.child), op: request, by: actor?.kind === "agent" ? "lead" : "person", answer: (agentWords(text)?.body ?? text).slice(0, 400), request, text, ...(actor?.kind === "agent" && { actor }), at: this.now() })
     if (!claim.claimed) return
     store.markAnswerDelivered(ask, delivered)
     this.answersHeld.set(edge.child, { ...claim.answer, delivered })
@@ -3252,6 +3263,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A turn that ended on its own Fins' work or its move is still at work, on that.
     const waits = !busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined
     const working = busy || waits !== undefined
+    const workSince = waits ? held?.activityAt : last && (last.dispatchedAt ?? last.createdAt)
     const thread = this.store()?.thread(edge.child)
     const title = thread?.title ?? session.title
     // A reading is taken of every Fin there is, on every look: it holds to what memory has, and never reads a journal in.
@@ -3271,9 +3283,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(runsOn && { runsOn }),
       ...((session.status === "starting" || this.starting.has(edge.op)) && { starting: "launching" as const }),
       ...(working && { working }),
+      ...(working && workSince !== undefined && { workSince }),
+      ...(working && last && { workInputs: inputsOf(last.id, held?.control?.actions) }),
       ...(waits ? { step: `Waiting for ${waits}`, awaiting: waits } : working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
       ...(waiting && { waiting: this.waitingOf(edge, waiting.line, live.pendingAsk(conversation)) }),
-      ...(!working && last?.status === "failed" && { ended: { outcome: "failed" as const, ...(last.error && { reason: last.error }), at: last.createdAt ?? edge.createdAt } }),
+      ...(!working && last?.status === "failed" && { ended: { outcome: "failed" as const, ...(last.error && { reason: last.error }), at: turnFailedAt(last, held?.activityAt, edge.createdAt) } }),
       ...(!working && last?.status === "interrupted" && last.interruption?.reason === "stopped" && { ended: { outcome: "stopped" as const, at: last.interruption.at } }),
       startedAt: edge.createdAt,
       ...(held?.activityAt && { updatedAt: held.activityAt }),
@@ -3321,7 +3335,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   private journalOf(child: string): ChildJournal {
     const latest = this.latest.get(child)
     const kept = this.answersHeld.get(child)
-    return { ...(latest && { latest }), ...(kept && { answered: { by: kept.by, answer: kept.answer, ask: kept.ask, at: kept.at, ...(kept.delivered && { delivered: true as const }) } }) }
+    return { ...(latest && { latest }), ...(kept && { answered: { by: kept.by, answer: kept.answer, ask: kept.ask, request: kept.request, at: kept.at, ...(kept.op === kept.request && { routine: true as const }), ...(kept.delivered && { delivered: true as const }) } }) }
   }
 
   private entryOf(edge: ThreadParent): NativeAgent {
