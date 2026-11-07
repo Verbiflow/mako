@@ -465,10 +465,21 @@ try {
     assert.ok(!("refused" in r))
     held.claude[0]!.spentUntil = reset
     spent()
-    // A quiet Thread may be unloaded by then, with no roster at all: which says no notice as well as an empty one does.
-    const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length ?? 0
+    // No roster says no notice as well as an empty one does, but it isn't the reset clearing it, so each run says if it
+    // read that. This failed in CI without saying which, a notice left standing or no roster: this names it next time.
+    let noRoster = 0
+    const shown = () => {
+      const agents = r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents
+      if (!agents) noRoster += 1
+      return agents?.filter((agent) => agent.child?.limitNotice).length ?? 0
+    }
     await until("the notice on the Apex's snapshot", () => shown() === 1, 6_000)
-    await until("its reset, with nobody reading", () => shown() === 0, 12_000)
+    await until("its reset, with nobody reading", () => shown() === 0, 12_000).catch((error) => {
+      const entries = r.world.agents.roster(r.apex.conversation).map((agent) => [agent.child?.state?.kind, Boolean(agent.child?.limitNotice)])
+      console.error("At its reset:", JSON.stringify({ reset, now: clock(), shown: shown(), entries, session: r.world.live.session(r.apex.conversation)?.status, notices: r.world.store.limitNotices() }))
+      throw error
+    })
+    if (noRoster) console.log(`its reset: the Apex's snapshot held no roster on ${noRoster} reads`)
     await r.world.close()
   }
   // Past its reset a notice is off the entry that carries it, whatever the cache held; and a host that comes back to
