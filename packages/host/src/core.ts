@@ -700,6 +700,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   lent.subscribe(() => {
     late.conversations?.agents?.capacityChanged()
     late.advertiser?.roomChanged()
+    // A lease served or ended starts or ends work this Mac stays awake for.
+    void late.keepAwake?.refresh()
   })
   // The sessions this Mac lends as their source: asks it can answer itself, each lease the broker issues it, beats
   // for them on its runtime link, and every way one ends. A cloud machine and a fixture desk lend nothing.
@@ -1229,6 +1231,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     file: join(environment.dataRoot, "keep-awake.json"),
     helper: () => sleepWatchHelper(environment),
     working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations.has(id), ownWork: true }).length,
+    serving: () => lent.count(),
     changed: (state) => emit({ type: "keep-awake", state }),
   }) : undefined
   late.keepAwake = keepAwake

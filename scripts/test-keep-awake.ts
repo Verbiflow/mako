@@ -44,14 +44,15 @@ function standIn() {
 
 const root = mkdtempSync(join(tmpdir(), "mako-keep-awake-"))
 
-function harness(options: { agents?: number; helper?: string | null; power?: string; file?: string; fails?: number; lingerMs?: number } = {}) {
+function harness(options: { agents?: number; serving?: number; helper?: string | null; power?: string; file?: string; fails?: number; lingerMs?: number } = {}) {
   const spawned: ReturnType<typeof standIn>[] = []
   const shown: KeepAwakeState[] = []
-  const work = { agents: options.agents ?? 0 }
+  const work = { agents: options.agents ?? 0, serving: options.serving ?? 0 }
   const awake = new KeepAwake({
     file: options.file ?? join(root, `${randomUUID()}.json`),
     helper: async () => (options.helper === null ? undefined : (options.helper ?? "/helper")),
     working: () => work.agents,
+    serving: () => work.serving,
     changed: (state) => shown.push(state),
     coalesceMs: 1,
     lingerMs: options.lingerMs ?? 60_000,
@@ -140,6 +141,22 @@ try {
     assert.equal(spawned.length, 0)
     assert.equal(shown.length, 0)
     assert.deepEqual(await awake.state(), { settings: { on: true, lidClosed: false }, hold: { kind: "rest" } })
+    awake.stop()
+  }
+
+  {
+    // A session this Mac serves another place's Thread under a lease is work too: with no agent of its own at work, the
+    // Mac still stays awake while it lends, and rests once the lease ends.
+    const { awake, work, holds, newest } = harness({ serving: 1 })
+    await awake.refresh()
+    await settle()
+    assert.deepEqual(newest()?.told, ["hold idle Mako: 1 agent working"], "a lent session holds the Mac awake")
+    await holds("idle")
+    assert.deepEqual((await awake.state()).hold, { kind: "idle", agents: 1 })
+    work.serving = 0
+    await awake.refresh()
+    await settle()
+    assert.deepEqual((await awake.state()).hold, { kind: "rest" }, "and rests once the lease ends")
     awake.stop()
   }
 
