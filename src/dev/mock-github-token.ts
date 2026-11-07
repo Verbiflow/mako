@@ -4,7 +4,8 @@ import type { GitHubTokenListing } from "@mako/host/contracts/github-person"
 /**
  * "Open pull requests as me" and who cloud commits are authored as, for `?mock`: off until a token is saved, and As
  * you. `github-token=on` starts with Ada's, `=expired` with one that lapsed; `github-authorship=mako` starts As Mako,
- * `=missing` is a cloud without the setting, `=failed` can't be read, and `=refused` can't be saved.
+ * `=missing` is a cloud without the setting, `=failed` can't be read, `=refused` can't be saved, and `=unanswered` saves
+ * but loses its answer.
  * Saving checks the shape a GitHub token has and answers after a moment, as the cloud does; one ending `refused` is
  * refused with GitHub's words, so the form's error can be seen.
  */
@@ -35,7 +36,8 @@ export function mockGitHubToken() {
     },
     githubAuthorshipSave: async (next: CommitAuthor) => {
       await pause()
-      if (params.get("github-authorship") === "refused") throw new Error("Error invoking remote method 'mako:github-authorship-save': PUT answered 500")
+      if (params.get("github-authorship") === "unanswered") as = next
+      if (params.get("github-authorship") === "refused" || params.get("github-authorship") === "unanswered") throw new Error("Error invoking remote method 'mako:github-authorship-save': PUT answered 500")
       as = next
       return authorship()
     },

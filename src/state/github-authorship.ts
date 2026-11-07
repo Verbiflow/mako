@@ -35,8 +35,8 @@ export const FALLBACK_WORDS = `Pull requests are opened by ${MAKO_GITHUB_APP} un
 export const AUTHORSHIP_UNAVAILABLE = "This choice isn't on Mako Cloud yet. It will appear here after Mako Cloud's next update, and there's nothing you need to do."
 /** Every other failure to read it. */
 export const AUTHORSHIP_UNREAD = "Mako couldn't read this from Mako Cloud. Check your connection, then try again."
-/** A failure to save a choice, which goes back to what the account had. */
-export const AUTHORSHIP_UNSAVED = "Mako couldn't save that, so nothing changed. Check your connection, then try again."
+/** A save with no answer: it may have landed, so this promises only what was read back after it. */
+export const AUTHORSHIP_UNCONFIRMED = "Mako couldn't confirm that choice, so this shows what Mako Cloud has now. Check your connection, then choose again if you need to."
 
 export type GitHubAuthorshipPhase =
   | { kind: "loading" }
@@ -48,8 +48,9 @@ export type GitHubAuthorshipPhase =
 export const authorshipChoosable = (phase: GitHubAuthorshipPhase) => phase.kind === "ready" || phase.kind === "loading"
 
 /**
- * The setting as the account has it, and choosing it. A choice shows at once and goes back to what the account had
- * when the save fails; `error` says so.
+ * The setting as the account has it, and choosing it. A choice shows at once. A save with no answer may still have
+ * landed, so it's read back rather than undone: `error` says it's unconfirmed, and if the read fails too nothing is said
+ * of who commits name.
  */
 export function useGitHubAuthorship(authorships: GitHubAuthorships) {
   const [phase, setPhase] = useState<GitHubAuthorshipPhase>({ kind: "loading" })
@@ -71,15 +72,21 @@ export function useGitHubAuthorship(authorships: GitHubAuthorships) {
   }, [authorships, settle])
   const choose = useCallback(async (as: CommitAuthor): Promise<void> => {
     if (phase.kind !== "ready" || phase.authorship.as === as) return
-    const before = phase.authorship
-    setPhase({ kind: "ready", authorship: { ...before, as } })
+    setPhase({ kind: "ready", authorship: { ...phase.authorship, as } })
     setSaving(true)
     setError(undefined)
     try {
       setPhase({ kind: "ready", authorship: await authorships.save(as) })
     } catch {
-      setPhase({ kind: "ready", authorship: before })
-      setError(AUTHORSHIP_UNSAVED)
+      setPhase({ kind: "loading" })
+      setError(AUTHORSHIP_UNCONFIRMED)
+      try {
+        const now = await authorships.read()
+        setPhase(now ? { kind: "ready", authorship: now } : { kind: "unavailable" })
+      } catch {
+        setPhase({ kind: "failed" })
+        setError(undefined)
+      }
     } finally {
       setSaving(false)
     }

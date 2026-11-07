@@ -51,7 +51,7 @@ const FALLBACK = "Pull requests are opened by Mako by Verbiflow until you add a 
 const AS_MAKO = "Commits name Mako's bot, with you as co-author."
 const UNAVAILABLE = "This choice isn't on Mako Cloud yet. It will appear here after Mako Cloud's next update, and there's nothing you need to do."
 const UNREAD = "Mako couldn't read this from Mako Cloud. Check your connection, then try again."
-const UNSAVED = "Mako couldn't save that, so nothing changed. Check your connection, then try again."
+const UNCONFIRMED = "Mako couldn't confirm that choice, so this shows what Mako Cloud has now. Check your connection, then choose again if you need to."
 const RAW = /remote method|answered \d{3}|^Error/
 
 async function checkWindow() {
@@ -177,13 +177,20 @@ async function checkWindow() {
     assert.ok(!RAW.test(said) && said.includes("Try again"), said)
     assert.equal(await evaluate(`Boolean(document.querySelector('${section} [aria-label="Commits and pull requests"]'))`), false, "no choice to press")
     await capture(`desktop-unread-${theme}`, section)
-    // A choice that can't be saved: what to do, and the choice as it was.
+    // A save with no answer: what the account has now, read back, whichever way the save went.
     await desktop("&github-authorship=refused", theme)
     await click({ css: `${section} [aria-label="Commits and pull requests"] button`, text: "As Mako" })
-    await until(has(section, UNSAVED), "the desktop's refused save")
+    await until(has(section, UNCONFIRMED), "the desktop's unconfirmed save")
+    await until(`!document.querySelector('${section} [aria-label="Commits and pull requests"] button[disabled]')`, "read back")
     assert.ok(!RAW.test(await text(section)))
-    assert.equal(await pressed(section), "As you", "the choice goes back")
-    await capture(`desktop-unsaved-${theme}`, section)
+    assert.equal(await pressed(section), "As you", "a save that didn't land reads back as it was")
+    await capture(`desktop-unconfirmed-${theme}`, section)
+    await desktop("&github-authorship=unanswered", theme)
+    await click({ css: `${section} [aria-label="Commits and pull requests"] button`, text: "As Mako" })
+    await until(has(section, UNCONFIRMED), "the desktop's save that landed unanswered")
+    await until(`!document.querySelector('${section} [aria-label="Commits and pull requests"] button[disabled]')`, "read back")
+    assert.equal(await pressed(section), "As Mako", "a save that landed with its answer lost reads back as landed")
+    await capture(`desktop-unanswered-${theme}`, section)
   }
 
   // The web client: a laptop's browser draws the desktop's group; a phone the touch layout.
@@ -242,10 +249,26 @@ async function checkWindow() {
       await capture(`${form}-unread-${theme}`)
       await fixture(`view=${view}&scene=off&authorship=refused${tone}`, size)
       await until(`Boolean(document.querySelector('[aria-label="Commits and pull requests"]'))`, `the ${form}'s choice`)
-      await click({ css: `[aria-label="Commits and pull requests"] ${view === "phone" ? "[role=radio]" : "button"}`, text: "As Mako" })
-      await until(has("body", UNSAVED), `the ${form}'s refused save`)
+      const choice = `[aria-label="Commits and pull requests"] ${view === "phone" ? "[role=radio]" : "button"}`
+      const chosen = `document.querySelector('[aria-label="Commits and pull requests"] [aria-checked="true"], [aria-label="Commits and pull requests"] [aria-pressed="true"]')?.innerText`
+      await click({ css: choice, text: "As Mako" })
+      await until(has("body", UNCONFIRMED), `the ${form}'s unconfirmed save`)
+      await until(`${chosen} === "As you"`, `the ${form} reading back a save that didn't land`)
       assert.ok(!RAW.test(await text("body")))
-      await capture(`${form}-unsaved-${theme}`)
+      await capture(`${form}-unconfirmed-${theme}`)
+      await fixture(`view=${view}&scene=off&authorship=unanswered${tone}`, size)
+      await until(`Boolean(document.querySelector('[aria-label="Commits and pull requests"]'))`, `the ${form}'s choice`)
+      await click({ css: choice, text: "As Mako" })
+      await until(has("body", UNCONFIRMED), `the ${form}'s save that landed unanswered`)
+      await until(`${chosen} === "As Mako"`, `the ${form} reading back a save that landed`)
+      // A save with no answer and a read that fails too: nothing claimed, and a way to ask again.
+      await fixture(`view=${view}&scene=off&authorship=gone${tone}`, size)
+      await until(`Boolean(document.querySelector('[aria-label="Commits and pull requests"]'))`, `the ${form}'s choice`)
+      await click({ css: choice, text: "As Mako" })
+      await until(has("body", UNREAD), `the ${form} losing the cloud mid-save`)
+      const gone = await text("body")
+      assert.ok(!RAW.test(gone) && gone.includes("Try again") && !gone.includes(UNCONFIRMED), gone)
+      assert.equal(await evaluate(`Boolean(document.querySelector('[aria-label="Commits and pull requests"]'))`), false, "no choice said")
     }
   }
 

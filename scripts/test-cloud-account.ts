@@ -107,6 +107,7 @@ async function fakeCloud() {
   const refreshedWith: string[] = []
   let authorship: CommitAuthor = "you"
   let authorshipAnswers: number | undefined
+  let authorshipUnreadable = false
   const account = { id: "u1", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: ["cloud"] }
   /** The gateway a runtime's link reaches: the protocol's fake, which answers renewals with the same check. */
   const gateway = createFakeGateway({ renew: (value) => (verify(value) ? Math.floor(Date.now() / 1000) + options.tokenSeconds : undefined) })
@@ -208,6 +209,7 @@ async function fakeCloud() {
         const checked = z.object({ as: z.enum(["you", "mako"]) }).strict().safeParse(await json(request))
         if (!checked.success) return send(400, JSON.stringify({ title: "The request body isn't valid" }))
         authorship = checked.data.as
+        if (authorshipUnreadable) return send(200, "not the answer")
       }
       return send(200, JSON.stringify({ as: authorship, pullRequests: authorship === "mako" ? "mako" : "mako-fallback", login: null }))
     }
@@ -355,6 +357,7 @@ async function fakeCloud() {
   })
   return {
     answerAuthorship: (status: number) => { authorshipAnswers = status },
+    loseAuthorshipAnswers: (lost: boolean) => { authorshipUnreadable = lost },
     url,
     moves,
     browsers,
@@ -937,6 +940,15 @@ test("who cloud commits are authored as is read and chosen through the account, 
   assert.deepEqual(await mac.accounts.githubAuthorship(), { as: "mako", pullRequests: "mako", login: null }, "kept by the account")
   assert.deepEqual(await mac.accounts.saveGitHubAuthorship("you"), { as: "you", pullRequests: "mako-fallback", login: null })
   assert.deepEqual(cloud.calls.filter((call) => call.endsWith("/github-authorship")), ["GET", "PUT", "GET", "PUT"].map((method) => `${method} /v1/accounts/u1/github-authorship`))
+})
+
+test("a save that landed with its answer lost fails, and reading the account says it landed", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/authorship-unanswered" })
+  cloud.loseAuthorshipAnswers(true)
+  await assert.rejects(mac.accounts.saveGitHubAuthorship("mako"))
+  cloud.loseAuthorshipAnswers(false)
+  assert.deepEqual(await mac.accounts.githubAuthorship(), { as: "mako", pullRequests: "mako", login: null })
 })
 
 test("a cloud without who commits are authored as says so with no error, and any other failure stays one", async () => {
