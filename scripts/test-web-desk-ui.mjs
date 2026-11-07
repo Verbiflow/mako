@@ -145,7 +145,7 @@ async function checkDesk() {
     const third = await evaluate("document.querySelectorAll('[data-session-tab]')[2].getAttribute('data-session-tab')")
     await click(`[data-session-tab="${third}"]`)
     await until(`document.querySelector('[data-session-tab="${third}"]').getAttribute('aria-selected') === 'true'`, "the third tab selected")
-    await until("document.querySelector('main textarea')?.placeholder.includes('Codex')", "the Codex Session's composer")
+    await until("document.querySelector('[data-composer]')?.innerText.includes('To Codex')", "the Codex Session's composer")
     const thread = await evaluate("document.querySelector('[data-thread-screen]').getAttribute('data-thread-screen')")
     const other = await evaluate("[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Ship the billing webhooks')).getAttribute('data-conversation-id')")
     await click(`[data-conversation-id="${other}"]`)
