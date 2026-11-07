@@ -41,17 +41,18 @@ function readAnswered(id: string, read: ReadOut, snapshot: { revision: number; e
   const out = readsOut.get(id)
   out?.delete(read)
   if (out && !out.size) readsOut.delete(id)
-  return Boolean(snapshot) && read.revision >= 0 && sameEpoch(read, snapshot!) && read.revision > snapshot!.revision
+  return Boolean(snapshot) && read.revision >= 0 && olderThan(snapshot!, read)
 }
 
 /** Every read out of this conversation hears the revision it now stands at here. */
 function noteTaken(id: string): void {
   const current = acpStore.get().conversations[id]
   if (current?.kind !== "live" || current.revision === undefined) return
+  const taken = { revision: current.revision, ...(current.epoch && { epoch: current.epoch }) }
   for (const read of readsOut.get(id) ?? []) {
-    if (sameEpoch(read, current) && read.revision >= current.revision) continue
-    read.revision = current.revision
-    read.epoch = current.epoch
+    if (read.revision >= 0 && !olderThan(read, taken)) continue
+    read.revision = taken.revision
+    read.epoch = taken.epoch
   }
 }
 
@@ -95,6 +96,36 @@ function sameEpoch(held: { epoch?: string } | undefined, incoming: { epoch?: str
   return held?.epoch === undefined || incoming.epoch === undefined || held.epoch === incoming.epoch
 }
 
+/**
+ * The host starts this window has heard from, in the order it first heard each: one heard later is a newer start (its
+ * host restarted). The order of starts whose epochs don't say when they began (a build before they did).
+ */
+const epochsHeard = new Map<string, number>()
+
+function epochPlace(epoch: string): number {
+  let place = epochsHeard.get(epoch)
+  if (place === undefined) {
+    place = epochsHeard.size
+    epochsHeard.set(epoch, place)
+  }
+  return place
+}
+
+/** When a host start began, as its epoch says it (`LiveConversations.epoch`): base 36, so they sort by their text. */
+const startOf = (epoch: string) => (/^[0-9a-z]{9}\./.test(epoch) ? epoch.slice(0, 9) : undefined)
+
+/**
+ * Whether `said` is older than `held`, as one order: an older host start, whatever its revision, or an older revision
+ * of the same start. A newer start always wins: by when each began, where both say, else by the order this window
+ * heard them. One that names no start is read as the same start.
+ */
+function olderThan(said: { epoch?: string; revision: number }, held: { epoch?: string; revision: number }): boolean {
+  if (said.epoch === undefined || held.epoch === undefined || said.epoch === held.epoch) return said.revision < held.revision
+  const [saidStart, heldStart] = [startOf(said.epoch), startOf(held.epoch)]
+  if (saidStart && heldStart && saidStart !== heldStart) return saidStart < heldStart
+  return epochPlace(said.epoch) < epochPlace(held.epoch)
+}
+
 /** Where the history on screen begins, when it is a window the host paged. */
 function windowStart(conversation: AcpConversation | undefined): LiveHistoryCursor | undefined {
   return conversation?.kind === "live" && conversation.hydrated && conversation.history
@@ -136,8 +167,9 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
   const id = snapshot.session.id
   const existing = acpStore.get().conversations[id]
   // Older than what this window holds of it, shown or only listed (it was let go of, and its revision kept): a read the
-  // stream overtook.
-  const stale = existing?.kind === "live" && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision
+  // stream overtook, or one answered by a host start this window has since heard a newer one of.
+  if (snapshot.epoch) epochPlace(snapshot.epoch)
+  const stale = existing?.kind === "live" && existing.revision !== undefined && olderThan(snapshot, { revision: existing.revision, ...(existing.epoch && { epoch: existing.epoch }) })
   const narrower = !stale && dropsLoadedHistory(existing, snapshot, covers)
   if (stale || narrower) {
     if (replyBindingId !== undefined && existing) updateAcpConversation(id, (current) => ({ ...current, replyBindingId: replyBindingId ?? undefined }))
@@ -333,8 +365,11 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
       readAnswered(id, read, null)
       fetching.delete(id)
       const waiting = restored ? pending.get(id)?.[0] : undefined
-      if (!rereads.delete(id) && !waiting) stuck.delete(id)
-      else {
+      if (!rereads.delete(id) && !waiting) {
+        stuck.delete(id)
+        // Its last read settled: one read only to catch up goes back to being listed, unless it's on screen now.
+        if (releaseWhenRead.delete(id) && acpStore.get().activeKey !== id) unloadLive(id)
+      } else {
         const held = stuck.get(id)
         const tries = waiting && held?.batch === waiting ? held.tries + 1 : 0
         if (waiting) stuck.set(id, { batch: waiting, tries })
@@ -348,12 +383,17 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
   return fetch
 }
 
-/** A listed Session read again whole, quietly, and let go again unless it's on screen by then. */
+/** Listed Sessions read again whole (`refreshListed`), to be let go again once their last read settles. */
+const releaseWhenRead = new Set<string>()
+
+/**
+ * A listed Session read again whole, quietly, and let go again unless it's on screen by then: once the last read it
+ * takes settles, since one that answers before batches it overtook is read again (`hydrateLive`).
+ */
 function refreshListed(id: string): void {
   if (fetching.has(id)) return
-  void hydrateLive(id, true).then(() => {
-    if (acpStore.get().activeKey !== id) unloadLive(id)
-  })
+  releaseWhenRead.add(id)
+  void hydrateLive(id, true)
 }
 
 /**
@@ -404,6 +444,7 @@ function batchHistoryFailure(batch: LiveBatch, current: { historyFailure?: strin
  * when it's next in line, so a snapshot taken meanwhile is what it's read against.
  */
 export function applyLiveBatch(heard: HeardLiveBatch): void {
+  if (heard.epoch) epochPlace(heard.epoch)
   if (!isCompactBatch(heard)) applyBatch(heard, heard, false)
   else {
     const current = acpStore.get().conversations[heard.id]
@@ -434,9 +475,10 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
   ) {
     if (sameEpoch(current, batch) && batch.revision <= (current.revision ?? 0)) return
     // A Session this host runs whose batches it missed (it read one back that the stream had overtaken, then let it
-    // go): what changed meanwhile and goes only when it changes, an approval or a roster, isn't in this batch, so it's
-    // read again rather than merged over. Another device's listed Sessions take what their link sends.
-    if (current.elsewhere === undefined && sameEpoch(current, batch) && current.revision !== undefined && batch.revision > current.revision + 1)
+    // go), or held as of a host start before this batch's: what changed meanwhile and goes only when it changes, an
+    // approval or a roster, isn't in this batch, so it's read again rather than merged over. Another device's listed
+    // Sessions take what their link sends.
+    if (current.elsewhere === undefined && current.revision !== undefined && (!sameEpoch(current, batch) || batch.revision > current.revision + 1))
       return refreshListed(batch.id)
     const session = sessionAfter(current.session, batch)
     const requests = requestsAfter(current.requests, batch)
@@ -468,6 +510,8 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
           ? current.threadPath
           : (batch.threadPath ?? undefined),
       revision: batch.revision,
+      // Its numbers are its host start's: a batch of a newer start is what it's held as of from then.
+      epoch: batch.epoch ?? current.epoch,
       activityAt: batch.activityAt ?? current.activityAt,
       nativeActivity: batchNativeActivity(batch, current),
       updatedAt: Date.now(),
@@ -674,6 +718,7 @@ export function hydrateLiveSummaries(
  */
 function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void {
   for (const summary of summaries) {
+    if (summary.epoch) epochPlace(summary.epoch)
     const previous = acpStore.get().conversations[summary.session.id]
     if (previous?.hydrated && !reconnect) {
       // Opened here, it reads its owner's stream; its Fins still come from the list while this window holds no roster of them.
@@ -746,6 +791,8 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
       children: summary.children,
       fins: summary.fins,
       revision: summary.revision,
+      // Its numbers are its host start's: without the start, a newer one's would be read as the same.
+      ...(summary.epoch && { epoch: summary.epoch }),
       hydrated: false,
       createdAt: summary.createdAt,
       updatedAt: summary.createdAt,

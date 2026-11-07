@@ -19,7 +19,8 @@ import type { LiveBatch, LiveSnapshot, LiveSummary } from "@mako/host/contracts/
  * - an app outside Mako waiting on the person.
  * Asks open, are answered, and replace one another in any order; a Session starts and ends turns; reads of a Session
  * go out and are answered late and out of order, after newer batches; the window opens a Session and lets it go, loses
- * it and lists it again; and the person looks at one subject or another. What the window can't know isn't checked: a
+ * it and lists it again; the person looks at one subject or another; and the host restarts, its numbers begun again,
+ * while reads of the start before are still out. What the window can't know isn't checked: a
  * Session's own asks while it holds none of that Session, and the Fins' while it doesn't hold the newest, which alone
  * hears them. `SEEDS=<n>` runs more than CI's 300; a failure names its seed and step, and `SEED=<seed>` runs that one.
  */
@@ -82,18 +83,23 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   }), { source: "live" }, {})
   let counter = 0
   const next = (prefix: string) => `${prefix}${(counter += 1)}`
-  const counts = { asked: 0, answered: 0, replaced: 0, turns: 0, lateReads: 0, staleReads: 0, opened: 0, letGo: 0, removed: 0, looked: 0, several: 0 }
+  const counts = { asked: 0, answered: 0, replaced: 0, turns: 0, lateReads: 0, staleReads: 0, oldStartReads: 0, restarts: 0, opened: 0, letGo: 0, removed: 0, looked: 0, several: 0 }
 
-  // The host: each Session's state by revision, the Fins (told to the newest alone), the remote Session, the outside app.
+  // The host: each Session's state by its start and revision, the Fins (told to the newest alone), the remote Session,
+  // the outside app. A restart is a new start (`E<n>`), its numbers begun again, what it holds carried over.
   const revisions: BySession<number> = { older: 1, newest: 1 }
-  const history: BySession<Map<number, SessionState>> = { older: new Map(), newest: new Map() }
+  const history: BySession<Map<string, SessionState>> = { older: new Map(), newest: new Map() }
   const fins: FinAsks = {}
   // What the remote Session and the outside app ask, kept beside the Apex Thread's Sessions.
   const others: OtherAsks = {}
-  const host = { revision: revisions, history, fins, finsAt: new Map<number, FinAsks>(), remote: others.remote, outside: others.outside }
-  for (const session of SESSIONS) host.history[session].set(1, { running: false })
-  host.finsAt.set(1, {})
-  const now = (session: Session) => host.history[session].get(host.revision[session])!
+  const host = { start: 0, revision: revisions, history, fins, finsAt: new Map<string, FinAsks>(), remote: others.remote, outside: others.outside }
+  // As a host names its starts: when it began, in base 36, then its own random part (`LiveConversations.epoch`).
+  const epochOf = (start: number) => `${start.toString(36).padStart(9, "0")}.s${seed}`
+  const at = (epoch: string, revision: number) => `${epoch}:${revision}`
+  const stampOf = (session: Session) => at(epochOf(host.start), host.revision[session])
+  for (const session of SESSIONS) host.history[session].set(stampOf(session), { running: false })
+  host.finsAt.set(stampOf("newest"), {})
+  const now = (session: Session) => host.history[session].get(stampOf(session))!
   const roster = (fins: FinAsks) => ({
     limited: false,
     agents: FINS.map((fin): NativeAgent => {
@@ -113,21 +119,28 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     return [{ id: `held-${state.signIn}`, text: "Go on", attachments: [], status: "held", createdAt: 1, signIn: { harness: "codex", account: "me", credential: "c", at: state.signIn } } as never]
   }
   const sessionOf = (session: Session, state: SessionState) => ({ id: keys[session], harness: "codex", cwd: "/fixture", title: `The ${session} Session`, status: state.running ? "running" as const : "ready" as const, connection: "connected" as const, modes: [], currentMode: null, configOptions: [] })
-  const snapshot = (session: Session, revision = host.revision[session]): LiveSnapshot => {
-    const state = host.history[session].get(revision)!
+  const snapshot = (session: Session, epoch = epochOf(host.start), revision = host.revision[session]): LiveSnapshot => {
+    const state = host.history[session].get(at(epoch, revision))!
     // The older Session never hears the Fins: its roster is theirs as it read them in, before any asked.
-    const fins = session === "newest" ? host.finsAt.get(revision)! : {}
-    return { session: sessionOf(session, state), threadId: thread, sessionId: ids[session], epoch: "E", revision, createdAt: session === "older" ? 1 : 2, blocks: [], requests: requests(state), permissions: permissions(state), base: null, nativeAgents: roster(fins) }
+    const fins = session === "newest" ? host.finsAt.get(at(epoch, revision))! : {}
+    return { session: sessionOf(session, state), threadId: thread, sessionId: ids[session], epoch, revision, createdAt: session === "older" ? 1 : 2, blocks: [], requests: requests(state), permissions: permissions(state), base: null, nativeAgents: roster(fins) }
   }
   /** What the window holds of each Session: not at all, listed, or shown. */
   const held = (session: Session) => acpStore.get().conversations[keys[session]]?.kind === "live"
   const heldRevision = (session: Session) => acpStore.get().conversations[keys[session]]?.revision
+  /** What the window holds of a Session as of: its host's start and its revision there. */
+  const heldAt = (session: Session) => {
+    const conversation = acpStore.get().conversations[keys[session]]
+    return conversation?.revision === undefined || !conversation.epoch ? undefined : { epoch: conversation.epoch, revision: conversation.revision }
+  }
   /** A change to one Session: its next revision, sent to the window while it holds the Session. */
   const change = (session: Session, state: Partial<SessionState>, what: Partial<LiveBatch>, fins?: FinAsks) => {
+    const before = now(session)
+    const finsBefore = session === "newest" ? host.finsAt.get(stampOf(session))! : undefined
     const revision = (host.revision[session] += 1)
-    host.history[session].set(revision, { ...now(session), ...(revision > 1 && host.history[session].get(revision - 1)), ...state })
-    if (session === "newest") host.finsAt.set(revision, fins ?? host.finsAt.get(revision - 1)!)
-    if (held(session)) applyLiveBatch({ id: keys[session], revision, epoch: "E", updates: [], ...what })
+    host.history[session].set(stampOf(session), { ...before, ...state })
+    if (session === "newest") host.finsAt.set(stampOf(session), fins ?? finsBefore!)
+    if (held(session)) applyLiveBatch({ id: keys[session], revision, epoch: epochOf(host.start), updates: [], ...what })
   }
   const listRemote = (initial = false) => {
     const ask = host.remote
@@ -136,41 +149,44 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     else hydrateLiveSummaries([summary], true)
   }
   /** Reads of a Session out now (the window's own, recovering, or the run's), answered as of when they were asked. */
-  const reads: { session: Session; revision: number; answer: (snapshot: LiveSnapshot) => void }[] = []
+  const reads: { session: Session; epoch: string; revision: number; answer: (snapshot: LiveSnapshot) => void }[] = []
   readSnapshot = (id) => new Promise((answer) => {
     const session = SESSIONS.find((each) => keys[each] === id)!
-    reads.push({ session, revision: host.revision[session], answer })
+    reads.push({ session, epoch: epochOf(host.start), revision: host.revision[session], answer })
   })
   const settle = async () => {
     for (let wait = 0; wait < 6; wait += 1) await turn()
   }
   const trail: string[] = []
 
-  /** The newest revision the window has taken of each Session, held now or not: it never goes back past it. */
-  const newestTaken: BySession<number> = { older: 1, newest: 1 }
+  /** The newest the window has taken of each Session, its start and revision there, held now or not: never gone back past. */
+  const newestTaken: BySession<{ start: number; revision: number }> = { older: { start: 0, revision: 1 }, newest: { start: 0, revision: 1 } }
   const check = (what: string) => {
     for (const session of SESSIONS) {
-      const revision = heldRevision(session)
-      if (revision === undefined) continue
-      assert.ok(revision >= newestTaken[session], `seed ${seed}, after ${what}: the window took the ${session} Session back from ${newestTaken[session]} to ${revision}, answered asks with it\n${trail.slice(-16).join("\n")}`)
-      newestTaken[session] = revision
+      const held = heldAt(session)
+      if (!held) continue
+      const taken = { start: Number.parseInt(held.epoch.slice(0, 9), 36), revision: held.revision }
+      const before = newestTaken[session]
+      assert.ok(taken.start > before.start || (taken.start === before.start && taken.revision >= before.revision), `seed ${seed}, after ${what}: the window took the ${session} Session back from ${before.revision} of start ${before.start} to ${taken.revision} of start ${taken.start}, answered asks with it\n${trail.slice(-16).join("\n")}`)
+      newestTaken[session] = taken
     }
     const shown = notificationsStore.get().items.filter((item) => ["approval", "question", "needs-you"].includes(item.kind))
     const open = new Set<string>()
     const unknown = new Set<string>()
     for (const session of SESSIONS) {
-      const revision = heldRevision(session)
-      if (revision === undefined) {
+      const held = heldAt(session)
+      const state = held && host.history[session].get(at(held.epoch, held.revision))
+      if (!state) {
         unknown.add(subjects[session])
         continue
       }
-      const state = host.history[session].get(revision)!
       if (state.own) open.add(`${subjects[session]}:${state.own.kind}:${state.own.id}`)
       // A sign-out waits behind its own approval or question, and is said once that's answered.
       if (state.signIn && !state.own) open.add(`${subjects[session]}:needs-you:sign-in:${state.signIn}`)
     }
-    const finsKnown = heldRevision("newest") !== undefined
-    const fins = finsKnown ? host.finsAt.get(heldRevision("newest")!)! : {}
+    const newestAt = heldAt("newest")
+    const fins = (newestAt && host.finsAt.get(at(newestAt.epoch, newestAt.revision))) || {}
+    const finsKnown = newestAt !== undefined
     if (host.remote) open.add(`${subjects.remote}:${host.remote.kind}:${host.remote.id}`)
     if (host.outside !== undefined) open.add(`${subjects.outside}:needs-you:external:${host.outside}`)
     const where = () => `seed ${seed}, after ${what}:\n${trail.slice(-16).join("\n")}\nshown ${JSON.stringify(shown.map((item) => `${item.id}${item.seen ? " (seen)" : ""}`))}`
@@ -290,9 +306,10 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
       const read = reads.splice(Math.floor(pick() * reads.length), 1)[0]
       if (!read) continue
       counts.lateReads += 1
-      if (read.revision < (heldRevision(read.session) ?? 0)) counts.staleReads += 1
-      trail.push(`the read of the ${read.session} Session at ${read.revision} is answered`)
-      read.answer(snapshot(read.session, read.revision))
+      if (read.epoch === heldAt(read.session)?.epoch && read.revision < (heldRevision(read.session) ?? 0)) counts.staleReads += 1
+      if (read.epoch !== epochOf(host.start)) counts.oldStartReads += 1
+      trail.push(`the read of the ${read.session} Session at ${read.revision} of ${read.epoch} is answered`)
+      read.answer(snapshot(read.session, read.epoch, read.revision))
     } else if (roll < 0.86) {
       if (held(session) && acpStore.get().conversations[keys[session]]?.hydrated) {
         counts.letGo += 1
@@ -313,6 +330,19 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
         trail.push(`the window loses the ${session} Session`)
         removeAcpConversation(keys[session])
       }
+    } else if (roll < 0.95) {
+      // The host restarts: a new start, its numbers begun again, holding what it held. It tells the window by what it sends
+      // from then on; reads the last start had out are answered late, as that start had it.
+      counts.restarts += 1
+      host.start += 1
+      for (const each of SESSIONS) {
+        const carried = host.history[each].get(at(epochOf(host.start - 1), host.revision[each]))!
+        const fins = each === "newest" ? host.finsAt.get(at(epochOf(host.start - 1), host.revision[each]))! : undefined
+        host.revision[each] = 1
+        host.history[each].set(stampOf(each), carried)
+        if (fins) host.finsAt.set(stampOf(each), fins)
+      }
+      trail.push(`the host restarts as ${epochOf(host.start)}`)
     } else {
       counts.looked += 1
       visible = new Set(Object.values(subjects).filter(() => pick() < 0.3))
@@ -325,7 +355,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   // Every read answered, and every Session held again as it stands: everything open has its notice, nothing more.
   for (let round = 0; reads.length && round < 50; round += 1) {
     const read = reads.shift()!
-    read.answer(snapshot(read.session, read.revision))
+    read.answer(snapshot(read.session, read.epoch, read.revision))
     await settle()
   }
   for (const session of SESSIONS) if (!held(session)) applyLiveSnapshot(snapshot(session))
@@ -349,6 +379,65 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   applyLiveSnapshot(at(1, [asking]))
   assert.equal(acpStore.get().conversations[key]?.revision, 2, "a listed Session takes no snapshot older than it")
   assert.equal(notificationsStore.get().items.filter((item) => !item.seen).length, 0, "and its answered question isn't asked again")
+}
+
+// A read answered by a host start before the one this window holds the Session as of is past, whatever its revision,
+// shown or listed: the newer start always wins. As epochs that say when their start began order them, and as a build
+// before they did is ordered, by when this window first heard each.
+for (const [label, older, newer] of [["timed starts", "000000001.old", "000000002.new"], ["starts heard in turn", "olderStart", "newerStart"]] as const) {
+  const thread = ThreadIdSchema.parse(randomUUID()), session = SessionIdSchema.parse(randomUUID()), key = `restarted-${label}`
+  const fin = childEntry(ThreadParentSchema.parse({ child: randomUUID(), parent: thread, parentSession: session, name: "fin", role: "worker", origin: "started", asked: { brief: { objective: "Work" }, harness: "claude" }, op: "start-fin", startedBy: { kind: "agent", session }, createdAt: 1 }), { source: "live" }, {})
+  const asking = NativeAgentSchema.parse({ ...fin, child: { ...fin.child!, state: { kind: "blocked", question: "Which?", on: "person", ask: { kind: "question", id: "which", options: [{ label: "This" }] } } } })
+  // SAFETY: an approval as the window reads it.
+  const approval = { id: "approve", observationId: "o", sessionId: key, title: "Run", options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] } as never
+  const state = (epoch: string, revision: number, agents: NativeAgent[], permissions: never[] = []): LiveSnapshot => ({ session: { id: key, harness: "codex", cwd: "/fixture", title: "Restarted", status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }, threadId: thread, sessionId: session, epoch, revision, createdAt: 1, blocks: [], requests: [], permissions, base: null, nativeAgents: { agents, limited: false } })
+  visible = new Set()
+  notificationsStore.set({ items: [] })
+  let answerRead = (_snapshot: LiveSnapshot) => {}
+  readSnapshot = () => new Promise((answer) => { answerRead = answer })
+  applyLiveSnapshot(state(older, 1, [asking], [approval]))
+  // SAFETY: the answer as the approval card sends it.
+  const answering = answerLiveApproval(key, "approve", { outcome: "selected", optionId: "allow" } as never)
+  await turn()
+  assert.ok(unloadLive(key), `${label}: let go of while its receipt is read`)
+  applyLiveBatch({ id: key, revision: 2, epoch: older, updates: [], permissions: [], nativeAgents: { agents: [asking], limited: false } })
+  applyLiveSnapshot(state(newer, 1, [fin]))
+  answerRead(state(older, 2, [asking]))
+  await answering
+  assert.equal(acpStore.get().conversations[key]?.epoch, newer, `${label}: a reply of the start before doesn't replace the newer start's`)
+  assert.equal(notificationsStore.get().items.filter((item) => !item.seen).length, 0, `${label}: and its answered question isn't asked again`)
+}
+
+// A listed Session that skips revisions is read again and let go once its last read settles, though a burst of 101
+// skips came while the first was out; and each later skip reads once, never again by itself.
+{
+  const key = "skipped-revisions"
+  let revision = 1, reads = 0
+  const at = (now = revision): LiveSnapshot => ({ session: { id: key, harness: "codex", cwd: "/fixture", title: "Skipped", status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }, epoch: "000000001.skip", revision: now, createdAt: 1, blocks: [], requests: [], permissions: [], base: null, nativeAgents: { agents: [], limited: false } })
+  let first = (_snapshot: LiveSnapshot) => {}
+  readSnapshot = () => {
+    reads += 1
+    return reads === 1 ? new Promise((answer) => { first = answer }) : Promise.resolve(at())
+  }
+  applyLiveSnapshot(at())
+  assert.ok(unloadLive(key))
+  revision = 4
+  applyLiveBatch({ id: key, revision, epoch: "000000001.skip", updates: [] })
+  assert.equal(reads, 1, "a skip reads it again")
+  for (let burst = 0; burst < 100; burst += 1) applyLiveBatch({ id: key, revision: (revision += 3), epoch: "000000001.skip", updates: [] })
+  first(at(4))
+  for (let wait = 0; wait < 20; wait += 1) await turn()
+  assert.equal(acpStore.get().conversations[key]?.revision, revision, "caught up past the burst")
+  assert.equal(acpStore.get().conversations[key]?.hydrated, false, "and let go once its last read settled")
+  const settled = reads
+  for (let wait = 0; wait < 20; wait += 1) await turn()
+  assert.equal(reads, settled, "no read after the burst settles")
+  for (let skip = 0; skip < 20; skip += 1) {
+    applyLiveBatch({ id: key, revision: (revision += 3), epoch: "000000001.skip", updates: [] })
+    for (let wait = 0; wait < 4; wait += 1) await turn()
+  }
+  assert.equal(reads, settled + 20, "one read for each later skip, never a loop")
+  assert.equal(acpStore.get().conversations[key]?.hydrated, false, "each let go again")
 }
 
 const only = process.env.SEED

@@ -277,6 +277,8 @@ try {
   }
   console.log("PASS: long turn then steer shows the running prompt once on every harness, with or without earlierRequests")
   source.blocks = []
+  // A host start after the steers' above: a window never goes back to a start it has heard a newer one of.
+  source.epoch = "after-steers"
   source.revision = 20
   source.base = { ref: { harness: "claude", nativeId: "cache", path: "fixture" }, start: 0, hasEarlier: false, total: 1,
     entries: [{ type: "tool", id: "native-cache", name: "read", status: "completed", output: "native".repeat(1000) }] }

@@ -159,9 +159,12 @@ export class LiveConversations {
    * One generation per host life. Every batch and snapshot carries it so a
    * renderer can tell a revision numbered by this host from one numbered by
    * the host before it, and re-snapshot instead of merging across the seam.
-   * Readers only compare it, and every batch carries it: 72 random bits, in 12 characters rather than a UUID's 36.
+   * Every batch carries it: when this host started, in base 36 (nine characters, so one sorts after another by its
+   * text as its host started later), a `.`, then 48 random bits, in 17 characters rather than a UUID's 36. A window
+   * orders two by their start (`olderThan`): a reply of the host before, answered late, never takes back what this
+   * one said. A `.` is no base64url character, so an epoch of a build before this one reads as unordered.
    */
-  readonly epoch = randomBytes(9).toString("base64url")
+  readonly epoch = `${Date.now().toString(36).padStart(9, "0")}.${randomBytes(6).toString("base64url")}`
   /** The one timer for held messages' times (`armWakes`): when it fires, and the timer. */
   private wakeTimer: { at: number; timer: ReturnType<typeof setTimeout> } | undefined
   private wakesStopped = false
