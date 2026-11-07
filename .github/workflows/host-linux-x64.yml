@@ -18,6 +18,7 @@ on:
       - scripts/fixtures/acp-stream-agent.mjs
       - scripts/fixtures/host-measure-preload.cjs
       - scripts/patch-cursor-sdk.mjs
+      - scripts/patch-zod.mjs
       - scripts/test-host-linux.mjs
       - scripts/test-linux-locks.mjs
       - package.json
