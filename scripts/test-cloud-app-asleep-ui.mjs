@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * A cloud Thread's app while its machine sleeps, against the production components and the fixture desk: the strip
@@ -25,7 +25,7 @@ if (process.versions.electron) {
   const args = process.argv.slice(2)
   const option = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined)
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-asleep-app-ui-"))
+  const root = testScratch("mako-asleep-app-ui-")
   const out = option("--out") ? resolve(option("--out")) : root
   await mkdir(out, { recursive: true })
   const server = await createServer({
@@ -47,7 +47,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`UI evidence: ${out}`)
 }
 
 async function checkWindow() {
