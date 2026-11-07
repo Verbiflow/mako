@@ -9,6 +9,7 @@ import { preview } from 'vite'
 import { webHostProxy } from '../electron/web-dev-proxy.mjs'
 import { PREVIEW_MEDIA_TYPE, encodePreviewMedia } from '@mako/control-runtime/contracts'
 import { invokeRuntime } from '@mako/host/transport/connection'
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const root = testScratch('mako-browser-delivery-')
 const socket = join(root, 'host.sock')
@@ -62,7 +63,6 @@ await build({ entryPoints: ['src/state/message-outbox.ts'], outfile: join(root, 
 await writeFile(join(root, 'dist/index.html'), `<title>Mako delivery fixture</title><script type="module">
 import {installWebBridge} from './bridge.js';
 import * as outbox from './outbox.js';
-import { testScratch } from "./lib/test-scratch.mjs"
 await installWebBridge(); window.outbox=outbox; window.events=[]; window.mako.onEvent(e=>events.push(e));
 outbox.watchPendingMessages(async()=>{
  for(const command of outbox.pendingMessages()) {
