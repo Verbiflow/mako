@@ -18,6 +18,8 @@ const LEGACY_FROM: ReadonlyMap<string, string> = new Map([[`your ${LEGACY_APEX_W
 export const DIGEST_WAITS = "digest"
 /** Digests an Apex takes in a minute, counted as they're sent; one past them waits for the next slot (`LiveDispatch`). */
 export const WAKES_PER_MINUTE = 6
+/** An idle Apex waits this long after a notice for the others of its burst, then wakes once for all of them. */
+export const WAKE_COALESCE_MS = 2_000
 
 export const FROM_AGENTS = `[mako · from ${YOUR_FINS}, not the person]`
 /**

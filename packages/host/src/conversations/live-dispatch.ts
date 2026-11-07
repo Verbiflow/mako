@@ -3,6 +3,7 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
+import { digestAsks } from "../contracts/agents.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
 import { quietSwitch } from "../contracts/conversation-control.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
@@ -212,7 +213,8 @@ export class LiveDispatch {
     if (!request) return
     // A switch's own message goes on its destination, once the switch has committed.
     if (request.id === transfer?.input.id) return
-    if (request.digest && this.overBudget(resident, request)) return
+    // A digest that asks its Apex something goes now: a question can't wait out the minute it has to be answered in.
+    if (request.digest && !digestAsks(request.digest.notices) && this.overBudget(resident, request)) return
     if (this.leaveRemovedFolder(resident)) return
     if (request.accountSwitch) {
       void this.access.switchAccount(resident, request).catch((error) => {

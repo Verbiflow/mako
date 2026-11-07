@@ -120,6 +120,13 @@ schedules, and a failing schedule is pinned there.
     step) answers nothing, known by where it came from, never by its words. An answer still on its way that fails doesn't reopen a
     question something else closed (`Agents.inputDelivered`).
 
+14. **A digest that asks something doesn't wait for the minute's budget.** The
+    budget (`WAKES_PER_MINUTE`) holds what's only news. A digest with a question or
+    a decision in it goes as soon as its Apex can take it (`digestAsks`), and one
+    joining a digest the budget holds takes that digest along, within the burst's
+    window. Otherwise it could outwait the minute its Apex has to answer
+    (`APEX_ANSWER_MS`), and the person would be asked first.
+
 ## What each failure leaves
 
 | What happened | The switch | Its message |
