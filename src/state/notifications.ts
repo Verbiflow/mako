@@ -338,6 +338,22 @@ export function retireSubject(id: string, only?: "asks"): void {
   env?.dismissDesktop(id)
 }
 
+/**
+ * One notification taken back by its own id (`noteOutcome` makes it from its subject, kind and marker), unseen only:
+ * what else waits on its subject stays. Its toast and desktop notice go when nothing unseen is left there.
+ */
+export function retireNotice(id: string): void {
+  const env = environment
+  const state = notificationsStore.get()
+  const retired = state.items.find((item) => item.id === id && !item.seen)
+  if (!retired) return
+  notificationsStore.set({ items: state.items.filter((item) => item !== retired) })
+  burst = burst.filter((pending) => pending.item.id !== id)
+  if (state.items.some((item) => item !== retired && item.subject.id === retired.subject.id && !item.seen)) return
+  env?.dismissToast(retired.subject.id)
+  env?.dismissDesktop(retired.subject.id)
+}
+
 /* ------------------------------------------------------------------ */
 /* Seen                                                                 */
 /* ------------------------------------------------------------------ */
