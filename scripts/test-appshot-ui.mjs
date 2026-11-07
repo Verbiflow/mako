@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Appshots in the production desk with the fixture bridge (`?mock`): the
@@ -29,7 +29,7 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-appshot-ui-"))
+  const root = testScratch("mako-appshot-ui-")
   const evidence = process.argv[2] ? resolve(process.argv[2]) : root
   await mkdir(evidence, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 20029, strictPort: true, hmr: false } })
@@ -46,7 +46,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Appshot UI evidence: ${evidence}`)
 }
 
 async function check() {

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // The waiting-on-background-work state in production components: the line
 // at the transcript's end, the Agents panel, the status marks, in dark and
@@ -18,7 +18,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-background-work-ui-"))
+  const root = testScratch("mako-background-work-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-background-work-ui", main: fileURLToPath(import.meta.url) }))
   const given = process.argv[2]
   let server
@@ -38,7 +38,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Background work UI evidence: ${root}`)
 }
 
 async function check() {

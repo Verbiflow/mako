@@ -1,12 +1,12 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Git } from "@mako/git"
 import { LocalUpdates } from "@mako/host/application/local-updates"
 import { resolveLocalIdentity } from "./mac-local-signing.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const USAGE = "Use npm run test:settings-build -- [<checkout>] [--keep] [--as-installed-updater] [--from upstream|checkout]"
 
@@ -70,7 +70,7 @@ export function rehearsalOptions(args) {
 
 async function rehearse(args) {
   const options = rehearsalOptions(args)
-  const root = await mkdtemp(join(tmpdir(), "mako-settings-build-"))
+  const root = testScratch("mako-settings-build-")
   try {
     await mkdir(join(root, "profile"))
     await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-settings-build", main: fileURLToPath(import.meta.url) }))

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import { mkdir, mkdtemp, readdir, rm, symlink, utimes, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { KEEP_RELEASE_BUILDS, pruneReleaseBuilds } from "./lib/prune-release.mjs"
 import { finishRehearsal, rehearsalOptions } from "./test-local-build.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
-const root = await mkdtemp(join(tmpdir(), "mako-build-cleanup-"))
+const root = testScratch("mako-build-cleanup-")
 try {
   const project = join(root, "project")
   const release = join(project, "release")

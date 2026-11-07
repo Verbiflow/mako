@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * The composer's `/` and `$` capability menu against a real host: discovery
@@ -24,7 +24,7 @@ if (process.versions.electron) {
   const url = process.argv[2]
   assert.ok(url, "Pass the URL printed by npm run dev")
   assert.ok(["127.0.0.1", "localhost"].includes(new URL(url).hostname))
-  const root = await mkdtemp(join(tmpdir(), "mako-capability-menu-"))
+  const root = testScratch("mako-capability-menu-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-capability-menu-check", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_MENU_CHECK_ROOT: root, MAKO_MENU_CHECK_URL: url }
   delete env.ELECTRON_RUN_AS_NODE
@@ -33,7 +33,6 @@ if (process.versions.electron) {
     child.once("error", reject)
     child.once("exit", (code) => resolveExit(code ?? 1))
   })
-  console.log(`Capability menu evidence: ${root}`)
 }
 
 async function check() {
