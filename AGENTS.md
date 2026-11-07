@@ -1536,7 +1536,14 @@ Three rules hold this together, and each has a specific failure it prevents:
   prompt identity, prepend anchors and complete answer-copy data. Only actual
   user scrolling may release follow mode; virtualizer size adjustments must not.
   Follow changes only as the reader moves: up leaves the end, down into it
-  follows again, and a scroll's end decides nothing. Under a finger the end
+  follows again, and a scroll's end decides nothing. A wheel taken by a
+  scroller inside the transcript (the crew card's list, a code block) stays
+  with it until it settles, as the browser's own gesture does. Input ends when
+  it settles (`INPUT_SETTLE_MS`), for input that moved nothing and a browser
+  with no `scrollend`: left standing, the next layout shift would read as the
+  reader's. Focus resting in a turn keeps that turn, and only a selection or
+  moving input postpones what's released; `test-follow-ui.mjs` holds all of it
+  through bursts of reports on every form. Under a finger the end
   waits for it to lift, and a `scrollend` there (the browser sends one for the
   page's own writes too) doesn't end the gesture;
   `test-phone-scroll-ui.mjs` holds both by touch and by wheel. A Thread

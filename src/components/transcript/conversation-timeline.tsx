@@ -42,6 +42,8 @@ import { CompactPresentationContext } from "./compact-presentation"
 import { wokeAfterRest } from "@/lib/woke-after-rest"
 
 const NEAR_BOTTOM = 96
+/** A reader's input has ended this long after it last moved anything, for what no `scrollend` follows: input that moved nothing, or a browser without it. */
+const INPUT_SETTLE_MS = 160
 const TEXT_BLOCKS = "p,pre,li,td,h1,h2,h3,h4,h5,h6"
 const PREVIEW_ATTRIBUTES = {
   file: "data-inline-file-preview",
@@ -311,6 +313,17 @@ function leftEnd(node: HTMLDivElement, from: number): boolean {
   return Math.min(node.scrollTop, end) < Math.min(from, end) - 0.5
 }
 
+/** Whether a wheel over `target` moves a scroller inside the transcript rather than the transcript. */
+function wheelTakenInside(target: EventTarget, viewport: HTMLElement, deltaY: number): boolean {
+  for (let node = target instanceof Element ? target : null; node && node !== viewport; node = node.parentElement) {
+    const room = node.scrollHeight - node.clientHeight
+    if (room <= 1 || (deltaY < 0 ? node.scrollTop <= 0 : node.scrollTop >= room - 1)) continue
+    const { overflowY } = getComputedStyle(node)
+    if (overflowY === "auto" || overflowY === "scroll") return true
+  }
+  return false
+}
+
 /**
  * Moves the scroller so the captured content is where it was, and says whether
  * it had to. Content already within a pixel of its place is left alone: a
@@ -497,6 +510,15 @@ export function ConversationTimeline({
    * content back under the finger.
    */
   const touching = useRef(false)
+  /** A button held on the scroller: its bar being dragged, or a selection. Its input isn't over, however still it is. */
+  const pressing = useRef(false)
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const inputSettled = useRef<() => void>(() => {})
+  /** Input is the reader's only until it settles: left standing, the next layout shift would count as their scroll. */
+  const settleInput = useCallback(() => {
+    clearTimeout(settleTimer.current)
+    settleTimer.current = setTimeout(() => inputSettled.current(), INPUT_SETTLE_MS)
+  }, [])
   /** The end is followed again as the finger lifts; set by the observer below. */
   const followEnd = useRef<() => void>(() => {})
   /**
@@ -506,6 +528,8 @@ export function ConversationTimeline({
    */
   const seeking = useRef(false)
   const lastScrollTop = useRef(0)
+  /** The wheel is on a scroller inside the transcript: a gesture stays with the scroller it began on, as the browser's does. */
+  const innerWheel = useRef(false)
   /**
    * The offset the timeline last scrolled to itself. Any other scroll — the
    * reader's, the virtualizer's, the browser's for focus or find — moves the
@@ -841,7 +865,13 @@ export function ConversationTimeline({
     const ours =
       ownScrollTop.current !== null &&
       Math.abs(node.scrollTop - ownScrollTop.current) < 1
+    // A wheel that outran the scroller inside has chained on down to the transcript, and is the reader's here again.
+    if (innerWheel.current && movingDown && !ours) {
+      innerWheel.current = false
+      userScrolling.current = true
+    }
     if ((userScrolling.current || touching.current) && !ours) scrollMotion.current = true
+    if (userScrolling.current || scrollMotion.current) settleInput()
     ownScrollTop.current = null
     // Only the reader's movement decides: up leaves the end, down into it follows again. A scroll that ended
     // short of the end after moving up stays where it was left.
@@ -872,10 +902,25 @@ export function ConversationTimeline({
     // edge observer alone stays silent while the edge never left view.
     if (userScrolling.current) wake.current()
     reportReading.current()
-  }, [])
+  }, [settleInput])
+
+  useEffect(() => {
+    inputSettled.current = () => {
+      innerWheel.current = false
+      if (touching.current || pressing.current) return
+      if (userScrolling.current || scrollMotion.current) onScroll()
+      userScrolling.current = false
+      scrollMotion.current = false
+      reportReading.current()
+    }
+    return () => clearTimeout(settleTimer.current)
+  }, [onScroll])
 
   const onWheel = useCallback(
     (event: ReactWheelEvent<HTMLDivElement>) => {
+      // The crew card's list or a code block taking the wheel: it scrolls that, and the transcript is left as it was.
+      if (viewport.current && wheelTakenInside(event.target, viewport.current, event.deltaY)) innerWheel.current = true
+      if (innerWheel.current) return settleInput()
       if (viewport.current) endSeek(viewport.current)
       bookmarkRestore.current = undefined
       if (!awaitingEarlier.current) viewport.current?.removeAttribute("data-preserve-scroll")
@@ -886,16 +931,13 @@ export function ConversationTimeline({
       direction.current = event.deltaY < 0 ? "up" : "down"
       stalled.current = false
       if (!awaitingEarlier.current) restore.current = null
-      if (event.deltaY < 0) pinned.current = false
       const node = viewport.current
+      // Up leaves the end now: the scroll this wheel makes may come after the end's next write, which would swallow it.
+      // Down into the end follows again, whichever of this event and its scroll comes first.
+      if (event.deltaY < 0) pinned.current = false
+      if (node && event.deltaY > 0 && node.scrollHeight - node.scrollTop - node.clientHeight < NEAR_BOTTOM) pinned.current = true
       node?.toggleAttribute("data-reading-anchor", !pinned.current && !!readingAnchor.current?.exchangeId)
-      if (
-        node &&
-        ((event.deltaY < 0 && node.scrollTop <= 0) ||
-          (event.deltaY > 0 &&
-            node.scrollTop + node.clientHeight >= node.scrollHeight))
-      )
-        userScrolling.current = false
+      settleInput()
       // A wheel toward earlier turns asks for them even when it moves
       // nothing: at the top edge, or when the compositor applied this
       // (passive) wheel's scroll before it reached this handler, no scroll
@@ -904,7 +946,7 @@ export function ConversationTimeline({
       if (event.deltaY < 0) wake.current()
       reportReading.current()
     },
-    [endSeek]
+    [endSeek, settleInput]
   )
 
   /** The last finger lifts: a glide may go on, and the end, if followed, is caught up with. */
@@ -949,6 +991,7 @@ export function ConversationTimeline({
       : captureAnchor(node, [], false) : null
     node?.toggleAttribute("data-reading-anchor", !pinned.current && !!readingAnchor.current?.exchangeId)
     userScrolling.current = true
+    pressing.current = true
     stalled.current = false
     if (!awaitingEarlier.current) restore.current = null
     reportReading.current()
@@ -1040,12 +1083,13 @@ export function ConversationTimeline({
       const selection = document.getSelection()
       const selecting = !!selection && !selection.isCollapsed &&
         (node.contains(selection.anchorNode) || node.contains(selection.focusNode))
-      const focus = document.activeElement
-      const interacting = selecting || !!focus && focus !== node && node.contains(focus)
-      lease.report({ visible: ids, nearby,
+      // Focus resting in a turn keeps that turn; it isn't a reason to keep every other. A selection may span any of them.
+      const focused = document.activeElement?.closest("[data-exchange]")
+      const focusedTurn = focused && node.contains(focused) ? focused.getAttribute("data-exchange") : null
+      lease.report({ visible: ids, nearby: focusedTurn ? [...nearby, focusedTurn] : nearby,
         anchor: anchorTurn ? { turn: anchorTurn, offset: snapshot.exchangeOffset ?? 0, block } : undefined,
         following: pinned.current, moving: userScrolling.current || scrollMotion.current || awaitingEarlier.current || !!pendingJump.current || !!bookmarkRestore.current,
-        interacting, window: historyBlocks !== undefined && historyBase !== undefined ? { blocks: historyBlocks, base: historyBase } : undefined })
+        interacting: selecting, window: historyBlocks !== undefined && historyBase !== undefined ? { blocks: historyBlocks, base: historyBase } : undefined })
       if (anchorTurn) setActiveTurn(current => current === anchorTurn ? current : anchorTurn)
     }
     const schedule = () => { if (!frame) frame = requestAnimationFrame(report) }
@@ -1551,8 +1595,14 @@ export function ConversationTimeline({
           data-virtualized={windowed ? "" : undefined}
           onPointerDown={onPointerDown}
           onPointerUp={(event) => {
+            pressing.current = false
             if (event.pointerType === "mouse") userScrolling.current = false
+            else settleInput()
             reportReading.current()
+          }}
+          onPointerCancel={() => {
+            pressing.current = false
+            settleInput()
           }}
           onTouchStart={(event) => {
             touching.current = event.touches.length > 0
