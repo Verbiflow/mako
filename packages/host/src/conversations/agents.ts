@@ -3371,8 +3371,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     this.rosters.delete(edge.parent)
     const kindChanged = !before || before.state.kind !== entry.state.kind || before.stoppable !== entry.stoppable
-    for (const conversation of this.conversationsOfThread(edge.parent)) {
-      this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
+    const quiet = progressOnly && !kindChanged
+    for (const conversation of quiet ? this.progressReaders(edge.parent) : this.conversationsOfThread(edge.parent)) {
+      this.deps.live.childrenChanged(conversation, quiet)
       if (kindChanged) this.wakes.refresh(conversation)
     }
     this.askApex(edge)
@@ -4129,7 +4130,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (entries === "[]") this.queueHeard.delete(thread)
       else this.queueHeard.set(thread, entries)
       this.forget(thread)
-      for (const conversation of this.conversationsOfThread(thread)) this.deps.live.childrenChanged(conversation, progressOnly)
+      for (const conversation of progressOnly ? this.progressReaders(thread) : this.conversationsOfThread(thread)) this.deps.live.childrenChanged(conversation, progressOnly)
     }
   }
 
@@ -4603,6 +4604,19 @@ export class Agents implements AgentOperations, ConversationChildren {
       return conversation
     }
     return undefined
+  }
+
+  /**
+   * The conversations a Fin's progress alone goes to: its Thread's newest Session's, by the store's order of its
+   * Sessions. Every step went to every Session, and one let go of was read back from its journal for it and held: on
+   * 2026-11-06 an Apex of 14 Sessions, 13 of them closed, took each of 74 steps in five minutes 14 times, 202 MB to each
+   * window. A window draws a Thread's Fins from its newest Session by the same order (`threadChildren`); a start, an end
+   * or a change of how a Fin stands still goes to every one, and one read in takes its Fins as they are.
+   */
+  private progressReaders(thread: string): string[] {
+    const store = this.store()
+    const sessions = store?.thread(ThreadIdSchema.parse(thread))?.sessions ?? []
+    return sessions.length ? (store?.conversationsOf(sessions[sessions.length - 1]!) ?? []) : []
   }
 
   private conversationsOfThread(thread: string): string[] {
