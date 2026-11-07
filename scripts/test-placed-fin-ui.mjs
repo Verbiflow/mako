@@ -13,6 +13,12 @@ import { fileURLToPath } from "node:url"
  * on an approval, a row of its own under Needs you that opens on Loft; with Loft quiet; and with the Apex's own device
  * off, the Fin's row still saying what it asks. Screenshots of each, dark and light, land in the printed directory
  * (or `MAKO_PLACED_UI_SHOTS`). Pass a dev server's URL to use it; with none it serves its own.
+ *
+ * The desk's rail shots keep the right sidebar open; before the crew card and the opened Fin, the sidebar is closed
+ * by the person's own command (Toggle the right sidebar), since a display narrower than the window asked for (a
+ * runner's) clamps the window, and the stage then covers the workbench with the sidebar, as it's designed to in a
+ * narrow window. The window's real size and the screen's are printed for every desk scene; `MAKO_PLACED_UI_WIDTH`
+ * asks for a narrower desk window, to see a clamped runner's case here.
  */
 if (process.versions.electron) {
   void check().catch(async (error) => {
@@ -112,7 +118,7 @@ async function check() {
   try {
     // The desk, the Apex's own device: the Fin under the Apex in the rail, opening Loft's conversation of it.
     for (const scene of ["studio", "quiet", "unlisted"]) {
-      const desk = await open(`${base}?mock&app=apex&placed=${scene}`, { width: 1440, height: 900 })
+      const desk = await open(`${base}?mock&app=apex&placed=${scene}`, { width: Number(process.env.MAKO_PLACED_UI_WIDTH ?? 1440), height: 900 })
       await desk.until(`Boolean(document.querySelector('.thread-jump-scope [data-asking-fin="${FIN_THREAD}"]'))`, "the placed Fin under its Apex in the rail")
       const rows = await desk.evaluate("[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].map((node) => node.innerText)")
       assert.ok(!rows.some((text) => text.includes(FIN_TITLE)), `the placed Fin is no row of its own in the rail (${scene}): ${JSON.stringify(rows)}`)
@@ -124,9 +130,16 @@ async function check() {
       // the open one. A cold runner's first transcript takes a while to come up.
       assert.ok(await desk.click(`.thread-jump-scope [data-conversation-id="${APEX_CONVERSATION}"]`), `the Apex's row in the rail (${scene})`)
       await desk.activeIs(APEX_CONVERSATION, "the Apex's conversation open in place")
-      // The Apex's transcript first: its viewport, with its skeleton gone. A cold runner's first transcript takes a
-      // while; one that never comes up is this check's failure to say, never something to pass around.
+      // The window as the display allowed it, printed every run: a runner's display clamps a window wider than itself.
+      const sizes = await desk.evaluate("({ inner: [window.innerWidth, window.innerHeight], screen: [screen.width, screen.height] })")
+      console.log(`desk, ${scene}: window ${sizes.inner.join("×")} on a ${sizes.screen.join("×")} screen`)
+      // The right sidebar, closed as the person closes it: in a window too narrow for both, the stage covers the
+      // workbench with it, and the transcript, mounted, has no box. The scene must not depend on the display's width.
+      await desk.evaluate("Promise.all([import('/src/state/stage.ts'), import('/src/extend/commands.ts')]).then(([{ stageStore }, { runCommand }]) => { if (Object.values(stageStore.get().byTab).some((tab) => tab.companion)) runCommand('view.toggle-companion'); return true })")
+      // The Apex's transcript first: its viewport, with its skeleton gone and a box of its own. A cold runner's first
+      // transcript takes a while; one that never comes up is this check's failure to say, never something to pass around.
       await desk.until("Boolean(document.querySelector('[data-transcript-viewport]')) && !document.querySelector('.skeleton-transcript')", "the Apex's transcript", 90_000, TRANSCRIPT)
+      await desk.until("document.querySelector('[data-transcript-viewport]').getBoundingClientRect().height > 0", "the Apex's transcript with a box", 20_000, TRANSCRIPT)
       // Then the crew card in that transcript (a compact card can stand elsewhere on the page, under a hidden surface).
       // The card draws its rows through a virtualizer, which draws none while the card's scroller measures no
       // height: below the fold on a runner it did, and the wait ran out with the card mounted and empty. On screen,
@@ -136,6 +149,11 @@ async function check() {
       await desk.until(`Boolean(document.querySelector('${CARD}'))`, "the crew card in the Apex's transcript", 60_000, TRANSCRIPT)
       await desk.evaluate(`document.querySelector('${CARD}').scrollIntoView({ block: 'start' }); true`)
       await desk.until(`Boolean(document.querySelector('${CARD} [data-crew-row="${FIN_THREAD}"]'))`, "the Fin in the Apex's crew card", 30_000, TRANSCRIPT)
+      // Drawn, not only mounted: the card and its row have a box.
+      const drawn = await desk.evaluate(TRANSCRIPT)
+      const card = drawn.cards.find((each) => each.inTranscript)
+      assert.ok(card && card.card.height > 0 && card.rows > 0, `the crew card is drawn in the transcript (${scene}): ${JSON.stringify(drawn)}`)
+      assert.ok(await desk.evaluate(`document.querySelector('${CARD} [data-crew-row="${FIN_THREAD}"]').getBoundingClientRect().height > 0`), `the Fin's row has a box (${scene})`)
       // The card fades in; its screenshot is taken once that's done. Only the card's own animation: rows hold marks
       // that pulse for as long as a Fin works.
       await desk.evaluate(`Promise.all(document.querySelector('${CARD}').getAnimations().filter((animation) => animation.effect.getTiming().iterations !== Infinity).map((animation) => animation.finished)).then(() => true)`)
