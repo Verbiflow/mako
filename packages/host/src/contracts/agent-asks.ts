@@ -1,5 +1,19 @@
 import { z } from "zod"
 
+/** The settings an agent may change for the person, each with its value. `commit-model`: the model that drafts commit messages (Settings › Utility models). */
+export const SettingSchema = z.discriminatedUnion("name", [
+  z.object({ name: z.literal("hand-off-on-sleep"), value: z.boolean() }),
+  z.object({ name: z.literal("continue-after-restart"), value: z.boolean() }),
+  z.object({ name: z.literal("harness-order"), value: z.array(z.string().min(1).max(40)).min(1).max(16) }),
+  z.object({ name: z.literal("commit-model"), value: z.string().min(1).max(400) }),
+])
+export type Setting = z.infer<typeof SettingSchema>
+
+/** A setting from a tool's arguments; undefined when the name or its value isn't one. */
+export function settingValue(name: string, value: boolean | string | string[] | undefined): Setting | undefined {
+  return SettingSchema.safeParse({ name, value }).data
+}
+
 /**
  * What an agent below full access asks the person to let it do through Mako's tools, kept in its conversation's control
  * (`ConversationControl.asks`), so a restart keeps it and the desk, the web app and the phone read one fact. The person
@@ -12,6 +26,8 @@ export const AgentAskWantSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("rename"), op: z.string(), title: z.string() }),
   z.object({ kind: z.literal("archive"), op: z.string() }),
   z.object({ kind: z.literal("restore"), op: z.string() }),
+  /** A change in Settings. */
+  z.object({ kind: z.literal("setting"), setting: SettingSchema }),
 ])
 export type AgentAskWant = z.infer<typeof AgentAskWantSchema>
 
@@ -29,6 +45,21 @@ export function agentAskLine(want: AgentAskWant): string {
       return "Wants to archive this Thread"
     case "restore":
       return "Wants to restore this Thread"
+    case "setting":
+      return settingLine(want.setting)
+  }
+}
+
+function settingLine(setting: Setting): string {
+  switch (setting.name) {
+    case "hand-off-on-sleep":
+      return `Wants to turn ${setting.value ? "on" : "off"} handing agents off when this Mac sleeps`
+    case "continue-after-restart":
+      return `Wants to turn ${setting.value ? "on" : "off"} continuing turns a restart cut short`
+    case "harness-order":
+      return `Wants to put ${setting.value[0]} first in your harness order`
+    case "commit-model":
+      return `Wants to draft commit messages with ${setting.value}`
   }
 }
 
@@ -58,6 +89,8 @@ export function agentAskWords(want: AgentAskWant, name: string): AgentAskWords {
       return { title, description: "its title in the list", detail: "The title it shows everywhere; the agent's work goes on as it is.", allow: "Rename", keep: "Keep this title" }
     case "archive":
       return { title, description: "out of the list", detail: "It leaves the list, and a turn still running stops. Restore brings it back.", allow: "Archive", keep: "Keep it" }
+    case "setting":
+      return { title, description: "in Settings", detail: "It changes this setting for every Thread on this Mac. You can change it back in Settings.", allow: "Change it", keep: "Leave it" }
     case "restore":
       return { title, description: "back in the list", detail: "It comes back to the list as it was.", allow: "Restore", keep: "Leave it archived" }
   }

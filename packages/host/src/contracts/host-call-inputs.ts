@@ -1975,6 +1975,21 @@ const inputs = {
         z.literal("max"),
       ]),
     ]),
+  "mako:settings-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+      ]),
+      z.object({
+        action: z.union([z.literal("set"), z.literal("read")]),
+        setting: z.string().optional(),
+        value: z
+          .union([z.boolean(), z.string(), z.array(z.string())])
+          .optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:shutdown-ack": () => z.tuple([z.string()]),
   "mako:simulator-setup": () => z.tuple([z.boolean().optional()]),
   "mako:simulator-setup-press": () =>
@@ -2950,6 +2965,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:set-model", "workspaces"],
   ["mako:set-name", "workspaces"],
   ["mako:set-thinking", "workspaces"],
+  ["mako:settings-act", "conversations"],
   ["mako:shutdown-ack", "application"],
   ["mako:simulator-setup", "control"],
   ["mako:simulator-setup-press", "control"],

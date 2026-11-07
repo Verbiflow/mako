@@ -1,4 +1,5 @@
 import type { HostCallReplay } from "./host-call-policy.js"
+import type { JsonValue } from "./json.js"
 import type { ReturnLanded } from "./cloud-threads.js"
 
 /**
@@ -65,9 +66,26 @@ export type ThreadActResult =
   | { outcome: "asked"; ask: string; next: string }
   | { refused: ThreadActRefusal; why: string }
 
+/** Reads what `settings` covers, or changes one. `value` is the setting's own: true or false, a list of harnesses, a model. */
+export interface SettingsInput {
+  action: "read" | "set"
+  /** set: hand-off-on-sleep, continue-after-restart, harness-order or commit-model. */
+  setting?: string
+  value?: boolean | string | string[]
+  /** The caller's own key for this. */
+  clientKey: string
+}
+
+export type SettingsResult =
+  | { outcome: "read"; settings: { handOff: JsonValue; conversations: JsonValue; harnessOrder: JsonValue } }
+  /** `note`: kept, but it can't take effect yet, and why. */
+  | { outcome: "set"; setting: string; value: boolean | string | string[]; note?: string }
+  | { outcome: "asked"; ask: string; next: string }
+  | { refused: "unavailable" | "no-thread" | "bad-value" | "failed"; why: string }
+
 /** What the MCP door shows the model of an operation; its input schema is the host call's. */
 export interface ThreadToolDefinition {
-  channel: "mako:threads-move" | "mako:threads-act"
+  channel: "mako:threads-move" | "mako:threads-act" | "mako:settings-act"
   replay: HostCallReplay
   /** Inputs the MCP door leaves out: an agent moves its own Thread. */
   filled: readonly "conversation"[]
@@ -115,8 +133,25 @@ export const THREAD_ACT_TOOL: ThreadToolDefinition = {
   },
 }
 
+export const SETTINGS_TOOL: ThreadToolDefinition = {
+  channel: "mako:settings-act",
+  replay: "replay",
+  filled: [],
+  mcp: {
+    name: "settings",
+    description: "Read or change the settings an agent may change for the person, as Settings does: hand-off-on-sleep, continue-after-restart, harness-order and commit-model. Call it when the person asks for one of these. read answers at once; set happens now on full access, and on other access Mako asks the person first. Sign-ins, access and spend are the person's own: this can't change them.",
+    fields: {
+      action: "read or set.",
+      setting: "set: which one.",
+      value: "set: true or false, a list of harnesses first to last, or a model.",
+      clientKey: "Your own key for this: a repeat with it is the same change.",
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+}
+
 /** Every tool on a `mako` server that acts for the person through one host call. */
-export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, THREAD_ACT_TOOL]
+export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, THREAD_ACT_TOOL, SETTINGS_TOOL]
 
 /** What an answer tells an agent to do next. */
 export const AFTER_ACT = {
