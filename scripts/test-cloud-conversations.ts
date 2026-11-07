@@ -350,12 +350,14 @@ test("another device's conversation followed here picks up where it was: a dropp
   await until("its batches relayed", () => revisions().length === 3)
 
   // The link drops; two batches go by meanwhile. Followed again at once, from what the gateway kept: each once, none read again.
-  machine.network!.cut()
-  send(5)
-  send(6)
-  const cut = performance.now()
-  await until("what went by while the link was down", () => revisions().includes(6), 1_000)
-  assert.ok(performance.now() - cut < 1_000, "current within a second")
+  // Current at once, by what it waited for rather than the runner's clock: a wait of a second or more is a backoff.
+  const { waits: cutWaits } = await ranOut(async () => {
+    machine.network!.cut()
+    send(5)
+    send(6)
+    await until("what went by while the link was down", () => revisions().includes(6), 10_000)
+  })
+  assert.ok(cutWaits.every((ms) => ms < 1_000), `current at once, after no backoff: ${cutWaits.join(", ")}`)
   assert.deepEqual(revisions(), [2, 3, 4, 5, 6], "every batch, once, in order")
   assert.equal(rereads(), 0, "no window reads it again")
 
@@ -800,13 +802,16 @@ test("a Mac woken on a network the sleep didn't keep follows on at once: every e
   await new Promise((resolve) => setTimeout(resolve, 300))
   assert.equal(events.length, 1, "nothing arrives on the dead socket")
   const woke = performance.now()
-  router.wake()
-  await until("every missed event", () => events.length === 1 + MISSED, BEFORE_HEARTBEAT_MS)
+  const { waits: wakeWaits } = await ranOut(async () => {
+    router.wake()
+    await until("every missed event", () => events.length === 1 + MISSED, BEFORE_HEARTBEAT_MS)
+  })
   const ms = performance.now() - woke
   assert.deepEqual(revisions(), Array.from({ length: 1 + MISSED }, (_, index) => index + 2), "each event once, in order")
   console.log(`  woke to ${MISSED} missed events relayed: ${ms.toFixed(0)} ms`)
   // Without the wake's 100 ms probe, the stream's own silence would find the dead socket.
-  assert.ok(ms < 3_000, `caught up by the wake's probe, before the working stream's 3 s of silence could: ${ms.toFixed(0)} ms`)
+  assert.ok(wakeWaits.includes(100) && wakeWaits.every((ms) => ms < 3_000),
+    `caught up by the wake's probe, before the working stream's 3 s of silence could: ${ms.toFixed(0)} ms; ran out: ${wakeWaits.join(", ")}`)
   // Following on: the next event comes on the new connection.
   machine.batch(threadId, conversationId, 3 + MISSED, "ready")
   await until("the next event", () => events.length === 2 + MISSED)
@@ -955,9 +960,8 @@ test("a cloud app's view is asked passively at this Mac's preview of its port; a
 
   // The machine goes to sleep: the look says so at once, from what this Mac kept, and wakes nothing.
   await machine.served.close()
-  const started = performance.now()
-  const asleep = await look()
-  assert.ok(performance.now() - started < 1_000, "answered at once, never waited out")
+  const { result: asleep, waits: lookWaits } = await ranOut(() => look())
+  assert.deepEqual(lookWaits, [], "answered at once, never waited out")
   const expected: ThreadAppView = {
     kind: "asleep",
     project: "Hello-World",
@@ -1658,11 +1662,10 @@ test("another Mac's conversation while that Mac is off reads from the copy it ke
   machine.account.editWaiting = async (session, id, expectedText, text) => (waited.push(["edit", session, id, expectedText, text]), held)
   machine.account.unwaitMessage = async (session, id) => (waited.push(["unwait", session, id]), (held = held.filter((each) => each.id !== id)))
   const requestId = randomUUID()
-  const asking = performance.now()
   const listedBeforeWait = events.filter((event) => event.type === "live-listed").length
-  const sent = await router.route("mako:live-prompt", [conversation, requestId, "Merge it once CI is green", [], undefined])
+  const { result: sent, waits: promptWaits } = await ranOut(() => router.route("mako:live-prompt", [conversation, requestId, "Merge it once CI is green", [], undefined]))
   assert.ok(sent.handled)
-  assert.ok(performance.now() - asking < 1_000, "at once: a Mac isn't woken by being called")
+  assert.deepEqual(promptWaits, [], "at once: a Mac isn't woken by being called")
   assert.deepEqual(z.object({ id: z.string(), status: z.string() }).loose().parse(decodeRuntimeValue(sent.value)), { id: requestId, text: "Merge it once CI is green", attachments: [], status: "queued" })
   assert.deepEqual(waited, [["wait", listed.session, requestId, { conversation, text: "Merge it once CI is green" }]], "kept by the account, for the Session, by the conversation the list named")
   assert.ok(events.filter((event) => event.type === "live-listed").length > listedBeforeWait, "windows read it again")

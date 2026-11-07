@@ -101,12 +101,23 @@ for (const harness of [...registeredHarnessIds(), "future-fixture"]) {
 const message = { id: "same", role: "user" as const, blocks: [], anchor: { id: "native", index: 0, at: 1 } }
 assert.notEqual(reconcileMessages([message], [{ ...message, anchor: { ...message.anchor, at: 2 } }])[0], message)
 
-const many = Array.from({ length: 10000 }, (_, index) => ({ ...request, id: auditId(index + 1),
+const many = Array.from({ length: 20_000 }, (_, index) => ({ ...request, id: auditId(index + 1),
   nativePrompt: { ...reference, messageId: `u${index}` },
   nativeDelivery: { ...request.nativeDelivery, evidence: { ...accepted, referenceId: `u${index}` } },
 }))
-const started = performance.now()
 assert.equal(nativePromptRequestIds(source, many).size, many.length)
-const elapsed = performance.now() - started
-assert.ok(elapsed < 1000, `10,000 exact correspondences took ${elapsed.toFixed(1)}ms`)
-console.log(`Native prompt correspondence: exact receipts, source/attempt/binding fencing, ambiguity refusal, six registry labels plus future fixture, metadata/object reuse; 10,000 lookups in ${elapsed.toFixed(1)}ms. No native prompt sent.`)
+// Linear, by how its time grows rather than the runner's clock: four times the requests take about four times as long,
+// where a cost that grows with their square takes sixteen. Each the quickest of five, past the first above.
+const correspond = (count: number) => {
+  const some = many.slice(0, count)
+  let quickest = Infinity
+  for (let run = 0; run < 5; run++) {
+    const began = performance.now()
+    nativePromptRequestIds(source, some)
+    quickest = Math.min(quickest, performance.now() - began)
+  }
+  return quickest
+}
+const [fewer, more] = [correspond(5_000), correspond(20_000)]
+assert.ok(more < fewer * 8, `exact correspondences in linear time: ${fewer.toFixed(2)} ms for 5,000, ${more.toFixed(2)} ms for 20,000`)
+console.log(`Native prompt correspondence: exact receipts, source/attempt/binding fencing, ambiguity refusal, six registry labels plus future fixture, metadata/object reuse; ${fewer.toFixed(2)} ms for 5,000 lookups and ${more.toFixed(2)} ms for 20,000. No native prompt sent.`)
