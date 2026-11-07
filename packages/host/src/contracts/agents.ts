@@ -444,6 +444,11 @@ export const NoticeSchema = z.object({
 })
 export type Notice = z.infer<typeof NoticeSchema>
 
+/** Whether a digest of these notices asks its Apex something: it goes as soon as it can, whatever the minute's budget. */
+export function digestAsks(notices: readonly Notice[]): boolean {
+  return notices.some(({ report, decision }) => report.status === "blocked" || report.status === "needs-input" || decision !== undefined)
+}
+
 /** Why a spawn waits: the tree's running budget, the person's limit of Fins at once (`place-full`), or (from 8.4) another place. */
 export type QueueReason = "tree-running" | "place-full" | "device-offline"
 
