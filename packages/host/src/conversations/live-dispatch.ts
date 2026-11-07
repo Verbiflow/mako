@@ -47,7 +47,8 @@ export function nextQueued(snapshot: Pick<LiveSnapshot, "session" | "requests">)
 
 /**
  * Whether the harness's own transcript shows the Fin's brief `briefId` (`transcriptHolds`): under the message id it
- * was sent with, where the harness keeps that, or by its "You're fin:" line, which the brief sent again carries too.
+ * was sent with, where the harness keeps that, or by its "You're fin:" line, which the brief sent again carries too, or
+ * a digest's record of what it carries.
  * False when its session has no transcript, or one Mako can't read.
  */
 async function briefInTranscript(snapshot: LiveSnapshot, control: ConversationControl, briefId: string, history: (path: string, before?: number) => Promise<ThreadPage | null>): Promise<boolean> {
@@ -59,7 +60,8 @@ async function briefInTranscript(snapshot: LiveSnapshot, control: ConversationCo
     hostWarn("live", "a harness's transcript couldn't be read to see whether it had a Fin's brief", { conversation: snapshot.session.id, error: errorMessage({ error }) })
     return null
   })
-  const marker = brief.text.split("\n").find((line) => line.includes("You're fin:")) ?? ""
+  // A digest's own line is its record of what it carries, which names each report.
+  const marker = brief.text.split("\n").find((line) => line.includes("You're fin:") || line.startsWith(`{"version":`)) ?? ""
   return page ? transcriptHolds(page.entries, { attemptId: brief.nativeDelivery?.attemptId, marker }) : false
 }
 

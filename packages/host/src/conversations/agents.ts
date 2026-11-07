@@ -218,11 +218,12 @@ const READ_CHARS = 8_000
 
 /**
  * The Fin's brief a cut turn still has to carry: the brief cut short, or the brief sent again and cut short too, unless
- * its harness said it had it. Whether it goes as itself or as a Continue is decided as it's sent, by the harness's
- * transcript (`LiveDispatch`): a bare Continue would leave a Fin that never had it with nothing to do.
+ * its harness said it had it. A digest cut at its hand-off is the same: its reports read as heard, so nothing else would
+ * send them. Whether it goes as itself or as a Continue is decided as it's sent, by the harness's transcript
+ * (`LiveDispatch`): a bare Continue would leave a Fin that never had it with nothing to do.
  */
 function cutBrief(op: string | undefined, cut: LiveRequest): string | undefined {
-  const root = cut.continues?.brief ?? (op !== undefined && cut.id === namedUuid(`${op}\nbrief`) ? cut.id : undefined)
+  const root = cut.continues?.brief ?? (cut.digest || (op !== undefined && cut.id === namedUuid(`${op}\nbrief`)) ? cut.id : undefined)
   return cut.nativeDelivery?.evidence.kind !== "accepted" ? root : undefined
 }
 

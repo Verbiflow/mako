@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
-import { BRIEF_AGAIN } from "../contracts/children.js"
+import { BRIEF_AGAIN, DIGEST_AGAIN } from "../contracts/children.js"
 import { transientCause, unheardDigest, waitsAgain, carriedDigest } from "../contracts/delivery-retry.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
@@ -144,7 +144,7 @@ export class LiveAutoContinue {
       actor: input.actor,
       id: input.requestId,
       createdAt: Date.now(),
-      text: brief ? `${BRIEF_AGAIN}\n\n${brief.text}` : continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
+      text: brief ? `${brief.digest ? DIGEST_AGAIN : BRIEF_AGAIN}\n\n${brief.text}` : continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
       attachments: [],
       tuning,
       status: "queued",
