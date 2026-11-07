@@ -7,7 +7,7 @@ import { agentsOpenStore, closeAgents } from "./agents-open"
 import { useWebClient } from "./client"
 import { filesOpenStore, leftFiles } from "./files-open"
 import { leftReview, reviewOpenStore } from "./review-open"
-import { webSetup } from "./setup-source"
+import { listedAsker, webSetup } from "./setup-source"
 import { closeSetup, setupOpenStore, useSetupOpen } from "./setup-open"
 import { useThreadSetupPlace } from "./setup-thread"
 import { WebSideRail } from "./side-rail"
@@ -28,7 +28,7 @@ export function SetupLayer({ place, onAll }: { place: string | undefined; onAll:
     leftReview()
     leftFiles()
     closeAgents()
-    setSetupSource(webSetup(client.gateway, client.account.id, () => [...accountListStore.get().devices.values()]))
+    setSetupSource(webSetup(client.gateway, client.account.id, () => [...accountListStore.get().devices.values()], Date.now, (thread) => listedAsker(accountListStore.get().rows, thread)))
     return () => setSetupSource(undefined)
   }, [open, client])
   useEffect(() => {

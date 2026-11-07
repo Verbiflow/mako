@@ -1,4 +1,4 @@
-import type { ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 import { type LucideIcon, ChevronRightIcon, CloudIcon, CommandIcon, FileTextIcon, FolderIcon, GitBranchIcon, KeyRoundIcon, LaptopIcon, PlugIcon, PlusIcon, ServerIcon, WrenchIcon } from "lucide-react"
 import {
   askAnswerLabel,
@@ -10,6 +10,7 @@ import {
   SCOPE_WORDS,
   SETUP_AWAY_ALLOW,
   SETUP_AWAY_EMPTY,
+  SETUP_AWAY_NOTE,
   SETUP_PART_ADDS,
   SETUP_PART_TITLES,
   syncWords,
@@ -28,7 +29,8 @@ import { LiveMark } from "@/components/ui/live-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { addTo, answerAsk, rowTap, useAway, useSetup } from "@/state/setup"
+import { ASK_TOUCH } from "@/lib/ask-card"
+import { addTo, answerAsk, readSetup, rowTap, useAway, useSetup } from "@/state/setup"
 
 /** The dot's colour by its tone; the words beside it always say the same. */
 const DOT = {
@@ -104,6 +106,7 @@ function Answer({ primary, disabled, onClick, children }: { primary?: boolean; d
       onClick={onClick}
       className={cn(
         "pressable flex h-7 items-center px-2.5 text-label font-medium disabled:opacity-50",
+        ASK_TOUCH,
         primary ? "bg-foreground text-background hover:bg-foreground/90" : "bg-raised text-foreground/85 hover:bg-fill-selected"
       )}
     >
@@ -256,6 +259,34 @@ export function PartRows({ folder, view, part, now }: { folder: string; view: Se
   return (
     <div className="flex flex-col divide-y divide-hairline border-t border-hairline">
       {part.rows.map((row) => <Row key={row.id} folder={folder} place={view.id} row={row} now={now} compact />)}
+    </div>
+  )
+}
+
+/**
+ * What a page built away from the Mac says of itself, on every surface that lists its grants (Settings › Setup, the
+ * laptop browser's rail, the phone): it shows what the account lends, and the rest is the Mac's to show.
+ */
+export function SetupAwayNote({ className }: { className?: string }) {
+  return (
+    <p data-setup-away-note className={cn("text-label leading-relaxed text-muted-foreground", className)}>
+      {SETUP_AWAY_NOTE}
+    </p>
+  )
+}
+
+/** A read that failed: why, in words, and Try again, which reads the folder's Setup once more. */
+export function SetupReadFailed({ folder, why, className }: { folder: string; why: string; className?: string }) {
+  const [trying, setTrying] = useState(false)
+  return (
+    <div data-setup-failed className={cn("flex flex-col items-start gap-2", className)}>
+      <p className="text-ui text-negative">Setup couldn&apos;t be read. {why}</p>
+      <Action tone="outline" size="sm" disabled={trying} onClick={() => {
+        setTrying(true)
+        void readSetup(folder).finally(() => setTrying(false))
+      }}>
+        {trying ? "Reading…" : "Try again"}
+      </Action>
     </div>
   )
 }

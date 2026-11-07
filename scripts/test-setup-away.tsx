@@ -5,11 +5,12 @@
  */
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
-import type { Grant, SourceAsk } from "@mako/protocol/borrow"
+import type { Grant, LeaseEvent, SourceAsk } from "@mako/protocol/borrow"
 import { partSummary, rowAction, type SetupView } from "@mako/host/contracts/setup"
-import { PhoneSetup, SetupPage } from "@/components/setup/setup-page"
-import { allAsks, readSetup, setSetupSource, setupAskCard, setupStore } from "@/state/setup"
-import { askNotice, runChoice } from "@/lib/ask-card"
+import { PhoneSetup, SetupPage, ThreadSetup } from "@/components/setup/setup-page"
+import { ZodError } from "zod"
+import { allAsks, readFailure, readSetup, setSetupSource, setupAskCard, setupStore } from "@/state/setup"
+import { ASK_TOUCH, askNotice, runChoice } from "@/lib/ask-card"
 import { inboxCount, inboxModel } from "@/state/inbox"
 import DeskSettings from "@/web-client/desk-settings"
 import { closeSetup, openSetup, setupOpenStore } from "@/web-client/setup-open"
@@ -17,7 +18,7 @@ import { SetupRailRow } from "@/web-client/setup-rail-row"
 import type { ScreenRoute } from "@/web-client/route"
 import { Settings } from "@/web-client/settings"
 import { SetupScreen } from "@/web-client/setup-screen"
-import { webSetup, type BorrowGateway } from "@/web-client/setup-source"
+import { listedAsker, webSetup, type BorrowGateway } from "@/web-client/setup-source"
 
 const NOW = Date.UTC(2026, 10, 4, 12)
 const MAC = "mac-1"
@@ -45,19 +46,22 @@ const sourceAsk: SourceAsk = {
   why: "the app reads it",
   askPerson: true,
 }
+// The broker's log says when the ask was made: its age is that, not the read's.
+const ASKED_AT = NOW - 12 * 60_000
+const askedEvent: LeaseEvent = { event: "asked", at: ASKED_AT, grant: "g-env", borrower: sourceAsk.borrower, resource: { kind: "file", ref: ".env.local" }, correlationId: "c-ask-1" }
 const gateway: BorrowGateway = {
   rest: async (_method, path) => {
     const route = path.split("?")[0]
     const answer =
       route === "/v1/borrow/grants" ? { grants: [grant] }
       : route === "/v1/borrow/leases" ? { leases: [] }
-      : route === "/v1/borrow/events" ? { events: [] }
+      : route === "/v1/borrow/events" ? { events: [askedEvent] }
       : route === "/v1/borrow/asks" ? { asks: [sourceAsk] }
       : undefined
     return answer === undefined ? undefined : JSON.parse(JSON.stringify(answer))
   },
 }
-const source = webSetup(gateway, "acct", () => [{ id: MAC, name: "MacBook Pro", platform: "macOS 26.1" }], () => NOW)
+const source = webSetup(gateway, "acct", () => [{ id: MAC, name: "MacBook Pro", platform: "macOS 26.1" }], () => NOW, (thread) => listedAsker([{ thread: "t-1", title: "Fix the webhooks", harness: "codex" }], thread))
 
 // 1. A laptop's browser: Settings is given a way to open a project's Setup, which draws in its pane at the desk's form.
 const opened: ScreenRoute[] = []
@@ -112,6 +116,32 @@ assert.doesNotMatch(phone, /Nothing yet/, "an empty part says no grants, not not
 assert.match(phone, /No grants/)
 assert.equal(partSummary({ part: "code", rows: [] }, NOW, true).line, "No grants")
 assert.equal(partSummary({ part: "code", rows: [] }, NOW).line, "Nothing yet", "a Mac's own page still says Nothing yet")
+
+// Every surface that lists its grants says what it can't see, in the one line: Settings › Setup, the laptop browser's
+// rail and the phone. A Mac's own page says nothing of the kind.
+const awayNotes = (html: string) => html.split("data-setup-away-note").length - 1
+assert.equal(awayNotes(renderToStaticMarkup(<SetupPage folder="shop" />)), 1, "Settings › Setup, and the laptop browser's page")
+assert.equal(awayNotes(renderToStaticMarkup(<PhoneSetup folder="shop" />)), 1, "the phone")
+assert.equal(awayNotes(renderToStaticMarkup(<ThreadSetup folder="shop" thread="t-1" elsewhere="a cloud machine" />)), 1, "the laptop browser's rail")
+assert.match(renderToStaticMarkup(<SetupPage folder="shop" />), /What each place has for shop/, "and the page names its project")
+
+// The phone names the asking Thread as the account lists it, aged from when it asked.
+const asked = setupStore.get().byFolder.shop!.places.flatMap((place) => place.asks)[0]!
+assert.deepEqual([asked.by.title, asked.by.harness, asked.at], ["Fix the webhooks", "codex", ASKED_AT])
+assert.match(phone, /Fix the webhooks/)
+assert.match(phone, /12m/)
+
+// Its answers are as tall as the card's under a finger.
+assert.ok(phone.includes(ASK_TOUCH), "the phone's Decline takes the card's touch height")
+
+// A read that fails says why in words and offers Try again; a reply this build can't read isn't printed.
+assert.equal(readFailure(new ZodError([])), "Its answer wasn't one this version of Mako reads.")
+setupStore.set((state) => ({ failed: { ...state.failed, gone: "The account didn't answer." } }))
+const failedPhone = renderToStaticMarkup(<PhoneSetup folder="gone" />)
+assert.match(failedPhone, /data-setup-failed/)
+assert.match(failedPhone, /Setup couldn(&#x27;|')t be read\. The account didn(&#x27;|')t answer\./)
+assert.match(failedPhone, /Try again/)
+for (const surface of [<SetupPage folder="gone" />, <ThreadSetup folder="gone" thread="t-1" elsewhere={undefined} />]) assert.match(renderToStaticMarkup(surface), /Try again/)
 
 // 4. An ask a project's two folders hold is one ask, in the Inbox and to answer.
 setSetupSource(undefined)

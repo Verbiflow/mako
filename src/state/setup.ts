@@ -1,4 +1,5 @@
 import { toast } from "sonner"
+import { ZodError } from "zod"
 import {
   askAnswerLabel,
   askAnswers,
@@ -81,9 +82,21 @@ export async function readSetup(folder: string): Promise<SetupView | undefined> 
     })
     return view
   } catch (error) {
-    setupStore.set((state) => ({ failed: { ...state.failed, [folder]: error instanceof Error ? error.message : String(error) } }))
+    setupStore.set((state) => ({ failed: { ...state.failed, [folder]: readFailure(error instanceof Error ? error : new Error(String(error))) } }))
     return undefined
   }
+}
+
+/**
+ * Why a read failed, in words the person can act on. A reply this build's schemas refuse (a newer cloud's field, say)
+ * is said as that, and its detail goes to the console, never onto the page.
+ */
+export function readFailure(error: Error): string {
+  if (error instanceof ZodError) {
+    console.warn("Setup's reply didn't match this build's schema", error.issues)
+    return "Its answer wasn't one this version of Mako reads."
+  }
+  return error.message
 }
 
 /** Reads a folder's Setup unless it was read within the last minute: what a Thread's notice asks as it opens. */

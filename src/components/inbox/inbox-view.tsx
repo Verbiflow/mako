@@ -12,7 +12,7 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { acpStore } from "@/state/acp-state"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
-import { runChoice, type AskCard as AskWords } from "@/lib/ask-card"
+import { ASK_TOUCH, runChoice, type AskCard as AskWords } from "@/lib/ask-card"
 import { setupAskCard } from "@/state/setup"
 import {
   answerApproval,
@@ -172,7 +172,7 @@ function AskChoices({ card, sending, setSending }: { card: AskWords; sending: bo
     <>
       {card.note ? <span className="text-label text-muted-foreground">{card.note}</span> : null}
       {card.choices.map((choice) => (
-        <button key={choice.answer} type="button" data-inbox-answer={choice.answer} disabled={sending} onClick={() => void runChoice(choice, setSending)} className={cn(BUTTON, choice.primary ? PRIMARY : QUIET)}>
+        <button key={choice.answer} type="button" data-inbox-answer={choice.answer} disabled={sending} onClick={() => void runChoice(choice, setSending)} className={cn(BUTTON, ASK_TOUCH, choice.primary ? PRIMARY : QUIET)}>
           {choice.label}
         </button>
       ))}

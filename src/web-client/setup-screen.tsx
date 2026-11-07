@@ -4,7 +4,7 @@ import { PhoneSetup, SetupPage } from "@/components/setup/setup-page"
 import { setSetupSource } from "@/state/setup"
 import { accountListStore } from "./account-list"
 import { useWebClient } from "./client"
-import { webSetup, type BorrowGateway } from "./setup-source"
+import { listedAsker, webSetup, type BorrowGateway } from "./setup-source"
 
 /** A project's Setup away from the Mac: the phone's screen, or the desk's page in a laptop's browser. Back to where it was opened from. */
 export function SetupScreen({ project, onBack, desk }: { project: string; onBack: () => void; desk?: boolean }) {
@@ -18,7 +18,7 @@ export function SetupScreen({ project, onBack, desk }: { project: string; onBack
  */
 export function SetupScreenOn({ project, onBack, gateway, account, desk }: { project: string; onBack: () => void; gateway: BorrowGateway; account: string; desk?: boolean }) {
   useEffect(() => {
-    setSetupSource(webSetup(gateway, account, () => [...accountListStore.get().devices.values()]))
+    setSetupSource(webSetup(gateway, account, () => [...accountListStore.get().devices.values()], Date.now, (thread) => listedAsker(accountListStore.get().rows, thread)))
     return () => setSetupSource(undefined)
   }, [gateway, account])
   return <SetupScreenView project={project} onBack={onBack} {...(desk && { desk })} />

@@ -831,7 +831,14 @@ function platformOf(text: string): Platform {
  * A device's own readings (its recipe, its own brokers) are its host's to say, so a device place here shows only what
  * the account's broker holds for it, and the page says so (`away`).
  */
-export function accountSetupView(input: { now: number; project: string; snapshot: BorrowSnapshot; devices: readonly AccountDevice[] }): SetupView {
+export function accountSetupView(input: {
+  now: number
+  project: string
+  snapshot: BorrowSnapshot
+  devices: readonly AccountDevice[]
+  /** The asking Thread as the account lists it, by its ID; an ask from one it doesn't list says "A Thread". */
+  askers?: (thread: string) => Omit<Asker, "thread"> | undefined
+}): SetupView {
   const { now, project, snapshot } = input
   const named = [
     ...snapshot.grants.flatMap((grant) => (grant.scope.level === "project" ? [grant.scope.repository] : [])),
@@ -855,8 +862,14 @@ export function accountSetupView(input: { now: number; project: string; snapshot
   const asks = snapshot.asks
     .filter((waiting) => waiting.ask.askPerson && ours(waiting.ask.borrower))
     .map((waiting) => {
-      const where = waiting.ask.borrower.place
-      return sourceAskOf(waiting, where.kind === "machine" ? "cloud" : `device:${where.device}`, { thread: waiting.ask.borrower.thread, title: "A Thread", fin: false })
+      const { ask } = waiting
+      const where = ask.borrower.place
+      // When it was asked: the broker's log line for it, the newest of that Thread's for that grant and name.
+      const asked = snapshot.events
+        .filter((event) => event.event === "asked" && event.grant === ask.grant && event.borrower.thread === ask.borrower.thread && event.resource.ref === ask.ref)
+        .reduce<number | undefined>((latest, event) => Math.max(latest ?? 0, event.at), undefined)
+      const asker = input.askers?.(ask.borrower.thread)
+      return sourceAskOf({ ask, at: asked ?? waiting.at }, where.kind === "machine" ? "cloud" : `device:${where.device}`, { thread: ask.borrower.thread, title: asker?.title ?? "A Thread", fin: asker?.fin ?? false, ...(asker?.harness && { harness: asker.harness }) })
     })
   const broker: BrokerReading = {
     account: snapshot.grants[0]?.scope.account ?? "",

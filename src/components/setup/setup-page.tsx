@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { ArrowUpRightIcon, PlusIcon, RefreshCwIcon } from "lucide-react"
-import { SETUP_ADDITIONS, SETUP_AWAY_NOTE, threadPlace, viewAsks, type SetupPlaceView, type SetupView } from "@mako/host/contracts/setup"
+import { SETUP_ADDITIONS, threadPlace, viewAsks, type SetupPlaceView, type SetupView } from "@mako/host/contracts/setup"
 import { Action, Chip, Segmented } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuTrigger } from "@/components/ui/menu"
 import { Shimmer } from "@/components/ui/shimmer"
@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 import { openAppSetup } from "@/state/app-setup"
 import { addTo, choosePlace, rebuildBase, shownPlace, threadPlaceId, useSetup } from "@/state/setup"
 import { useSetupView } from "./use-setup-view"
-import { NeedsYou, PartRows, PartSummaryRow, PlaceIcon, SetupPlaceBody } from "./setup-parts"
+import { NeedsYou, PartRows, PartSummaryRow, PlaceIcon, SetupAwayNote, SetupPlaceBody, SetupReadFailed } from "./setup-parts"
 
 /** The clock rows' ages are read against: the page's own read, so a row says the same until the page reads again. */
 function readAt(view: SetupView): number {
@@ -78,15 +78,16 @@ export function SetupPage({ folder, addOpen }: { folder: string; addOpen?: boole
   const picked = useSetup((state) => state.place[folder])
   const place = shownPlace(view, picked)
   if (!view || !place)
-    return failed ? <p className="text-ui text-negative">Setup couldn&apos;t be read: {failed}</p> : <p className="text-ui text-faint"><Shimmer text="Reading what each place has…" /></p>
+    return failed ? <SetupReadFailed folder={folder} why={failed} /> : <p className="text-ui text-faint"><Shimmer text="Reading what each place has…" /></p>
   const now = readAt(view)
   return (
     <div data-setup-page={place.id} className="flex flex-col gap-7">
       <div className="flex items-center gap-3">
-        <p data-setup-intro className="min-w-0 flex-1 text-label text-faint">{view.away ? SETUP_AWAY_NOTE : `What each place has for ${view.project}, and where each thing stands.`}</p>
+        <p data-setup-intro className="min-w-0 flex-1 text-label text-faint">What each place has for {view.project}, and where each thing stands.</p>
         <PlacePicker folder={folder} view={view} current={place} />
         {view.away ? null : <AddMenu folder={folder} place={place} open={addOpen} />}
       </div>
+      {view.away ? <SetupAwayNote className="-mt-4" /> : null}
       <PlaceHeader folder={folder} place={place} away={Boolean(view.away)} />
       <SetupPlaceBody folder={folder} view={place} now={now} />
       <p className="px-1 text-label text-faint">Agents see names, never a value. A change reaches running Threads within a minute; a copy refreshes at a Thread&apos;s next turn.</p>
@@ -101,7 +102,7 @@ export function SetupPage({ folder, addOpen }: { folder: string; addOpen?: boole
 export function ThreadSetup({ folder, thread, elsewhere, onAll }: { folder: string | undefined; thread: string | undefined; elsewhere: string | undefined; onAll?: (project: string) => void }) {
   const { view, failed } = useSetupView(folder)
   if (!folder) return <p className="px-4 py-3 text-label text-faint">Open a Thread to see what its place has.</p>
-  if (!view) return <p className="px-4 py-3 text-label text-faint">{failed ? `Setup couldn't be read: ${failed}` : <Shimmer text="Reading this Thread's setup…" />}</p>
+  if (!view) return failed ? <SetupReadFailed folder={folder} why={failed} className="px-4 py-3" /> : <p className="px-4 py-3 text-label text-faint"><Shimmer text="Reading this Thread's setup…" /></p>
   const id = threadPlaceId(view, elsewhere)
   const place = id ? (thread ? threadPlace(view, id, thread) : view.places.find((entry) => entry.id === id)) : undefined
   if (!place) return <p className="px-4 py-3 text-label text-faint">This Thread&apos;s place has no setup to show.</p>
@@ -119,6 +120,7 @@ export function ThreadSetup({ folder, thread, elsewhere, onAll }: { folder: stri
         </Action>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
+        {view.away ? <SetupAwayNote className="pt-1" /> : null}
         <div className="flex flex-col gap-5 pt-2">
           <SetupPlaceBody folder={folder} view={place} now={readAt(view)} compact />
         </div>
@@ -133,7 +135,7 @@ export function PhoneSetup({ folder }: { folder: string }) {
   const picked = useSetup((state) => state.place[folder])
   const place = shownPlace(view, picked)
   const [open, setOpen] = useState<string | undefined>(undefined)
-  if (!view || !place) return <p className="px-5 py-4 text-ui text-faint">{failed ? `Setup couldn't be read: ${failed}` : <Shimmer text="Reading…" />}</p>
+  if (!view || !place) return failed ? <SetupReadFailed folder={folder} why={failed} className="px-5 py-4" /> : <p className="px-5 py-4 text-ui text-faint"><Shimmer text="Reading…" /></p>
   const now = readAt(view)
   const waiting = viewAsks(view).length
   return (
@@ -145,7 +147,7 @@ export function PhoneSetup({ folder }: { folder: string }) {
       <div className="px-4 pb-3">
         <PlacePicker folder={folder} view={view} current={place} short />
         <p className="mt-2 px-1 text-label leading-relaxed text-muted-foreground">{place.line}</p>
-        {view.away ? <p data-setup-intro className="mt-1 px-1 text-label leading-relaxed text-faint">{SETUP_AWAY_NOTE}</p> : null}
+        {view.away ? <SetupAwayNote className="mt-1 px-1" /> : null}
       </div>
       <div className="flex flex-col gap-6 px-4 pb-10">
         <NeedsYou folder={folder} asks={place.asks} now={now} compact />

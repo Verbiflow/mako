@@ -30,6 +30,12 @@ export type AskCard = {
 }
 
 /**
+ * How tall an ask's answers are under a finger, wherever the card is drawn: 44 px, as the dock's ask rows, so a phone's
+ * Decline is as easy to hit as any other answer there. Under a mouse the card keeps its own height.
+ */
+export const ASK_TOUCH = "[@media(pointer:coarse)]:h-11"
+
+/**
  * Runs a choice with its row held busy. An answer that didn't land, or failed, frees the row, so the ask stays open and
  * can be answered again; one that landed keeps it held until the ask goes. A choice that says nothing is taken as landed.
  */
