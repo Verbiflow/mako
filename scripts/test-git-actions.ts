@@ -366,10 +366,20 @@ try {
   assert.equal(await project2.open("c", { repository: `${multi}/api/` }), "api: #102 was already open; pushed 1 commit: https://github.com/o/r/pull/102.", "a repository is named by its folder, absolute or from the project")
   await assert.rejects(project2.status("c", { repository: "nope" }), /^Error: .*multi has no repository named "nope"\. Pass one of: api, web\.$/)
   assert.equal(parseYaml(await project2.status("c", { repository: " ./web/ " })).repository, "web", "a name from the project folder may start with ./ and end with /")
-  const slashes = "/".repeat(100_000) + "x"
-  const started = performance.now()
-  await assert.rejects(project2.status("c", { repository: slashes }), /has no repository named/)
-  assert.ok(performance.now() - started < 1000, "a hostile name is refused in linear time")
+  // Linear, by how its time grows with the name rather than the runner's clock: four times the name takes about four
+  // times as long, where a cost that grows with its square takes sixteen. Each the quickest of five, past a first.
+  const refusing = async (slashes: number) => {
+    let quickest = Infinity
+    for (let run = 0; run < 5; run++) {
+      const began = performance.now()
+      await assert.rejects(project2.status("c", { repository: "/".repeat(slashes) + "x" }), /has no repository named/)
+      quickest = Math.min(quickest, performance.now() - began)
+    }
+    return quickest
+  }
+  await refusing(1_000)
+  const [short, long] = [await refusing(25_000), await refusing(100_000)]
+  assert.ok(long < short * 8, `a hostile name is refused in linear time: ${short.toFixed(2)} ms for 25,000 slashes, ${long.toFixed(2)} ms for four times as many`)
 
   const onlyApi = parseYaml(await project2.status("c", { repository: "api" }))
   assert.deepEqual([onlyApi.repository, onlyApi.pullRequest.number, onlyApi.otherRepositories], ["api", 102, ["web"]], "one repository's report names it and its siblings")
