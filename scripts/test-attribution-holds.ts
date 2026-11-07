@@ -64,7 +64,7 @@ async function countATurn(): Promise<void> {
   const checkout = join(root, "turn", "repo")
   store.saveRoot({ id: "r1", path: checkout, kind: "workspace", repository: false, head: null, mark: null, seenAt: started, trackedAt: started, active: true })
   const own: Attribution = { certainty: "exact", author: { thread: "T1", session: "S1", turn: "R1" }, effect: "modify" }
-  const other: Attribution = { certainty: "exact", author: { thread: "T2", session: "S2", turn: "R2" }, effect: "modify" }
+  const other: Attribution = { certainty: "exact", author: { thread: "T2", session: "S2", turn: "T2-turn" }, effect: "modify" }
   const version = (file: number, step: number) => {
     const text = Array.from({ length: LINES }, (_, line) => (line % 30 === step * 5 % 30 ? `line ${line} of file ${file}, step ${step}` : `line ${line} of file ${file}`)).join("\n")
     const bytes = new TextEncoder().encode(text)
