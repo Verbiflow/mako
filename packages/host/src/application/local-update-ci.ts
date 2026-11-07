@@ -22,9 +22,9 @@ export type CiReading = { passed: true; run: string } | { passed: false; why: st
 /** Asks GitHub for `path`, answering its JSON. */
 export type GitHubApi = (path: string) => Promise<string>
 
-/** `owner/repo` of a GitHub remote's URL; null for any other remote. */
+/** `owner/repo` of a GitHub remote's URL; null for any other remote, which runs every check. */
 export function githubRepository(url: string): string | null {
-  return /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(url.trim())?.[1] ?? null
+  return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(url.trim())?.[1] ?? null
 }
 
 /**

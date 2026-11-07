@@ -47,7 +47,7 @@ for (const [label, runs, jobs] of [
 ] as const) assert.equal((await readCi(answers([...runs], jobs && [...jobs]), "o/r", "main", commit)).passed, false, `${label} vouches for nothing`)
 assert.equal((await readCi(async () => { throw new Error("gh: command not found") }, "o/r", "main", commit)).passed, false, "no gh is no answer")
 assert.equal((await readCi(async () => "<html>", "o/r", "main", commit)).passed, false, "nor is an answer that isn't one")
-for (const url of ["https://github.com/Verbiflow/mako.git", "https://github.com/Verbiflow/mako", "git@github.com:Verbiflow/mako.git", "ssh://git@github.com/Verbiflow/mako.git", "https://x-access-token:t@github.com/Verbiflow/mako.git\n"])
+for (const url of ["https://github.com/Verbiflow/mako.git", "https://github.com/Verbiflow/mako", "git@github.com:Verbiflow/mako.git", "ssh://git@github.com/Verbiflow/mako.git", "https://github.com/Verbiflow/mako.git\n"])
   assert.equal(githubRepository(url), "Verbiflow/mako", url)
 for (const url of ["/tmp/remote.git", "https://gitlab.com/Verbiflow/mako.git", "https://github.com.example.com/Verbiflow/mako.git", "https://example.com/github.com/Verbiflow/mako.git"])
   assert.equal(githubRepository(url), null, url)
