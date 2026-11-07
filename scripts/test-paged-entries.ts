@@ -197,6 +197,40 @@ try {
     }
   }
 
+  // A conversation at rest is paged as it's read, and reads exactly as it was written; the newest rows stay whole.
+  {
+    const id = randomUUID()
+    const folder = join(root, "read-paged")
+    const text = (at: number): Entry => ({ type: "text", id: `b-${at}`, text: `${at} `.repeat(200) })
+    const blocks = Array.from({ length: 2_000 }, (_, at) => text(at))
+    const written = snapshotOf(id, blocks.map((block) => ({ ...block })))
+    written.session.status = "ready"
+    const journal = new LiveJournal(folder, id)
+    journal.commit(written)
+    // A block whose end came as an append reads whole, once, whichever way it's read.
+    const grown = { ...written, revision: written.revision + 1, blocks: written.blocks.map((block, at) => (at === 10 && block.type === "text" ? { ...block, text: `${block.text}and the end` } : block)) }
+    journal.commit(grown, written)
+    journal.close()
+    const again = new LiveJournal(folder, id)
+    const read = await again.readSliced()
+    assert.ok(read)
+    const paged = read.blocks.filter((block) => isPaged(block)).length
+    assert.ok(paged > 1_000, `old blocks are paged as they're read (${paged} of 2000)`)
+    assert.equal(isPaged(read.blocks.at(-1)!), false, "the newest stay whole")
+    assert.equal(isDeepStrictEqual(read.blocks.map((block) => ({ ...block })), grown.blocks), true, "every block reads as it was written, the appended one too")
+    again.close()
+
+    const running = new LiveJournal(join(root, "read-running"), id)
+    const moving = snapshotOf(id, blocks.map((block) => ({ ...block })))
+    moving.session.status = "running"
+    running.commit(moving)
+    running.close()
+    const reopened = new LiveJournal(join(root, "read-running"), id)
+    const held = await reopened.readSliced()
+    assert.equal(held?.blocks.some((block) => isPaged(block)), false, "a conversation still moving stays whole")
+    reopened.close()
+  }
+
   console.log("PASS: paged entries read as they were, survive their rows changing and their journal closing, and a running conversation keeps only its turn under way")
 } finally {
   rmSync(root, { recursive: true, force: true })

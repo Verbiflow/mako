@@ -40,6 +40,7 @@ export interface PagedRows {
 export const INLINE_CHARS = 160
 /** Fields that stay whatever they hold: a paged entry is checked against its row by them. */
 const ALWAYS_INLINE = new Set(["type", "id"])
+const TextField = z.string()
 /** Rows a pager keeps parsed, by characters: an entry's fields read one after another, or a page read twice, parse once. */
 const READ_CACHE_CHARS = 2 * 1024 * 1024
 /** About what a paged entry's object and its slots weigh, beside the fields it keeps. */
@@ -159,7 +160,9 @@ export class EntryPager {
     let weight = PAGED_OVERHEAD
     let long = false
     for (const [key, value] of Object.entries(entry)) {
-      const size = value === undefined ? 0 : JSON.stringify(value).length
+      // A string's length says enough: writing one out only to measure it was half of reading a long journal.
+      const text = TextField.safeParse(value)
+      const size = value === undefined ? 0 : text.success ? text.data.length + 2 : JSON.stringify(value).length
       if (ALWAYS_INLINE.has(key) || size <= inlineChars) {
         Object.defineProperty(paged, key, { value, writable: true, enumerable: true, configurable: true })
         weight += 16 + size * 2

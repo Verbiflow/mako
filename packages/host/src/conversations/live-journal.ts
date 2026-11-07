@@ -302,6 +302,8 @@ const MessageBaseSchema = BaseFields.extend({ entries: z.array(DecodedEntrySchem
 
 /** How many rows a journal's read (`LiveJournal.reading`) reads and parses between two stops. */
 const ROWS_PER_STEP = 128
+/** The newest rows a read leaves whole, for the sweep to weigh (`WARM_CHARS`): an answer's last turn stays quick to show. */
+const WARM_ROWS = 512
 
 /** How long `stageBase` writes rows before it lets other work run. */
 const STAGE_SLICE_MS = 4
@@ -779,7 +781,27 @@ export class LiveJournal {
     if (!metadataValue) return null
     const stored = MetadataSchema.parse(JSON.parse(metadataValue))
     const metadata = { ...stored, revision: Math.max(stored.revision, this.revision()) }
+    const requests: LiveRequest[] = []
+    const requestRows = this.db.prepare("SELECT rowid AS at, value FROM requests WHERE rowid > ? ORDER BY rowid LIMIT ?")
+    for (let last = -1; ;) {
+      const rows = requestRows.all(last, ROWS_PER_STEP)
+      for (const row of rows) {
+        const request = RowAtSchema.parse(row)
+        requests.push(LiveRequestSchema.parse(JSON.parse(request.value)))
+        last = request.at
+      }
+      if (rows.length < ROWS_PER_STEP) break
+      yield
+    }
+    // A conversation at rest is paged as it's read, its bodies gone before the next rows come, as a sweep would leave it.
+    // One still moving, or a block with appends to come, stays whole; the newest stay too, the sweep's to weigh.
+    const settled = metadata.session.status !== "running" && metadata.session.status !== "starting" && !requests.some((request) => request.status === "dispatching")
     const blocks: Entry[] = []
+    let pagedTo = 0
+    const pageRead = (end: number) => {
+      for (; settled && pagedTo < end; pagedTo++)
+        if (!this.appends.has(pagedTo)) blocks[pagedTo] = this.pager.page(blocks[pagedTo]!, "blocks", pagedTo)
+    }
     const blockRows = this.db.prepare("SELECT id, value FROM blocks WHERE id > ? ORDER BY id LIMIT ?")
     for (let last = -1; ;) {
       const rows = blockRows.all(last, ROWS_PER_STEP)
@@ -789,6 +811,7 @@ export class LiveJournal {
         last = block.id
       }
       if (rows.length < ROWS_PER_STEP) break
+      pageRead(blocks.length - WARM_ROWS)
       yield
     }
     const tails = new Map<number, AppendValue[]>()
@@ -819,18 +842,6 @@ export class LiveJournal {
     // The rows hold what was read; merged again below, an entry that reads the same keeps the object its row holds.
     if (read && !read.whole) this.baseRows = [...read.base.entries]
     const baseLiveStart = read?.entryIndex && metadata.baseLiveStart !== undefined ? read.entryIndex(metadata.baseLiveStart) : metadata.baseLiveStart
-    const requests: LiveRequest[] = []
-    const requestRows = this.db.prepare("SELECT rowid AS at, value FROM requests WHERE rowid > ? ORDER BY rowid LIMIT ?")
-    for (let last = -1; ;) {
-      const rows = requestRows.all(last, ROWS_PER_STEP)
-      for (const row of rows) {
-        const request = RowAtSchema.parse(row)
-        requests.push(LiveRequestSchema.parse(JSON.parse(request.value)))
-        last = request.at
-      }
-      if (rows.length < ROWS_PER_STEP) break
-      yield
-    }
     const order = this.ordered ? z.array(z.string()).safeParse(JSON.parse(RowKeysSchema.parse(this.db.prepare("SELECT keys FROM request_order WHERE id=1").get()).keys)).data : undefined
     if (order) inOrder(requests, order)
     const harnessTurns = this.db
