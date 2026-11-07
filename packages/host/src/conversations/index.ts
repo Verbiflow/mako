@@ -60,6 +60,7 @@ import type { FileFoldersOptions, FileGrepOptions } from "../contracts/file-inde
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 import type { ConversationSettings } from "../contracts/turn-continuation.js"
+import type { KeepAwakeSettings, KeepAwakeState } from "../contracts/keep-awake.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 import { z } from "zod"
 import { harnessOrder } from "../contracts/harness-defaults.js"
@@ -83,6 +84,7 @@ export { SessionUploads, declareSyncMethods, readBackfill, syncStatusOf, uploadS
 export { SYNC_WINDOW_MS, syncTier, windowStart } from "./sync-window.js"
 export { CloudReadiness, READY_EVERY_MS } from "./cloud-readiness.js"
 export { SleepHandOff, sleepWatchHelper } from "./sleep-handoff.js"
+export { KeepAwake, recountsWork } from "./keep-awake.js"
 export { ownerHold } from "./owner-check.js"
 export { CloudReturns } from "./cloud-returns.js"
 export { CloudFollow } from "./cloud-follow.js"
@@ -723,6 +725,11 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:handoff-settings", () => noHandOffs)
   const setNoHandOffs: (onSleep: boolean) => HandOffSettings = () => noHandOffs
   methods.handle("mako:handoff-settings-set", setNoHandOffs)
+  /** Keeping this Mac awake while agents work: on a person's Mac `KeepAwake` answers first; elsewhere there's no Mac to keep. */
+  const noKeepAwake: KeepAwakeState = { settings: { on: false, lidClosed: false }, hold: { kind: "rest" }, unavailable: "This Mako doesn't keep a Mac awake." }
+  methods.handle("mako:keep-awake", () => noKeepAwake)
+  const setNoKeepAwake: (change: Partial<KeepAwakeSettings>) => KeepAwakeState = () => noKeepAwake
+  methods.handle("mako:keep-awake-set", setNoKeepAwake)
   /** Where no person's Mac brings Threads back (a cloud machine, the fixture desk); on a Mac, `CloudReturns` answers first. */
   const returnNowhere: (conversationId: string, move: string, options?: ThreadReturnOptions) => ThreadReturnOutcome = () => ({ kind: "stayed", reason: "This Mako doesn't bring Threads back from the cloud." })
   methods.handle("mako:thread-return", returnNowhere)
@@ -784,7 +791,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   /** The person answering what one of an Apex's Fins asks them, from the Apex's Thread on any device (`Agents.respond`). */
   methods.handle("mako:agents-next-place", async (conversation: string) => {
     const next = await conversations.agents?.nextPlace(conversation)
-    return next ? { label: next.label } : null
+    return next ? { label: next.label, harness: next.harness } : null
   })
   methods.handle("mako:agents-continue-next", async (conversation: string, id: string) => await conversations.agents?.continueNext(conversation, id) ?? false)
   methods.handle("mako:agents-respond", (conversation: string, input: AgentsRespondInput) =>

@@ -1,6 +1,7 @@
 import { accounts } from "@/state/accounts"
 import { handOff } from "@/state/handoff"
 import { conversationSettings } from "@/state/conversation-settings"
+import { keepAwake } from "@/state/keep-awake"
 import { revealWorkedProject } from "@/state/prefs"
 import { playFeedback } from "@/state/feedback"
 import { workspaceTransitionStore } from "@/state/workspace-transition"
@@ -416,6 +417,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "conversation-settings") {
     conversationSettings.settled(event.settings)
+    return
+  }
+  if (event.type === "keep-awake") {
+    keepAwake.settled(event.state)
     return
   }
   if (event.type === "runtime-updates") {

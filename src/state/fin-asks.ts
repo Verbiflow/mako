@@ -58,9 +58,9 @@ export async function answerFin(apexConversation: string, ask: PersonAsk, answer
 }
 
 /** Where a Thread a limit holds could go on, as its card says it; undefined with nowhere, or with no host to ask. */
-export async function nextPlace(conversation: string): Promise<string | undefined> {
+export async function nextPlace(conversation: string): Promise<{ label: string; harness: string } | undefined> {
   if (!hasBridge()) return undefined
-  return getMako().agentsNextPlace(conversation).then((next) => next?.label, () => undefined)
+  return getMako().agentsNextPlace(conversation).then((next) => next ?? undefined, () => undefined)
 }
 
 /** The person pressed that card. False when it didn't go, with a toast that says so. */

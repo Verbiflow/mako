@@ -32,6 +32,8 @@ const reads = [
   "mako:thread-move-asks",
   "mako:handoff-settings",
   "mako:conversation-settings",
+  /** Where keeping this Mac awake stands; reads what `KeepAwake` holds. */
+  "mako:keep-awake",
   "mako:git-status",
   "mako:git-diff",
   "mako:git-diff-all",
@@ -331,6 +333,8 @@ const replays = [
   "mako:handoff-settings-set",
   /** The same settings saved twice are one choice. */
   "mako:conversation-settings-set",
+  /** The same choice saved twice is one choice. */
+  "mako:keep-awake-set",
   /** `LiveAutoContinue.continueNow`: the request id is the continuation's; a repeat finds it and changes nothing. */
   "mako:live-continue-turn",
   /** `ThreadStore.renameThread` and `clearThreadTitle`: the operation id is receipted. */

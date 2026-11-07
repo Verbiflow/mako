@@ -67,6 +67,7 @@ import type { ForkInput, TransferInput } from "./conversation-control.js"
 import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissionResponse, PromptAttachment } from "./providers-acp.js"
 import type { LiveStartOptions, LiveSnapshot, LiveRequest, SignInReadiness, SignInResume } from "./live-conversations.js"
 import type { ConversationSettings } from "./turn-continuation.js"
+import type { KeepAwakeSettings, KeepAwakeState } from "./keep-awake.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
@@ -483,6 +484,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** Whether agents at work go to the cloud as this Mac sleeps, and whether it can. */
     handOffSettings: () => invokeTrustedHost<HandOffSettings>("mako:handoff-settings"),
     setHandOffOnSleep: (onSleep: boolean) => invokeTrustedHost<HandOffSettings>("mako:handoff-settings-set", onSleep),
+    /** Whether this Mac is kept awake while agents work, the person's choice for it, and what's held now. */
+    keepAwake: () => invokeTrustedHost<KeepAwakeState>("mako:keep-awake"),
+    setKeepAwake: (change: Partial<KeepAwakeSettings>) => invokeTrustedHost<KeepAwakeState>("mako:keep-awake-set", change),
     /**
      * Brings the Thread of a conversation back from the cloud under `move`; its steps arrive as `thread-return-step`
      * events. `options.project`: the folder its project is in now, when the one its worktree was made from moved.
@@ -1015,7 +1019,7 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<AgentsDirected | AgentRefused>("mako:agents-direct", conversation, input),
     /** Where a Thread held by a limit could go on, for its card (`Agents.nextPlace`). */
     agentsNextPlace: (conversation: string) =>
-      invokeTrustedHost<{ label: string } | null>("mako:agents-next-place", conversation),
+      invokeTrustedHost<{ label: string; harness: string } | null>("mako:agents-next-place", conversation),
     agentsContinueNext: (conversation: string, id: string) =>
       invokeTrustedHost<boolean>("mako:agents-continue-next", conversation, id),
     agentsRespond: (conversation: string, input: AgentsRespondInput) =>
