@@ -75,10 +75,12 @@ export const ROW_SURFACE =
 
 /**
  * A row's floating controls, shown while the row (`group`) is hovered or focused, or a menu of theirs is open.
- * `z-[1]` keeps them over the row's status mark, whose translucent parts paint as their own layers.
+ * `z-[1]` keeps them over the row's status mark, whose translucent parts paint as their own layers. Focus inside the
+ * row is an arbitrary variant, not `group-has-[…]`: that compiles to `:is(.group:has(…) *)`, and with a universal last
+ * part any element added anywhere restyles the whole of `main`, a frame lost for each transcript row that mounts.
  */
 export const ROW_ACTIONS =
-  "pointer-events-none absolute inset-y-0 right-0 z-[1] flex items-center pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
+  "pointer-events-none absolute inset-y-0 right-0 z-[1] flex items-center pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 [.group:has(:focus-visible)_&]:pointer-events-auto [.group:has(:focus-visible)_&]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
 /** An Apex's row is two lines, its crew's pips under its title (`ApexCrewLine`). */
 export const APEX_SURFACE = "h-11 flex-col items-stretch justify-center gap-[3px]"
