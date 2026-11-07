@@ -39,6 +39,11 @@ export interface Keychain {
   delete(item: KeychainItem): Promise<boolean>
 }
 
+/** What the addon read: it says no item as null, or undefined for a store without one. */
+export function passwordRead(password: string | null | undefined): KeychainRead {
+  return password === null || password === undefined ? { kind: "missing" } : { kind: "found", value: password }
+}
+
 /**
  * The keychain asked from this process, through `@napi-rs/keyring`, off the
  * event loop. A prompt from macOS keeps the read waiting until the person
@@ -52,10 +57,9 @@ export function processKeychain(keyring: () => Promise<typeof Keyring>): Keychai
         const { AsyncEntry, findCredentialsAsync } = await keyring()
         if (item.account === undefined) {
           const [first] = await findCredentialsAsync(item.service)
-          return first ? { kind: "found", value: first.password } : { kind: "missing" }
+          return passwordRead(first?.password)
         }
-        const value = await new AsyncEntry(item.service, item.account).getPassword()
-        return value === undefined ? { kind: "missing" } : { kind: "found", value }
+        return passwordRead(await new AsyncEntry(item.service, item.account).getPassword())
       } catch (error) {
         return { kind: "failed", reason: error instanceof Error ? error.message : String(error) }
       }

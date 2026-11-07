@@ -224,7 +224,7 @@ async function check() {
       "Use a host started with a temporary MAKO_DATA_ROOT and no connected models"
     )
     // A fresh profile opens in Review; staging lives in the Files layout.
-    await evaluate("import('/src/state/prefs.ts').then(({setPref}) => setPref('changesLayout', 'files'))")
+    await evaluate("import('/src/state/prefs.ts').then(({setPref}) => setPref('changesView', 'files'))")
     await evaluate(
       `import('/src/state/session.ts').then(({actions}) => actions.openWorkspace(${JSON.stringify(repository)}))`
     )
@@ -427,9 +427,9 @@ async function check() {
     }
     await click('[data-surface-id="files"]')
     await until(
-      "Boolean(document.querySelector('input[placeholder=\"Find a file\"]'))"
+      "Boolean(document.querySelector('input[placeholder^=\"Search\"]'))"
     )
-    await fill('input[placeholder="Find a file"]', "feature.ts")
+    await fill('input[placeholder^="Search"]', "feature.ts")
     await until(
       "Boolean(document.querySelector('button[title=\"feature.ts\"]'))"
     )

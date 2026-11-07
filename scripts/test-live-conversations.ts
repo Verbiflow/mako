@@ -901,6 +901,13 @@ async function bulkLoadsAreNamed() {
     const memory = owner.residency().memory
     assert.deepEqual(memory.loads, [{ by: "a list reading journals", count: ids.length }])
     assert.ok(memory.held.length > 0 && memory.held.every((held) => held.by === "a list reading journals"), "each conversation in memory says who read it in")
+    // One running as no work at all is named by who called it, or the log can only say "unnamed work".
+    for (const id of ids) owner["records"].release(id)
+    const noWorkOfItsOwn = () => { for (const id of ids) owner.snapshot(id) }
+    noWorkOfItsOwn()
+    assert.equal(warned.length, 2, "a second reader gets a line of its own")
+    assert.equal(warned[1]?.fields?.by, "unnamed work")
+    assert.match(String(warned[1]?.fields?.from), /noWorkOfItsOwn/, "and says who called it")
     archives.close()
     console.log("PASS: the report and the lifecycle load no journal; a reader loading in bulk is named")
   } finally {
