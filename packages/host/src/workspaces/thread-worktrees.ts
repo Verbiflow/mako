@@ -556,12 +556,12 @@ export class ThreadWorktreeService {
     const folder = await realpath(cwd)
     const repoRoot = await this.git.output(folder, ["rev-parse", "--show-toplevel"]).catch(() => "")
     if (repoRoot) {
-      if (await this.git.succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])) await this.spares.want(repoRoot)
+      if (await this.git.succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])) await this.spares.want(this.homeOf(repoRoot))
       return
     }
     const found = await projectRepositories(this.git, folder)
     if ("roots" in found && (await Promise.all(found.roots.map((root) => this.git.succeeds(root, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])))).every(Boolean))
-      await this.spares.want(folder)
+      await this.spares.want(this.homeOf(folder))
   }
 
   /**
@@ -1557,8 +1557,28 @@ export class ThreadWorktreeService {
     return ready
   }
 
+  /**
+   * The project a folder is a worktree of, however many starts back: a Fin starts from its Apex's worktree, which has no
+   * spares of its own, and shares its repository with the project's.
+   */
+  private homeOf(folder: string): string {
+    const roots = new Map<string, string>()
+    for (const { path, repoRoot, project } of this.threads.worktrees()) {
+      roots.set(path, repoRoot)
+      // One repository of a project folder's checkout: the folder around it stands for the project.
+      if (project !== repoRoot) roots.set(dirname(path), project)
+    }
+    const seen = new Set<string>()
+    let home = folder
+    for (let up = roots.get(home); up !== undefined && !seen.has(up); up = roots.get(home)) {
+      seen.add(up)
+      home = up
+    }
+    return home
+  }
+
   private wantSpares(repoRoot: string): void {
-    const wanted = this.spares.want(repoRoot).catch(() => {})
+    const wanted = this.spares.want(this.homeOf(repoRoot)).catch(() => {})
     this.wanting.add(wanted)
     void wanted.finally(() => this.wanting.delete(wanted))
   }
@@ -1566,10 +1586,14 @@ export class ThreadWorktreeService {
   /** A spare placed at the receipt's path and branched, or none; a spare that fails is given back and the send checks out fresh. */
   private async fromSpare(receipt: Receipt): Promise<Spare | undefined> {
     const members = membersOf(receipt)
-    const spare = await this.spares.claim(receipt.repoRoot, receipt.members?.map((member) => member.repoRoot))
+    const home = this.homeOf(receipt.repoRoot)
+    const atHome = (repoRoot: string) => join(home, relative(receipt.repoRoot, repoRoot))
+    const spare = await this.spares.claim(home, receipt.members?.map((member) => atHome(member.repoRoot)))
     if (!spare) return undefined
     try {
-      await this.spares.place(spare, receipt.path, receipt.branch, members.map(({ repoRoot, base }) => ({ repoRoot, base })))
+      // Filed under the folder it started from, which a spare of the project isn't.
+      await mkdir(dirname(receipt.path), { recursive: true, mode: 0o700 })
+      await this.spares.place(spare, receipt.path, receipt.branch, members.map(({ repoRoot, base }) => ({ repoRoot: atHome(repoRoot), base })))
     } catch {
       await this.spares.discard(spare)
       if (!existsSync(receipt.path)) return undefined
