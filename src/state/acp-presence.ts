@@ -27,6 +27,8 @@ export interface AcpPresence {
   background?: number
   /** Where it runs when not on this Mac, in words ("Studio", "a cloud machine"). */
   elsewhere?: string
+  /** The kind of device `elsewhere` names (`LiveSummary.elsewhereKind`): a machine's rows wear a server, a Mac's a laptop. */
+  elsewhereKind?: string
   /** What a conversation on another device waits on there, in a line ("Approve: npm test"). */
   waitingOn?: string
   /** Its Thread's name as the device it runs on has it, when it runs elsewhere. */
@@ -105,6 +107,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
       if (presence.status === "background" && work) presence.background = work.count
       if (conversation.parent) presence.apex = conversation.parent.thread
       if (conversation.elsewhere) presence.elsewhere = conversation.elsewhere
+      if (conversation.elsewhereKind) presence.elsewhereKind = conversation.elsewhereKind
       if (conversation.waitingOn) presence.waitingOn = conversation.waitingOn
       if (conversation.threadTitle) presence.threadTitle = conversation.threadTitle
       if (conversation.quietSince !== undefined) presence.quietSince = conversation.quietSince
@@ -145,6 +148,7 @@ export function sameAcpPresence(
           (presence.nativePaths ?? []).join("\0") &&
         candidate.status === presence.status &&
         candidate.elsewhere === presence.elsewhere &&
+        candidate.elsewhereKind === presence.elsewhereKind &&
         candidate.waitingOn === presence.waitingOn &&
         candidate.threadTitle === presence.threadTitle &&
         candidate.quietSince === presence.quietSince &&

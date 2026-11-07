@@ -28,7 +28,7 @@ import "../web-client/style.css"
  * holds the threads the desktop's `?mock&app=busy` desk lists (the same titles, agents and folders, run on one Mac),
  * and opening one draws its conversation from the same fixtures. `test-web-desk-ui.mjs` drives it beside the desktop.
  * `?thread=busy` opens the busy Thread, `?thread=apex` the mock Apex (`&turns=260` for a long one); `?theme=light`
- * draws it light.
+ * draws it light; `?machine` runs the Threads on a Linux machine of the person's own.
  */
 
 const search = new URLSearchParams(location.search)
@@ -124,7 +124,8 @@ store.set({ messages: [], stream: null })
 accountListStore.set({
   phase: "live",
   rows: [...busy, apex, ...native],
-  devices: new Map([[STUDIO, { id: STUDIO, kind: "desktop", name: "Studio", platform: "darwin" }]]),
+  // `?machine`: the Threads run on a machine of the person's own, so the rail, the strip and the chip wear its server.
+  devices: new Map([[STUDIO, search.has("machine") ? { id: STUDIO, kind: "runtime", name: "build-box", platform: "Linux x64 · Ubuntu 24.04" } : { id: STUDIO, kind: "desktop", name: "Studio", platform: "darwin" }]]),
 })
 
 /** What another Session's owner answers when it's opened: its record, a short exchange. */
