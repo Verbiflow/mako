@@ -18,6 +18,11 @@ assert.match(passed.output, /to stderr/)
 assert.doesNotMatch(passed.output, /HUNG/)
 assert.equal((await say("process.exit(3)")).code, 3, "and its exit code")
 
+// One that can't start says so, and isn't a pass.
+let unstarted = ""
+assert.equal(await runSuite("/no/such/suite", [], { limitMs: 60_000, quietMs: 60_000, write: (text) => { unstarted += text } }), null)
+assert.match(unstarted, /DID NOT START: \/no\/such\/suite: .*ENOENT/, "it says why")
+
 // Silent, with a child of its own: both are named, and both go.
 const child = 'const c=require("child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)//the-stuck-script"],{stdio:"ignore"});console.log("CHILD "+c.pid);setInterval(()=>{},1000)'
 const silent = await say(child, { quietMs: 1_500 })

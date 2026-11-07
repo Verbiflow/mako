@@ -68,7 +68,10 @@ export function runSuite(command, args, { limitMs, quietMs, write = (text) => pr
       child.stderr.destroy()
       resolve(stopped ? null : code)
     }
-    child.once("error", () => settle(null))
+    child.once("error", (error) => {
+      write(`\nDID NOT START: ${command}: ${error.message}\n`)
+      settle(null)
+    })
     child.once("exit", (code) => setTimeout(() => settle(code), 200))
   })
 }
