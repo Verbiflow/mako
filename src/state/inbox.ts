@@ -92,6 +92,8 @@ export interface SetupInboxItem {
   since: number
   folder: string
   ask: SetupAsk
+  /** Its page was built away from its Mac (`SetupView.away`): only a no can be said here. */
+  away: boolean
 }
 
 export type InboxAsk = FinInboxItem | ApprovalInboxItem | WaitingInboxItem | SetupInboxItem
@@ -261,7 +263,7 @@ function buildModel(acp: AcpState, threads: ThreadsState, setup: SetupStateOf): 
     asks.push({ kind: "waiting", key: `waiting:${path}`, title: refTitle(ref), harness: ref.harness, question: status.detail ?? "Waiting for you", since: status.since, open: { kind: "ref", ref } })
   }
   for (const { folder, ask } of allAsks(setup))
-    asks.push({ kind: "setup", key: `setup:${folder}:${ask.id}`, title: ask.by.title, harness: ask.by.harness ?? "", question: setupAskWords(ask), since: ask.at, folder, ask })
+    asks.push({ kind: "setup", key: `setup:${ask.id}`, title: ask.by.title, harness: ask.by.harness ?? "", question: setupAskWords(ask), since: ask.at, folder, ask, away: Boolean(setup.byFolder[folder]?.away) })
   asks.sort((left, right) => left.since - right.since)
 
   const toRead: ReadInboxItem[] = []

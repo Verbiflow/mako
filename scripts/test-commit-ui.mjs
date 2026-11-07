@@ -1,13 +1,13 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
-import { mkdtemp, writeFile, mkdir } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile, mkdir } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 import { createServer } from "node:http"
 import { once } from "node:events"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (process.versions.electron) {
   void check()
@@ -23,7 +23,7 @@ if (process.versions.electron) {
     "Pass the dev URL of a host started with a temporary MAKO_DATA_ROOT, e.g. `MAKO_DATA_ROOT=$(mktemp -d) PORT=5199 node electron/start.mjs --web`. A MAKO_PROFILE host shares the user's model connections; this check requires none."
   )
   assert.ok(["127.0.0.1", "localhost"].includes(new URL(url).hostname))
-  const root = await mkdtemp(join(tmpdir(), "mako-commit-ui-"))
+  const root = testScratch("mako-commit-ui-")
   await writeFile(
     join(root, "package.json"),
     JSON.stringify({
@@ -45,7 +45,6 @@ if (process.versions.electron) {
     child.once("error", reject)
     child.once("exit", (code) => resolve(code ?? 1))
   })
-  console.log(`Commit UI evidence: ${root}`)
 }
 
 async function check() {
@@ -224,7 +223,7 @@ async function check() {
       "Use a host started with a temporary MAKO_DATA_ROOT and no connected models"
     )
     // A fresh profile opens in Review; staging lives in the Files layout.
-    await evaluate("import('/src/state/prefs.ts').then(({setPref}) => setPref('changesLayout', 'files'))")
+    await evaluate("import('/src/state/prefs.ts').then(({setPref}) => setPref('changesView', 'files'))")
     await evaluate(
       `import('/src/state/session.ts').then(({actions}) => actions.openWorkspace(${JSON.stringify(repository)}))`
     )
@@ -427,9 +426,9 @@ async function check() {
     }
     await click('[data-surface-id="files"]')
     await until(
-      "Boolean(document.querySelector('input[placeholder=\"Find a file\"]'))"
+      "Boolean(document.querySelector('input[placeholder^=\"Search\"]'))"
     )
-    await fill('input[placeholder="Find a file"]', "feature.ts")
+    await fill('input[placeholder^="Search"]', "feature.ts")
     await until(
       "Boolean(document.querySelector('button[title=\"feature.ts\"]'))"
     )

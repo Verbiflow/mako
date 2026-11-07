@@ -320,6 +320,8 @@ export interface LiveRequest {
   id: string
   /** When the host admitted it (epoch ms); absent in journals written before it was kept. */
   createdAt?: number
+  /** When it was sent to its harness, which is when its turn began: a message can wait long after it's admitted. */
+  dispatchedAt?: number
   text: string
   attachments: PromptAttachment[]
   /**
@@ -457,6 +459,11 @@ export interface LiveSummary {
    * Git as that host reads them, naming the conversation, since a path there can be another conversation's too.
    */
   elsewhere?: string
+  /**
+   * The kind of the account's device `elsewhere` names (`desktop`, `runtime`), where whoever listed it knows: a
+   * machine of the person's own is marked apart from a Mac. Absent for the cloud, and from a host before it.
+   */
+  elsewhereKind?: string
   /**
    * What a conversation listed from another device waits on, in a line ("Approve: npm test"), while it waits on a
    * person there: the row asks for them as a local one would.

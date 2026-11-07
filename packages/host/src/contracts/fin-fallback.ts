@@ -235,8 +235,8 @@ export function limitNoticeWords(facts: LimitFacts, label: (harness: string) => 
   return {
     ran: `${where} ran out${facts.until === undefined ? "" : ` until ${resetWords(facts.until, now)}`}`,
     did: [
-      ...(facts.apex ? [`This Thread moved to ${facts.apex}.`] : []),
-      ...[...by].map(([to, n]) => `${count(n, "Fin", "Fins")} moved to ${to}.`),
+      ...(facts.apex ? [`This Thread ${by.has(facts.apex) ? `and ${count(by.get(facts.apex)!, "Fin", "Fins")} ` : ""}moved to ${facts.apex}.`] : []),
+      ...[...by].filter(([to]) => to !== facts.apex).map(([to, n]) => `${count(n, "Fin", "Fins")} moved to ${to}.`),
       ...(facts.stopped ? [`${count(facts.stopped, "Fin has", "Fins have")} nowhere to go.`] : []),
       ...(facts.waiting ? [`${count(facts.waiting, "report is waiting for its Apex", "reports are waiting for their Apex")}.`] : []),
     ].join(" "),

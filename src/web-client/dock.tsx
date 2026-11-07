@@ -1,6 +1,6 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import { FinOfApexNote } from "./apex-fins"
-import { FinAskCard } from "./fin-ask"
+import { FinAskCard, LimitContinueCard } from "./fin-ask"
 import { FinsNeedYou } from "@/components/composer/fin-asks"
 import { sendDirect, useAddressee, useThreadAsks, useThreadRollup } from "@/state/apex-fins"
 import { FIN_WORD } from "@mako/host/contracts/agents"
@@ -150,8 +150,9 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
       {ask ? <AskCard key={ask.kind === "question" ? ask.id : ask.permission.id} ask={ask} conversation={conversation} harness={harness} answerTyped={answerTyped} /> : null}
       {card !== null ? <FinsNeedYou thread={threadId} compact /> : null}
       {fin ? <FinAskCard key={`${fin.fin}:${fin.ask.id}`} apex={conversation} ask={fin} more={finAsks.length - 1} answerTyped={answerTyped} /> : null}
+      {!ask && !fin ? <LimitContinueCard /> : null}
       {unsent.length ? (
-        <ul role="list" aria-label="Messages not sent" className="mx-auto flex w-full max-w-content flex-col gap-1.5 px-3 pb-1">
+        <ul role="list" aria-label="Messages not sent" className="mx-auto flex w-full max-w-content flex-col gap-1.5 px-2 pb-1">
           {unsent.map((message) => (
             <li key={message.id} className="web-unsent">
               <p className="min-w-0 flex-1 truncate text-ui">{message.text}</p>
@@ -166,7 +167,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
           ))}
         </ul>
       ) : null}
-      <div className="mx-auto w-full max-w-content px-3">
+      <div data-dock-queue className="mx-auto w-full max-w-content px-2">
         <PromptQueue onEdit={editing.begin} />
       </div>
       <ReviewTray conversation={conversation} />

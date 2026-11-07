@@ -291,8 +291,11 @@ try {
   stopping.track(stubborn.child, { kind: "acp:test", owner: "conv-stubborn" })
   const leftAt = [await polite.grandchild, await stubborn.grandchild]
   const endedAt = performance.now()
-  assert.deepEqual((await stopping.end(300)).map((entry) => entry.owner), ["grok", "conv-stubborn"])
-  assert.ok(performance.now() - endedAt < 2_000, "ending waits for the exits, not out a fixed time")
+  assert.deepEqual((await stopping.end(50)).map((entry) => entry.owner), ["grok", "conv-stubborn"])
+  const endMs = performance.now() - endedAt
+  // Ending waits for the exits: the shortest fixed wait it has is the second after SIGKILL, which the exits it waits
+  // for take a small part of. A grace it ignored would show the default two seconds on top.
+  assert.ok(endMs < 1_000, `ending waits for the exits, not out a fixed time: ${Math.round(endMs)} ms`)
   await settle()
   for (const pid of [polite.child.pid!, stubborn.child.pid!, ...leftAt]) assert.equal(alive(pid), false, `${pid} ended with the host`)
   assert.deepEqual(JSON.parse(await readFile(stopping.path, "utf8")).children, [], "nothing is left for the next host to reap")

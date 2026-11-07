@@ -1,14 +1,14 @@
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { constants } from "node:fs"
 import { resolveLocalIdentity } from "./mac-local-signing.mjs"
-import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import assert from "node:assert/strict"
 import { createPackage } from "@electron/asar"
 import { copyBuildSource, verifyLocalCandidate } from "@mako/host/application/local-updates"
 import { physicalFiles } from "@mako/host/base/physical-files"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 async function check() {
   const root = process.env.MAKO_COPY_TEST_ROOT
@@ -45,7 +45,7 @@ if (process.versions.electron) {
   app.setPath("userData", join(process.env.MAKO_COPY_TEST_ROOT, "profile"))
   void check().then(() => app.exit(process.exitCode === undefined ? 0 : Number(process.exitCode))).catch((error) => { console.error(error); app.exit(1) })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-checkout-copy-"))
+  const root = testScratch("mako-checkout-copy-")
   const stagedApp = process.argv[2] === "--app"
   const sourceArgument = stagedApp ? process.argv[3] : process.argv[2]
   assert.ok(!stagedApp || sourceArgument, "Pass --app <Mako.app> to verify signed staging")

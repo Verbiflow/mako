@@ -1,6 +1,10 @@
 import { toast } from "sonner"
+import { ZodError } from "zod"
 import {
+  askAnswerLabel,
+  askAnswers,
   askLine,
+  SETUP_AWAY_ALLOW,
   viewAsks,
   type AskAnswer,
   type RowAction,
@@ -12,6 +16,7 @@ import {
   type SetupRow,
   type SetupView,
 } from "@mako/host/contracts/setup"
+import type { AskCard } from "@/lib/ask-card"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
 
@@ -77,15 +82,32 @@ export async function readSetup(folder: string): Promise<SetupView | undefined> 
     })
     return view
   } catch (error) {
-    setupStore.set((state) => ({ failed: { ...state.failed, [folder]: error instanceof Error ? error.message : String(error) } }))
+    setupStore.set((state) => ({ failed: { ...state.failed, [folder]: readFailure(error instanceof Error ? error : new Error(String(error))) } }))
     return undefined
   }
+}
+
+/**
+ * Why a read failed, in words the person can act on. A reply this build's schemas refuse (a newer cloud's field, say)
+ * is said as that, and its detail goes to the console, never onto the page.
+ */
+export function readFailure(error: Error): string {
+  if (error instanceof ZodError) {
+    console.warn("Setup's reply didn't match this build's schema", error.issues)
+    return "Its answer wasn't one this version of Mako reads."
+  }
+  return error.message
 }
 
 /** Reads a folder's Setup unless it was read within the last minute: what a Thread's notice asks as it opens. */
 export function readSetupIfOld(folder: string, maxAgeMs = 60_000): void {
   const held = setupStore.get().byFolder[folder]
   if (!held || Date.now() - held.at > maxAgeMs) void readSetup(folder)
+}
+
+/** Whether a folder's page was built away from its Mac (`SetupView.away`), so only a no or a Stop can be drawn. */
+export function useAway(folder: string): boolean {
+  return useSetup((state) => Boolean(state.byFolder[folder]?.away))
 }
 
 export function choosePlace(folder: string, place: string) {
@@ -111,14 +133,23 @@ export function threadPlaceId(view: SetupView | undefined, elsewhere: string | u
   return view.places.find((place) => place.place.kind === "device" && place.place.here)?.id ?? view.places[0]?.id
 }
 
-/** Every folder's asks, oldest first: what the Inbox lists. */
+/**
+ * Every ask, once, oldest first: what the Inbox lists. A project's asks are in the view of each of its folders (its
+ * main checkout's, a worktree's), and one ask is one thing to answer.
+ */
 export function allAsks(state: SetupState): Array<{ folder: string; ask: SetupAsk }> {
-  return Object.entries(state.byFolder)
-    .flatMap(([folder, view]) => viewAsks(view).map((ask) => ({ folder, ask })))
-    .sort((left, right) => left.ask.at - right.ask.at)
+  const seen = new Map<string, { folder: string; ask: SetupAsk }>()
+  for (const [folder, view] of Object.entries(state.byFolder)) for (const ask of viewAsks(view)) if (!seen.has(ask.id)) seen.set(ask.id, { folder, ask })
+  return [...seen.values()].sort((left, right) => left.ask.at - right.ask.at)
+}
+
+/** The folders whose views hold an ask: each reads again once it's answered. */
+function foldersHolding(state: SetupState, ask: string): string[] {
+  return Object.entries(state.byFolder).filter(([, view]) => viewAsks(view).some((held) => held.id === ask)).map(([folder]) => folder)
 }
 
 async function act(folder: string, key: string, request: SetupAct): Promise<SetupActOutcome> {
+  const holding = request.act === "answer" ? foldersHolding(setupStore.get(), request.ask) : []
   setupStore.set((state) => ({ busy: { ...state.busy, [key]: true } }))
   try {
     const from = currentSource()
@@ -136,7 +167,7 @@ async function act(folder: string, key: string, request: SetupAct): Promise<Setu
       delete busy[key]
       return { busy }
     })
-    void readSetup(folder)
+    for (const each of new Set([folder, ...holding])) void readSetup(each)
   }
 }
 
@@ -144,29 +175,43 @@ async function act(folder: string, key: string, request: SetupAct): Promise<Setu
  * A new Thread in the project with the request written, which the person reads and sends: how the recipe changes
  * (a tool into its prepare, a file into its carry), since each change is proved before every Thread gets it.
  */
-let drafter: ((root: string, text: string) => Promise<void>) | undefined
+let drafter: ((root: string, text: string) => Promise<boolean>) | undefined
 
 /** How this window starts a Thread with a request written: the desk's own; a browser away from the Mac has none. */
 export function setSetupDrafter(next: typeof drafter) {
   drafter = next
 }
 
-async function draftInNewThread(root: string, text: string) {
-  if (!drafter) {
-    toast("Ask for this from a Thread on your Mac")
-    return
+/**
+ * The desk's drafter: a new Thread of the project, then the request written into its composer. It has drafted only
+ * when both happened: a Thread that couldn't open, or words no composer took, answer false.
+ */
+export function setupDrafter(open: (root: string) => Promise<boolean>, compose: (text: string) => Promise<boolean>) {
+  return async (root: string, text: string): Promise<boolean> => {
+    window.dispatchEvent(new CustomEvent("mako:close-settings"))
+    if (!(await open(root))) return false
+    return compose(text)
   }
-  await drafter(root, text)
 }
 
-/** The person's answer to an agent's ask. A tool added to setup is a recipe change, drafted for them to send. */
-export function answerAsk(folder: string, ask: SetupAsk, answer: AskAnswer) {
-  const root = setupStore.get().byFolder[folder]?.root ?? folder
-  if (answer === "add-to-setup" && ask.kind === "tool") {
-    void draftInNewThread(root, toolRequest(ask.tool, ask.version, ask.by.title))
-    return
+async function draftInNewThread(root: string, text: string): Promise<boolean> {
+  if (!drafter) {
+    toast("Ask for this from a Thread on your Mac")
+    return false
   }
-  void act(folder, `ask:${ask.id}`, { act: "answer", ask: ask.id, answer })
+  const drafted = await drafter(root, text)
+  if (!drafted) toast("The request couldn't be written in a new Thread. Try again.")
+  return drafted
+}
+
+/**
+ * The person's answer to an agent's ask: true once it landed, false when it didn't (said in a toast). A tool added to
+ * setup is a recipe change, drafted for them to send.
+ */
+export async function answerAsk(folder: string, ask: SetupAsk, answer: AskAnswer): Promise<boolean> {
+  const root = setupStore.get().byFolder[folder]?.root ?? folder
+  if (answer === "add-to-setup" && ask.kind === "tool") return draftInNewThread(root, toolRequest(ask.tool, ask.version, ask.by.title))
+  return (await act(folder, `ask:${ask.id}`, { act: "answer", ask: ask.id, answer })).done
 }
 
 export function toolRequest(tool: string, version: string | undefined, by?: string): string {
@@ -200,6 +245,23 @@ const ADD_REQUESTS = {
 export function addTo(folder: string, part: SetupListPart, place: SetupPlaceView) {
   const root = setupStore.get().byFolder[folder]?.root ?? folder
   void draftInNewThread(root, ADD_REQUESTS[part](place.place.kind === "cloud" ? "cloud machines" : place.title))
+}
+
+/**
+ * A Setup ask in the shape every surface draws an ask (`AskCard`): who asks and what for, why, and its answers, the
+ * narrowest first. Away from its Mac only no can be said here, and the card says where the rest can.
+ */
+export function setupAskCard(folder: string, ask: SetupAsk, away: boolean): AskCard {
+  const line = askLine(ask)
+  const offered = askAnswers(ask)
+  return {
+    who: ask.by.title,
+    want: `${line.verb} ${line.thing}`,
+    ...(line.after && { description: line.after }),
+    detail: `“${ask.why}”. Answering here is the same as in this Thread's Setup and your Inbox; nothing is added until you do.`,
+    ...(away && offered.length > 1 && { note: SETUP_AWAY_ALLOW }),
+    choices: askAnswers(ask, away).map((answer, index) => ({ answer, label: askAnswerLabel(ask, answer, true), primary: index === 0 && !away, choose: () => answerAsk(folder, ask, answer) })),
+  }
 }
 
 /** An ask as one plain line, for a notice or an Inbox row. */

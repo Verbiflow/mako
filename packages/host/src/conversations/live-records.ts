@@ -323,7 +323,7 @@ export class LiveRecords {
     if (sinceSweep >= BULK_LOADS && !this.bulkSaid.has(by)) {
       this.bulkSaid.add(by)
       hostWarn("residency", "one reader is loading conversations in bulk", {
-        by, loads: sinceSweep, loaded: this.residents.size, budget: this.memoryBudget().bytes,
+        by, ...(by === UNNAMED_READER && { from: callers(new Error().stack) }), loads: sinceSweep, loaded: this.residents.size, budget: this.memoryBudget().bytes,
         hint: "a list or a job must read the listing (LiveSummary), never a journal; see BULK_LOADS",
       })
     }
@@ -333,6 +333,13 @@ export class LiveRecords {
   /** Every reader that loaded a conversation from disk this host life, most first. */
   private loads(): ConversationMemory["loads"] {
     return [...this.loadsBy].map(([by, count]) => ({ by, count })).sort((left, right) => right.count - left.count).slice(0, 10)
+  }
+
+  /** The harness Sessions a conversation is bound to, from memory or its listing: never reads its journal in. */
+  nativeIds(id: string): readonly { provider: string; nativeId: string }[] {
+    const resident = this.residents.get(id)
+    if (!resident) return this.recovered.get(id)?.nativeIds ?? []
+    return (resident.snapshot.control?.bindings ?? []).flatMap((binding) => (binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []))
   }
 
   /** Lets go of a conversation now when nothing is using it, as the memory budget would. */
@@ -771,6 +778,11 @@ function residentWeight(weights: ContentWeights, { snapshot }: Resident): number
 }
 
 /** The listing's line for a conversation, loaded or not. */
+/** The functions a stack names past this file's, nearest first: work with no name of its own is known by who called it. */
+function callers(stack: string | undefined): string {
+  return (stack ?? "").split("\n").slice(1).filter((line) => !line.includes("live-records")).slice(0, 4).map((line) => /at (?:async )?(\S+)/.exec(line)?.[1]).filter(Boolean).join(" < ")
+}
+
 function residentSummary(snapshot: LiveSnapshot): LiveSummary {
   const wakes = sooner(wakeAt(snapshot.requests), transferDue(snapshot.control))
   const promptedAt = personPromptedAt(snapshot.requests, snapshot.control?.actions)

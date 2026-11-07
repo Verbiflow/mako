@@ -44,5 +44,6 @@ assert.ok(!threadList(grouped.filter((ref) => ref.path !== "/sessions/rail-newes
 const hostListed = threadList(grouped.map((ref) => (ref.path === "/sessions/rail-0.jsonl" ? { ...ref, threadId: undefined } : ref)))
 assert.deepEqual([...unlistedThreadSessions(hostListed, [{ id: thread, sessions: [{ id: "old-session" }, { id: "new-session" }] }, { id: "other", sessions: [{ id: "elsewhere" }] }])], ["old-session"], "the host finds a listed Thread's Session that the cap cut before placement")
 console.log("Rail list: pushes past the cap, a displacing new session and a focus reload agree on rows and folder counts; a listed Thread keeps its older Sessions, and the host finds them")
-// The window's stores keep timers alive.
+// The window's stores keep timers alive. Run with --no-maglev: Node's exit joins V8's workers, and exiting this soon
+// after loading, one could be compiling and waiting on a collection only this thread can run, and neither ever ends.
 process.exit(0)

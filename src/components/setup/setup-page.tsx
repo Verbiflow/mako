@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 import { openAppSetup } from "@/state/app-setup"
 import { addTo, choosePlace, rebuildBase, shownPlace, threadPlaceId, useSetup } from "@/state/setup"
 import { useSetupView } from "./use-setup-view"
-import { NeedsYou, PartRows, PartSummaryRow, PlaceIcon, SetupPlaceBody } from "./setup-parts"
+import { NeedsYou, PartRows, PartSummaryRow, PlaceIcon, SetupAwayNote, SetupPlaceBody, SetupReadFailed } from "./setup-parts"
 
 /** The clock rows' ages are read against: the page's own read, so a row says the same until the page reads again. */
 function readAt(view: SetupView): number {
@@ -51,7 +51,7 @@ function PlacePicker({ folder, view, current, short }: { folder: string; view: S
   )
 }
 
-function PlaceHeader({ folder, place }: { folder: string; place: SetupPlaceView }) {
+function PlaceHeader({ folder, place, away }: { folder: string; place: SetupPlaceView; away: boolean }) {
   const busy = useSetup((state) => Boolean(state.busy.rebuild))
   return (
     <div className="flex items-start gap-3">
@@ -62,7 +62,7 @@ function PlaceHeader({ folder, place }: { folder: string; place: SetupPlaceView 
         </div>
         <p className="mt-1 max-w-[46rem] text-label leading-relaxed text-muted-foreground">{place.line}</p>
       </div>
-      {place.place.kind === "cloud" ? (
+      {place.place.kind === "cloud" && !away ? (
         <Action tone="quiet" size="sm" disabled={busy} onClick={() => rebuildBase(folder)}>
           <RefreshCwIcon />
           Rebuild base
@@ -78,27 +78,31 @@ export function SetupPage({ folder, addOpen }: { folder: string; addOpen?: boole
   const picked = useSetup((state) => state.place[folder])
   const place = shownPlace(view, picked)
   if (!view || !place)
-    return failed ? <p className="text-ui text-negative">Setup couldn&apos;t be read: {failed}</p> : <p className="text-ui text-faint"><Shimmer text="Reading what each place has…" /></p>
+    return failed ? <SetupReadFailed folder={folder} why={failed} /> : <p className="text-ui text-faint"><Shimmer text="Reading what each place has…" /></p>
   const now = readAt(view)
   return (
     <div data-setup-page={place.id} className="flex flex-col gap-7">
       <div className="flex items-center gap-3">
-        <p className="min-w-0 flex-1 text-label text-faint">What each place has for {view.project}, and where each thing stands.</p>
+        <p data-setup-intro className="min-w-0 flex-1 text-label text-faint">What each place has for {view.project}, and where each thing stands.</p>
         <PlacePicker folder={folder} view={view} current={place} />
-        <AddMenu folder={folder} place={place} open={addOpen} />
+        {view.away ? null : <AddMenu folder={folder} place={place} open={addOpen} />}
       </div>
-      <PlaceHeader folder={folder} place={place} />
+      {view.away ? <SetupAwayNote className="-mt-4" /> : null}
+      <PlaceHeader folder={folder} place={place} away={Boolean(view.away)} />
       <SetupPlaceBody folder={folder} view={place} now={now} />
       <p className="px-1 text-label text-faint">Agents see names, never a value. A change reaches running Threads within a minute; a copy refreshes at a Thread&apos;s next turn.</p>
     </div>
   )
 }
 
-/** A Thread's own place, in its side panel: its asks first, then what its place has, compact. */
-export function ThreadSetup({ folder, thread, elsewhere }: { folder: string | undefined; thread: string | undefined; elsewhere: string | undefined }) {
+/**
+ * A Thread's own place, in its side panel: its asks first, then what its place has, compact. "All of" opens the
+ * project's whole page: in the app's Settings, or where `onAll` says.
+ */
+export function ThreadSetup({ folder, thread, elsewhere, onAll }: { folder: string | undefined; thread: string | undefined; elsewhere: string | undefined; onAll?: (project: string) => void }) {
   const { view, failed } = useSetupView(folder)
   if (!folder) return <p className="px-4 py-3 text-label text-faint">Open a Thread to see what its place has.</p>
-  if (!view) return <p className="px-4 py-3 text-label text-faint">{failed ? `Setup couldn't be read: ${failed}` : <Shimmer text="Reading this Thread's setup…" />}</p>
+  if (!view) return failed ? <SetupReadFailed folder={folder} why={failed} className="px-4 py-3" /> : <p className="px-4 py-3 text-label text-faint"><Shimmer text="Reading this Thread's setup…" /></p>
   const id = threadPlaceId(view, elsewhere)
   const place = id ? (thread ? threadPlace(view, id, thread) : view.places.find((entry) => entry.id === id)) : undefined
   if (!place) return <p className="px-4 py-3 text-label text-faint">This Thread&apos;s place has no setup to show.</p>
@@ -110,12 +114,13 @@ export function ThreadSetup({ folder, thread, elsewhere }: { folder: string | un
           {place.place.kind === "cloud" ? "This Thread's cloud machine" : place.title}
         </Chip>
         <span className="flex-1" />
-        <Action size="xs" className="text-faint" onClick={() => openAppSetup(view.root, "setup")}>
+        <Action size="xs" className="text-faint" onClick={() => (onAll ? onAll(view.root) : openAppSetup(view.root, "setup"))}>
           All of {view.project}
           <ArrowUpRightIcon />
         </Action>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
+        {view.away ? <SetupAwayNote className="pt-1" /> : null}
         <div className="flex flex-col gap-5 pt-2">
           <SetupPlaceBody folder={folder} view={place} now={readAt(view)} compact />
         </div>
@@ -130,7 +135,7 @@ export function PhoneSetup({ folder }: { folder: string }) {
   const picked = useSetup((state) => state.place[folder])
   const place = shownPlace(view, picked)
   const [open, setOpen] = useState<string | undefined>(undefined)
-  if (!view || !place) return <p className="px-5 py-4 text-ui text-faint">{failed ? `Setup couldn't be read: ${failed}` : <Shimmer text="Reading…" />}</p>
+  if (!view || !place) return failed ? <SetupReadFailed folder={folder} why={failed} className="px-5 py-4" /> : <p className="px-5 py-4 text-ui text-faint"><Shimmer text="Reading…" /></p>
   const now = readAt(view)
   const waiting = viewAsks(view).length
   return (
@@ -141,6 +146,8 @@ export function PhoneSetup({ folder }: { folder: string }) {
       </div>
       <div className="px-4 pb-3">
         <PlacePicker folder={folder} view={view} current={place} short />
+        <p className="mt-2 px-1 text-label leading-relaxed text-muted-foreground">{place.line}</p>
+        {view.away ? <SetupAwayNote className="mt-1 px-1" /> : null}
       </div>
       <div className="flex flex-col gap-6 px-4 pb-10">
         <NeedsYou folder={folder} asks={place.asks} now={now} compact />
@@ -149,7 +156,7 @@ export function PhoneSetup({ folder }: { folder: string }) {
           <div className="flex flex-col divide-y divide-hairline bg-shell/55">
             {place.parts.map((part) => (
               <div key={part.part} className={cn(open === part.part && "bg-surface/40")}>
-                <PartSummaryRow part={part} now={now} open={open === part.part} onToggle={() => setOpen(open === part.part ? undefined : part.part)} />
+                <PartSummaryRow part={part} now={now} away={Boolean(view.away)} open={open === part.part} onToggle={() => setOpen(open === part.part ? undefined : part.part)} />
                 {open === part.part && part.rows.length ? <PartRows folder={folder} view={place} part={part} now={now} /> : null}
               </div>
             ))}

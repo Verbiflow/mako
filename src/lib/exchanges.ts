@@ -1,7 +1,7 @@
 import type { Block, ChatMessage } from "@/lib/types"
 import { mergeMedia, type MediaCandidate } from "@mako/sessions/turn-media"
 import { textOf } from "@/lib/format"
-import { causeWords, eventLabel } from "@/lib/transcript-events"
+import { causeWords, eventLabel, foldLimitMoves } from "@/lib/transcript-events"
 import { foldUsageLimits } from "@/lib/usage-limit-folds"
 import { opensContinuation, savedContinuation, type SavedContinuation } from "@mako/host/contracts/turn-continuation"
 import { savedResumeAccount } from "@mako/host/contracts/resume-account"
@@ -446,7 +446,7 @@ export function toExchanges(
   }
 
   const byId = new Map(previous.map((exchange) => [exchange.id, exchange]))
-  return foldUsageLimits(exchanges).map((exchange) => {
+  return foldLimitMoves(foldUsageLimits(exchanges)).map((exchange) => {
     const old = byId.get(exchange.id)
     return old &&
       old.prompt === exchange.prompt &&
