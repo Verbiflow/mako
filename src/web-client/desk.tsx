@@ -50,7 +50,7 @@ import { FilesLayer } from "./files-layer"
 import { closeFiles, filesOpenStore, openFiles } from "./files-open"
 import { closeReview, deskReviewCode, openReview, reviewOpenStore, useReviewOpen } from "./review-open"
 
-const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
+const DeskSettings = lazy(() => import("./desk-settings"))
 
 /** The rail's narrowest and widest, as the desktop's. */
 const RAIL_MIN = 200
@@ -127,7 +127,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           <>
             <nav ref={rail} aria-label="Threads" style={{ width: prefsStore.get().railWidth }} className="flex min-h-0 shrink-0 flex-col overflow-hidden">
               <AgentThreads />
-              <DeskIdentity settings={!starting && under.kind === "settings"} onSettings={() => open({ kind: "settings" })} />
+              <DeskIdentity settings={!starting && (under.kind === "settings" || under.kind === "setup")} onSettings={() => open({ kind: "settings" })} />
             </nav>
             <Divider
               side="left"
@@ -146,9 +146,9 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
             <DeskStart key="new" startIn={startIn} onDismiss={back} onStarted={onStarted} />
           ) : under.kind === "thread" ? (
             <DeskThread key={under.thread} threadId={under.thread} sessionId={under.session} addSessionRef={addSession} onArchived={back} onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })} />
-          ) : under.kind === "settings" ? (
+          ) : under.kind === "settings" || under.kind === "setup" ? (
             <Suspense fallback={null}>
-              <Settings onBack={undefined} />
+              <DeskSettings route={under} open={open} />
             </Suspense>
           ) : (
             <DeskEmpty onNew={() => newThread()} />

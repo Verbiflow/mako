@@ -28,6 +28,8 @@ import { appPorts } from "./app-ports.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac } from "../base/platform.js"
 import { describeThisDevice } from "./device-description.js"
+import type { SourceAnswer } from "@mako/protocol/borrow"
+import type { BorrowSnapshot } from "../contracts/setup.js"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
 /** The account's stream skipped a number, or said one was lost: the list is read whole again (`onAccountGap`). */
@@ -141,6 +143,12 @@ export interface CloudAccount {
     list(repository: string): Promise<CloudCarriedFile[]>
     put(repository: string, file: { path: string; data: Buffer; names: string[] }): Promise<CloudCarriedFile>
     remove(repository: string, path?: string): Promise<string[]>
+  }
+  /** The account's broker, for Setup: what it holds for this person, this device's answer to an ask, a revoke. */
+  borrow?: {
+    snapshot(since: number): Promise<BorrowSnapshot | null>
+    answer(ask: string, answer: SourceAnswer): Promise<void>
+    revoke(grant: string): Promise<void>
   }
   /** Hears what the account's list of Sessions is told (`AccountListNotice`), in the stream's order, as it comes; returns how to stop. */
   onThreadListings?(listener: (heard: AccountListNotice) => void): () => void
@@ -387,6 +395,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       list: (repository) => cloud.carriedFiles(repository),
       put: (repository, file) => cloud.putCarriedFile(repository, file),
       remove: (repository, path) => cloud.removeCarriedFiles(repository, path),
+    },
+    borrow: {
+      snapshot: (since) => cloud.borrowSnapshot(since),
+      answer: (ask, answer) => cloud.answerBorrowAsk(ask, answer),
+      revoke: (grant) => cloud.revokeBorrowGrant(grant),
     },
     onThreadListings: (listener) => {
       threadListeners.add(listener)

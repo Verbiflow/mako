@@ -96,6 +96,8 @@ jobs:
       - run: npm run test:transcript-events
       - run: npm run test:stage
       - run: npm run test:fin-words
+      # Setup's rows and words: each grant, lease, ask and reading in its part, said against its source.
+      - run: npm run test:setup
       - run: npm run test:fin-decisions
       - run: npm run test:live-controls
       - run: npm run test:prompt-delivery
