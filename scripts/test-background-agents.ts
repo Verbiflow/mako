@@ -6,10 +6,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
+import { threadToken } from "@mako/sessions/thread-references"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import type { MarkedProcess } from "@mako/host/base/marked-processes"
 import { accessModeId } from "@mako/host/contracts/access"
+import { THREAD_LIST_CAP } from "@mako/host/contracts/thread-list"
 import { childEntry, childMode, childState, modeWithin, type ThreadParent } from "@mako/host/contracts/agents"
 import { AFTER_START, type AgentsStarted } from "@mako/host/contracts/agent-tools"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
@@ -1222,11 +1224,18 @@ async function activityTellsNoOne(): Promise<void> {
 /** A list reads what the listing and the store hold, never a journal: one Fin's search once read 74 back at once. */
 async function listsReadNoJournal(): Promise<void> {
   const rows: ThreadRef[] = []
-  let lists = 0
+  const lists: (string | undefined)[] = []
   const w = new AgentsWorld({
     root: join(root, "lists"),
     script: (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : "Started them."),
-    references: { list: () => (lists += 1, rows), transcriptArtifact: async () => null },
+    // As the catalog lists: filtered, newest first, and only then capped.
+    references: {
+      list: ({ harness } = {}) => {
+        lists.push(harness)
+        return rows.filter((row) => !harness || row.harness === harness).sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "")).slice(0, THREAD_LIST_CAP)
+      },
+      transcriptArtifact: async () => null,
+    },
   })
   try {
     const apex = await w.apex("codex")
@@ -1261,12 +1270,27 @@ async function listsReadNoJournal(): Promise<void> {
     const row = (harness: string, nativeId: string): ThreadRef => ({ harness, nativeId, path: `/rail/${nativeId}.jsonl`, title: `Thread ${nativeId}`, updatedAt: new Date(NOW).toISOString() })
     rows.push(row(sibling.provider, sibling.nativeId), row("codex", "somebody-elses"))
     for (let at = 0; at < 2_000; at += 1) rows.push(row("codex", `other-${at}`))
-    lists = 0
+    lists.length = 0
     const found = await quiet("a Fin's search over 2,000 rows", () => w.agents.list(asFin, { scope: "threads" }))
     assert.ok(found && "threads" in found, JSON.stringify(found))
     assert.deepEqual(found.threads.map((thread) => thread.ref).filter((ref) => ref.includes(sibling.nativeId)).length, 1, "a Fin of its tree is in reach")
     assert.equal(found.threads.some((thread) => thread.ref.includes("somebody-elses")), false, "a Thread outside it isn't")
-    assert.ok(lists <= 3, `the rows are read once a search, not once a row (${lists})`)
+    assert.equal(new Set(lists).size, lists.length, `each list is read once a search, not once a row (${lists.length})`)
+
+    // A row another harness's newer Sessions would push past the cap: a Fin's sibling, known by its provider's identity.
+    const days = (ago: number) => new Date(NOW - ago * 86_400_000).toISOString()
+    const chats = `chats:${sibling.nativeId}`
+    rows.length = 0
+    rows.push({ ...row(sibling.provider, sibling.nativeId), identity: chats, updatedAt: days(30) })
+    rows.push({ ...row(sibling.provider, "not-of-this-tree"), identity: "chats:not-of-this-tree", updatedAt: days(30) })
+    for (let at = 0; at < THREAD_LIST_CAP; at += 1) rows.push({ ...row("codex", `newer-${at}`), updatedAt: days(1) })
+    assert.notEqual(sibling.provider, "codex", "the sibling's harness isn't the one filling the list")
+    const named = (id: string, what: string) => quiet(what, () => w.agents.list(asFin, { scope: "threads", query: threadToken(sibling.provider, id).slice(1) }))
+    const refsOf = (answer: Awaited<ReturnType<typeof named>>) => (answer && "threads" in answer ? answer.threads.map((thread) => thread.ref) : [])
+    assert.deepEqual(refsOf(await named(chats, "a Fin naming its sibling")), [threadToken(sibling.provider, chats).slice(1)], "its sibling is in reach by its identity, whatever fills the list")
+    assert.equal(refsOf(await named(chats.slice(0, 14), "a Fin shortening its sibling's id")).length, 1, "and by a short id only it has")
+    assert.deepEqual(refsOf(await named("chats:not-of-this-tree", "a Fin naming a stranger")), [], "a row of the same harness outside its tree isn't")
+    assert.deepEqual(refsOf(await named("chats:", "a Fin's id two rows could mean")), [], "nor an id that could mean either")
   } finally {
     await w.close()
   }

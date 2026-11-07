@@ -163,17 +163,16 @@ export const ROOM_WATCH_JOB = "read this device's capacity"
 export const APEX_ANSWER_MS = 60_000
 
 /**
- * The rows each exact id can mean, by harness: a Fin's reach looks up every row it lists, so a walk of all of them for
+ * The rows of a harness each exact id can mean: a Fin's reach looks up every row it lists, so a walk of all of them for
  * each would be a walk of their square. An id with no row of its own may be a short one, which only that walk can tell.
  */
 function referenceIndex(rows: readonly ThreadRef[]): Map<string, ThreadRef[]> {
   const byId = new Map<string, ThreadRef[]>()
   for (const row of rows)
     for (const id of new Set([row.nativeId, threadReferenceId(row)])) {
-      const key = `${row.harness}\0${id}`
-      const held = byId.get(key)
+      const held = byId.get(id)
       if (held) held.push(row)
-      else byId.set(key, [row])
+      else byId.set(id, [row])
     }
   return byId
 }
@@ -3635,12 +3634,21 @@ export class Agents implements AgentOperations, ConversationChildren {
   private reachOf(apex: Apex): (ref: string) => boolean {
     const store = this.store()!
     if (!store.edges().of(apex.thread)) return () => true
-    const everyRow = this.deps.references?.list({}) ?? []
-    const rowsById = referenceIndex(everyRow)
+    // Each harness's rows, once: a list is capped after it's filtered, so one of everything can hide all of a harness.
+    const listed = new Map<string, { rows: ThreadRef[]; byId: Map<string, ThreadRef[]> }>()
+    const listOf = (harness: string) => {
+      const held = listed.get(harness)
+      if (held) return held
+      const rows = this.deps.references?.list({ harness }) ?? []
+      const list = { rows, byId: referenceIndex(rows) }
+      listed.set(harness, list)
+      return list
+    }
     const keysOf = (ref: string): string[] => {
       const token = parseThreadToken(ref)
       if (!token) return []
-      const row = findThreadReference(rowsById.get(`${token.harness}\0${token.id}`) ?? everyRow, token.harness, token.id)
+      const { rows, byId } = listOf(token.harness)
+      const row = findThreadReference(byId.get(token.id) ?? rows, token.harness, token.id)
       return [token.id, ...(row ? [row.nativeId, threadReferenceId(row)] : [])].map((id) => `${token.harness}\0${id}`)
     }
     const tree = treeEdges(store.edges(), apex.thread)
