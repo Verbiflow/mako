@@ -20,6 +20,52 @@ import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, HeardLiveBatch[]>()
+/** A read of a conversation's snapshot while it's out: the newest revision this window has taken of it since it was asked. */
+type ReadOut = { revision: number; epoch?: string }
+/**
+ * The reads out of each conversation (`readBackLive`, `hydrateLive`): each answer older than what this window took of
+ * its conversation while it was out is past, whatever this window holds of it by then (it may have let it go, or no
+ * longer list it). Kept only while each read is out.
+ */
+const readsOut = new Map<string, Set<ReadOut>>()
+
+function readGoesOut(id: string): ReadOut {
+  const asked = acpStore.get().conversations[id]
+  const read: ReadOut = asked?.kind === "live" && asked.revision !== undefined ? { revision: asked.revision, ...(asked.epoch && { epoch: asked.epoch }) } : { revision: -1 }
+  readsOut.set(id, (readsOut.get(id) ?? new Set()).add(read))
+  return read
+}
+
+/** The read is answered: whether what it says is past, older than what this window took meanwhile. */
+function readAnswered(id: string, read: ReadOut, snapshot: { revision: number; epoch?: string } | null): boolean {
+  const out = readsOut.get(id)
+  out?.delete(read)
+  if (out && !out.size) readsOut.delete(id)
+  return Boolean(snapshot) && read.revision >= 0 && sameEpoch(read, snapshot!) && read.revision > snapshot!.revision
+}
+
+/** Every read out of this conversation hears the revision it now stands at here. */
+function noteTaken(id: string): void {
+  const current = acpStore.get().conversations[id]
+  if (current?.kind !== "live" || current.revision === undefined) return
+  for (const read of readsOut.get(id) ?? []) {
+    if (sameEpoch(read, current) && read.revision >= current.revision) continue
+    read.revision = current.revision
+    read.epoch = current.epoch
+  }
+}
+
+/**
+ * A conversation's snapshot read back and taken, as an answer's receipt is (`answerLiveApproval`), unless this window
+ * took a newer revision of it while the read was out. The snapshot either way, or null when there's none to read.
+ */
+export async function readBackLive(id: string): Promise<LiveSnapshot | null> {
+  const read = readGoesOut(id)
+  const snapshot = await readLiveSnapshot(id).catch(() => null)
+  if (snapshot && !readAnswered(id, read, snapshot)) applyLiveSnapshot(snapshot)
+  else if (!snapshot) readAnswered(id, read, null)
+  return snapshot
+}
 // Invalid/oversized snapshots cannot be repaired by refetching on every token.
 // Activation and reconnect retry them. Transient outages may recover on a later
 // batch even if the independent event stream stayed connected throughout.
@@ -89,16 +135,18 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
   for (const action of snapshot.control?.actions ?? []) if (steerTaken(action)) settleMessage(action.input.id, true)
   const id = snapshot.session.id
   const existing = acpStore.get().conversations[id]
-  const stale = existing?.hydrated && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision
+  // Older than what this window holds of it, shown or only listed (it was let go of, and its revision kept): a read the
+  // stream overtook.
+  const stale = existing?.kind === "live" && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision
   const narrower = !stale && dropsLoadedHistory(existing, snapshot, covers)
   if (stale || narrower) {
-    if (replyBindingId !== undefined) updateAcpConversation(id, (current) => ({ ...current, replyBindingId: replyBindingId ?? undefined }))
-    if (stale && existing.kind === "live") {
-      takeView(existing, snapshot)
+    if (replyBindingId !== undefined && existing) updateAcpConversation(id, (current) => ({ ...current, replyBindingId: replyBindingId ?? undefined }))
+    if (stale && existing?.kind === "live") {
+      if (existing.hydrated) takeView(existing, snapshot)
       dropHeld(existing)
     }
-    // The same state, read again over the range on screen, replaces it whole.
-    if (narrower) rereadLive(id)
+    // The same state, read again over the range on screen, replaces it whole; one on screen not yet read is read again.
+    if (narrower || (stale && acpStore.get().activeKey === id && !existing?.hydrated)) rereadLive(id)
     return
   }
   const pendingPrompts = existing?.pendingPrompts?.filter(
@@ -187,6 +235,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
   const buffered = (pending.get(id) ?? []).filter((batch) => sameEpoch(snapshot, batch))
   pending.delete(id)
   for (const batch of buffered) applyLiveBatch(batch)
+  noteTaken(id)
   // An answer its Fins heard while this window held a gap, or held the Session not at all, takes back what was said; an
   // ask that came meanwhile is said, quietly, as its own approval is (`syncThreadStatus`).
   const read = acpStore.get().conversations[id]
@@ -245,9 +294,17 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
   if (existing) return existing
   let restored = false
   const covers = windowStart(acpStore.get().conversations[id])
+  const read = readGoesOut(id)
   const fetch = readLiveSnapshot(id, true)
     .then((snapshot) => {
       restored = true
+      // Taken newer meanwhile, held still or not (let go of, or no longer listed): that's newer than what it says.
+      if (readAnswered(id, read, snapshot && !("kind" in snapshot) ? snapshot : null)) {
+        if (!acpStore.get().conversations[id]) pending.delete(id)
+        restoredLive(id)
+        if (acpStore.get().activeKey === id && !acpStore.get().conversations[id]?.hydrated) rereadLive(id)
+        return false
+      }
       if (snapshot && "kind" in snapshot) {
         restoredLive(id)
         const held = acpStore.get().conversations[id]
@@ -273,6 +330,7 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
       return false
     })
     .finally(() => {
+      readAnswered(id, read, null)
       fetching.delete(id)
       const waiting = restored ? pending.get(id)?.[0] : undefined
       if (!rereads.delete(id) && !waiting) stuck.delete(id)
@@ -288,6 +346,14 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
     })
   fetching.set(id, fetch)
   return fetch
+}
+
+/** A listed Session read again whole, quietly, and let go again unless it's on screen by then. */
+function refreshListed(id: string): void {
+  if (fetching.has(id)) return
+  void hydrateLive(id, true).then(() => {
+    if (acpStore.get().activeKey !== id) unloadLive(id)
+  })
 }
 
 /**
@@ -338,12 +404,15 @@ function batchHistoryFailure(batch: LiveBatch, current: { historyFailure?: strin
  * when it's next in line, so a snapshot taken meanwhile is what it's read against.
  */
 export function applyLiveBatch(heard: HeardLiveBatch): void {
-  if (!isCompactBatch(heard)) return applyBatch(heard, heard, false)
-  const current = acpStore.get().conversations[heard.id]
-  const held = current?.kind === "live" && sameEpoch(current, heard) && heard.revision === (current.revision ?? 0) + 1 ? current : undefined
-  const read = expandLiveBatch(heard, held ? { blocks: held.hydrated ? held.blocks : [], requests: held.requests ?? [], ...(held.control && { control: held.control }) } : { blocks: [] })
-  for (const patch of read.unheld) settleMessage(patch.id, true)
-  applyBatch(read.batch, heard, read.unread)
+  if (!isCompactBatch(heard)) applyBatch(heard, heard, false)
+  else {
+    const current = acpStore.get().conversations[heard.id]
+    const held = current?.kind === "live" && sameEpoch(current, heard) && heard.revision === (current.revision ?? 0) + 1 ? current : undefined
+    const read = expandLiveBatch(heard, held ? { blocks: held.hydrated ? held.blocks : [], requests: held.requests ?? [], ...(held.control && { control: held.control }) } : { blocks: [] })
+    for (const patch of read.unheld) settleMessage(patch.id, true)
+    applyBatch(read.batch, heard, read.unread)
+  }
+  noteTaken(heard.id)
 }
 
 /**
@@ -364,6 +433,11 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
     !fetching.has(batch.id)
   ) {
     if (sameEpoch(current, batch) && batch.revision <= (current.revision ?? 0)) return
+    // A Session this host runs whose batches it missed (it read one back that the stream had overtaken, then let it
+    // go): what changed meanwhile and goes only when it changes, an approval or a roster, isn't in this batch, so it's
+    // read again rather than merged over. Another device's listed Sessions take what their link sends.
+    if (current.elsewhere === undefined && sameEpoch(current, batch) && current.revision !== undefined && batch.revision > current.revision + 1)
+      return refreshListed(batch.id)
     const session = sessionAfter(current.session, batch)
     const requests = requestsAfter(current.requests, batch)
     const next = {
