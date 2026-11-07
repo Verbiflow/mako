@@ -4,6 +4,7 @@ import { harnessLabel } from "@/lib/harness-label"
 import { workspaceName } from "@/lib/format"
 import {
   acpStore,
+  conversationRoster,
   updateAcpConversation,
   type LiveAcpConversation,
 } from "@/state/acp-state"
@@ -197,29 +198,42 @@ export function noteListedOutcome(
   })
 }
 
-/** Each Apex's Fins' asks said to the person so far, by Fin and ask. */
+/** Each Apex's Fins' asks said to the person so far, by the conversation they were said on, by Fin and ask. */
 const announcedFinAsks = new Map<string, ReadonlySet<string>>()
 
 /**
  * What an Apex's Fins ask the person, said on the Apex as its own ask would
  * be: once per ask, the Fin's name before its line, and taken back from the
- * attention centre once each is answered, on this device or another.
+ * attention centre once each is answered, on this device or another. Its
+ * Thread's Fins as they stand (`conversationRoster`), and said once for the
+ * Thread: only its newest Session hears an ask answered (`finReaders`), so
+ * one an older Session said is taken back there too.
  */
 export function noteFinAsks(conversation: LiveAcpConversation, quiet = false): void {
-  const asks = personAsks(rosterChildren(conversation.nativeAgents))
-  const before = announcedFinAsks.get(conversation.key)
+  const state = acpStore.get()
+  const asks = personAsks(rosterChildren(conversationRoster(state, conversation)))
   const now = new Set(asks.map((ask) => `${ask.fin}:${ask.ask.id}`))
-  if (!before && !now.size) return
-  if (before && [...before].some((id) => !now.has(id)))
-    for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id, "asks")
+  const sessions = Object.values(state.conversations).filter((each): each is LiveAcpConversation =>
+    each.kind === "live" && (each.key === conversation.key || (conversation.threadId !== undefined && each.threadId === conversation.threadId)))
+  const said = new Set<string>()
+  for (const session of sessions) {
+    const before = announcedFinAsks.get(session.key)
+    if (!before) continue
+    if ([...before].some((id) => !now.has(id))) for (const id of liveSubjectIds(session.key, session.threadPath)) retireSubject(id, "asks")
+    const still = new Set([...before].filter((id) => now.has(id)))
+    if (still.size) announcedFinAsks.set(session.key, still)
+    else announcedFinAsks.delete(session.key)
+    for (const id of still) said.add(id)
+  }
+  const mine = new Set(announcedFinAsks.get(conversation.key))
   for (const ask of asks) {
     const id = `${ask.fin}:${ask.ask.id}`
-    if (before?.has(id)) continue
-    const said = finAskWaiting(ask.ask, ask.title, askWords(ask))
-    noteOutcome({ kind: said.for, subject: liveSubject(conversation), marker: `fin:${id}`, detail: said.line, quiet })
+    if (said.has(id)) continue
+    const words = finAskWaiting(ask.ask, ask.title, askWords(ask))
+    noteOutcome({ kind: words.for, subject: liveSubject(conversation), marker: `fin:${id}`, detail: words.line, quiet })
+    mine.add(id)
   }
-  if (now.size) announcedFinAsks.set(conversation.key, now)
-  else announcedFinAsks.delete(conversation.key)
+  if (mine.size) announcedFinAsks.set(conversation.key, mine)
 }
 
 export function syncThreadStatus(

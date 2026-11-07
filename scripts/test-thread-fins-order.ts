@@ -7,8 +7,13 @@ import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-ide
 import { conversationShown } from "@mako/host/conversations/session-report"
 import { AccountSessions } from "@mako/protocol/account-sessions"
 import { ReportedSessionSchema } from "@mako/protocol/thread-listing"
-import { threadChildren, threadRollup } from "@/state/apex-fins"
+import { apexConversation, threadChildren, threadRollup } from "@/state/apex-fins"
 import { acpStore, conversationWork } from "@/state/acp-state"
+import { NativeAgentSchema } from "@mako/host/contracts/native-agents"
+import { selectAcpPresence } from "@/state/acp-presence"
+import { finAskLine } from "@/state/fin-asks"
+import { noteFinAsks } from "@/state/acp-live"
+import { notificationsStore } from "@/state/notifications"
 import { applyLiveSnapshot, listLive } from "@/state/live-recovery"
 import { applyThreadGroupChange } from "@/state/thread-groups"
 
@@ -87,6 +92,34 @@ for (const [olderSaw, newestSays] of [[atWork, ended], [ended, atWork]] as const
   // A Thread of one Session (no group) counts its own.
   const alone = { [olderConversation]: conversations[olderConversation]! }
   assert.equal(conversationWork({ activeKey: null, conversations: alone }, alone[olderConversation]!)?.count, olderSaw === atWork ? 1 : undefined, "one Session alone counts its own roster")
+}
+// A Fin's question, as #524's review found it: a Session's question status read its own roster, so an older Session kept
+// a question the newest roster had seen answered, and missed one asked since. Every reader of it reads the Thread's.
+const idle = childEntry(edge, { source: "live" }, {})
+const asking = NativeAgentSchema.parse({ ...idle, child: { ...idle.child!, state: { kind: "blocked", question: "Which color?", on: "person", ask: { kind: "question", id: "ask-color", options: [{ label: "Blue" }] } } } })
+for (const [olderSaw, newestSays] of [[asking, idle], [idle, asking]] as const) {
+  const conversations = { [olderConversation]: held(olderConversation, older, olderSaw), [newestConversation]: held(newestConversation, newest, newestSays) }
+  const state = { activeKey: null, conversations, threadSessions: acpStore.get().threadSessions }
+  const asked = newestSays === asking
+  for (const key of [olderConversation, newestConversation]) {
+    const which = key === olderConversation ? "the older" : "the newest"
+    assert.equal(finAskLine(state, conversations[key]!) !== undefined, asked, `${which} Session's question line is the newest roster's (${asked ? "asking" : "answered"})`)
+    assert.equal(selectAcpPresence(state).find((presence) => presence.key === key)?.status, asked ? "needs-permission" : "ready", `${which} Session's status is the newest roster's (${asked ? "asking" : "answered"})`)
+  }
+  // Said once for the Thread, and taken back once the newest hears it answered, wherever it was said.
+  acpStore.set(state)
+  const said = () => notificationsStore.get().items.filter((item) => item.id.endsWith(`:fin:${edge.child}:ask-color`)).length
+  noteFinAsks(conversations[olderConversation]!)
+  noteFinAsks(conversations[newestConversation]!)
+  assert.equal(said(), asked ? 1 : 0, "an ask is said once for the Thread")
+  if (asked) {
+    const answered = held(newestConversation, newest, idle)
+    acpStore.set({ ...state, conversations: { ...conversations, [newestConversation]: answered } })
+    noteFinAsks(answered)
+    assert.equal(said(), 0, "and taken back when the newest hears it answered, from the older Session it was said on")
+  }
+  // The Apex's conversation answers go through, away from it, is its newest Session's.
+  assert.equal(apexConversation(state, thread)?.key, newestConversation, "the Apex's conversation is its newest Session")
 }
 applyThreadGroupChange({ thread, group: null })
 console.log("thread fins order: a Thread's Fins are its newest Session's, listed or held, in any order they arrive")

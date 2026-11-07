@@ -16,7 +16,7 @@ import type {
 import { createHook, createStore } from "@/state/store"
 import { backgroundWork, type BackgroundWork } from "@mako/host/contracts/background-work"
 import { finsAsChildren, rosterChildren } from "@mako/host/contracts/children"
-import { withChildren, type NativeAgent } from "@mako/host/contracts/native-agents"
+import { withChildren, type NativeAgent, type NativeAgentRoster } from "@mako/host/contracts/native-agents"
 
 export interface AcpQueuedPrompt {
   text: string
@@ -347,13 +347,18 @@ export function threadChildren(state: AcpState, thread: string | undefined): rea
 }
 
 /**
- * What the conversation waits on between turns (`backgroundWork`), counting its Thread's Fins as every surface draws
- * them (`threadChildren`). Only its Thread's newest Session hears them move (`finReaders`): an older one's own roster
- * keeps them as they stood when it last heard, and counted from there it would wait on Fins long ended.
+ * The conversation's roster with its Thread's Fins as every surface draws them (`threadChildren`): its own provider's
+ * work, and its Thread's Fins from its newest Session. Only that Session hears them move (`finReaders`): an older one's
+ * own roster keeps them as they stood when it last heard, and read from there its Fins would wait on work long ended or
+ * on a question long answered, and miss a new one. Whatever a window says of a Session's Fins reads them here.
  */
+export function conversationRoster(state: AcpState, conversation: Pick<LiveAcpConversation, "threadId" | "nativeAgents">): NativeAgentRoster | undefined {
+  return conversation.threadId ? withChildren(conversation.nativeAgents, threadChildren(state, conversation.threadId)) : conversation.nativeAgents
+}
+
+/** What the conversation waits on between turns (`backgroundWork`), its Thread's Fins as they stand (`conversationRoster`). */
 export function conversationWork(state: AcpState, conversation: LiveAcpConversation): BackgroundWork | null {
-  const roster = conversation.threadId ? withChildren(conversation.nativeAgents, threadChildren(state, conversation.threadId)) : conversation.nativeAgents
-  return backgroundWork(conversation.session, roster)
+  return backgroundWork(conversation.session, conversationRoster(state, conversation))
 }
 
 export function liveAcpForThread(

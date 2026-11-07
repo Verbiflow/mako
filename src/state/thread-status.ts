@@ -95,7 +95,7 @@ export function threadStatus(
     if (owned.permission)
       return { kind: "needs-permission", since: owned.updatedAt, detail: owned.permission.title }
     // A Fin asking the person: its Apex's Thread needs them, as an ask of its own would, while the Apex works on.
-    const finAsk = finAskLine(owned)
+    const finAsk = finAskLine(acpState, owned)
     if (finAsk) return { kind: "needs-permission", since: owned.updatedAt, detail: finAsk }
     if (owned.session.status === "running" || owned.session.status === "starting")
       return state.working[owned.threadPath ?? ref.path] ?? { kind: "working", since: owned.createdAt }
@@ -155,7 +155,7 @@ export function threadLiveKey(state: AcpState, ref: ThreadRef): string {
     owned.session.connection,
     owned.session.status,
     owned.permission?.id ?? "",
-    finAskLine(owned) ?? "",
+    finAskLine(state, owned) ?? "",
     owned.waitingOn ?? "",
     conversationWork(state, owned)?.count ?? 0,
   ].join("|")

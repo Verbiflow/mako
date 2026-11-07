@@ -90,11 +90,14 @@ export function stopCounts(children: readonly NativeAgent[]): StopCounts {
   return { working: reached.filter((child) => childGroup(childStateOf(child)) === "working").length, reached: reached.length }
 }
 
-/** The Apex's conversation the person talks to: the one on screen if it's the Apex's, else any of its Sessions with Fins. */
+/**
+ * The Apex's conversation the person talks to: the one on screen if it's the Apex's, else its newest Session with Fins,
+ * the one that hears them move (`newestSaid`).
+ */
 export function apexConversation(state: AcpState, thread: string): AcpConversation | undefined {
   const active = state.activeKey ? state.conversations[state.activeKey] : undefined
   if (active?.threadId === thread) return active
-  return Object.values(state.conversations).find((conversation) => conversation.threadId === thread && conversation.kind === "live" && rosterChildren(conversation.nativeAgents).length > 0)
+  return newestSaid(state, (conversation) => (rosterChildren(conversation.nativeAgents).length ? { value: conversation, fullness: 0 } : undefined)).get(thread)
 }
 
 /** A Fin's own conversation in this window, when it has one: what opens when its tab is pressed. */
