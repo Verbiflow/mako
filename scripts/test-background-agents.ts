@@ -105,10 +105,35 @@ function rosterAndLists(): void {
 function uploadsFollowParents(): void {
   const parent = randomUUID()
   const at = new Date(NOW - 60_000).toISOString()
-  const rows: ReportedSession[] = [{ session: parent, thread: randomUUID(), conversation: "parent", harness: "codex", nativeId: "parent", title: "Parent", state: "idle", createdAt: at, activityAt: at, generation: 1 }]
-  const scope = uploadScope(rows, { onBattery: false, percent: undefined, lowPower: false }, (harness, nativeId) => `/${harness}/${nativeId}`, NOW, (session) => (session === parent ? [{ harness: "cursor", nativeId: "helper" }] : []))
-  assert.deepEqual(scope.sessions.map((session) => `${session.harness}:${session.nativeId}`), ["codex:parent", "cursor:helper"], "a child's Session syncs right after its parent's, under its Thread")
+  const thread = randomUUID()
+  const row = (session: string, nativeId: string): ReportedSession => ({ session, thread, conversation: nativeId, harness: "codex", nativeId, title: "Parent", state: "idle", createdAt: at, activityAt: at, generation: 1 })
+  const rows = [row(parent, "parent"), row(randomUUID(), "earlier")]
+  let looks = 0
+  const children = new Map([[thread, [{ harness: "cursor", nativeId: "helper" }]]])
+  const scope = uploadScope(rows, { onBattery: false, percent: undefined, lowPower: false }, (harness, nativeId) => { if (nativeId === "helper") looks += 1; return `/${harness}/${nativeId}` }, NOW, children)
+  assert.equal(looks, 1, "a Thread's children are walked once, however many Sessions it has")
+  assert.deepEqual(scope.sessions.filter((session) => session.nativeId !== "earlier").map((session) => `${session.harness}:${session.nativeId}`), ["codex:parent", "cursor:helper"], "a child's Session syncs right after its parent's, under its Thread")
   assert.equal(scope.sessions[1]!.thread, scope.sessions[0]!.thread)
+}
+
+/** Two connections' own counters start alike, so a read-only store's version has to show that it reopened on a newer file. */
+function readOnlyStoreVersion(): void {
+  const path = join(root, "read-only-version.sqlite")
+  const journal = () => ({ conversationId: randomUUID(), createdAt: Date.now(), harness: "codex", bindings: [] })
+  const who = { kind: "service", name: "workspace" } as const
+  const first = new ThreadStore(path, { now: () => Date.now() })
+  const apex = first.registerJournal(journal(), who)
+  first.close()
+  const reader = new ThreadStore(path, { now: () => Date.now(), readOnly: true })
+  const before = reader.version()
+  assert.equal(reader.version(), before, "reading doesn't move it")
+  const writer = new ThreadStore(path, { now: () => Date.now() })
+  const placed = writer.registerJournal(journal(), who)
+  writer.keepEdge(edge({ child: placed.thread, parent: apex.thread, parentSession: apex.session, run: { harness: "codex", nativeId: "fin-new", device: writer.deviceId, startedAt: 1 } }))
+  writer.close()
+  assert.notEqual(reader.version(), before, "a new Fin moves it, on a reopened connection too")
+  assert.deepEqual(reader.childSessions().get(apex.thread), [{ harness: "codex", nativeId: "fin-new" }], "and it reads that Fin")
+  reader.close()
 }
 
 function storeKeeps(): void {
@@ -117,12 +142,16 @@ function storeKeeps(): void {
   const apex = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "codex", bindings: [] }, { kind: "service", name: "workspace" })
   const placed = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "claude", bindings: [] }, { kind: "service", name: "workspace" })
   const first = edge({ child: placed.thread, parent: apex.thread, parentSession: apex.session })
+  const before = threads.version()
+  assert.equal(threads.version(), before, "reading doesn't move the store's version")
   assert.equal(threads.keepEdge(first).op, first.op)
+  assert.notEqual(threads.version(), before, "a new child does")
   assert.equal(threads.keepEdge({ ...first, op: "start:other", parent: ThreadIdSchema.parse(randomUUID()) }).op, first.op, "one parent per child: the first edge stands")
   const run = { harness: "claude", nativeId: "n", device: threads.deviceId, startedAt: 1 }
   threads.keepEdge({ ...first, run: { ...run, ended: { at: 1, kind: "done" } } })
   const later = threads.keepEdge({ ...first, run: { ...run, ended: { at: 2, kind: "failed" } } })
   assert.deepEqual(later.run?.ended, { at: 1, kind: "done" }, "an end is written once")
+  assert.deepEqual(threads.childSessions().get(apex.thread), [{ harness: "claude", nativeId: "n" }], "a child without a claim still names its run")
   const told = report(first.child, "done", "Fixed it.")
   const kept = threads.keepReport(told)
   assert.ok("report" in kept && !kept.deduped)
@@ -1859,6 +1888,7 @@ try {
   rosterAndLists()
   uploadsFollowParents()
   storeKeeps()
+  readOnlyStoreVersion()
   await startsAndWakes()
   await explicitReports()
   await refusals()

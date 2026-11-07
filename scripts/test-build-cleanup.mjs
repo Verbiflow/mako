@@ -66,7 +66,7 @@ try {
 
   // A rehearsal prints its result and removes its folder unless kept.
   assert.deepEqual(rehearsalOptions([]).keep, false)
-  assert.deepEqual(rehearsalOptions(["../x", "--keep", "--as-installed-updater"]), { source: join(process.cwd(), "../x"), keep: true, asInstalledUpdater: true })
+  assert.deepEqual(rehearsalOptions(["../x", "--keep", "--as-installed-updater"]), { source: join(process.cwd(), "../x"), keep: true, asInstalledUpdater: true, ciPassed: false })
   assert.throws(() => rehearsalOptions(["--other"]), /test:settings-build/)
   const rehearsal = async () => {
     const folder = await mkdtemp(join(root, "rehearsal-"))

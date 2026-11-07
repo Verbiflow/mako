@@ -4775,7 +4775,8 @@ one goes over and compares the row with that old commit. Devin's saved open
 crossed at a person's update that way, +69% over its baseline's commit, from
 two changes neither over budget: a subagent analysis on every read, and the
 media `_meta` parses below. `npm run update:local` runs no performance check;
-Settings › Updates runs `test:update-performance` (`test-update-performance.ts`):
+Settings › Updates runs `test:update-performance` (`test-update-performance.ts`),
+unless CI passed the commit (below):
 only `perf:decoders` and the budgets, never the harness's unit tests or the
 rest of `test:performance`, alone after `test:application` and
 `test:renderer-assets` so it doesn't time them, at a gross 1.5× line
@@ -4858,7 +4859,21 @@ the environment `updateEnvironment` builds from the few variables
 `scripts/ci-update-checks.ts`) runs that same function in that same
 environment: an update once failed three times on a test that broke only
 under the updater's verdict variable, which nothing at review set. Add a
-variable the updater sets there, never in a check alone. A failed build says
+variable the updater sets there, never in a check alone. So a commit whose push
+to the default branch passed whole, `update-checks` among it, has passed all of
+this already, and an update of it (`from` upstream, clean by construction) runs
+the compile and `test:update-machine` alone (`application/local-update-ci.ts`):
+a real host and this Mac's Electron, every step of it among `checks`, about 10 s
+against 4 to 9 minutes. The performance check took 80 to 88% of `checking`, at
+load 26 once. It found two real problems: drift over a baseline (Devin's saved
+open), which `update-checks` now trips at the commit that causes it, on a quiet
+runner; and a hotspot (`startsWith` over resent output) behind a failure that
+hung on process-to-process timing, so a reading that was partly luck. The newest
+run of the commit's push decides, and GitHub says which branch is the default,
+as a local `origin/HEAD` can be stale. No answer runs every check: a run still
+going, a reading that disagrees with itself, no `gh`, a remote that isn't GitHub,
+a commit from before `test:update-machine`. A build of the checkout never asks.
+`test:settings-build -- --ci-passed` rehearses a commit CI passed. A failed build says
 whose it is (`local-update-failures.ts`: the code, the Mac, or the checkout),
 what to do next, and the failing command's last lines apart; each step's time
 is logged (`build ready`, `build failed`) and carried on the ready build. Public
