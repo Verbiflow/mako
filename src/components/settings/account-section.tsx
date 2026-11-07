@@ -6,8 +6,6 @@ import {
   GlobeIcon,
   LaptopIcon,
   LockIcon,
-  ServerIcon,
-  TerminalIcon,
   XIcon,
 } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
@@ -25,7 +23,7 @@ import { SyncSection } from "@/components/settings/sync-section"
 import { TurnOnCard } from "@/components/settings/cloud-turn-on"
 import { formatDay, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { CloudAccountState, CloudBrowserSession, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow } from "@/lib/types"
+import type { CloudAccountState, CloudBrowserSession, CloudKeptSignIn, CloudPerson, CloudSignInRow } from "@/lib/types"
 
 type SignedIn = Extract<CloudAccountState, { status: "signed-in" }>
 
@@ -35,7 +33,7 @@ const SIGNED_IN_WITH = {
   local: "with a test account",
 } satisfies Record<NonNullable<CloudPerson["signedInWith"]>, string>
 
-/** This Mac's Mako account: signing in through the browser, and the devices it's signed in on. */
+/** This Mac's Mako account: signing in through the browser, and the browsers signed in to it. Its devices are Settings › Devices. */
 export function AccountSection() {
   const account = useCloudAccount((state) => state.account)
   useEffect(() => cloudAccount.load(), [])
@@ -217,7 +215,6 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
       {invited ? <CloudSignIns /> : null}
       {invited ? <HandOffSettings /> : null}
 
-      <Devices current={state.device} connection={state.connection} />
       <Browsers connection={state.connection} />
     </>
   )
@@ -443,136 +440,6 @@ function hoursLeft(expiresAt: string | null): number {
   return expiresAt ? (Date.parse(expiresAt) - Date.now()) / 3_600_000 : Infinity
 }
 
-function Devices({ current, connection }: { current: CloudDevice; connection: SignedIn["connection"] }) {
-  const devices = useCloudAccount((store) => store.devices)
-  const failure = useCloudAccount((store) => store.failure)
-  const [confirming, setConfirming] = useState<string>()
-  useEffect(() => {
-    if (connection !== "connected") return
-    void cloudAccount.loadDevices()
-    const refresh = () => void cloudAccount.loadDevices()
-    const timer = setInterval(refresh, 60_000)
-    window.addEventListener("focus", refresh)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener("focus", refresh)
-    }
-  }, [connection])
-  const list = devices?.list ?? [current]
-  const ordered = [...list].sort((a, b) =>
-    a.id === current.id ? -1 : b.id === current.id ? 1 : b.lastSeenAt.localeCompare(a.lastSeenAt)
-  )
-  return (
-    <div className="flex flex-col gap-2">
-      <Eyebrow>Devices</Eyebrow>
-      <ListCard>
-        {ordered.map((device) => (
-          <DeviceRow
-            key={device.id}
-            device={device}
-            current={device.id === current.id}
-            confirming={confirming === device.id}
-            onConfirm={(next) => setConfirming(next ? device.id : undefined)}
-          />
-        ))}
-      </ListCard>
-      {failure?.action.startsWith("remove:") ? (
-        <Note tone="negative">{failure.message}</Note>
-      ) : !devices && failure?.action === "devices" ? (
-        <p className="px-1 text-label text-faint">The other devices couldn't be read: {failure.message}</p>
-      ) : (
-        <p className="px-1 text-label leading-relaxed text-faint">
-          Removing a device signs it out within seconds, wherever it is.
-        </p>
-      )}
-    </div>
-  )
-}
-
-const DEVICE_ICONS = { desktop: LaptopIcon, cli: TerminalIcon, runtime: ServerIcon, browser: GlobeIcon } as const
-
-/**
- * How a device came to be signed in as you, in one line: when, from where (as the cloud read its address, never the
- * address), and how. "Joined Oct 21 from San Jose, United States, through the browser". Where is left out for a
- * device that joined before the cloud kept it.
- */
-function joined(device: CloudDevice): string {
-  const when = new Date(device.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: new Date(device.createdAt).getFullYear() === new Date().getFullYear() ? undefined : "numeric" })
-  const from = device.enrolledFrom
-  let country = from?.country ?? null
-  try {
-    if (country) country = new Intl.DisplayNames(undefined, { type: "region" }).of(country) ?? country
-  } catch {
-    // A code the runtime doesn't know is shown as it came.
-  }
-  const place = from ? [from.city, country].filter(Boolean).join(", ") : ""
-  const how = device.enrolledBy === "browser" ? "through the browser" : "with a code you approved"
-  return `Joined ${when}${place ? ` from ${place}` : ""}, ${how}`
-}
-
-function DeviceRow({
-  device,
-  current,
-  confirming,
-  onConfirm,
-}: {
-  device: CloudDevice
-  current: boolean
-  confirming: boolean
-  onConfirm: (confirming: boolean) => void
-}) {
-  const busy = useCloudAccount((store) => store.busy)
-  const removing = busy === `remove:${device.id}`
-  const Icon = DEVICE_ICONS[device.kind]
-  return (
-    <ListCardRow className="flex items-center gap-3">
-      <div className="flex size-8 shrink-0 items-center justify-center bg-fill-hover text-muted-foreground [&_svg]:size-4">
-        <Icon />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-ui font-medium">{device.name}</span>
-          {current ? <Chip>This Mac</Chip> : null}
-        </div>
-        {confirming ? (
-          <p className="mt-0.5 truncate text-label text-caution">It will be signed out within seconds.</p>
-        ) : (
-          <>
-            <p className="mt-0.5 truncate text-label text-faint">
-              {[device.platform, device.appVersion ? `Mako ${device.appVersion}` : null, current ? null : seen(device.lastSeenAt)]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
-            <p data-device-joined className="truncate text-label text-faint" title={joined(device)}>
-              {joined(device)}
-            </p>
-          </>
-        )}
-      </div>
-      {current ? null : confirming ? (
-        <div className="flex animate-enter items-center gap-1">
-          <Action size="xs" disabled={removing} onClick={() => onConfirm(false)}>
-            Cancel
-          </Action>
-          <Action
-            size="xs"
-            tone="danger"
-            disabled={removing}
-            onClick={() => void cloudAccount.removeDevice(device.id).then((ok) => ok && onConfirm(false))}
-          >
-            {removing ? <Spinner /> : null}
-            Remove
-          </Action>
-        </div>
-      ) : (
-        <Action size="xs" disabled={Boolean(busy)} onClick={() => onConfirm(true)}>
-          Remove
-        </Action>
-      )}
-    </ListCardRow>
-  )
-}
-
 /**
  * The browsers signed in to the account on the cloud's pages. A browser signed in there can connect a new device to
  * the account with a click, so each is listed with what makes a stranger's stand out: which browser, where it signed
@@ -740,14 +607,6 @@ function Note({ tone, className, children }: { tone: "caution" | "negative"; cla
       {children}
     </p>
   )
-}
-
-/** A device's `lastSeenAt` moves when it renews its connection, every few minutes while it's on. */
-function seen(lastSeenAt: string): string {
-  const minutes = (Date.now() - new Date(lastSeenAt).getTime()) / 60_000
-  if (minutes < 10) return "Active now"
-  const relative = formatRelative(lastSeenAt) || formatDay(lastSeenAt)
-  return /^\d/.test(relative) ? `Last active ${relative} ago` : `Last active ${relative}`
 }
 
 function hostOf(cloud: string): string {

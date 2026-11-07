@@ -49,14 +49,16 @@ if (process.versions.electron) {
 }
 
 /** The needs-you facts, read in the page from the contract and the Thread status the marks read, not from the Inbox. */
-const NEEDS_FACTS = `Promise.all([import('/src/state/acp-state.ts'), import('/src/state/apex-fins.ts'), import('/packages/host/src/contracts/children.ts'), import('/src/state/thread-store.ts'), import('/src/state/thread-status.ts')]).then(([{ acpStore }, { threadChildren }, { childStateOf, childGroup }, { threadsStore }, { threadStatus }]) => {
+const NEEDS_FACTS = `Promise.all([import('/src/state/acp-state.ts'), import('/src/state/apex-fins.ts'), import('/packages/host/src/contracts/children.ts'), import('/src/state/thread-store.ts'), import('/src/state/thread-status.ts'), import('/src/state/setup.ts')]).then(([{ acpStore }, { threadChildren }, { childStateOf, childGroup }, { threadsStore }, { threadStatus }, { allAsks, setupStore }]) => {
   const acp = acpStore.get()
   const apexes = [...new Set(Object.values(acp.conversations).flatMap((conversation) => conversation.kind === 'live' && conversation.threadId ? [conversation.threadId] : []))]
   const fins = apexes.flatMap((thread) => threadChildren(acp, thread).filter((agent) => { const state = childStateOf(agent); return childGroup(state) === 'needs' && state.on !== 'lead' }).map((agent) => ({ apex: thread, fin: agent.child.thread })))
   const asking = new Set(fins.flatMap((fin) => [fin.apex, fin.fin]))
   const state = threadsStore.get()
   const threads = state.threads.filter((ref) => !ref.parent && !asking.has(ref.threadId) && threadStatus(ref, state).kind === 'needs-permission').map((ref) => ref.path)
-  return { fins: fins.map((fin) => fin.fin), threads }
+  // A Setup ask waits on the person too, once its folder's Setup has been read: each listed once.
+  const setup = allAsks(setupStore.get()).map((entry) => entry.ask.id)
+  return { fins: fins.map((fin) => fin.fin), threads, setup }
 })`
 
 async function checkWindow() {
@@ -122,11 +124,12 @@ async function checkWindow() {
   console.log("PASS: five top rows, then Threads, no view switch")
 
   // 2. The Inbox's count is the needs-you facts.
+  // The facts as the Inbox's count reads them: a Setup ask arrives once its folder's Setup is read.
+  await until(`${NEEDS_FACTS}.then((facts) => Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) === facts.fins.length + facts.threads.length + facts.setup.length)`, "the Inbox row counts the needs-you facts")
   const facts = await evaluate(NEEDS_FACTS)
   console.log("NEEDS FACTS", JSON.stringify(facts))
-  const expected = facts.fins.length + facts.threads.length
+  const expected = facts.fins.length + facts.threads.length + facts.setup.length
   assert.ok(facts.fins.length >= 2, "the scene has Fins asking the person")
-  await until(`Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${expected}`, "the Inbox row counts the needs-you facts")
   assert.match(await rollup(), new RegExp(`${facts.fins.length} needs? you`), "the Apex row's rollup says the same")
   await capture("desktop-rail.png")
   console.log(`PASS: the Inbox counts ${expected}, the needs-you facts`)
