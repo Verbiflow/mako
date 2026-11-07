@@ -169,22 +169,23 @@ export function setSetupDrafter(next: typeof drafter) {
   drafter = next
 }
 
-async function draftInNewThread(root: string, text: string) {
+async function draftInNewThread(root: string, text: string): Promise<boolean> {
   if (!drafter) {
     toast("Ask for this from a Thread on your Mac")
-    return
+    return false
   }
   await drafter(root, text)
+  return true
 }
 
-/** The person's answer to an agent's ask. A tool added to setup is a recipe change, drafted for them to send. */
-export function answerAsk(folder: string, ask: SetupAsk, answer: AskAnswer) {
+/**
+ * The person's answer to an agent's ask: true once it landed, false when it didn't (said in a toast). A tool added to
+ * setup is a recipe change, drafted for them to send.
+ */
+export async function answerAsk(folder: string, ask: SetupAsk, answer: AskAnswer): Promise<boolean> {
   const root = setupStore.get().byFolder[folder]?.root ?? folder
-  if (answer === "add-to-setup" && ask.kind === "tool") {
-    void draftInNewThread(root, toolRequest(ask.tool, ask.version, ask.by.title))
-    return
-  }
-  void act(folder, `ask:${ask.id}`, { act: "answer", ask: ask.id, answer })
+  if (answer === "add-to-setup" && ask.kind === "tool") return draftInNewThread(root, toolRequest(ask.tool, ask.version, ask.by.title))
+  return (await act(folder, `ask:${ask.id}`, { act: "answer", ask: ask.id, answer })).done
 }
 
 export function toolRequest(tool: string, version: string | undefined, by?: string): string {

@@ -149,7 +149,7 @@ export function AskRow({ folder, ask, now, compact }: { folder: string; ask: Set
       <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-7">
         {away && askAnswers(ask).length > 1 ? <span data-setup-away-allow className="mr-1 text-label text-muted-foreground">{SETUP_AWAY_ALLOW}</span> : null}
         {askAnswers(ask, away).map((answer, index) => (
-          <Answer key={answer} primary={index === 0 && !away} disabled={busy} onClick={() => answerAsk(folder, ask, answer)}>
+          <Answer key={answer} primary={index === 0 && !away} disabled={busy} onClick={() => void answerAsk(folder, ask, answer)}>
             {askAnswerLabel(ask, answer, compact)}
           </Answer>
         ))}

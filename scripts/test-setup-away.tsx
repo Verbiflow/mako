@@ -8,8 +8,8 @@ import { renderToStaticMarkup } from "react-dom/server"
 import type { Grant, SourceAsk } from "@mako/protocol/borrow"
 import { partSummary, rowAction, type SetupView } from "@mako/host/contracts/setup"
 import { PhoneSetup, SetupPage } from "@/components/setup/setup-page"
-import { allAsks, answerAsk, readSetup, setSetupSource, setupAskCard, setupStore } from "@/state/setup"
-import { askNotice } from "@/lib/ask-card"
+import { allAsks, readSetup, setSetupSource, setupAskCard, setupStore } from "@/state/setup"
+import { askNotice, runChoice } from "@/lib/ask-card"
 import { inboxCount, inboxModel } from "@/state/inbox"
 import DeskSettings from "@/web-client/desk-settings"
 import { closeSetup, openSetup, setupOpenStore } from "@/web-client/setup-open"
@@ -118,12 +118,14 @@ setSetupSource(undefined)
 const { away: _away, ...withAsk } = page
 const reads: string[] = []
 let answered = false
+let refusing = true
 setSetupSource({
   read: async (folder): Promise<SetupView> => {
     reads.push(folder)
     return answered ? { ...withAsk, places: withAsk.places.map((place) => ({ ...place, asks: [] })) } : withAsk
   },
   act: async () => {
+    if (refusing) return { done: false, why: "The source said no." }
     answered = true
     return { done: true }
   },
@@ -138,9 +140,22 @@ setupStore.set((state) => {
 assert.equal(allAsks(setupStore.get()).length, 1, "the two folders' views list it once")
 assert.equal(inboxModel().asks.filter((item) => item.kind === "setup").length, 1, "and the Inbox's row")
 assert.equal(inboxCount(inboxModel()), 1, "and its badge")
-reads.length = 0
+// An answer that doesn't land frees its buttons and leaves the ask open; one that lands holds them until it goes.
 const [listed] = allAsks(setupStore.get())
-answerAsk(listed!.folder, listed!.ask, "allow-thread")
+const choice = setupAskCard(listed!.folder, listed!.ask, false).choices[0]!
+const steps: boolean[] = []
+assert.equal(await runChoice(choice, (busy) => steps.push(busy)), false, "the source refused it")
+assert.deepEqual(steps, [true, false], "so its buttons are free again")
+await new Promise((done) => setTimeout(done, 10))
+assert.equal(allAsks(setupStore.get()).length, 1, "and the ask is still open to answer")
+const failing: boolean[] = []
+assert.equal(await runChoice({ ...choice, choose: () => Promise.reject(new Error("the host is gone")) }, (busy) => failing.push(busy)), false, "an answer that throws hasn't landed")
+assert.deepEqual(failing, [true, false])
+refusing = false
+reads.length = 0
+steps.length = 0
+assert.equal(await runChoice(choice, (busy) => steps.push(busy)), true, "the source took it")
+assert.deepEqual(steps, [true], "held until the ask goes")
 await new Promise((done) => setTimeout(done, 10))
 assert.deepEqual([...reads].sort(), ["/Users/you/.worktrees/shop-1", "/Users/you/shop"], "answering it reads every folder holding it")
 assert.equal(allAsks(setupStore.get()).length, 0, "so no twin stands")

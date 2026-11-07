@@ -12,7 +12,7 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { acpStore } from "@/state/acp-state"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
-import type { AskCard } from "@/lib/ask-card"
+import { runChoice, type AskCard as AskWords } from "@/lib/ask-card"
 import { setupAskCard } from "@/state/setup"
 import {
   answerApproval,
@@ -163,13 +163,16 @@ function Crumb({ item }: { item: InboxAsk }) {
   )
 }
 
-/** An ask's answers as the Inbox draws every ask (`AskCard`): what can't be given here said first, the one to take filled. */
-function AskChoices({ card, sending, onChoose }: { card: AskCard; sending: boolean; onChoose: () => void }) {
+/**
+ * An ask's answers as the Inbox draws every ask (`AskCard`): what can't be given here said first, the one to take
+ * filled. An answer that didn't land frees them again (`runChoice`).
+ */
+function AskChoices({ card, sending, setSending }: { card: AskWords; sending: boolean; setSending: (held: boolean) => void }) {
   return (
     <>
       {card.note ? <span className="text-label text-muted-foreground">{card.note}</span> : null}
       {card.choices.map((choice) => (
-        <button key={choice.answer} type="button" data-inbox-answer={choice.answer} disabled={sending} onClick={() => { onChoose(); choice.choose() }} className={cn(BUTTON, choice.primary ? PRIMARY : QUIET)}>
+        <button key={choice.answer} type="button" data-inbox-answer={choice.answer} disabled={sending} onClick={() => void runChoice(choice, setSending)} className={cn(BUTTON, choice.primary ? PRIMARY : QUIET)}>
           {choice.label}
         </button>
       ))}
@@ -220,7 +223,7 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
         ) : item.kind === "approval" && item.answerable ? (
           <ApprovalAnswers item={item} sending={sending} send={(option) => settle(answerApproval(item, option))} />
         ) : item.kind === "setup" ? (
-          <AskChoices card={setupAskCard(item.folder, item.ask, item.away)} sending={sending} onChoose={() => setSending(true)} />
+          <AskChoices card={setupAskCard(item.folder, item.ask, item.away)} sending={sending} setSending={setSending} />
         ) : null}
         <span className="flex-1" />
         <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">

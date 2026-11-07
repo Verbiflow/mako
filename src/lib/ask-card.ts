@@ -11,7 +11,8 @@ export type AskChoice = {
   label: string
   /** The one to take first; drawn filled. At most one. */
   primary?: boolean
-  choose: () => void
+  /** Answers the ask: true once the answer landed, false when it didn't (the host refused it, or what it allowed failed). */
+  choose: () => void | Promise<boolean>
   /** What the choice is, for tests and styling (`data-inbox-answer`). */
   answer: string
 }
@@ -26,6 +27,17 @@ export type AskCard = {
   /** Said beside the answers when the one the ask wants can't be given here. */
   note?: string
   choices: AskChoice[]
+}
+
+/**
+ * Runs a choice with its row held busy. An answer that didn't land, or failed, frees the row, so the ask stays open and
+ * can be answered again; one that landed keeps it held until the ask goes. A choice that says nothing is taken as landed.
+ */
+export async function runChoice(choice: AskChoice, busy: (held: boolean) => void): Promise<boolean> {
+  busy(true)
+  const landed = await Promise.resolve(choice.choose()).then((said) => said ?? true, () => false)
+  if (!landed) busy(false)
+  return landed
 }
 
 /** An ask as a notice above the composer: in the attention hue, ahead of the stack's other notices. */
