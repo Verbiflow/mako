@@ -323,7 +323,7 @@ export class LiveRecords {
     if (sinceSweep >= BULK_LOADS && !this.bulkSaid.has(by)) {
       this.bulkSaid.add(by)
       hostWarn("residency", "one reader is loading conversations in bulk", {
-        by, loads: sinceSweep, loaded: this.residents.size, budget: this.memoryBudget().bytes,
+        by, ...(by === UNNAMED_READER && { from: callers(new Error().stack) }), loads: sinceSweep, loaded: this.residents.size, budget: this.memoryBudget().bytes,
         hint: "a list or a job must read the listing (LiveSummary), never a journal; see BULK_LOADS",
       })
     }
@@ -771,6 +771,11 @@ function residentWeight(weights: ContentWeights, { snapshot }: Resident): number
 }
 
 /** The listing's line for a conversation, loaded or not. */
+/** The functions a stack names past this file's, nearest first: work with no name of its own is known by who called it. */
+function callers(stack: string | undefined): string {
+  return (stack ?? "").split("\n").slice(1).filter((line) => !line.includes("live-records")).slice(0, 4).map((line) => /at (?:async )?(\S+)/.exec(line)?.[1]).filter(Boolean).join(" < ")
+}
+
 function residentSummary(snapshot: LiveSnapshot): LiveSummary {
   const wakes = sooner(wakeAt(snapshot.requests), transferDue(snapshot.control))
   const promptedAt = personPromptedAt(snapshot.requests, snapshot.control?.actions)
