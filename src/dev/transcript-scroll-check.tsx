@@ -93,6 +93,8 @@ const params = new URL(location.href).searchParams
 const TURNS = Number(params.get("turns") ?? 90)
 /** With `paged=N`, the source holds back all but the newest N turns and serves 20 per request. */
 const PAGED = Number(params.get("paged") ?? 0)
+/** How long the paged source takes to answer, `answer` milliseconds when given: long enough, a finger that asked rests first. */
+const ANSWER_MS = Number(params.get("answer") ?? 300)
 // A history page can begin inside one long answer, before its prompt loads.
 const base = conversation(TURNS).filter((message) =>
   message.role !== "user" ||
@@ -121,7 +123,7 @@ export function Probe() {
   const exchanges = toExchanges(state.messages)
   const loadEarlier = async () => {
     set((current) => ({ ...current, loading: true }))
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await new Promise((resolve) => setTimeout(resolve, ANSWER_MS))
     set((current) => ({
       ...current,
       loading: false,
