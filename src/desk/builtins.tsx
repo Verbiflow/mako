@@ -1,4 +1,8 @@
 import { AgentsPanel } from "@/components/inspector/agents-panel"
+import { SetupPanel, SetupReading } from "@/components/inspector/setup-panel"
+import { useSetupOffered } from "@/components/inspector/setup-offered"
+import { setSetupDrafter, setupDrafter } from "@/state/setup"
+import { actions } from "@/state/session"
 import { ControlPreviewOverlay } from "@/components/inspector/control-preview-overlay"
 import { AppshotButton } from "@/components/composer/appshot-button"
 import { AppshotShortcutHost } from "@/components/composer/appshot-flight"
@@ -11,6 +15,7 @@ import { simulatorSetupStore } from "@/state/simulator-setup"
 import { simulators, simulatorsRunnable, simulatorsStore } from "@/state/simulators"
 import {
   MonitorIcon,
+  PackageIcon,
   FilesIcon,
   GitCompareIcon,
   SmartphoneIcon,
@@ -86,6 +91,8 @@ export function installBuiltins(): () => void {
       reading: ControlReading,
     }),
     registerSurface({ id: "agents", label: "Agents", icon: ApexMark, render: AgentsPanel, order: 4, reading: AgentsReading, useOffered: () => useAgentsOffered() }),
+    registerSurface({ id: "setup", label: "Setup", icon: PackageIcon, render: SetupPanel, order: 6, reading: SetupReading, useOffered: useSetupOffered }),
+    installSetupDrafter(),
     installSimulatorSurface(),
     // Identity, through the same slots a plugin would use. It lives in the
     // rail's footer and only there: the titlebar carried the same avatar six
@@ -155,6 +162,20 @@ export function installBuiltins(): () => void {
     ),
   ]
   return () => disposers.forEach((dispose) => dispose())
+}
+
+/**
+ * The words written into the composer that's on screen once the new Thread's frame is drawn; true when a composer took
+ * them (it marks the event handled), so a draft nobody received isn't taken for one.
+ */
+function composeDraft(text: string): Promise<boolean> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve(!window.dispatchEvent(new CustomEvent("mako:compose", { detail: { text }, cancelable: true })))))
+}
+
+/** Setup's requests (a tool into the recipe, a file into its carry) start a Thread of the project with the words written. */
+function installSetupDrafter(): () => void {
+  setSetupDrafter(setupDrafter((root) => actions.newConversationIn(root), composeDraft))
+  return () => setSetupDrafter(undefined)
 }
 
 /** The simulator panel, offered only while a host here can run one: until then Settings › Simulators sets one up. */

@@ -185,6 +185,7 @@ try {
     const blocked = state()
     assert.ok(blocked?.kind === "blocked" && blocked.ask?.kind === "approval")
     assert.deepEqual(blocked.ask.options?.map((option) => option.label), ["Move to the cloud", "Keep here"])
+    assert.equal(blocked.ask.named, true, "answered in its own words, not a command's Allow once")
     const asking = world.agents.personAsk(apex.conversation)
     assert.equal(asking?.fin, thread(), "the Apex's row carries it, so the Inbox and phone do")
     await world.agents.respond(apex.conversation, { fin: thread(), ask: blocked.ask.id, allow: false, request: "r-keep" })

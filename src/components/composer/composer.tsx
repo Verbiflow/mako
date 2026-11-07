@@ -499,6 +499,8 @@ export function Composer() {
       // the new one until the next keystroke.
       setMention(mentionAt(body, body.length))
       focusComposerSoon(textarea, body.length, viewRef)
+      // Taken: whoever wrote it learns a composer has the words.
+      event.preventDefault()
     }
     const insert = (event: ComposerTextEvent) => {
       const { detail } = event

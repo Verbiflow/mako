@@ -5,6 +5,7 @@ import { activeAcp, useAcp } from "@/state/acp"
 import { agentsOpenStore, closeAgents, openDeskFin, useAgentsOpen, useDeskFin } from "./agents-open"
 import { filesOpenStore, leftFiles } from "./files-open"
 import { leftReview, reviewOpenStore } from "./review-open"
+import { setupOpenStore } from "./setup-open"
 import { WebSideRail } from "./side-rail"
 
 /**
@@ -31,14 +32,10 @@ export function AgentsLayer({ place }: { place: string | undefined }) {
   }, [open])
   useEffect(() => {
     const away = () => {
-      if (agentsOpenStore.get().open && (reviewOpenStore.get().open || filesOpenStore.get().open)) closeAgents()
+      if (agentsOpenStore.get().open && (reviewOpenStore.get().open || filesOpenStore.get().open || setupOpenStore.get().open)) closeAgents()
     }
-    const stopReview = reviewOpenStore.subscribe(away)
-    const stopFiles = filesOpenStore.subscribe(away)
-    return () => {
-      stopReview()
-      stopFiles()
-    }
+    const stops = [reviewOpenStore.subscribe(away), filesOpenStore.subscribe(away), setupOpenStore.subscribe(away)]
+    return () => stops.forEach((stop) => stop())
   }, [])
   const was = useRef(place)
   useEffect(() => {
