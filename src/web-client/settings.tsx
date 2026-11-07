@@ -27,6 +27,7 @@ import { useTheme, type WebTheme } from "./theme"
 import { setPref, usePrefs } from "@/state/prefs"
 import { Group, Row, Switch } from "./settings-rows"
 import { Fins } from "./fins"
+import { WebDevices } from "./devices"
 
 const DEFAULT_QUIET: QuietHours = { start: "22:00", end: "07:00" }
 /** The device's latest readings Diagnostics lists; Copy takes every one kept. */
@@ -60,6 +61,7 @@ export function Settings({ onBack, onSetup }: { onBack: (() => void) | undefined
           <Notifications />
           <Conversation />
           <Fins />
+          <WebDevices />
           <PullRequests />
           <Appearance />
           <ThisBrowser />
@@ -283,7 +285,7 @@ function ThisBrowser() {
   const [steps, setSteps] = useState(false)
   const [confirming, setConfirming] = useState(false)
   return (
-    <Group title="This browser" footer="Signing out here, or from a Mac's Settings › Account, ends it at once.">
+    <Group title="This browser" footer="Signing out here, or removing this browser in Settings › Devices on another device, ends it at once.">
       {way !== "none" ? (
         <button type="button" onClick={() => (way === "prompt" ? void install() : setSteps(true))} className="web-row flex min-h-12 w-full items-center gap-3 px-4 text-left text-ui">
           <SmartphoneIcon className="size-4 text-muted-foreground" />

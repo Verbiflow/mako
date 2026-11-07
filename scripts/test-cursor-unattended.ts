@@ -12,6 +12,7 @@ import { UNATTENDED_SIGN_IN } from "@mako/host/harnesses/live-driver"
 import { CURSOR_SDK_WIRE_VERSION, type SdkMethod, type SdkResult } from "@mako/host/harnesses/cursor/sdk/wire"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { ranOut } from "./lib/ran-out.ts"
 
 /**
  * Cursor with no key anywhere, started where nobody can sign it in (a cloud machine): the start fails at once, saying
@@ -42,14 +43,14 @@ const auth = new CursorSdkAuth({
 const driver = createCursorSdkDriver({ stores: new NativeStores(false), auth, stateRoot: () => root, home: root, client: () => client, models: async () => [] })
 try {
   const asked: string[] = []
-  const started = performance.now()
-  await assert.rejects(
+  const { waits } = await ranOut(() => assert.rejects(
     driver.start(root, admitted("cursor", { conversationId: randomUUID(), unattended: true, emit: (event) => { if (event.type === "live-permission") asked.push(event.type) } }, { env: {} })),
     { message: UNATTENDED_SIGN_IN },
-  )
+  ))
   assert.deepEqual(asked, [], "no sign-in offered")
   assert.equal(browser, 0, "no browser opened")
-  assert.ok(performance.now() - started < 5_000, "at once")
+  // At once, by what it waited for rather than the runner's clock: nothing a second or longer ran out.
+  assert.deepEqual(waits.filter((ms) => ms >= 1_000), [], "at once")
   console.log("PASS: Cursor started where nobody can sign it in fails at once, offering no sign-in")
 } finally {
   rmSync(root, { recursive: true, force: true })
