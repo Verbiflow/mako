@@ -38,6 +38,8 @@ import { unregisterBundle } from "./local-update-installer.js"
 import { changesSince, readUncommitted, readUpdateSource, type Writers } from "./local-update-source.js"
 import { checkScripts, performanceEnvironment, UPDATE_CHECKS, updateEnvironment, updaterInherited, writeChanged } from "./local-update-checks.js"
 import { describeFailure, failureMessage, StepError, type FailureContext } from "./local-update-failures.js"
+import { githubApi } from "../git/index.js"
+import { githubRepository, readCi, type CiReading } from "./local-update-ci.js"
 import { checkoutUpstream, seedDependencies } from "./upstream-copy.js"
 import { runProcessGroup } from "./process-group.js"
 import { DependencyInstallError, installDependencies, missingDependencies, uninstalledPackages } from "./local-update-dependencies.js"
@@ -185,6 +187,8 @@ export interface LocalUpdateOptions {
   quietEveryMs?: number
   /** Who changed each uncommitted file, from the change journal; nobody is named without it. */
   writers?: Writers
+  /** What CI says of a commit; GitHub unless a test or a rehearsal stands in. */
+  ciPassed?: (commit: string) => Promise<CiReading>
 }
 
 export interface CandidateMaker {
@@ -612,7 +616,8 @@ export class LocalUpdates {
         ...changed && { changed: await writeChanged(job, changed) },
       }))
       const scripts = await checkScripts(checkout)
-      const performance = await runUpdateChecks({ npm, checkout, env, folder: job, revision, performance: scripts.performance, phase: (phase) => this.phase(phase) })
+      const vouched = from === "upstream" && scripts.machine && (await this.ciPassed(source, upstream!.name, revision))
+      const performance = await runUpdateChecks({ npm, checkout, env, folder: job, revision, performance: scripts.performance, vouched, phase: (phase) => this.phase(phase) })
       this.phase("packaging")
       const maker = this.options.candidate ?? this.packager(node)
       await maker.package(checkout, output, env).catch((error: Error) => {
@@ -662,6 +667,18 @@ export class LocalUpdates {
     const diff = await this.git.text({ cwd: source, args: ["diff", "--name-only", "--no-renames", installed, revision, "--"], read: true, timeoutMs: 30_000 })
     return [...new Set([...diff.split("\n").filter(Boolean), ...uncommitted.files.flatMap((file) => file.from ? [file.path, file.from] : [file.path])])]
   }
+
+  /** Whether CI passed `commit` on `upstream`, `origin/main`; it's said in the log either way, as it decides what runs. */
+  private async ciPassed(source: string, upstream: string, commit: string): Promise<boolean> {
+    const slash = upstream.indexOf("/")
+    const url = await this.git.text({ cwd: source, args: ["remote", "get-url", upstream.slice(0, slash)], read: true, timeoutMs: 10_000 }).catch(() => "")
+    const repository = githubRepository(url)
+    const reading = this.options.ciPassed
+      ? await this.options.ciPassed(commit)
+      : repository ? await readCi((path) => githubApi(source, path), repository, upstream.slice(slash + 1), commit) : { passed: false as const, why: "its upstream isn't on GitHub" }
+    hostLog("updates", reading.passed ? "CI passed this commit; only this Mac's checks run" : "every check runs", { revision: commit.slice(0, 12), ...reading.passed ? { run: reading.run } : { why: reading.why } })
+    return reading.passed
+  }
 }
 
 /** What `runUpdateChecks` runs in, and where it reports which step it's on. */
@@ -674,6 +691,8 @@ export interface UpdateCheckRun {
   revision: string | undefined
   /** The checkout's performance script (`checkScripts`). */
   performance: string
+  /** CI passed this very commit (`readCi`): only what this Mac alone can tell runs. */
+  vouched?: boolean
   phase?: (phase: BuildPhase) => void
 }
 
@@ -689,6 +708,12 @@ export async function runUpdateChecks(run: UpdateCheckRun): Promise<UnsurePerfor
   run.phase?.("compiling")
   await runStep("compiling", npm, UPDATE_CHECKS.compile, checkout, env)
   run.phase?.("checking")
+  if (run.vouched) {
+    await runBuild(npm, ["run", UPDATE_CHECKS.machine], checkout, env).catch((error: Error) => {
+      throw new StepError("checking", error.message, { blame: "machine", next: "CI passed this commit, so this is this Mac, not the code.", script: UPDATE_CHECKS.machine, details: error.message, cause: error })
+    })
+    return undefined
+  }
   const results = await Promise.allSettled(UPDATE_CHECKS.checks.map((script) => runStep("checking", npm, script, checkout, env)))
   const failed = results.find((result) => result.status === "rejected")
   if (failed) throw failed.reason
