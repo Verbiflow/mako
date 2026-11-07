@@ -61,6 +61,13 @@ export interface BorrowBrokerUnderTest {
   person(): Promise<BorrowPersonUnderTest>
   /** A Thread of `repository` (`owner/name`) of the person's account, at a place of the broker's choosing. */
   borrower(repository: string): Promise<BorrowerUnderTest>
+  /**
+   * A Thread of `repository` at one of the person's devices, as that device's own credential names it, for a broker
+   * that serves device borrowers. `listed` says whether the account lists the Thread as running on that device: a
+   * request naming any other Thread is refused where the device's credential is served, before a lease is issued or
+   * reused. A broker that serves no device borrowers leaves it out, and its device cases don't run.
+   */
+  deviceBorrower?(repository: string, device: string, listed: boolean): Promise<BorrowerUnderTest>
   /** Everything the broker keeps for the account, as text, wherever it keeps it: no value may be in it in the clear. */
   kept(): Promise<string>
   close(): Promise<void>
@@ -140,6 +147,35 @@ export function runBorrowConformance(makeBroker: () => Promise<BorrowBrokerUnder
         await broker.close()
       }
     })
+
+  scenario("a device borrows only for a Thread the account lists as running there, under a grant naming that device", async (broker) => {
+    if (!broker.deviceBorrower) return
+    const person = await broker.person()
+    const value = canary()
+    granted(await person.grant(vaultCopy(person.account, "env", { devices: ["conformance-box"] }), value))
+    const box = await broker.deviceBorrower(REPOSITORY, "conformance-box", true)
+    const lease = leaseOf(await box.borrow(need("c-1")))
+    assert.deepEqual(await box.value(lease.id), value)
+    const elsewhere = await broker.deviceBorrower(REPOSITORY, "conformance-other", true)
+    assert.equal(refusalOf(await elsewhere.borrow(need("c-1"))), "out-of-scope", "a device the grant doesn't name")
+    // Another Thread named by the same device's credential, one the account doesn't list there: issued nothing, and
+    // the lease the listed Thread holds doesn't open for it. Each holds on its own.
+    const claimed = await broker.deviceBorrower(REPOSITORY, "conformance-box", false)
+    assert.ok("refusal" in (await claimed.borrow(need("c-1"))), "an unlisted Thread is refused the need the listed one holds")
+    assert.ok("refusal" in (await claimed.borrow(need("c-2"))), "and is issued nothing new")
+    assert.ok(refused(await claimed.value(lease.id)), "and the listed Thread's lease doesn't open for it")
+  })
+
+  scenario("a lease held under a grant that changed away from its borrower is refused when it's asked for again", async (broker) => {
+    if (!broker.deviceBorrower) return
+    const person = await broker.person()
+    granted(await person.grant(vaultCopy(person.account, "env", { devices: ["conformance-box"] }), canary()))
+    const box = await broker.deviceBorrower(REPOSITORY, "conformance-box", true)
+    const lease = leaseOf(await box.borrow(need("c-1")))
+    granted(await person.grant(vaultCopy(person.account, "env", { devices: ["conformance-other"], version: 2 }), canary()))
+    assert.ok("refusal" in (await box.borrow(need("c-1"))), "the cached lease isn't handed back")
+    assert.ok(refused(await box.value(lease.id)), "and its value no longer opens")
+  })
 
   scenario("a vault copy reaches its project's Threads and no other, and opens only for its own lease", async (broker) => {
     const person = await broker.person()

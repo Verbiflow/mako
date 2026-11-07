@@ -98,7 +98,9 @@ async function until(what: string, done: () => boolean, timeoutMs = 15_000): Pro
 }
 const NOW = Date.UTC(2026, 10, 4, 20)
 const began = performance.now()
-const clock = () => NOW + Math.round(performance.now() - began)
+// What the next reads of the clock say, ahead of the time itself.
+const clockSays: number[] = []
+const clock = () => clockSays.shift() ?? NOW + Math.round(performance.now() - began)
 const RESET = NOW + 3 * 3_600_000
 const LIMIT = "You've hit your usage limit"
 /** Every harness signed in: its catalog lists a model. */
@@ -236,6 +238,7 @@ try {
     const thread = edgeOf(r).child
     assert.deepEqual(r.world.store.reportsOf(thread, 0).map((report) => [report.status, report.summary]), [["done", "Labelled all 120."]], "one report, the turn that finished the work: no failure for a limit it moved past")
     await until("its Apex to hear", () => r.wakes.length === 1)
+    assert.ok(r.wakes[0]!.includes('"labels" (Codex)'), `it's named for the harness it's on: ${r.wakes[0]!.slice(0, 200)}`)
     assert.ok(r.wakes[0]!.includes(`"labels" moved to Claude (work): personal is at its limit`), r.wakes[0])
     assert.ok(r.wakes[0]!.includes(`"labels" moved to Codex: Claude (work) is at its limit`), r.wakes[0])
     assert.equal(r.wakes.length, 1, "the moves never woke the Apex by themselves")
@@ -390,7 +393,7 @@ try {
     out()
     await until("the notice", () => r.world.agents.personAsk(r.apex.conversation) !== undefined, 8_000)
     const said = r.world.agents.personAsk(r.apex.conversation)!
-    assert.equal(said.line, `Claude (personal) ran out until ${resetWords(RESET, clock())}. This Thread moved to Codex. 2 Fins moved to Codex.`, "what ran out, until when and what moved where, in one line")
+    assert.equal(said.line, `Claude (personal) ran out until ${resetWords(RESET, clock())}. This Thread and 2 Fins moved to Codex.`, "what ran out, until when and what moved where, in one line")
     assert.deepEqual(said.ask.options?.map((option) => option.label), ["Got it"])
     assert.equal(r.world.agents.roster(r.apex.conversation).find((agent) => agent.child?.limitNotice)?.child?.limitNotice?.harness, "claude", "it names the harness that ran out, though the Fin carrying it has left")
     const carrying = r.world.agents.roster(r.apex.conversation).filter((agent) => agent.child?.limitNotice)
@@ -464,9 +467,64 @@ try {
     assert.ok(!("refused" in r))
     held.claude[0]!.spentUntil = reset
     spent()
+    // No roster isn't no notice: it doesn't count as cleared, and neither does anything before the reset. This failed
+    // in CI without saying if a notice stood or the roster had gone: a failure now prints which.
     const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length
     await until("the notice on the Apex's snapshot", () => shown() === 1, 6_000)
-    await until("its reset, with nobody reading", () => shown() === 0, 12_000)
+    const fresh = () => r.world.agents.roster(r.apex.conversation).filter((agent) => agent.child?.limitNotice).length
+    assert.equal(fresh(), 1, "a fresh read of the roster has it too")
+    await until("its reset, with nobody reading", () => shown() === 0, 12_000).catch((error) => {
+      const entries = r.world.agents.roster(r.apex.conversation).map((agent) => [agent.child?.state?.kind, Boolean(agent.child?.limitNotice)])
+      console.error("At its reset:", JSON.stringify({ reset, now: clock(), shown: shown() ?? "no roster", entries, session: r.world.live.session(r.apex.conversation)?.status, notices: r.world.store.limitNotices() }))
+      throw error
+    })
+    assert.ok(clock() >= reset, `the notice held until its reset, not ${reset - clock()} ms short of it`)
+    assert.equal(fresh(), 0, "and a fresh read of the roster agrees")
+    await r.world.close()
+  }
+  // A timer can fire a moment early, and the clock can cross the reset between the two reads that follow. Linux runners
+  // left a notice on the Apex's snapshot this way, past its reset, while a fresh roster was clean.
+  {
+    const reset = clock() + 7_000
+    const held = { claude: named("personal"), codex: named("default") }
+    let spent!: () => void
+    const out = new Promise<void>((resolve) => (spent = resolve))
+    const r = await run("notice-early-timer", {
+      accounts: held,
+      selected: { claude: "personal" },
+      start: { harness: "claude" },
+      fin: async (turn, end) => {
+        if (turn > 1) return "Done."
+        await out
+        end({ limit: { resetsAt: reset }, fail: LIMIT })
+        return "Partial labels."
+      },
+    })
+    assert.ok(!("refused" in r))
+    held.claude[0]!.spentUntil = reset
+    const realTimeout = globalThis.setTimeout
+    let early = 0
+    // SAFETY: called as setTimeout is, with the timer it returns; only the reset's own timer is touched.
+    globalThis.setTimeout = ((work: () => void, ms?: number) => {
+      const forReset = ms !== undefined && ms > 1_000 && Math.abs(clock() + ms - reset) < 5
+      return realTimeout(() => {
+        if (forReset && !early) {
+          early += 1
+          clockSays.push(reset - 1, reset)
+        }
+        work()
+      }, ms)
+    }) as typeof setTimeout
+    try {
+      spent()
+      const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length
+      await until("the notice on the Apex's snapshot", () => shown() === 1, 6_000)
+      await until("its reset, on a timer that fired early", () => shown() === 0, 12_000)
+      assert.equal(early, 1, "the reset's timer is the one that fired early")
+      assert.ok(clock() >= reset - 1, "and the notice held until its reset")
+    } finally {
+      globalThis.setTimeout = realTimeout
+    }
     await r.world.close()
   }
   // Past its reset a notice is off the entry that carries it, whatever the cache held; and a host that comes back to
@@ -787,11 +845,6 @@ try {
     await until("the move to work", () => r.world.launches.some((launch) => launch.conversation === finConversation && launch.account === "work"))
     await until("its turn on work", () => r.finTurns().length === 2)
     await r.world.restart()
-    await new Promise((d) => setTimeout(d, 9000))
-    const fc = r.fin()
-    console.log("DBG rows", JSON.stringify(r.world.live.snapshot(fc)!.requests.map((q) => ({ id: q.id.slice(0, 5), st: q.status, cont: Boolean(q.continues), retry: q.retry && { c: q.retry.cause, at: q.retry.at - Date.now(), r: q.retry.reason?.slice(0, 40) }, wake: q.wake, pause: q.pause, why: q.interruption?.reason, t: q.text.slice(0, 30) }))))
-    console.log("DBG session", JSON.stringify(r.world.live.session(fc)?.status), r.world.live.pinnedAccount(fc, "claude"), JSON.stringify(r.world.store.finTurn(edgeOf(r).child)), JSON.stringify(r.world.agents.roster(r.apex.conversation)[0]?.child?.state))
-    console.log("DBG turns", r.finTurns().length, JSON.stringify(held.claude), JSON.stringify(r.world.continued.map((c) => [c.conversation === fc ? "fin" : "apex", c.to, c.by])), JSON.stringify(r.world.launches.map((l) => [l.conversation === fc ? "fin" : "apex", l.account])))
     await until("it to stop out of accounts", () => { const state = r.world.agents.roster(r.apex.conversation)[0]?.child?.state; return state?.kind === "ended" && state.outcome === "stopped" }, 30_000)
     const accountsRun = r.world.launches.filter((launch) => launch.conversation === finConversation).map((launch) => launch.account)
     assert.equal(accountsRun.lastIndexOf("personal"), 0, `never back to personal: ${accountsRun.join(", ")}`)

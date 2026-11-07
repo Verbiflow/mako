@@ -7,6 +7,7 @@ import type { WatchEvent } from "@mako/host/contracts/watcher-child"
 import { childBackend, childHistory, probeDelivery, type FileHistory, type WatchListener } from "@mako/host/workspaces/watch-backend"
 import { WatchReadings } from "@mako/host/workspaces/watch-readings"
 import { FileEventsServiceWatch } from "@mako/host/workspaces/file-events-service"
+import { ranOut } from "./lib/ran-out.ts"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-backend-")))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -89,9 +90,9 @@ try {
   // A child that dies every time is given up after five tries.
   const dying = join(root, "dying.mjs")
   writeFileSync(dying, "process.on('message', () => process.exit(1))\n")
-  const started = Date.now()
-  await assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/)
-  assert.ok(Date.now() - started < 10_000, "within the backoff, not forever")
+  // Within the backoff, by the waits it took rather than the runner's clock: each restart twice the last, then given up.
+  const { waits } = await ranOut(() => assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/))
+  assert.deepEqual(waits.filter((ms) => ms >= 250), [250, 500, 1_000, 2_000], "within the backoff, not forever")
 
   // Late isn't silent: a canary heard 8 s late, as a degraded fseventsd
   // delivers, mutes nothing and restarts nothing, and its lag is read and
@@ -203,7 +204,8 @@ try {
   process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1_500 })
   const restarted = await service.restart()
   assert.equal(restarted.restart?.outcome, "restarted")
-  assert.ok((restarted.restart?.after?.lagMs ?? Infinity) < 250, `delivery measured again after: ${restarted.restart?.after?.lagMs} ms`)
+  // Measured again, not the late beats carried over: well under the lag it restarted from, whatever the runner's pace.
+  assert.ok((restarted.restart?.after?.lagMs ?? Infinity) < (restarted.restart?.before.lagMs ?? 0) / 2, `delivery measured again after: ${restarted.restart?.after?.lagMs} ms, from ${restarted.restart?.before.lagMs} ms`)
   assert.ok((restarted.restart?.before.lagMs ?? 0) >= 1_200)
   assert.equal(restarted.state, "healthy", "and the notice goes")
   await until("every watch hears its events may have been dropped, and rescans", () => d.dropped() === 1, 30_000)

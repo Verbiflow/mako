@@ -55,15 +55,16 @@ import type { GitHubPerson } from "./contracts/github-person.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { hostPlatform, nodePlatform, onMac } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
+import type { KeepAwakeSettings } from "./contracts/keep-awake.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { BorrowedSimulators, ControlResidency, LeaseEnded, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService, type SimulatorBorrowing } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { FinCapacity, FinCostModel, FinCostSampler, MacCapacity, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations } from "./conversations/index.js"
+import { FinCapacity, FinCostModel, FinCostSampler, MacCapacity, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
-import { declareGitMethods, hostGit } from "./git/index.js"
+import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
 import type { TerminalClients } from "./terminals/index.js"
 import { declareApplicationMethods, Updates, type Application } from "./application/index.js"
@@ -201,6 +202,7 @@ interface LateParts {
   attribution?: Attribution
   /** On a cloud machine: its tracker (`openMachineTracker`), made once the conversations are. */
   machineTracker?: MachineTracker
+  keepAwake?: KeepAwake
   /** Turning the cloud on, as one line: told when what it reads changes. */
   turnOn?: CloudTurnOnFollower
   /** The file system's history, for fseventsd's restart to end reads across it. */
@@ -289,6 +291,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     late.sessions?.own(event)
     // The account and the agents' sign-ins say each change here; turning the cloud on reads them again then.
     if (event.type === "cloud-account" || event.type === "cloud-sign-ins") void late.turnOn?.changed()
+    if (recountsWork(event)) late.keepAwake?.changed()
     web()?.event(event, client)
   }
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
@@ -412,7 +415,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const makoProcesses = () => readMakoProcesses([environment.dataRoot, ...threads.memory?.hostDataRoots() ?? []])
   const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, userRoot: environment.userRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs, subscribed: shell.subscribed, makoProcesses })
   const tools = openTools(harnesses.tools, environment.dataRoot, () => shell.foreground.idle())
-  const conversationsIn = (path: string, status: (value: string) => boolean) => (late.conversations?.live.summaries() ?? [])
+  const conversationsIn = (path: string, status: (value: string) => boolean) => (late.conversations?.live.listed() ?? [])
     .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
     .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
   // A terminal daemon outlives the host, so a folder's shells are asked of it even before a window opens a terminal.
@@ -505,6 +508,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   let windowRows: ThreadRef[] | undefined
   /** The rows by native session, read again with them: where the uploads read each Session. */
   let windowPaths: Map<string, string> | undefined
+  /** Moves with everything the catalog says, so what reads its paths knows they may have. */
+  let catalogMoves = 0
   // The Threads moving to the cloud from here, said on their rows from the move's first step.
   const movesUnderWay = new MovesUnderWay()
   // What each project on the list has checked out, as the rail shows it beside the project: read once a project is
@@ -584,6 +589,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     work: shell.work,
   })
   catalog.subscribe((event) => {
+    catalogMoves += 1
     if (event.type === "thread-ref") {
       const at = windowRows?.findIndex((row) => row.path === event.ref.path) ?? -1
       if (windowRows && at >= 0) windowRows[at] = event.ref
@@ -637,7 +643,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     uploads = new SessionUploads({
       rows: () => sessions.listed(),
       path: (harness, nativeId) => (windowPaths ??= new Map((windowRows ??= catalog.recent(windowStart(Date.now()))).map((ref) => [`${ref.harness}\n${ref.nativeId}`, ref.path]))).get(`${harness}\n${nativeId}`),
-      agents: (session) => threads.store?.childSessions(session) ?? [],
+      agents: () => threads.store?.childSessions() ?? new Map(),
+      scopeVersion: () => (threads.store ? `${threads.store.version()}:${catalogMoves}` : undefined),
       links: async () => {
         const cloud = late.cloud
         const blocked = cloud?.cloudBlocked ? await cloud.cloudBlocked() : "signed-out"
@@ -704,6 +711,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   lent.subscribe(() => {
     late.conversations?.agents?.capacityChanged()
     late.advertiser?.roomChanged()
+    // A lease served or ended starts or ends work this Mac stays awake for.
+    void late.keepAwake?.refresh()
   })
   // The sessions this Mac lends as their source: asks it can answer itself, each lease the broker issues it, beats
   // for them on its runtime link, and every way one ends. A cloud machine and a fixture desk lend nothing.
@@ -1232,6 +1241,20 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     readinessOnce = readiness
     shell.jobs.every("keep Threads at work ready to move", READY_EVERY_MS, () => readiness.refresh())
   }
+  // This Mac kept awake while its agents work: a turn, background work or a subagent, never a wait on the person, and never a Fin that sits open.
+  const keepAwake = cloudConversations && onMac() ? new KeepAwake({
+    file: join(environment.dataRoot, "keep-awake.json"),
+    helper: () => sleepWatchHelper(environment),
+    working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations.has(id), ownWork: true }).length,
+    serving: () => lent.count(),
+    changed: (state) => emit({ type: "keep-awake", state }),
+  }) : undefined
+  late.keepAwake = keepAwake
+  if (keepAwake) {
+    void keepAwake.refresh()
+    // What no batch says (a conversation closed, or gone to the cloud), and a helper to try again, within a minute.
+    shell.jobs.every("keep this Mac awake while agents work", 60_000, () => keepAwake.refresh())
+  }
   // The person's choice and their sign-in can change it; a minute is soon enough to start or stop listening.
   if (sleepHandOff) {
     void sleepHandOff.refresh()
@@ -1294,6 +1317,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     checkWaitMs: (harness) => harnesses.tools.mcpSources.get(harness)?.callWaitMs,
     jobs: shell.jobs,
     person: shell.machineGitHubPerson,
+    pullRequestsAs: config.machineAgentFd === undefined ? undefined : () => machinePullRequestsAs(),
     emit,
     warn: (message, facts) => hostWarn("workspace", message, facts),
   })
@@ -1649,6 +1673,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         }
         if (channel === "mako:continue-readings") return { handled: true, value: encodeRuntimeValue(cloudContinues.readings()) }
       }
+      if (keepAwake) {
+        if (channel === "mako:keep-awake") return { handled: true, value: encodeRuntimeValue(await keepAwake.state()) }
+        if (channel === "mako:keep-awake-set") {
+          // SAFETY: the dispatcher parsed this call's arguments with `mako:keep-awake-set`'s schema before routing it.
+          const [change] = args as [Partial<KeepAwakeSettings>]
+          return { handled: true, value: encodeRuntimeValue(await keepAwake.set(change)) }
+        }
+      }
       if (channel === "mako:thread-move" && cloudMoves) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-move`'s schema before routing it.
         const [conversationId, move, handOff] = args as [string, string, ThreadHandOff | undefined]
@@ -1758,6 +1790,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       wake.stop()
       repositories.stop()
       sleepHandOff?.stop()
+      keepAwake?.stop()
       cloudContinues?.close()
       late.cloud?.stop()
       shell.terminals.current()?.dispose()

@@ -168,6 +168,14 @@ export const GrantSchema = z
     secret: z.boolean(),
     /** Only for borrowers on the source device itself (a worktree reading its own Mac's main checkout), never another place. */
     within: z.literal("source-device").optional(),
+    /**
+     * The person's devices a borrower there may borrow under it. A borrower at a device is reached only by a grant
+     * naming that device, or by one that keeps to it (`within`): nothing held on one device or in the account reaches
+     * another of the person's devices unless the person said so for that device. The cloud's machines aren't devices;
+     * this list doesn't touch them. Which Threads run on a device is the account's listing, checked by whatever serves
+     * the device's credential before it asks the broker.
+     */
+    devices: z.array(Id).min(1).max(64).optional(),
     /** The name the person gave it or knows it by ("Cloudflare for parley"); the ref when absent. */
     label: z.string().max(200).optional(),
     grantedBy: ActorSchema,
@@ -190,6 +198,7 @@ export const GrantSchema = z
     if (grant.lifetime.until === "thread-ends" && grant.scope.level !== "thread")
       context.addIssue({ code: "custom", message: "A grant that ends with its Thread is scoped to that Thread" })
     if (grant.within && grant.source.kind !== "device") context.addIssue({ code: "custom", message: "Only a device's grant keeps to the device" })
+    if (grant.within && grant.devices) context.addIssue({ code: "custom", message: "A grant that keeps to its device names no other devices" })
     if (grant.scope.account !== accountOf(grant.grantedBy, grant.scope.account))
       context.addIssue({ code: "custom", message: "A grant is given within its own account" })
   })
@@ -512,8 +521,14 @@ export function selects(selector: ResourceSelector, kind: Kind, ref: string): bo
 /** Whether a grant reaches a borrower: inside its scope, and on its source device when it keeps to it. */
 export function reachesBorrower(grant: Grant, borrower: Borrower): boolean {
   if (!inScope(grant.scope, borrower)) return false
-  if (!grant.within) return true
-  return grant.source.kind === "device" && borrower.place.kind === "device" && borrower.place.device === grant.source.device
+  if (grant.within) return grant.source.kind === "device" && borrower.place.kind === "device" && borrower.place.device === grant.source.device
+  if (borrower.place.kind === "device") return grant.devices?.includes(borrower.place.device) ?? false
+  return true
+}
+
+/** Whether a grant, as it stands, still decides a need: it reaches the borrower and selects what's asked, in its mode. */
+function serves(grant: Grant, need: Need): boolean {
+  return reachesBorrower(grant, need.for) && selects(grant.resource, need.kind, need.ref) && (!need.mode || grant.mode === need.mode)
 }
 
 /** Whether a borrower is inside a scope. */
@@ -825,6 +840,12 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
           delete state.asks[ask.ask]
           decide(state, effects, ask.need, { refusal: { refused: reachesBorrower(grant, ask.need.for) ? "revoked" : "out-of-scope" } }, input.at)
         }
+      if (known)
+        for (const [key, wait] of Object.entries(state.waiting)) {
+          if (wait.grant !== grant.id || serves(grant, wait.need)) continue
+          delete state.waiting[key]
+          decide(state, effects, wait.need, { refusal: { refused: reachesBorrower(grant, wait.need.for) ? "revoked" : "out-of-scope" } }, input.at)
+        }
       if (lapsed(grant, input.at)) endGrant(state, effects, grant.id, { at: input.at, why: "expired", by: { kind: "mako" } })
       return done()
     }
@@ -1134,15 +1155,22 @@ function wake(state: BrokerState, effects: BrokerEffect[], at: number): void {
       decide(state, effects, wait.need, { refusal: { refused: held?.ended?.why === "revoked" ? "revoked" : "expired" } }, at)
       continue
     }
+    // Past its deadline a need is refused, whatever room has come: never served late.
+    if (at >= wait.deadline) {
+      delete state.waiting[key]
+      decide(state, effects, wait.need, { refusal: { refused: "no-capable-device", why: wait.why, waited: at - wait.since } }, at)
+      continue
+    }
+    // Issued only under the grant as it stands now: one changed since the need queued may no longer reach it.
+    if (!serves(held.grant, wait.need)) {
+      delete state.waiting[key]
+      decide(state, effects, wait.need, { refusal: { refused: reachesBorrower(held.grant, wait.need.for) ? "revoked" : "out-of-scope" } }, at)
+      continue
+    }
     const routed = route(state, held.grant, wait.need, wait.excluded ?? [])
     if ("device" in routed) {
       delete state.waiting[key]
       askCapable(state, effects, wait.need, held, routed.device, wait.lease, wait.ask, at, wait.excluded ?? [])
-      continue
-    }
-    if (at >= wait.deadline) {
-      delete state.waiting[key]
-      decide(state, effects, wait.need, { refusal: { refused: "no-capable-device", why: routed.why, waited: at - wait.since } }, at)
       continue
     }
     if (routed.why !== wait.why) state.waiting[key] = { ...wait, why: routed.why }

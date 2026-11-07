@@ -96,7 +96,9 @@ export function mockSetup() {
     { event: "refused", at: start - 3 * HOUR, grant: "g-outreach", borrower: borrower("t-studio", "studio"), resource: { kind: "tree", ref: "ignore/outreach" }, refused: "unavailable", reason: "unreadable", correlationId: "c-studio-outreach" },
   ]
   const apex = params.get("app") === "apex"
-  const asker = (thread: string, title: string, harness: string, fin: boolean) => (apex ? { thread: APEX_THREAD, title: APEX_TITLE, harness: "claude", fin: false } : { thread, title, harness, fin })
+  // `?setup=long`: the asking Thread's title is its first message, as long as titles often are.
+  const long = params.get("setup") === "long" ? "I'll read the MetaHarness track plan and the phone composer notes, then fix the webhook retries" : undefined
+  const asker = (thread: string, title: string, harness: string, fin: boolean) => (apex ? { thread: APEX_THREAD, title: APEX_TITLE, harness: "claude", fin: false } : { thread, title: long ?? title, harness, fin })
   const askPlace = apex ? `device:${MAC}` : "cloud"
   let asks: SetupAsk[] =
     params.get("setup") === "quiet"

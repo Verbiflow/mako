@@ -194,6 +194,8 @@ function mac(overrides: Partial<CapabilityProbeDeps> = {}): CapabilityProbeDeps 
     grantedBy: { kind: "person", account: "acct" },
     grantedAt: 1,
     version: 1,
+    // A borrower at a device borrows only under a grant naming it: this Mac's own Threads, here.
+    devices: ["mac"],
   }
   assert.equal(await broker.grant(grant), undefined)
   const need: Need = { kind: "operation", ref: "ios-simulator", for: { account: "acct", repository: "acct/shop", thread: "t1", place: { kind: "device", device: "mac" } }, why: "check the sign-in page on an iPhone", correlationId: "sim-1" }

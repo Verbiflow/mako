@@ -12,6 +12,7 @@ import { withExecutionAdmission, type AccountAdmission } from "@mako/host/harnes
 import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
 import type { LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import { HostJobs } from "@mako/host/base/host-jobs"
+import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
 import { ACCESS_TIERS, accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { AgentCaller, TreeBudget } from "@mako/host/contracts/agents"
 import type { ProviderBinding, ResumeVerdict } from "@mako/host/contracts/conversation-control"
@@ -109,6 +110,8 @@ export interface WorldOptions {
   finCeiling?: () => number
   /** Operations this device lends another place's Threads (`AgentsDeps.lent`). */
   lent?: () => number
+  /** Takes up what the last host left as the host does, each conversation read in a slice at a time first (`resumed`); at once without it. */
+  resumeInSlices?: boolean
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
   /** A harness closing a session, awaited before it's closed (a switch retiring its source, say). */
@@ -222,6 +225,7 @@ export class AgentsWorld {
   readonly events: HostEvent[] = []
   /** Every launch admission resolved, in order, with the account it ran on (`WorldOptions.accounts`). */
   readonly launches: WorldLaunch[] = []
+  private readonly inputs = new HostCallInputs()
   /** When each of `events` was emitted, by its place. */
   readonly eventAt: number[] = []
   private asking = new Map<string, { observationId: string; answered: (response: LivePermissionResponse) => void }>()
@@ -233,6 +237,8 @@ export class AgentsWorld {
   /** Each move through `continueOn`, in order: who asked and what it went to. */
   readonly continued: { conversation: string; to: string; kind: string; by: string }[] = []
   jobs!: HostJobs
+  /** Settles once this host took up what the last one left (`WorldOptions.resumeInSlices`). */
+  resumed!: Promise<void>
   private running = new Set<Promise<unknown>>()
   private holds = new Map<string, () => void>()
   private ends = new Map<string, ScriptedEnd>()
@@ -301,7 +307,8 @@ export class AgentsWorld {
         // host starts on its own conversations: a start the last one left preparing never reaches the next host's.
         await this.options.preparing?.(options)
         if (options.parent && !options.resume && !agents.startWanted(options.parent.op)) throw new Error("Its Apex stopped it before it started.")
-        await live.start(harness, cwd, options)
+        // Parsed as the host parses it, so what a schema drops never reaches the start here either.
+        await live.start(...this.inputs.of("mako:live-start").parse([harness, cwd, options]))
         await this.options.replying?.(options)
       },
       harnesses: () => HARNESSES,
@@ -351,11 +358,21 @@ export class AgentsWorld {
     }
     const agents = new Agents(deps)
     this.agents = agents
+    if (this.options.resumeInSlices) {
+      // As the host does (`openConversations`), each conversation read in a slice at a time first.
+      this.resumed = (async () => {
+        await this.live.continueRestartedInSlices()
+        await this.agents.resumeInSlices()
+        this.live.armWakes()
+      })()
+      return
+    }
     // As the host does (`openConversations`): the turns an exit cut short go on before the engine looks at what waits.
     this.live.continueRestarted()
     this.agents.resume()
     // As the host's start arms it: held messages' times (`LiveConversations.armWakes`).
     this.live.armWakes()
+    this.resumed = Promise.resolve()
   }
 
   /** The selected account of `harness` when it's at its limit, as `HarnessAccounts.limited` reads it. */
@@ -396,10 +413,12 @@ export class AgentsWorld {
   async restart(): Promise<void> {
     await this.close()
     this.open()
+    await this.resumed
   }
 
   /** A top-level conversation on `harness` at `access`, on `tuning`'s model: an Apex once it starts a child. */
   async apex(harness: string, access: AccessTier = "auto", tuning?: SessionSettings): Promise<{ conversation: string; caller: AgentCaller }> {
+    await this.resumed
     const conversation = randomUUID()
     const modeId = this.options.ladders?.[harness]?.find((mode) => mode.access === access)?.id ?? accessModeId(access)
     await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} apex`, modeId, ...(tuning && { tuning }) })
@@ -597,7 +616,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, wakeDue: () => [], snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, pinnedAccount: () => undefined, submit: none,
     act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
-    turnReply: () => undefined, connectedSession: () => null, childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {},
+    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {}, readIn: async () => {},
   }
 }
 

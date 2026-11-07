@@ -2,19 +2,19 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, rm } from "node:fs/promises"
 import { createServer } from "node:http"
-import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { startWebHost } from "@mako/host/transport/server"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { z } from "zod"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // The real desktop, main process and preload, against a host that answers a
 // few channels: a window gets each answer as the host meant it, though main
 // forwards the host's encoding unread and only the preload decodes it.
 
-const root = await mkdtemp(join(tmpdir(), "mako-desktop-answers-"))
+const root = testScratch("mako-desktop-answers-")
 const location = runtimeLocation(root)
 await mkdir(location.directory, { recursive: true, mode: 0o700 })
 

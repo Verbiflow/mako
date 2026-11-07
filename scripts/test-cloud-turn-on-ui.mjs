@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Mako Cloud in Settings › Account and the sidebar, against the production components and the mock bridge: an
@@ -26,7 +26,7 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-turn-on-ui-"))
+  const root = testScratch("mako-turn-on-ui-")
   const shotsAt = process.argv.indexOf("--shots")
   const shots = shotsAt > 0 ? resolve(process.argv[shotsAt + 1]) : root
   await mkdir(shots, { recursive: true })
@@ -49,7 +49,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`UI evidence: ${shots}`)
 }
 
 async function checkWindow() {

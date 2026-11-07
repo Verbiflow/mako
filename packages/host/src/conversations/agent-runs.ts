@@ -827,7 +827,8 @@ export function lastStep(entries: readonly Entry[], harness: string): string | u
     }
     if (entry.type === "thinking") return "Thinking"
     if (entry.type === "text" && entry.text.trim()) return clip(entry.text.replace(/^[#>*\-\s]+/, ""), STEP_CHARS)
-    if (entry.type === "user") return undefined
+    // A message and nothing after it: the turn has begun, and nothing has come of it yet.
+    if (entry.type === "user") return "Thinking"
   }
   return undefined
 }

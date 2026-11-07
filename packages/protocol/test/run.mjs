@@ -629,7 +629,7 @@ describe("a runtime served through serveRuntime", () => {
     await new Promise((resolve) => setTimeout(resolve, 10))
     assert.deepEqual(gateway.beats("d-mac"), [{ lease: "l1" }, { lease: "l1", progress: { phase: "booting", percent: 40 } }])
     const older = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-old", build: "test", versions: { min: 1, max: LEND_LINK_VERSION - 1 }, handle: async (operation) => answer(operation, null) })
-    assert.equal(older.beat("l1"), false, "a gateway before version 21 keeps no session alive through it")
+    assert.equal(older.beat("l1"), false, "a gateway before version 23 keeps no session alive through it")
     for (const frame of [{ type: "source-ask", ask }, { type: "lent", lease }, { type: "lent-ended", lease: "l1", why: "lost" }]) assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame(frame)), frame)
     assert.throws(() => decodeGatewayFrame(encodeGatewayFrame({ type: "lent-ended", lease: "l1", why: "bored" })), "a lease ends one of the contract's ways")
     assert.throws(() => decodeRuntimeFrame(JSON.stringify({ type: "lease-beat", lease: "l1", progress: { phase: "running", output: "secret" } })), WireError, "progress is a phase, never the output's words")
@@ -654,7 +654,7 @@ describe("a runtime served through serveRuntime", () => {
     await new Promise((resolve) => setTimeout(resolve, 10))
     assert.deepEqual(gateway.advertisements("d-mac"), [advertisement])
     const older = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-old", build: "test", versions: { min: 1, max: ADVERTISE_LINK_VERSION - 1 }, handle: async (operation) => answer(operation, null) })
-    assert.equal(older.advertise(advertisement), false, "a gateway before version 20 routes nothing to it by capability")
+    assert.equal(older.advertise(advertisement), false, "a gateway before version 22 routes nothing to it by capability")
     assert.deepEqual(gateway.advertisements("d-old"), [])
     assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "advertise", ...advertisement })), { type: "advertise", ...advertisement })
     const token = { capability: "cli", attributes: { command: "gh" }, token: "ghp_x" }

@@ -34,7 +34,8 @@ import {
   type TurnContinuation,
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
-import { childGroup, childStateOf, rollup } from "../contracts/children.js"
+import { digestAsks } from "../contracts/agents.js"
+import { childGroup, childStateOf, DIGEST_WAITS, rollup, WAKE_COALESCE_MS } from "../contracts/children.js"
 import { latestPendingQuestion, retireQuestionsForInput, type PendingAsk } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
@@ -445,6 +446,11 @@ export class LiveConversations {
     return this.records.session(id)
   }
 
+  /** The harness Sessions the conversation is bound to, from what's already listed: this never reads it in. */
+  nativeIds(id: string): readonly { provider: string; nativeId: string }[] {
+    return this.records.nativeIds(id)
+  }
+
   /** What memory holds of the conversation now; `undefined` for one only on disk, which this never reads in. */
   held(id: string): LiveSnapshot | undefined {
     return this.records.get(id)?.snapshot
@@ -498,8 +504,10 @@ export class LiveConversations {
     const resident = this.records.get(id)
     const request = resident?.snapshot.requests.find((candidate) => candidate.id === requestId)
     if (!resident || !request || (request.status !== "queued" && request.status !== "held")) return false
+    // A question joining a digest the budget holds takes it along, within the burst's window (`digestAsks`).
+    const wake = request.wake?.after === DIGEST_WAITS && digestAsks(digest.notices) ? { ...request.wake, at: Math.min(request.wake.at, Date.now() + WAKE_COALESCE_MS) } : request.wake
     const next: LiveRequest = digest.notices.length
-      ? { ...request, text, digest: { ...digest, ...(request.digest?.resting && { resting: true as const, ...(request.digest.nextTry !== undefined && { nextTry: request.digest.nextTry }) }) }, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
+      ? { ...request, wake, text, digest: { ...digest, ...(request.digest?.resting && { resting: true as const, ...(request.digest.nextTry !== undefined && { nextTry: request.digest.nextTry }) }) }, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
       : { ...request, status: "canceled" }
     const previous = resident.snapshot
     resident.snapshot = { ...previous, requests: previous.requests.map((candidate) => (candidate === request ? next : candidate)) }
@@ -1387,6 +1395,29 @@ export class LiveConversations {
       } catch (error) {
         hostWarn("live", "a turn Mako's exit cut short wasn't continued; it waits for Continue turn", { conversation: conversationId, error: errorMessage({ error }) })
       }
+    }
+  }
+
+  /** `continueRestarted`, each conversation read in first a slice at a time (`readIn`): what a host starting calls. */
+  async continueRestartedInSlices(): Promise<void> {
+    await this.readIn(this.restarts.left().map((turn) => turn.conversationId))
+    this.continueRestarted()
+  }
+
+  /**
+   * Reads conversations in from their journals a slice at a time, one after
+   * another (`LiveRecords.loadSliced`), for work that then reads them at
+   * once: read whole as a host started, a day of Fins' journals held its loop
+   * for 4.8 s. Other work runs between two journals too: a read that ends
+   * within its slice resolves without letting it, and ten small journals
+   * read back to back held the loop as long as reading them at once. One
+   * that can't be read is left to the read that follows, which fails as it
+   * would have.
+   */
+  async readIn(ids: Iterable<string>): Promise<void> {
+    for (const id of ids) {
+      await this.records.loadSliced(id).catch(() => undefined)
+      await new Promise((resolve) => setImmediate(resolve))
     }
   }
 

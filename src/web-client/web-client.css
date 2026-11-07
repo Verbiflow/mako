@@ -525,10 +525,6 @@
     @apply min-h-14 py-2;
   }
 
-  .web-live {
-    /* The renderer's conversation reads its column; on a phone it is the screen's width less a margin. */
-    --container-content: 760px;
-  }
   .web-dock {
     @apply bg-surface;
     /* The home indicator's room, not taken twice while the keyboard covers it. */
@@ -943,6 +939,13 @@
   flex-shrink: 0;
   flex-direction: column;
   gap: 8px;
+}
+.web-ask-options[data-row] {
+  flex-direction: row;
+}
+.web-ask-options[data-row] .web-ask-option:not([data-primary]) {
+  width: auto;
+  flex-shrink: 0;
 }
 .web-ask-option {
   @apply flex w-full items-center justify-center gap-2 bg-fill-hover px-3.5 py-2.5 text-ui text-foreground;
