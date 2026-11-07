@@ -274,7 +274,7 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching"
+  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
 >
 
 export interface AgentsDeps {
@@ -794,6 +794,50 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!edge?.run || edge.closedAt !== undefined) return true
     const reading = this.childReading(edge)
     return !(reading.source === "followed" && reading.working)
+  }
+
+  /** `resume`, every conversation it reads read in first a slice at a time (`LiveConversations.readIn`): what a host starting calls. */
+  async resumeInSlices(): Promise<void> {
+    const store = this.store()
+    if (!store) return
+    await this.deps.live.readIn(this.resumeReads(store))
+    if (!this.stopped) this.resume()
+  }
+
+  /**
+   * Every conversation `resume` may read, taken from what it goes through:
+   * each open delegation and each placed on another account, the report, the
+   * answer and the pull request's outcome the last host left undelivered, a
+   * limit's notice, a queued start, and the Apexes it left a message of
+   * unsettled. Each names Threads, and every conversation of each goes, with
+   * its Apex's and its tree's root's: whatever `resume` reads on the way (a
+   * digest's receipt in the Apex's queue, say) is of a Thread it already
+   * counts in. `test:resume-holds` fails on one it reads whole.
+   */
+  private resumeReads(store: ThreadStore): string[] {
+    const edges = store.edges()
+    const threads = new Set<string>()
+    const reads = new Set<string>()
+    const tree = (thread: string) => {
+      threads.add(thread)
+      const parent = edges.of(thread)?.parent
+      if (parent) threads.add(parent)
+      threads.add(this.rootOf(thread))
+    }
+    for (const edge of edges.all) if (edge.closedAt === undefined || edge.tuned?.rerouted) tree(edge.child)
+    for (const { report } of store.undeliveredReports()) tree(report.child)
+    for (const kept of store.undeliveredAnswers()) tree(kept.child)
+    for (const kept of store.undeliveredPullWakes()) tree(kept.child)
+    for (const { root } of store.limitNotices()) tree(root)
+    for (const spawn of store.queuedSpawns()) {
+      tree(spawn.tree)
+      const lead = parseQueued(spawn.record)?.lead
+      if (lead) tree(lead.thread)
+    }
+    for (const thread of threads) for (const conversation of this.conversationsOfThread(thread)) reads.add(conversation)
+    for (const apex of new Set(edges.all.map((edge) => edge.parent)))
+      for (const conversation of this.conversationsOfThread(apex)) if (this.deps.live.leftUnsettled(conversation)) reads.add(conversation)
+    return [...reads]
   }
 
   /** What the last host left: reports no Apex heard, sent again under their ids, Fins' messages its exit paused, and spawns the budget held. */

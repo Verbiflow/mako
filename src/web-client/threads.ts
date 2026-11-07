@@ -4,7 +4,7 @@ import type { WaitingFor } from "@mako/protocol/attention"
 import { CLOUD_FOLDER_WHERE, listedApexOf, listedOwner, listedPromptedAt, listedSummary, type ListedOwner } from "@mako/host/contracts/listed-conversations"
 import { byLastWorked, staleTarget, type OpenedBy, type SessionFacts } from "@mako/host/contracts/session-choice"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
-import { runPlace } from "@mako/host/contracts/account-devices"
+import { runPlace, type RunPlace } from "@mako/host/contracts/account-devices"
 import type { AccountListState, WebDevice } from "./account-list"
 import type { Owner } from "./start"
 
@@ -250,7 +250,25 @@ export function ownerOf(session: WebSession): Owner {
   return session.owner.kind === "cloud" ? { kind: "cloud", threadId: session.owner.threadId } : { kind: "mac", deviceId: session.owner.deviceId }
 }
 
-/** A Session's one line under its title: the Mac's name, when it isn't the cloud, and the project. */
+/** Where a Thread or Session runs, said in one line (`placeLine`): its words, and the glyph at their head. */
+export interface PlaceLine {
+  text: string
+  place: RunPlace
+}
+
+/**
+ * Where a Thread runs and its project, in the one order every screen says them: the device's name, then the project
+ * ("build-box · mako"), with the place's glyph: a cloud, a server for a machine of the person's own, a laptop for a Mac.
+ * The cloud isn't named (its glyph says it), and neither is the device where `named` is false (the list, while the
+ * account has one); with nothing else to say, where it runs.
+ */
+export function placeLine(where: string, project: string | undefined, { named = true, machine = false }: { named?: boolean; machine?: boolean } = {}): PlaceLine {
+  const cloud = where === CLOUD_WHERE
+  const text = [cloud || !named ? undefined : where, project].filter(Boolean).join(" · ") || (cloud ? "Cloud" : where)
+  return { text, place: cloud ? "cloud" : machine ? "machine" : "device" }
+}
+
+/** A Session's one line under its title: where it runs and the project (`placeLine`). */
 export function subtitle(thread: WebThread, session: WebSession): string {
-  return [session.where === CLOUD_WHERE ? undefined : session.where, thread.project].filter(Boolean).join(" · ") || (session.where === CLOUD_WHERE ? "Cloud" : session.where)
+  return placeLine(session.where, thread.project, { machine: session.machine }).text
 }

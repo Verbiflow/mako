@@ -14,10 +14,11 @@ import { AccountEventSchema } from "../dist/account-events.js"
 import { AccessChoicesAnswerSchema, AccessChoosingSchema, applyAccessChoosing, sameAccessChoices } from "../dist/access-choices.js"
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
 import { ATTENTION_SUMMARY_FROM, ATTENTION_WORDS, AttentionKindSchema, asks, attentionFact, attentionHeadline, attentionKey, attentionLine, attentionSummary, foldedBody, needsYouWaiting, questionWaiting, requestWaiting, rowWaitingFor, factStands, noticeTag, readNotice } from "../dist/attention.js"
-import { ASKING_VERSION, CONTINUE_VERSION, FIN_STATES_VERSION, FINS_VERSION, FORKS_VERSION, SESSION_ORDER_VERSION } from "../dist/version.js"
+import { ASKING_VERSION, CONTINUE_VERSION, FIN_STATES_VERSION, FINS_VERSION, FORKS_VERSION, BORROW_LINK_VERSION, SESSION_ORDER_VERSION } from "../dist/version.js"
 import { ContinueOfferSchema, ContinueStateSchema, cloudRuntimeOf, continueCloudThread, continueHandOver, continueRefusal, continueRefusalText, namedUuid as continueUuid } from "../dist/continues.js"
 import { ArchivedThreadSchema, LISTED_FINS, ListedSessionSchema, QuietDeviceSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
+import { BorrowPushSchema } from "../dist/borrow.js"
 import {
   CLOSE_CODES,
   PING,
@@ -111,7 +112,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 21)
+    assert.equal(SUPPORTED_VERSIONS.max, 22)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -279,8 +280,10 @@ describe("wire", () => {
     for (const frame of [
       { type: "operation", generation: 2, operation: withInput },
       { type: "fence", threadId: "th-1", generation: 2 },
+      { type: "borrow", threadId: "th-1", seq: 3, push: { push: "ended", lease: "l-1", why: "revoked" } },
     ])
       assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame(frame)), frame)
+    assert.throws(() => decodeGatewayFrame(encodeGatewayFrame({ type: "borrow", threadId: "th-1", seq: 3, push: { push: "ended", lease: "l-1", why: "revoked", value: "x" } })), "a borrow frame holds no value")
     const event = {
       v: PROTOCOL_VERSION,
       stream: "thread:th-1",
@@ -2084,7 +2087,14 @@ describe("an account's list of Threads, one row per Session", () => {
     assert.deepEqual(ReportedSessionSchema.parse(placed), placed, "a row says its Session's place in its Thread")
     assert.throws(() => ReportedSessionSchema.parse({ ...session, order: -1 }), "a place is never negative")
     assert.equal(rowsForLink([placed], SESSION_ORDER_VERSION)[0].order, 1)
-    assert.equal(rowsForLink([placed], SESSION_ORDER_VERSION - 1)[0].order, undefined, "a gateway before 21 refuses it, so it goes without")
+    assert.equal(rowsForLink([placed], SESSION_ORDER_VERSION - 1)[0].order, undefined, "a gateway before 22 refuses it, so it goes without")
+    // A peer that agreed 21 (the borrowing link) hears borrow frames and rows without `order`; one at 22 hears both.
+    assert.equal(negotiate({ min: 1, max: LINK_VERSION }, { min: 1, max: BORROW_LINK_VERSION }), BORROW_LINK_VERSION, "with a peer at 21, 21 is agreed")
+    assert.equal(negotiate({ min: 1, max: LINK_VERSION }, { min: 1, max: SESSION_ORDER_VERSION }), SESSION_ORDER_VERSION, "with a peer at 22, 22")
+    const borrowFrame = { type: "borrow", threadId: "t-0123456789abcdef", seq: 1, push: BorrowPushSchema.parse({ push: "ended", lease: "l1", why: "revoked" }) }
+    assert.equal(GatewayFrameEnvelopeSchema.parse(borrowFrame).type, "borrow", "a borrow frame, the gateway's to the runtime, reads at 21 and after")
+    assert.equal(rowsForLink([placed], BORROW_LINK_VERSION)[0].order, undefined, "at 21 the rows say no order")
+    assert.equal(rowsForLink([placed], SESSION_ORDER_VERSION)[0].order, 1, "at 22 they do, and borrow frames read the same")
     assert.deepEqual(rowsForLink([placed], SESSION_ORDER_VERSION - 1)[0].fins, placed.fins, "and the rest as 20 had it")
     assert.equal(rowsForLink([going], MOVES_VERSION - 1)[0].move, undefined, "a gateway before 11 refuses it, so it goes without")
     assert.equal(rowsForLink([going], MOVES_VERSION - 1)[0].waitingFor, undefined)
@@ -2350,7 +2360,9 @@ describe("a Session continued in the cloud while its device is off", () => {
   test("an Apex's row says its Fins from link 19, names and states only; an older link goes without; a reader passes over Fins it can't read, never the row", () => {
     assert.equal(FINS_VERSION, 19)
     assert.equal(FIN_STATES_VERSION, 20)
-    assert.equal(SESSION_ORDER_VERSION, 21)
+    assert.ok(LINK_VERSION >= FIN_STATES_VERSION)
+    assert.equal(BORROW_LINK_VERSION, 21)
+    assert.equal(SESSION_ORDER_VERSION, 22)
     assert.equal(LINK_VERSION, SESSION_ORDER_VERSION)
     const { runsOn: _runsOn, listedAt: _listedAt, ...reported } = row
     const fin = (name, state) => ({ thread: "2b3c4d5e-6f70-4182-9a3b-4c5d6e7f8091", name, harness: "cursor", state, startedAt: "2026-11-04T21:46:08.000Z" })

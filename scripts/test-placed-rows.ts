@@ -171,7 +171,7 @@ test("a placed Fin whose older Session asks while its newer one is idle: the ask
   }
 })
 
-// A host before link version 21 writes no `order`: its rows rank where they arrive, as every device did before.
+// A host before link version 22 writes no `order`: its rows rank where they arrive, as every device did before.
 test("rows from a host that says no order rank as they arrive: the first listed stands, whichever it is", () => {
   const apex = { thread: APEX_THREAD, session: APEX_SESSION }
   // Neither row asks anything, so nothing but arrival ranks them.

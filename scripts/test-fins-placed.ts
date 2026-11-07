@@ -920,7 +920,7 @@ async function aPlacedFinsNewestSessionOnItsDevice(): Promise<void> {
       assert.deepEqual(childStateOf(children[0]!), { kind: "blocked", question: "Approve: echo INDIA", on: "approval" }, `${order}: standing on its ask`)
       assert.deepEqual(finOpening(acpStore.get(), children[0]!), { kind: "conversation", key: continued }, `${order}: from under the Apex it opens the ask`)
     }
-    // Rows from a host before link version 21 say no order: they rank as they arrive, as every device did before.
+    // Rows from a host before link version 22 say no order: they rank as they arrive, as every device did before.
     // Neither row asks anything, so nothing but arrival ranks them.
     const without = (row: ListedSession): ListedSession => ({ ...row, order: undefined, state: "idle", waitingOn: undefined, waitingFor: undefined })
     assert.equal(listedOn([without(olderRow), without(newerRow)])[0]?.child?.conversation, continued, "without the field, the first listed stands")
