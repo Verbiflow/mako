@@ -1565,7 +1565,15 @@ Three rules hold this together, and each has a specific failure it prevents:
   own measurements land a frame after it paints and jumped the newest turn
   48 px; `test-phone-open-ui.mjs` holds both. A Thread's transcript whose
   code is here draws without a Suspense boundary (`chunks.ts`): React holds
-  a fallback it showed for 300 ms, and every cold open waited that long.
+  a fallback it showed for 300 ms, and every cold open waited that long. One
+  opened with nothing of it on the page (its first open, or after a reload)
+  shows the transcript's loader (`TranscriptLoading`; in a laptop's browser the
+  desktop's own `ConversationSkeleton`, in the transcript's column) over its still-empty
+  transcript until its turns arrive, never an empty column under the bar: the
+  transcript stays mounted under it, so the turns land at its end as a held
+  one's do (mounted only once they'd arrived, a 260-turn one jumped 48 px).
+  `test-phone-open-ui.mjs` reads every frame for it, a Thread and an Apex,
+  cold and warm, on a Mac and on a machine.
 - **Streamed prose is throttled, not debounced.** `useThrottled` in
   `markdown.tsx` paints through `StreamFrames` (`src/lib/stream-frames.ts`):
   the first token of a burst at once, then at most every 50 ms, up to 90 ms
@@ -4111,7 +4119,10 @@ heading names the one showing and leads back. The phone's list
 (`src/web-client/list.tsx`) has the Inbox as a chip, then Needs you (each Fin
 asking as a row of its own, "Mobile polish ·" before its question), Working
 and Recent, and `/inbox` is its Inbox screen (`inbox-screen.tsx`, the same Fin
-asks answered through `answerFin`). The rail and the list carry no lines:
+asks answered through `answerFin`). Where a Thread runs and its project are said
+in one order on every screen, the device then the project ("build-box · mako"),
+from one function (`placeLine` in `src/web-client/threads.ts`): the list's row
+leaves the device out while the account has one. The rail and the list carry no lines:
 spacing and type part them. Never gate provider names or the rail on model discovery.
 Position in the rail never carries status. `stableThreadRanks` in
 `src/lib/thread-folders.ts` gives a busy thread its rank when it starts, keeps
