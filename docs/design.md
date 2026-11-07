@@ -64,7 +64,7 @@ Use these; don't redraw them.
 | A button | `Action`, `IconAction` (`ui/kit.tsx`), with `pressable` |
 | A small fact | `Chip` |
 | A switch | `Toggle` |
-| Something to read or act on above the composer | `Notice` (`ui/notice.tsx`) |
+| Something to read or act on above the composer | `Notice` (`ui/notice.tsx`), on the composer box's own edges: whatever stands over it (notices, the queue, a goal, a plan) is its width, on every form |
 | A menu, a popover, a dialog | `ui/menu.tsx`, `ui/popover.tsx`, `ui/dialog.tsx` |
 | A tooltip | `ui/tooltip.tsx`, or `title` naming the action ("Send", "Copy") |
 | Loading | `Skeleton` for a shape to come, `Shimmer` for words at work, `Spinner` only inside a control that waits |

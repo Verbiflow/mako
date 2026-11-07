@@ -1,3 +1,4 @@
+import { sentByMako } from "./children.js"
 import type { LiveAction } from "./live-actions.js"
 import type { LiveBatch } from "./live-conversations.js"
 import type { Actor } from "./thread-identity.js"
@@ -22,7 +23,7 @@ export function personPromptedAt(
     if (latest === undefined || request.createdAt > latest) latest = request.createdAt
   }
   for (const action of actions ?? []) {
-    if (action.input.kind === "compact") continue
+    if (action.input.kind === "compact" || sentByMako(action.input.text)) continue
     if (latest === undefined || action.createdAt > latest) latest = action.createdAt
   }
   return latest

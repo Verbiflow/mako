@@ -402,7 +402,7 @@
 
   /* The comments going with the next message, over the composer. */
   .rv-tray {
-    @apply mx-auto flex w-full max-w-content items-center gap-1.5 px-3 pb-1.5;
+    @apply mx-auto flex w-full max-w-content items-center gap-1.5 px-2 pb-1.5;
   }
   .rv-tray-chip {
     @apply inline-flex h-8 max-w-[260px] shrink-0 items-center gap-1.5 bg-fill-hover pr-0.5 pl-2 text-label text-muted-foreground;

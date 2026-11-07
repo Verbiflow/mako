@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentsSendResult, AgentsSent } from "@mako/host/contracts/agent-tools"
 import { agentWords } from "@mako/host/contracts/children"
+import { actionNotice } from "@mako/host/contracts/operation-recovery"
 import { AgentsWorld, type WorldOptions } from "./lib/agents-world.ts"
 import { ranOut } from "./lib/ran-out.ts"
 
@@ -160,6 +161,9 @@ async function refusedSteerQueues(): Promise<void> {
     const answer = sent(await world.agents.send(apex.caller, { to: "claude", text: "Use the staging bucket.", deliver: "steer", clientKey: "r" }))
     assert.equal(answer.delivery, "queued")
     assert.equal(answer.hears, "Claude didn't take it into claude's running turn, so claude hears it when that turn ends, as its next message.")
+    const held = world.live.snapshot(fin.claude!)?.control?.actions ?? []
+    assert.equal(held.at(-1)?.state.kind, "not-accepted", "the harness refused it")
+    assert.equal(actionNotice(held, []), undefined, "and whoever opens the Fin hears nothing of a steer its Apex sent")
     await release()
     assert.equal(prompts(fin.claude!).filter((text) => text === "Use the staging bucket.").length, 1)
   } finally {

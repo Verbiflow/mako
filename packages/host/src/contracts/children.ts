@@ -78,6 +78,11 @@ export const HANDED_OVER_NOTE = "[mako · to deliver this, Mako stopped your run
 const AGENT_HEADER = /^\[mako · from (.+?)(?: \(agent\))?, not the person\]\n?/
 const PASSED_ON_HEADER = /^\[mako · the person's words, passed on by (.+?) \(agent\)\]\n?/
 
+/** Whether words came from Mako or an agent rather than the person typing them: only those carry Mako's header. */
+export function sentByMako(text: string): boolean {
+  return AGENT_HEADER.test(text) || PASSED_ON_HEADER.test(text)
+}
+
 /** A brief's lines for its Fin alone, who it is and how it reports: the person's card of the brief leaves them out. */
 export function briefIntro(name: string): string {
   return `You're fin:${name}${INTRO_TAIL}`

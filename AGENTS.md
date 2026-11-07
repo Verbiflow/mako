@@ -2621,6 +2621,11 @@ deliberate action and never rides along with a commit.
   with nothing else known), and "answered" only for an answer to this turn, in plain words: a plain message from its
   Apex may close a question (rule 13), and it's still the next job and not an answer. `npm run test:fin-row-time` holds the rule, and
   `test:orch-deliver` and `test:crew-card-ui` the real turn and every form.
+- **The notice above the composer speaks for what the person did.** A steer Mako sent by itself (a Fin's digest, an
+  Apex's message) raises nothing, whatever became of it, and hides nothing of theirs: what the harness didn't take goes
+  as the next turn, which is Mako's to handle. `actionNotice` picks the person's newest, and `sentByMako` tells them
+  apart by Mako's header, so a row already kept stops raising it. What stands over the composer keeps to its edges, on
+  every form: `npm run test:steer-notices` and `test:composer-edges-ui` hold both.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, at its last line; an agent's
   fin, still, with its harness as the badge, on its reply's byline; and a

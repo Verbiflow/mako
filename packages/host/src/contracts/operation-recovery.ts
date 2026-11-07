@@ -1,3 +1,4 @@
+import { sentByMako } from "./children.js"
 import { quietSwitch, type ContextTransfer } from "./conversation-control.js"
 import type { LiveAction } from "./live-actions.js"
 import type { LiveRequest } from "./live-conversations.js"
@@ -42,7 +43,7 @@ export function describeActionRecovery(action: LiveAction) {
     case "failed":
       return { title: `${label} failed`, guidance: "The action failed. Its saved record remains here; it will not be repeated automatically." }
     case "not-accepted":
-      return { title: `${label} not accepted`, guidance: "The agent did not accept this action. Your input remains available to edit and try again." }
+      return { title: `${label} not accepted`, guidance: compact ? "The agent did not start it, so nothing changed." : "The agent did not take it into this turn, so it goes as your next message." }
     case "uncertain":
       return { title: `${label} outcome unknown`, guidance: compact
         ? "Compaction may still be running. Disconnecting releases this blocked connection; it does not confirm completion or repeat compaction."
@@ -52,6 +53,21 @@ export function describeActionRecovery(action: LiveAction) {
         ? "The uncertainty was acknowledged. The original explanation is saved in Details. This is not a completion receipt."
         : "The uncertainty was acknowledged. Its original explanation was not retained by this version of Mako. This is not a completion receipt." }
   }
+}
+
+/** Whether Mako sent this by itself, a Fin's digest or an Apex's message: what becomes of it is Mako's to handle, and it does. */
+export function actionSentByMako(action: LiveAction): boolean {
+  return action.input.kind !== "compact" && sentByMako(action.input.text)
+}
+
+/**
+ * The action whose notice stands above the composer: the person's newest, while its notice says something true. A
+ * steer Mako sent raises nothing, whatever became of it, and hides nothing of theirs. Read from the words so one
+ * already kept stops raising it too.
+ */
+export function actionNotice(actions: readonly LiveAction[] | undefined, requests: readonly Pick<LiveRequest, "id">[]): LiveAction | undefined {
+  const action = actions?.filter((each) => !actionSentByMako(each)).at(-1)
+  return action && actionNoticeCurrent(action, requests) ? action : undefined
 }
 
 /** Transfer acceptance queues a prompt; only that prompt can prove delivery. */
