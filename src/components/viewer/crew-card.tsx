@@ -1,5 +1,6 @@
 import {
   memo,
+  use,
   useCallback,
   useLayoutEffect,
   useMemo,
@@ -8,7 +9,9 @@ import {
   type ReactNode,
 } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { finMoved } from "@/state/fin-moved"
 import {
+  ArrowRightLeftIcon,
   CheckIcon,
   ChevronRightIcon,
   CornerUpLeftIcon,
@@ -26,12 +29,16 @@ import {
   rollup,
   rollupLabel,
   rollupLine,
+  stoodFor,
+  timeWords,
   type ChildGroup,
   type Rollup,
 } from "@mako/host/contracts/children"
 import { APEX_WORD, FIN_WORD, finsWord, type ChildState } from "@mako/host/contracts/agents"
+import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { FinMark } from "@/components/stage/child-tabs"
+import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { LiveMark } from "@/components/ui/live-mark"
 import { Shimmer } from "@/components/ui/shimmer"
 import { useTickingText } from "@/components/ui/second-clock"
@@ -45,9 +52,10 @@ import {
   apexConversation,
   openFinInApex,
   threadChildren,
+  useThreadAsks,
   useThreadChildren,
 } from "@/state/apex-fins"
-import { answerFin, type FinAnswer } from "@/state/fin-asks"
+import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { mountCrewCard, unmountCrewCard } from "@/state/crew-card-view"
 
 const HEADINGS = {
@@ -320,22 +328,11 @@ const NeedsRow = memo(function NeedsRow({
   )
 })
 
-/** How long a Fin has run, one unit: "25s", "18m", "1h 4m". Nothing under a second. */
-function took(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000))
-  if (seconds < 1) return ""
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return rest ? `${hours}h ${rest}m` : `${hours}h`
-}
-
 /**
- * The time on a row. The shared clock ticks once a second only while the Fin
- * works; a minute or an hour is the same string for that whole stretch, so
- * the row's label doesn't repaint on the seconds in between.
+ * The time on a row: how long the Fin has stood as it does (`since`), a working
+ * one's current turn and never its age. The shared clock ticks once a second; a
+ * minute or an hour is the same string for that whole stretch, so the row's
+ * label doesn't repaint on the seconds in between.
  */
 const CrewElapsed = memo(function CrewElapsed({
   agent,
@@ -344,15 +341,13 @@ const CrewElapsed = memo(function CrewElapsed({
   agent: NativeAgent
   className?: string
 }) {
-  const state = childStateOf(agent)
-  const working = state.kind === "working" || state.kind === "starting"
-  const start = agent.startedAt ?? agent.observedAt
-  const frozen = (agent.settledAt ?? agent.observedAt) - start
-  const text = useTickingText(working, (now) =>
-    took(working ? now - start : frozen)
+  const since = agent.since
+  const stood = useTickingText(since !== undefined, (now) =>
+    since === undefined ? "" : stoodFor(now - since)
   )
-  if (!text) return null
-  return <span className={cn("tabular shrink-0", className)}>{text}</span>
+  const { time, title } = timeWords(childStateOf(agent), stood)
+  if (!time) return null
+  return <span title={title} className={cn("tabular shrink-0", className)}>{time}</span>
 })
 
 /** Working, queued, failed or done: one line, its mark, title, current line and time. */
@@ -374,6 +369,7 @@ const CrewLineRow = memo(function CrewLineRow({
   const line = waiting ? waited : childLine(state)
   const live = state.kind === "working" || state.kind === "starting"
   const lead = openAsk(state)?.on === "lead"
+  const moved = finMoved(agent)
   // `childState()` keeps a reason for a failed Fin but drops it for one that succeeded (`agents.ts`, not this
   // card's own), so the glyph only ever has a failure's line to read on real data today.
   const pr =
@@ -394,7 +390,7 @@ const CrewLineRow = memo(function CrewLineRow({
       <span
         className={cn(
           "flex min-w-0 flex-1",
-          compact ? "flex-col items-start" : "items-center gap-2"
+          compact ? "flex-col" : "items-center gap-2"
         )}
       >
         <span
@@ -410,13 +406,22 @@ const CrewLineRow = memo(function CrewLineRow({
           {lead ? (
             <CornerUpLeftIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
+          {moved ? (
+            <span data-fin-moved title={moved} className="flex min-w-0 items-center gap-1">
+              <ArrowRightLeftIcon className="size-3 shrink-0" aria-hidden />
+              <span className="min-w-0 truncate">
+                {moved.split(":")[0]}
+                {line ? " ·" : null}
+              </span>
+            </span>
+          ) : null}
           {pr ? (
             <GitPullRequestIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
           {live && line ? (
             <Shimmer text={line} className="min-w-0 truncate" />
           ) : (
-            <span className="min-w-0 truncate">
+            <span className="min-w-0 truncate" title={line}>
               {lead ? `Asking its Apex: ${line}` : line}
             </span>
           )}
@@ -431,6 +436,39 @@ const CrewLineRow = memo(function CrewLineRow({
     </button>
   )
 })
+
+/** A limit's one notice, heading its tree's card: the tree's, so no Fin's row, and "Got it" ends it everywhere. */
+function LimitNoticeRow({ apex, ask, compact }: { apex: string; ask: PersonAsk; compact: boolean }) {
+  const [sent, setSent] = useState(false)
+  const seen = () => {
+    if (sent) return
+    setSent(true)
+    void answerFin(apex, ask, { option: 0 }).then((answered) => {
+      if (!answered) setSent(false)
+    })
+  }
+  return (
+    <div
+      data-limit-notice={ask.ask.id}
+      aria-busy={sent || undefined}
+      className="mb-1.5 bg-[color-mix(in_oklab,var(--attention)_8%,var(--raised))] px-3 py-2.5 shadow-[inset_2px_0_0_var(--attention)]"
+    >
+      <p className="text-ui text-foreground/90">{ask.question}</p>
+      <button
+        type="button"
+        data-limit-seen
+        disabled={sent}
+        onClick={seen}
+        className={cn(
+          "pressable mt-2 flex items-center bg-foreground px-2.5 text-label font-medium text-background hover:bg-foreground/90 disabled:opacity-50",
+          compact ? "h-9" : "h-7"
+        )}
+      >
+        {ask.ask.options?.[0]?.label ?? "Got it"}
+      </button>
+    </div>
+  )
+}
 
 /** The settled Fins, folded: "24 done · 1 idle", which opens their list and closes it again. */
 function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled" }>; onToggle: () => void }) {
@@ -476,6 +514,7 @@ export function CrewCard({
   )
   const apexTitle = useApexCardTitle(thread)
   const children = useThreadChildren(thread)
+  const notice = useThreadAsks(thread).find((ask) => isLimitAsk(ask.ask.id))
   const scroller = useRef<HTMLDivElement>(null)
   const card = useRef<HTMLElement>(null)
   // In view until the observer says otherwise, so the dock doesn't also draw the asks for the frame before it reports.
@@ -517,10 +556,14 @@ export function CrewCard({
           : index
     },
   })
+  // A Fin opens in place on the desk; the web's Thread screen opens it by its own address.
+  const routed = use(RoutedOpenContext)
   const onOpen = useCallback(
-    (agent: NativeAgent) =>
-      thread ? openFinInApex(thread, apexTitle, agent) : undefined,
-    [thread, apexTitle]
+    (agent: NativeAgent) => {
+      if (routed) routed(agent)
+      else if (thread) openFinInApex(thread, apexTitle, agent)
+    },
+    [routed, thread, apexTitle]
   )
   const stoppable = children.filter((agent) => agent.stoppable).length
   const stopAll = useCallback(() => {
@@ -563,6 +606,7 @@ export function CrewCard({
           </button>
         ) : null}
       </header>
+      {notice && conversation ? <LimitNoticeRow key={notice.ask.id} apex={conversation} ask={notice} compact={compact} /> : null}
       <div
         ref={scroller}
         data-crew-scroller

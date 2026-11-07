@@ -180,7 +180,7 @@ export function RoomList({ room, now = room.at }: { room: RoomView; now?: number
                     <span
                       data-tip-quiet
                       style={isPicked ? PICKED_ACTIONS : undefined}
-                      className="rail-row-actions pointer-events-none absolute top-0.5 right-0 z-[1] flex items-center pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100"
+                      className="rail-row-actions pointer-events-none absolute top-0.5 right-0 z-[1] flex items-center pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 [.group:has(:focus-visible)_&]:pointer-events-auto [.group:has(:focus-visible)_&]:opacity-100"
                     >
                       <button
                         type="button"

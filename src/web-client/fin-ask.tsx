@@ -3,6 +3,7 @@ import { CheckIcon, XIcon } from "lucide-react"
 import { FIN_WORD } from "@mako/host/contracts/agents"
 import { askWords } from "@mako/host/contracts/children"
 import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
+import { useLimitContinue } from "@/state/limit-continue"
 import { WebHarnessIcon } from "./harness-icon"
 import { LiveMark } from "@/components/ui/live-mark"
 import { noteAnswered } from "./install"
@@ -84,6 +85,25 @@ export function FinAskCard({ apex, ask, more, answerTyped, from }: { apex: strin
               </button>
             ))
           )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** In a Thread's dock, where an ask would be: the one offer of a Thread a limit holds (`useLimitContinue`). */
+export function LimitContinueCard() {
+  const offer = useLimitContinue()
+  if (!offer) return null
+  return (
+    <div className="web-ask" data-ask="limit" data-limit-continue={offer.to}>
+      <div className="web-ask-body" aria-busy={offer.busy || undefined} data-busy={offer.busy || undefined}>
+        <p className="web-ask-title">
+          <span className="min-w-0 break-words">{offer.to} can take this</span>
+        </p>
+        <div className="web-ask-options" data-row role="group" aria-label="Answers">
+          <button type="button" className="web-ask-option" data-primary disabled={offer.busy} onClick={offer.go}>Continue on {offer.to}</button>
+          <button type="button" className="web-ask-option" onClick={offer.notNow}>Not now</button>
         </div>
       </div>
     </div>

@@ -2,7 +2,7 @@ import { processIdentityMatches } from "../base/process-liveness.js"
 import { existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { makoUserRoot } from "@mako/sessions/mako-root"
-import { DatabaseSync } from "node:sqlite"
+import { DatabaseSync, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import type { ThreadRef } from "@mako/sessions"
 import { ReadOnlyConnection, ReadOnlyStoreError } from "@mako/sessions/read-only-sqlite"
@@ -225,6 +225,7 @@ export class SessionMemory {
   private readonly lifecycle = new AbortController()
   private verifying = false
   private holdCheckOffset = 0
+  private holdRead: { db: DatabaseSync; statement: StatementSync } | undefined
   private stopHeartbeat: (() => void) | null = null
   private readonly annotations = new Map<string, { at: number; entry: SessionMemoryEntry | null; hold: SessionHold | null; elsewhere: boolean }>()
   /**
@@ -771,9 +772,11 @@ export class SessionMemory {
   }
 
   private readHold(provider: string, nativeId: string): z.infer<typeof HoldRowSchema> | null {
-    const row = this.db
-      .prepare("SELECT host_pid, host_started_at, host_label, conversation_id, since, heartbeat_at FROM holds WHERE provider = ? AND native_id = ?")
-      .get(provider, nativeId)
+    const db = this.db
+    // Read on every flush of every conversation at work, so prepared once. A reader's connection can reopen, and this goes with it.
+    if (this.holdRead?.db !== db)
+      this.holdRead = { db, statement: db.prepare("SELECT host_pid, host_started_at, host_label, conversation_id, since, heartbeat_at FROM holds WHERE provider = ? AND native_id = ?") }
+    const row = this.holdRead.statement.get(provider, nativeId)
     if (!row) return null
     const parsed = HoldRowSchema.safeParse(row)
     return parsed.success ? parsed.data : null

@@ -87,7 +87,7 @@ export function finMarkState(state: ChildState): LiveMarkState {
     case "idle":
       return "idle"
     case "ended":
-      return state.outcome === "failed" ? "failed" : state.decision?.on === "person" ? "needs" : "idle"
+      return state.outcome === "failed" || state.unfinished ? "failed" : state.decision?.on === "person" ? "needs" : "idle"
   }
 }
 

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentsSendResult, AgentsSent } from "@mako/host/contracts/agent-tools"
 import { agentWords } from "@mako/host/contracts/children"
+import { actionNotice } from "@mako/host/contracts/operation-recovery"
 import { AgentsWorld, type WorldOptions } from "./lib/agents-world.ts"
 import { ranOut } from "./lib/ran-out.ts"
 
@@ -160,6 +161,9 @@ async function refusedSteerQueues(): Promise<void> {
     const answer = sent(await world.agents.send(apex.caller, { to: "claude", text: "Use the staging bucket.", deliver: "steer", clientKey: "r" }))
     assert.equal(answer.delivery, "queued")
     assert.equal(answer.hears, "Claude didn't take it into claude's running turn, so claude hears it when that turn ends, as its next message.")
+    const held = world.live.snapshot(fin.claude!)?.control?.actions ?? []
+    assert.equal(held.at(-1)?.state.kind, "not-accepted", "the harness refused it")
+    assert.equal(actionNotice(held, []), undefined, "and whoever opens the Fin hears nothing of a steer its Apex sent")
     await release()
     assert.equal(prompts(fin.claude!).filter((text) => text === "Use the staging bucket.").length, 1)
   } finally {
@@ -234,8 +238,35 @@ async function forwardTakesTheChoice(): Promise<void> {
   }
 }
 
+/** A row's time on a real turn: from when it was sent to its harness, not when the Fin was spawned or the message waited. */
+async function aRowCountsItsTurn(): Promise<void> {
+  const { world, apex, fin, work, release } = await team("row-time", "codex", ["claude"])
+  try {
+    const conversation = fin.claude!
+    const since = () => world.agents.roster(apex.conversation).find((agent) => agent.child?.conversation === conversation)?.since
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const beforeTurn = Date.now()
+    await work()
+    const first = since()
+    assert.ok(first !== undefined && first >= beforeTurn, `the turn's start, not the Fin's: ${first} before ${beforeTurn}`)
+    // A message that waits behind the turn starts its own from when it's sent, not from when it was admitted.
+    world.live.submit(conversation, randomUUID(), "Then the changelog.", [])
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const sentAt = Date.now()
+    assert.equal(since(), first, "a queued message doesn't move the turn it waits behind")
+    world.release(conversation)
+    await until("the queued turn", () => (since() ?? 0) >= sentAt)
+    await release()
+    await until("the Fin at rest", () => world.live.snapshot(conversation)?.session.status !== "running")
+    const rested = since()
+    assert.ok(rested !== undefined && rested >= sentAt, `at rest it stands from when it stopped: ${rested}`)
+  } finally {
+    await world.close()
+  }
+}
+
 try {
-  for (const test of [idleTakesATurn, queueByDefault, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice]) {
+  for (const test of [aRowCountsItsTurn, idleTakesATurn, queueByDefault, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice]) {
     await test()
     console.log(`ok ${test.name}`)
   }

@@ -1,6 +1,7 @@
 import { accounts } from "@/state/accounts"
 import { handOff } from "@/state/handoff"
 import { conversationSettings } from "@/state/conversation-settings"
+import { keepAwake } from "@/state/keep-awake"
 import { revealWorkedProject } from "@/state/prefs"
 import { playFeedback } from "@/state/feedback"
 import { workspaceTransitionStore } from "@/state/workspace-transition"
@@ -352,6 +353,9 @@ function apply(event: HostEvent) {
     return
   }
   if (event.type === "host-reconnected") {
+    // The stream attached, so the host is there. The boot brings the window up to date; on a busy host that took 18 s,
+    // and it isn't an outage. One that fails says so itself.
+    hostConnectionStore.set({ kind: "connected" })
     void actions.reconnect()
     return
   }
@@ -416,6 +420,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "conversation-settings") {
     conversationSettings.settled(event.settings)
+    return
+  }
+  if (event.type === "keep-awake") {
+    keepAwake.settled(event.state)
     return
   }
   if (event.type === "runtime-updates") {
