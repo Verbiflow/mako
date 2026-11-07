@@ -30,7 +30,10 @@ export type HostInvoke = (channel: string, args: unknown[], client?: string, his
  * fast as it can: 8 MB is under a second of a busy host's traffic. What it misses, it reads again (`fallBehind`).
  */
 const STREAM_BEHIND_BYTES = 8 * 1024 * 1024
-/** What it may hold at all. Live batches no longer add to it, so only a reader that has stopped reading gets here. */
+/**
+ * What it may hold at all: what's queued and the notices it has missed together, the write about to go included. Live
+ * batches add only a notice, so only a reader that has stopped reading gets here.
+ */
 const STREAM_LOST_BYTES = 64 * 1024 * 1024
 
 /** One client's subscription to `/events`. */
@@ -41,8 +44,12 @@ type EventStream = {
   eventLimit: number
   live: LiveForm
   openedAt: number
-  /** Past `STREAM_BEHIND_BYTES`: each conversation's latest live batch it hasn't heard, by conversation, until it catches up. */
-  missed?: Map<string, RuntimeEvent>
+  /**
+   * Past `STREAM_BEHIND_BYTES`, until it catches up: the notice to read each conversation again, at the latest revision
+   * it missed. Never the batch itself: a stream's memory is only what `heldBy` counts.
+   */
+  missed?: Map<string, string>
+  missedBytes: number
   /** Why the host let it go, and what it held. */
   ending?: { why: string; queuedBytes: number }
 }
@@ -234,7 +241,7 @@ export async function startWebHost(
         ? requestedLimit : 512 * 1024
       const stream: EventStream = { client: clientId, observer: request.headers["x-mako-observer"] === "1",
         history: request.headers["x-mako-history"] === "1", eventLimit,
-        live: saidLiveForm(request.headers[LIVE_FORM_HEADER]?.toString()), openedAt: Date.now() }
+        live: saidLiveForm(request.headers[LIVE_FORM_HEADER]?.toString()), openedAt: Date.now(), missedBytes: 0 }
       streams.set(response, stream)
       subscribersChanged()
       response.once("close", () => {
@@ -344,18 +351,25 @@ export async function startWebHost(
    * conversation one read, in place of the stream and a whole window's boot. Everything else still goes, in order.
    */
   const fallBehind = (response: ServerResponse, stream: EventStream) => {
-    const missed = new Map<string, RuntimeEvent>()
+    const missed = new Map<string, string>()
     const since = Date.now()
     stream.missed = missed
     hostWarn("stream", "a client's stream fell behind", { client: stream.client, queuedBytes: response.writableLength })
     response.once("drain", () => {
+      const missedBytes = stream.missedBytes
       stream.missed = undefined
-      for (const event of missed.values()) {
-        const notice = invalidated(event)
-        if (notice) response.write(notice)
-      }
-      hostLog("stream", "a client's stream caught up", { client: stream.client, behindMs: Date.now() - since, conversations: missed.size })
+      stream.missedBytes = 0
+      for (const notice of missed.values()) response.write(notice)
+      hostLog("stream", "a client's stream caught up", { client: stream.client, behindMs: Date.now() - since, conversations: missed.size, missedBytes })
     })
+  }
+  /** Whether `stream` can hold `bytes` more; one that can't is let go, so it never holds past `STREAM_LOST_BYTES`. */
+  const holds = (response: ServerResponse, stream: EventStream, bytes: number) => {
+    const queuedBytes = response.writableLength + stream.missedBytes
+    if (queuedBytes + bytes <= STREAM_LOST_BYTES) return true
+    stream.ending = { why: "it stopped reading", queuedBytes }
+    response.destroy(new Error("Web client stopped consuming host events"))
+    return false
   }
   const send = (channel: RuntimeEventChannel, event: RuntimeEvent, client?: string) => {
     if (!client) outlet?.(channel, event)
@@ -373,17 +387,16 @@ export async function startWebHost(
     const notice = () => (invalidation === undefined ? (invalidation = invalidated(event)) : invalidation)
     for (const [stream, owner] of streams) {
       if (client && client !== owner.client) continue
-      const queuedBytes = stream.writableLength
-      if (queuedBytes > STREAM_LOST_BYTES) {
-        owner.ending = { why: "it stopped reading", queuedBytes }
-        stream.destroy(new Error("Web client stopped consuming host events"))
-        continue
-      }
-      if (queuedBytes > STREAM_BEHIND_BYTES && !owner.missed) fallBehind(stream, owner)
+      if (stream.destroyed) continue
+      if (stream.writableLength > STREAM_BEHIND_BYTES && !owner.missed) fallBehind(stream, owner)
       if (owner.missed) {
         const { type, conversation } = runtimeEventRouting(event)
-        if (type === "live-batch" && conversation) {
-          owner.missed.set(conversation, event)
+        const line = type === "live-batch" && conversation ? notice() : null
+        if (line && conversation) {
+          const grown = Buffer.byteLength(line) - Buffer.byteLength(owner.missed.get(conversation) ?? "")
+          if (!holds(stream, owner, grown)) continue
+          owner.missed.set(conversation, line)
+          owner.missedBytes += grown
           continue
         }
       }
@@ -391,15 +404,15 @@ export async function startWebHost(
       // Heard in a form this subscriber doesn't read: it reads the conversation again instead.
       if (payload === undefined) {
         const line = notice()
-        if (line) stream.write(line)
+        if (line && holds(stream, owner, Buffer.byteLength(line))) stream.write(line)
         continue
       }
       const { line, bytes } = lineOf(payload)
       if (owner.history && channel === "event" && bytes > owner.eventLimit && notice()) {
-        stream.write(notice()!)
+        if (holds(stream, owner, Buffer.byteLength(notice()!))) stream.write(notice()!)
         continue
       }
-      stream.write(line)
+      if (holds(stream, owner, bytes)) stream.write(line)
     }
   }
   return {

@@ -28,11 +28,11 @@ const stopFollowing = followHostLog((line) => { if (line.scope === "stream") lin
 const HeardSchema = z.object({ batch: z.object({ id: z.string(), revision: z.number(), historyChanged: z.boolean().optional(), nativeAgents: z.unknown().optional() }).optional() })
 
 /** A window's stream that takes nothing until `resume`, so everything sent waits in the host. */
-async function stalled() {
+async function stalled(history = true) {
   const client = randomUUID()
   let text = ""
   const opened = new Promise<IncomingMessage>((resolve, reject) => {
-    const req = request({ agent: false, socketPath: socket, path: "/events", method: "POST", headers: { "x-mako-window": client, "x-mako-history": "1" } }, resolve)
+    const req = request({ agent: false, socketPath: socket, path: "/events", method: "POST", headers: { "x-mako-window": client, ...history && { "x-mako-history": "1" } } }, resolve)
     req.on("error", reject)
     req.end()
   })
@@ -97,6 +97,28 @@ function marker(word: string): HostEvent {
   stream.leave()
 }
 
+// Many conversations cost a stream their notices, never their batches: 180 of 900 KB each, as a reader with no limit of its own takes.
+{
+  const stream = await stalled(false)
+  lines.length = 0
+  const conversations = Array.from({ length: 180 }, () => randomUUID())
+  for (const conversation of conversations) {
+    host.event(batch(conversation, 1, 900 * 1024))
+    await delay(1)
+  }
+  assert.ok(!lines.some((line) => /stream ended/.test(line.message)), "the stream stays, its batches let go as they're missed")
+  stream.resume()
+  const caughtUp = () => lines.find((line) => /caught up/.test(line.message))
+  for (let waited = 0; waited < 400 && !caughtUp(); waited += 1) await delay(10)
+  await delay(50)
+  const missed = Number(caughtUp()?.fields?.conversations)
+  assert.ok(missed > 160, `most of them missed (${missed})`)
+  assert.ok(Number(caughtUp()?.fields?.missedBytes) <= missed * 256, `what it kept is a short notice each (${caughtUp()?.fields?.missedBytes} bytes)`)
+  const notices = stream.events().flatMap(({ batch: heard }) => heard?.historyChanged ? [heard.id] : [])
+  assert.equal(new Set(notices).size, missed, "and each hears its notice")
+  stream.leave()
+}
+
 // The client leaving is a stream end too.
 {
   const stream = await stalled()
@@ -125,7 +147,9 @@ function marker(word: string): HostEvent {
   }
   assert.ok(ended(), "a stream past what can be held goes")
   assert.equal(ended()?.fields?.why, "it stopped reading")
-  assert.ok(Number(ended()?.fields?.queuedBytes) > 8 * 1024 * 1024, "with the bytes it held")
+  const held = Number(ended()?.fields?.queuedBytes)
+  assert.ok(held > 8 * 1024 * 1024, "with the bytes it held")
+  assert.ok(held <= 64 * 1024 * 1024, `and never past the limit, not by one write (${held})`)
   stream.leave()
 }
 
