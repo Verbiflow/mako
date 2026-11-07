@@ -720,15 +720,37 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!this.stopped) this.resume()
   }
 
-  /** The conversations `resume` reads: every open Fin's, and its Apexes' the last host left a message of unsettled. */
+  /**
+   * Every conversation `resume` may read, taken from what it goes through:
+   * each open delegation and each placed on another account, the report, the
+   * answer and the pull request's outcome the last host left undelivered, a
+   * limit's notice, a queued start, and the Apexes it left a message of
+   * unsettled. Each names Threads, and every conversation of each goes, with
+   * its Apex's and its tree's root's: whatever `resume` reads on the way (a
+   * digest's receipt in the Apex's queue, say) is of a Thread it already
+   * counts in. `test:resume-holds` fails on one it reads whole.
+   */
   private resumeReads(store: ThreadStore): string[] {
     const edges = store.edges()
+    const threads = new Set<string>()
     const reads = new Set<string>()
-    for (const edge of edges.all) {
-      if (edge.closedAt !== undefined || (edge.run && !edge.run.ended)) continue
-      const conversation = this.conversationOf(edge.child)
-      if (conversation) reads.add(conversation)
+    const tree = (thread: string) => {
+      threads.add(thread)
+      const parent = edges.of(thread)?.parent
+      if (parent) threads.add(parent)
+      threads.add(this.rootOf(thread))
     }
+    for (const edge of edges.all) if (edge.closedAt === undefined || edge.tuned?.rerouted) tree(edge.child)
+    for (const { report } of store.undeliveredReports()) tree(report.child)
+    for (const kept of store.undeliveredAnswers()) tree(kept.child)
+    for (const kept of store.undeliveredPullWakes()) tree(kept.child)
+    for (const { root } of store.limitNotices()) tree(root)
+    for (const spawn of store.queuedSpawns()) {
+      tree(spawn.tree)
+      const lead = parseQueued(spawn.record)?.lead
+      if (lead) tree(lead.thread)
+    }
+    for (const thread of threads) for (const conversation of this.conversationsOfThread(thread)) reads.add(conversation)
     for (const apex of new Set(edges.all.map((edge) => edge.parent)))
       for (const conversation of this.conversationsOfThread(apex)) if (this.deps.live.leftUnsettled(conversation)) reads.add(conversation)
     return [...reads]

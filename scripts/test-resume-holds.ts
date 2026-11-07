@@ -1,8 +1,14 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { cpSync } from "node:fs"
 import { join } from "node:path"
+import { mock } from "node:test"
+import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { Entry } from "@mako/sessions/entries"
+import { Agents } from "@mako/host/conversations/agents"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { LiveRecords } from "@mako/host/conversations/live-records"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 import { testScratch } from "./lib/test-scratch.mjs"
 
@@ -19,6 +25,10 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * run and on this machine), once as the host does now. The loop's longest hold while resuming in slices must stay
  * under a quarter of the one at once (`TIMES`), and both must resume exactly the same: the same messages sent on, the
  * same turns continued, every Fin's requests in the same states.
+ *
+ * And nothing the resume reads is read whole: every conversation it reads in from its journal (`LiveRecords.load` of
+ * one not in memory) must have been read in first. A settled Apex whose Fin's report was kept but not yet heard when
+ * the host died is read as the report is sent again (its queue is the receipt), so it's read in first too.
  */
 const FINS = 8
 /** Blocks added to each Fin's journal, and their size: about 18 MB a journal. */
@@ -106,15 +116,54 @@ interface Taken {
 /** What's said of how long ago a turn was cut differs by the moment it's read: the words around it are what's compared. */
 const withoutTimes = (text: string) => text.replace(/\d+(?:\.\d+)?\s*(?:ms|s|seconds?|minutes?|m)\b/g, "…")
 
+/**
+ * Each conversation `resume` and `continueRestarted` read in whole from its journal while `run` runs: those not in
+ * memory as they were asked for.
+ */
+async function readWhole(run: () => Promise<void>): Promise<string[]> {
+  let resuming = false
+  const whole: string[] = []
+  const during = <Self, Args extends unknown[], Result>(original: (this: Self, ...args: Args) => Result) => function (this: Self, ...args: Args): Result {
+    resuming = true
+    try {
+      return original.apply(this, args)
+    } finally {
+      resuming = false
+    }
+  }
+  const load = LiveRecords.prototype.load
+  const mocks = [
+    mock.method(Agents.prototype, "resume", during(Agents.prototype.resume)),
+    mock.method(LiveConversations.prototype, "continueRestarted", during(LiveConversations.prototype.continueRestarted)),
+    mock.method(LiveRecords.prototype, "load", function (this: LiveRecords, id: string) {
+      const cold = resuming && !this.has(id)
+      const resident = load.call(this, id)
+      if (cold && resident) whole.push(id)
+      return resident
+    }),
+  ]
+  try {
+    await run()
+  } finally {
+    for (const each of mocks) each.mock.restore()
+  }
+  return whole
+}
+
 /** A fresh host on a copy of what the last one left, taking it up at once or in slices. */
 async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: boolean): Promise<Taken> {
   const script: Script = () => "Done after the restart."
   let world: AgentsWorld | undefined
-  const holdMs = await longestHold(async () => {
-    world = new AgentsWorld({ root: at, script, finLimit: () => FINS * 2, ...(inSlices && { resumeInSlices: true }) })
-    await world.resumed
+  let holdMs = 0
+  const whole = await readWhole(async () => {
+    holdMs = await longestHold(async () => {
+      world = new AgentsWorld({ root: at, script, finLimit: () => FINS * 2, ...(inSlices && { resumeInSlices: true }) })
+      await world.resumed
+    })
   })
   assert.ok(world)
+  if (inSlices) assert.deepEqual(whole, [], "resuming in slices reads nothing whole")
+  else assert.ok(whole.length >= FINS, `resuming at once reads every Fin whole: ${whole.length}`)
   await world.settle()
   const sent: Record<string, string[]> = {}
   const requests: Record<string, string[][]> = {}
@@ -126,7 +175,37 @@ async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: b
   return { holdMs, sent, requests }
 }
 
+/**
+ * A settled Apex, and its Fin's report kept but not yet heard when the host died: the next host sends it again, and
+ * reads the Apex's queue for its receipt. The Apex left nothing unsettled, and is read in first all the same.
+ */
+async function unheardReport(): Promise<void> {
+  const at = join(root, "unheard")
+  const world = new AgentsWorld({ root: at, script: () => "Done." })
+  const apex = await world.apex("codex")
+  const fin = await world.agents.start(apex.caller, { harness: "claude", brief: { objective: "Work" }, name: "worker", clientKey: "worker", cwd: at })
+  assert.ok(!("refused" in fin) && fin.child, JSON.stringify(fin))
+  await world.settle()
+  assert.equal(world.live.leftUnsettled(apex.conversation), false, "the Apex left nothing unsettled")
+  const child = ThreadIdSchema.parse(fin.child)
+  world.store.keepReport({ id: `report:${randomUUID()}`, child, status: "blocked", summary: "Unheard as the host died.", question: "What next?", ownerGeneration: world.store.reportsOf(child, 0).at(-1)?.ownerGeneration ?? 1, at: Date.now() })
+  assert.ok(world.store.undeliveredReports().length > 0, "the report waits to be heard")
+  await world.close()
+  let next: AgentsWorld | undefined
+  const whole = await readWhole(async () => {
+    next = new AgentsWorld({ root: at, script: () => "Heard.", resumeInSlices: true })
+    await next.resumed
+  })
+  assert.ok(next)
+  await next.settle()
+  assert.deepEqual(whole, [], "the Apex the unheard report goes to was read in first")
+  assert.equal(next.store.undeliveredReports().length, 0, "and it heard the report")
+  await next.close()
+  console.log("an unheard report's settled Apex: read in first")
+}
+
 try {
+  await unheardReport()
   const left = join(root, "left")
   const { fins } = await leftByTheLastHost(left)
   cpSync(left, join(root, "at-once"), { recursive: true })
