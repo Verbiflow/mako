@@ -1673,7 +1673,8 @@ export function ConversationTimeline({
           onPointerUp={(event) => {
             pressing.current = false
             if (event.pointerType === "mouse") userScrolling.current = false
-            else settleInput()
+            // A settle that came due during the press waited for this: with no `scrollend`, nothing else would end it.
+            settleInput()
             reportReading.current()
           }}
           onPointerCancel={() => {

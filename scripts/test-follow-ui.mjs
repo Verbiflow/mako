@@ -254,6 +254,18 @@ async function check() {
   assert.ok(reader.bounded, "focus resting in a turn doesn't hold every turn in memory")
   assert.equal(reader.focused, true, "and the turn it rests in is kept")
   console.log("MEMORY", JSON.stringify({ windowed, ...reader }))
+  // A button held through a wheel, past when its input would settle, in a browser with no `scrollend`: its release ends
+  // the input, or the pane counts as moving for good and every turn stays in memory.
+  await evaluate("window.addEventListener('scrollend', (event) => event.stopImmediatePropagation(), true); true")
+  await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x: 700, y: 400, button: "left", clickCount: 1 })
+  await wheel(700, 400, -600)
+  await wait(600)
+  await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x: 700, y: 400, button: "left", clickCount: 1 })
+  await evaluate("getSelection().removeAllRanges(); true")
+  await wait(500)
+  const released = await evaluate(`Promise.all([import('/src/state/transcript-reading.ts'), import('/src/state/acp-state.ts')]).then(([reading, acp]) => reading.transcriptReaders.protected(reading.liveReadingSource(acp.activeLiveAcp(acp.acpStore.get()).key))?.size ?? null)`)
+  console.log("RELEASED", JSON.stringify({ size: released }))
+  assert.ok(released !== null && released <= 40, `a button held through a wheel lets go of memory as it's released: ${released}`)
 
   // Crossing into a window under a reader who's up: they stay where they are, and what's mounted falls.
   await load("/?mock&app=apex&turns=88", 1440, 900)
