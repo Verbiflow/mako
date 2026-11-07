@@ -108,6 +108,24 @@ acpStore.set({ activeKey: null })
 await answer({ roster: r3, revision: 3, epoch: "E" })
 assert.deepEqual(titles(rosterOf("shown")), titles(r4), "an older answer leaves what a snapshot said")
 
+// A whole roster older than one already held, heard while a read is out, is past: it never comes back over the newer one,
+// a Fin and its question with it, whichever form it comes in or as a snapshot of a view shown and let go.
+for (const how of ["compact", "plain", "snapshot"] as const) {
+  const id = `stale-${how}`
+  listed(id)
+  applyLiveBatch(delta(id, 3, r2, r3))
+  whole(id, 5, r4, how !== "plain")
+  if (how === "snapshot") {
+    applyLiveSnapshot(snapshotOf(id, 4, r3, "44444444-4444-4444-8444-444444444444"))
+    unloadLive(id)
+    acpStore.set({ activeKey: null })
+  } else whole(id, 4, r3, how === "compact")
+  assert.deepEqual(titles(rosterOf(id)), titles(r4), `the older whole roster (${how}) isn't taken`)
+  await answer({ roster: r3, revision: 3, epoch: "E" })
+  assert.deepEqual(titles(rosterOf(id)), titles(r4), `nor laid over an answer (${how})`)
+  assert.ok(inboxModel().asks.some((ask) => ask.question === "Can I deploy?"), "and the Fin's question stays")
+}
+
 // A change missed while the read is out: the answer can't take what came after it, so it's read again, unasked.
 listed("gap")
 applyLiveBatch(delta("gap", 3, r2, r3))

@@ -21,9 +21,27 @@ import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, HeardLiveBatch[]>()
 /** What a read of the whole roster is laid over with: each change heard since it was asked, or a roster that went whole. */
-type HeardRoster = { revision: number; patch: RosterPatch } | { revision: number; roster: NativeAgentRoster | undefined }
+type HeardRoster = { revision: number; epoch?: string } & ({ patch: RosterPatch } | { roster: NativeAgentRoster | undefined })
 /** The conversations whose whole roster this window is reading (`readRoster`), with what it heard since, and the try. */
 const rosterReads = new Map<string, { heard: HeardRoster[]; tries: number }>()
+/**
+ * The revision, in its host's start, of each roster this window holds: whatever wrote it, a batch, a snapshot or a read
+ * of the whole roster. A roster never goes back: what says it as of that revision or before is past, since a read can
+ * answer as of a moment the batches it hears haven't reached, and a batch or a snapshot can arrive after a newer one.
+ */
+const rosterAt = new Map<string, { revision: number; epoch?: string }>()
+
+/** Whether what `said` says of a roster is no newer than the one held. Another start's numbers aren't comparable. */
+function rosterBehind(said: { id: string; revision: number; epoch?: string }): boolean {
+  const held = rosterAt.get(said.id)
+  if (!held || (held.epoch !== undefined && said.epoch !== undefined && held.epoch !== said.epoch)) return false
+  return said.revision <= held.revision
+}
+
+function rosterTaken(id: string, revision: number, epoch: string | undefined): void {
+  rosterAt.set(id, { revision, ...(epoch && { epoch }) })
+}
+
 /** How many reads of a roster in a row may fail to make sense of what came meanwhile, before its snapshot is read. */
 const ROSTER_TRIES = 3
 // Invalid/oversized snapshots cannot be repaired by refetching on every token.
@@ -94,7 +112,6 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
   for (const transfer of snapshot.control?.transfers ?? []) settleMessage(transfer.input.id, true)
   for (const action of snapshot.control?.actions ?? []) if (steerTaken(action)) settleMessage(action.input.id, true)
   const id = snapshot.session.id
-  heardWholeRoster(id, snapshot.revision, snapshot.nativeAgents)
   const existing = acpStore.get().conversations[id]
   const stale = existing?.hydrated && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision
   const narrower = !stale && dropsLoadedHistory(existing, snapshot, covers)
@@ -107,6 +124,13 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     // The same state, read again over the range on screen, replaces it whole.
     if (narrower) rereadLive(id)
     return
+  }
+  // A roster read whole since that's newer than this snapshot stands; this one is laid over a read still out.
+  if (rosterBehind({ id, revision: snapshot.revision, ...(snapshot.epoch && { epoch: snapshot.epoch }) }) && existing?.kind === "live")
+    snapshot = { ...snapshot, nativeAgents: existing.nativeAgents }
+  else {
+    heardWholeRoster(id, snapshot.revision, snapshot.epoch, snapshot.nativeAgents)
+    rosterTaken(id, snapshot.revision, snapshot.epoch)
   }
   const pendingPrompts = existing?.pendingPrompts?.filter(
     (prompt) => !snapshot.requests.some((request) => request.id === prompt.id) &&
@@ -340,19 +364,36 @@ function batchHistoryFailure(batch: LiveBatch, current: { historyFailure?: strin
  * the revision before it; held anywhere else (buffered, out of order, another epoch) it waits as it came and is read
  * when it's next in line, so a snapshot taken meanwhile is what it's read against.
  */
-export function applyLiveBatch(heard: HeardLiveBatch): void {
+function withoutRoster(batch: HeardLiveBatch): HeardLiveBatch {
+  const rest = { ...batch }
+  delete rest.nativeAgents
+  if (isCompactBatch(rest)) delete rest.rosterPatch
+  return rest
+}
+
+export function applyLiveBatch(arrived: HeardLiveBatch): void {
+  // What it says of the roster, older than the roster read whole meanwhile, is left out.
+  const heard = rosterBehind(arrived) ? withoutRoster(arrived) : arrived
   if (!isCompactBatch(heard)) {
-    if (heard.nativeAgents) heardWholeRoster(heard.id, heard.revision, heard.nativeAgents)
-    return applyBatch(heard, heard, false)
+    if (heard.nativeAgents) heardWholeRoster(heard.id, heard.revision, heard.epoch, heard.nativeAgents)
+    applyBatch(heard, heard, false)
+    return noteRosterTaken(heard, heard.nativeAgents)
   }
   const current = acpStore.get().conversations[heard.id]
   const held = current?.kind === "live" && sameEpoch(current, heard) && heard.revision === (current.revision ?? 0) + 1 ? current : undefined
   const roster = held?.hydrated || !rosterReads.has(heard.id) ? held?.nativeAgents : undefined
   const read = expandLiveBatch(heard, held ? { blocks: held.hydrated ? held.blocks : [], requests: held.requests ?? [], ...(held.control && { control: held.control }), ...(roster && { nativeAgents: roster }) } : { blocks: [] })
   for (const patch of read.unheld) settleMessage(patch.id, true)
-  if (!heard.rosterPatch && read.batch.nativeAgents) heardWholeRoster(heard.id, heard.revision, read.batch.nativeAgents)
+  if (!heard.rosterPatch && read.batch.nativeAgents) heardWholeRoster(heard.id, heard.revision, heard.epoch, read.batch.nativeAgents)
   applyBatch(read.batch, heard, read.unread)
+  noteRosterTaken(heard, read.batch.nativeAgents)
   if (read.unreadRoster) readRoster(heard.id, read.unreadRoster, heard.revision)
+}
+
+/** A roster a batch said, once the window holds it. */
+function noteRosterTaken(batch: { id: string; revision: number; epoch?: string }, roster: NativeAgentRoster | undefined): void {
+  const current = acpStore.get().conversations[batch.id]
+  if (roster && current?.kind === "live" && current.revision === batch.revision && current.nativeAgents !== undefined) rosterTaken(batch.id, batch.revision, batch.epoch)
 }
 
 /**
@@ -365,13 +406,14 @@ function readRoster(id: string, patch: RosterPatch, revision: number): void {
   const listed = acpStore.get().conversations[id]
   if (listed?.kind !== "live" || listed.hydrated || fetching.has(id)) return
   const pending = rosterReads.get(id)
-  if (pending) return void pending.heard.push({ patch, revision })
-  askRoster(id, [{ patch, revision }], 1)
+  const epoch = acpStore.get().conversations[id]?.epoch
+  if (pending) return void pending.heard.push({ patch, revision, ...(epoch && { epoch }) })
+  askRoster(id, [{ patch, revision, ...(epoch && { epoch }) }], 1)
 }
 
-/** A roster that went whole while a read of it is out: by a batch, or a snapshot. */
-function heardWholeRoster(id: string, revision: number, roster: NativeAgentRoster | undefined): void {
-  rosterReads.get(id)?.heard.push({ revision, roster })
+/** A roster that went whole while a read of it is out, by a batch or a snapshot: never older than the one held (`rosterBehind`). */
+function heardWholeRoster(id: string, revision: number, epoch: string | undefined, roster: NativeAgentRoster | undefined): void {
+  rosterReads.get(id)?.heard.push({ revision, ...(epoch && { epoch }), roster })
 }
 
 function askRoster(id: string, heard: HeardRoster[], tries: number): void {
@@ -383,8 +425,15 @@ function askRoster(id: string, heard: HeardRoster[], tries: number): void {
     if (current?.kind !== "live" || current.hydrated || told === null) return
     let roster = told?.roster
     let readable = told !== undefined && sameEpoch(current, told)
+    // Strictly forward from the answer: what's no newer than what's laid over it so far is past.
+    let at = told?.revision ?? Number.NEGATIVE_INFINITY
     for (const each of read?.heard ?? []) {
-      if (told && each.revision <= told.revision) continue
+      if (told?.epoch !== undefined && each.epoch !== undefined && each.epoch !== told.epoch) {
+        readable = false
+        continue
+      }
+      if (each.revision <= at) continue
+      at = each.revision
       if ("patch" in each) {
         const next = roster && applyRosterPatch(roster, each.patch)
         if (!next) readable = false
@@ -398,6 +447,9 @@ function askRoster(id: string, heard: HeardRoster[], tries: number): void {
       if (tries < ROSTER_TRIES) return askRoster(id, [], tries + 1)
       return void hydrateLive(id, true)
     }
+    // The window took a newer roster meanwhile some other way, shown, say: this answer is past.
+    if (told && rosterBehind({ id, revision: at, ...(told.epoch && { epoch: told.epoch }) })) return
+    if (told) rosterTaken(id, at, told.epoch)
     if (roster === current.nativeAgents) return
     const next = { ...current, nativeAgents: reconcileRoster(current.nativeAgents, roster) }
     replaceAcpConversation(id, next)
