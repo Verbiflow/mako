@@ -35,7 +35,7 @@ if (process.versions.electron) {
   console.log(`Agent ask UI evidence: ${process.env.MAKO_ASK_UI_SHOTS ?? join(root, "shots")}`)
 }
 
-const TITLE = "wants to move this Thread to the cloud"
+const TITLE = "Wants to move this Thread to the cloud"
 const APEX_THREAD = "1ead1ead-0000-4000-8000-000000001ead"
 
 async function check() {
@@ -96,6 +96,11 @@ async function check() {
   assert.ok(inbox.includes("Move to the cloud") && inbox.includes("Keep here"), inbox)
   assert.ok(await evaluate("!document.querySelector('[data-inbox]').innerText.includes('Nothing waits on you')"), "the Inbox says what the rail says")
   await shoot("inbox", "[data-inbox-kind=agent-ask]")
+  // An answer the host refuses frees the card, so the ask can be answered again.
+  await evaluate("window.apexScene.refuseNextAgentAnswer(); document.querySelector('[data-inbox-kind=agent-ask] [data-inbox-answer=allow]').click(); true")
+  await until("document.querySelector('[data-inbox-kind=agent-ask] [data-inbox-answer=allow]')?.disabled === false && document.querySelector('[data-inbox-kind=agent-ask]')", "the refused answer freeing the card")
+  await new Promise((done) => setTimeout(done, 300))
+  assert.equal(await evaluate("document.querySelector('[data-inbox-kind=agent-ask] [data-inbox-answer=allow]').disabled"), false, "a refused answer leaves the ask answerable")
   await evaluate("document.querySelector('[data-inbox-kind=agent-ask] [data-inbox-answer=allow]').click(); true")
   await until("document.querySelectorAll('[data-inbox-kind=agent-ask]').length === 0", "the answered ask leaving the Inbox")
   assert.equal((await answers()).at(-1).allow, true)

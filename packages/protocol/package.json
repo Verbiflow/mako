@@ -12,6 +12,7 @@
     "./fake-gateway": "./dist/fake-gateway.js",
     "./records": "./dist/records.js",
     "./borrow": "./dist/borrow.js",
+    "./setup": "./dist/setup.js",
     "./records-http": "./dist/records-http.js",
     "./moves": "./dist/moves.js",
     "./saves": "./dist/saves.js",

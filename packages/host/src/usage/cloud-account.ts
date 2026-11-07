@@ -17,6 +17,8 @@ import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveH
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
+import { BORROW_PATHS, GrantSchema, LeaseEventSchema, LeaseSchema, SourceAnswerSchema, SourceAskSchema, type SourceAnswer } from "@mako/protocol/borrow"
+import type { BorrowSnapshot } from "../contracts/setup.js"
 import {
   LIVE_FORM,
   clientEndpointPath,
@@ -624,6 +626,36 @@ export class CloudAccounts {
   async cloudHarnesses(): Promise<CloudHarnesses | null> {
     const response = await this.#call("cloud.harnesses", "GET", "/v1/cloud/harnesses", undefined, false, [404])
     return response.status === 404 ? null : CloudHarnessesSchema.parse(await response.json())
+  }
+
+  /**
+   * What the account's broker holds for this person: its standing grants, live leases, lease log since `since`, and the
+   * asks waiting on this device as a source, each parsed by the open contract. Null from a cloud without a broker yet.
+   */
+  async borrowSnapshot(since: number): Promise<BorrowSnapshot | null> {
+    const read = async <Answer extends z.ZodType>(path: string, answer: Answer): Promise<z.infer<Answer> | null> => {
+      const response = await this.#call("borrow.read", "GET", path, undefined, false, [404])
+      return response.status === 404 ? null : answer.parse(await response.json())
+    }
+    const [grants, leases, events, asks] = await Promise.all([
+      read(BORROW_PATHS.grants, z.object({ grants: z.array(GrantSchema) })),
+      read("/v1/borrow/leases", z.object({ leases: z.array(LeaseSchema) })),
+      read(`${BORROW_PATHS.events}?since=${since}`, z.object({ events: z.array(LeaseEventSchema) })),
+      read("/v1/borrow/asks", z.object({ asks: z.array(SourceAskSchema) })),
+    ])
+    if (!grants || !leases || !events) return null
+    const at = Date.now()
+    return { grants: grants.grants, leases: leases.leases, events: events.events, asks: (asks?.asks ?? []).map((ask) => ({ ask, at })) }
+  }
+
+  /** This device's answer, as a source, to an ask the account's broker holds for it. */
+  async answerBorrowAsk(ask: string, answer: SourceAnswer): Promise<void> {
+    await this.#call("borrow.answer", "POST", `/v1/borrow/asks/${encodeURIComponent(ask)}`, SourceAnswerSchema.parse(answer))
+  }
+
+  /** The person's revoke of a grant the account's broker holds: every lease under it ends. */
+  async revokeBorrowGrant(grant: string): Promise<void> {
+    await this.#call("borrow.revoke", "DELETE", `${BORROW_PATHS.grants}/${encodeURIComponent(grant)}`)
   }
 
   /** The person's access choice per harness, as the account keeps them; null from a cloud that doesn't keep them yet. */

@@ -5,6 +5,7 @@ import type { ProjectAppSetup, RecipeProofSummary, RecipeVersionView, RecipeView
 import { environmentRepairPrompt } from "@mako/host/contracts/thread-environments"
 import { Action, Blank, Chip, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
+import { SetupPage } from "@/components/setup/setup-page"
 import { Skeleton } from "@/components/ui/skeleton"
 import { recipeChangeContext } from "@/lib/app-setup-context"
 import { threadFolderKey } from "@/lib/thread-folders"
@@ -73,7 +74,7 @@ async function changeWithAgent(setup: ProjectAppSetup) {
 export function AppsSection() {
   const chosen = useAppSetup((state) => state.chosen)
   return chosen ? (
-    <ProjectApp key={chosen} root={chosen} onBack={() => appSetupStore.set({ chosen: undefined })} />
+    <ProjectApp key={chosen} root={chosen} onBack={() => appSetupStore.set({ chosen: undefined, tab: "recipe" })} />
   ) : (
     <ProjectList onOpen={(root) => appSetupStore.set({ chosen: root })} />
   )
@@ -160,6 +161,7 @@ function runsSummary(recipe: RecipeView): string {
 /* ------------------------------------------------------------------ */
 
 function ProjectApp({ root, onBack }: { root: string; onBack: () => void }) {
+  const tab = useAppSetup((state) => state.tab ?? "recipe")
   const [setup, setSetup] = useState<ProjectAppSetup | null>(null)
   const [failure, setError] = useState<string | null>(null)
   const error = threadAppDriver()?.setup ? failure : "This Mako can't run apps."
@@ -187,23 +189,38 @@ function ProjectApp({ root, onBack }: { root: string; onBack: () => void }) {
         </Action>
         <div className="flex items-start gap-4">
           <div className="min-w-0 flex-1">
-            <h3 className="truncate text-title font-semibold text-foreground">{setup?.project ?? "\u00a0"}</h3>
-            <p className="mt-0.5 truncate text-label text-faint">{setup ? shortPath(setup.root) : "\u00a0"}</p>
+            <h3 className="truncate text-title font-semibold text-foreground">{setup?.project ?? folderName(root)}</h3>
+            <p className="mt-0.5 truncate text-label text-faint">{shortPath(setup?.root ?? root)}</p>
           </div>
-          {setup?.recipe.kind === "ready" ? (
+          {tab === "recipe" && setup?.recipe.kind === "ready" ? (
             <Action tone="outline" data-app-setup-action="change" onClick={() => void changeWithAgent(setup)}>
               Change with an agent
             </Action>
           ) : null}
         </div>
+        <div role="tablist" aria-label="Project" className="mt-3 flex gap-1">
+          {(["recipe", "setup"] as const).map((name) => (
+            <Action key={name} role="tab" size="xs" aria-selected={tab === name} data-on={tab === name} data-project-tab={name} onClick={() => appSetupStore.set({ tab: name })}>
+              {name === "recipe" ? "Recipe" : "Setup"}
+            </Action>
+          ))}
+        </div>
       </div>
 
+      {tab === "setup" ? <SetupPage folder={root} /> : <RecipePage setup={setup} error={error} />}
+    </div>
+  )
+}
+
+function RecipePage({ setup, error }: { setup: ProjectAppSetup | null; error: string | null }) {
+  return (
+    <>
       {error ? <p className="text-ui text-negative">The project&apos;s app couldn&apos;t be read: {error}</p> : null}
       {!setup && !error ? <p className="text-ui text-faint"><Shimmer text="Reading the recipe…" /></p> : null}
       {setup?.recipe.kind === "none" ? <NotSetUp setup={setup} /> : null}
       {setup?.recipe.kind === "invalid" ? <Broken setup={setup} message={setup.recipe.message} file={setup.recipe.file} /> : null}
       {setup?.recipe.kind === "ready" ? <Recipe state={setup.recipe} root={setup.root} /> : null}
-    </div>
+    </>
   )
 }
 

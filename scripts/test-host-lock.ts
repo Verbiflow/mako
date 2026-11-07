@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { acquireHostLock, hostLockName } from "@mako/host/base/host-lock"
+import { ranOut } from "./lib/ran-out.ts"
 
 if (process.argv[2] === "hold") await hold(process.argv[3]!)
 else if (process.argv[2] === "late") late(process.argv[3]!)
@@ -55,20 +56,22 @@ async function check() {
     try {
       assert.equal(started.lock, "held")
       assert.deepEqual(await acquireHostLock(dataRoot), { kind: "taken", holder: holder.pid }, "Another process's lock refuses this one")
-      const began = Date.now()
-      assert.deepEqual(await acquireHostLock(dataRoot, { predecessor: holder.pid! + 1, waitMs: 5_000 }), { kind: "taken", holder: holder.pid },
-        "A holder that isn't this host's predecessor refuses it at once")
-      assert.ok(Date.now() - began < 1_000)
+      // At once, and promptly, by how often it looked (every 50 ms) rather than the runner's clock.
+      const { result: refused, waits: refusing } = await ranOut(() => acquireHostLock(dataRoot, { predecessor: holder.pid! + 1, waitMs: 5_000 }))
+      assert.deepEqual(refused, { kind: "taken", holder: holder.pid }, "A holder that isn't this host's predecessor refuses it at once")
+      assert.deepEqual(refusing, [], "never looking again")
       assert.equal((await acquireHostLock(dataRoot, { predecessor: holder.pid, waitMs: 200 })).kind, "taken",
         "A predecessor that never leaves is given up on")
-      const succeeding = acquireHostLock(dataRoot, { predecessor: holder.pid, waitMs: 10_000 })
+      const looked: number[] = []
+      const looks = () => looked.filter((ms) => ms === 50).length
+      const succeeding = ranOut(() => acquireHostLock(dataRoot, { predecessor: holder.pid, waitMs: 10_000 }), looked)
       await new Promise((done) => setTimeout(done, 300))
-      const killedAt = Date.now()
       holder.kill("SIGKILL")
       await new Promise((done) => holder.once("exit", done))
-      const after = await succeeding
+      const looksBeforeExit = looks()
+      const { result: after } = await succeeding
       assert.equal(after.kind, "held", "A successor waits for its predecessor, and a killed host's lock is free at once, though an agent it spawned still runs")
-      assert.ok(Date.now() - killedAt < 1_000, "The successor takes the lock promptly")
+      assert.ok(looksBeforeExit > 0 && looks() - looksBeforeExit <= 2, `The successor takes the lock promptly: at its next look after the exit, or the one after (${looks() - looksBeforeExit} looks)`)
       if (after.kind === "held") await after.release()
     } finally {
       holder.kill("SIGKILL")
