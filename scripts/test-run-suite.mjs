@@ -39,8 +39,11 @@ assert.equal(chatty.code, null)
 assert.match(chatty.output, /HUNG: past 1 s/, "a limit holds even for a suite that keeps talking")
 
 // A process left in the background holds the output open; the suite has still ended.
-const left = 'require("child_process").spawn(process.execPath,["-e","setTimeout(()=>{},4000)"],{stdio:"inherit",detached:true}).unref();console.log("done")'
+const left = 'const c=require("child_process").spawn(process.execPath,["-e","setTimeout(()=>{},60000)"],{stdio:"inherit",detached:true});c.unref();console.log("left",c.pid)'
 const ended = await say(left)
 assert.equal(ended.code, 0)
-assert.ok(ended.ms < 3_000, `a background process doesn't hold the suite: ${ended.ms} ms`)
+const leftPid = Number(/left (\d+)/.exec(ended.output)?.[1])
+// Ended while what it left still runs: a suite that waited on it would end only once it had gone.
+assert.ok(alive(leftPid), `a background process doesn't hold the suite: ended in ${ended.ms} ms`)
+process.kill(leftPid, "SIGKILL")
 console.log("Run suite: output and exit code passed through; a silent or overlong suite is named down to its child and ended whole; a process left behind holds nothing")

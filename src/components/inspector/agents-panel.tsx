@@ -12,7 +12,7 @@ import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/backgro
 import { isActiveNativeAgent, isProviderWork, type NativeWork } from "@mako/host/contracts/native-agents"
 import { rollup, rollupChip, rollupLabel, rosterChildren } from "@mako/host/contracts/children"
 import { ApexFinsSection } from "@/components/inspector/apex-fins-section"
-import { apexConversation, openFinInApex, threadRollup, useApexView } from "@/state/apex-fins"
+import { apexConversation, openFinInApex, threadChildren, threadRollup, useApexView } from "@/state/apex-fins"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ToolGlyph } from "@/components/transcript/tool-views"
@@ -150,6 +150,8 @@ export function ConversationAgents({
   const roster = useAcp((state) => liveConversation(state, conversation)?.nativeAgents)
   const provider = useAcp((state) => liveConversation(state, conversation)?.harness)
   const thread = useAcp((state) => liveConversation(state, conversation)?.threadId)
+  // Its Thread's Fins, as the newest of its conversations holds them: an older Session hears only how they stand.
+  const children = useAcp((state) => (thread ? threadChildren(state, thread) : rosterChildren(liveConversation(state, conversation)?.nativeAgents)))
   const apexTitle = useApexName(conversation, thread)
   // Stable, so a batch moving one Fin repaints that Fin's row alone.
   const openChild = useCallback(
@@ -172,6 +174,7 @@ export function ConversationAgents({
     <AgentRoster
       conversation={conversation}
       roster={roster}
+      children={children}
       provider={provider}
       transcripts={transcripts}
       apexTitle={apexTitle}
@@ -192,6 +195,7 @@ function useApexName(conversation: string | undefined, thread: string | undefine
 function AgentRoster({
   conversation,
   roster,
+  children,
   provider,
   transcripts,
   waiting,
@@ -203,6 +207,8 @@ function AgentRoster({
 }: {
   conversation?: string
   roster?: NativeAgentRoster
+  /** Its Thread's Fins (`threadChildren`). */
+  children: readonly NativeAgent[]
   apexTitle: string
   litChild?: string
   onOpenChild?: (agent: NativeAgent) => void
@@ -219,7 +225,6 @@ function AgentRoster({
   const [visible, setVisible] = useState(40)
   const capability = useThreads((state) => descriptorFor(state, provider)?.capabilities.nativeAgents)
   const scroller = useRef<HTMLDivElement>(null)
-  const children = rosterChildren(roster)
   const agents = useMemo(() => ordered((roster?.agents ?? []).filter(isProviderWork)), [roster])
   if (agents.length === 0 && !unnamed && !children.length)
     return (

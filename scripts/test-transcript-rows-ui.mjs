@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
@@ -113,6 +113,15 @@ const TURNS = `Promise.all([import('/src/state/live-recovery.ts'), import('/src/
     recovery.applyLiveBatch({ id: at.key, epoch: at.epoch, revision: (at.revision ?? 0) + 1, updates: [], requestChanges: [], ...batch })
   }
   const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
+  window.__tall = () => {
+    n += 1
+    const id = crypto.randomUUID(), m = n
+    const text = '[mako · from your Fins, not the person]\\n1 finished:\\n  • "fin-' + m + '" done: the work is in.'
+    const request = { id, createdAt: Date.now(), text, attachments: [], status: 'dispatching', digest: { sentAt: Date.now(), notices: [] } }
+    send({ requestChanges: [request], updates: [{ kind: 'user', id: 'wake-' + m, text, requestId: id }, { kind: 'text', id: 'answer-' + m, text: 'A long answer with a good deal in it, line after line. '.repeat(600) }] })
+    send({ requestChanges: [{ ...request, status: 'completed' }] })
+    return 'wake-' + m
+  }
   window.__turn = async () => {
     n += 1
     const id = crypto.randomUUID(), m = n
@@ -139,6 +148,33 @@ const TURNS = `Promise.all([import('/src/state/live-recovery.ts'), import('/src/
   return true
 })`
 
+/** Each frame, once painted: the turns in view, how much of the view they fill, and for a reader up, the line they read. */
+const CROSSING = (up) => `(() => {
+  const node = document.querySelector('[data-transcript-viewport]')
+  const view = node.getBoundingClientRect()
+  const first = [...node.querySelectorAll('[data-exchange]')].find((turn) => turn.getBoundingClientRect().bottom > view.top + 40)
+  const anchor = ${up} ? first.dataset.exchange : null
+  const start = first.getBoundingClientRect().top
+  const seen = window.__crossing = { frames: 0, after: 0, crossed: false, empty: [], moved: [] }
+  const read = () => {
+    seen.frames += 1
+    if (node.hasAttribute('data-virtualized')) { seen.crossed = true; seen.after += 1 }
+    const turns = [...node.querySelectorAll('[data-exchange]')].map((turn) => turn.getBoundingClientRect())
+    const shown = turns.reduce((all, box) => all + Math.max(0, Math.min(box.bottom, view.bottom) - Math.max(box.top, view.top)), 0)
+    if (shown < view.height * (anchor ? 0.5 : 0.05)) seen.empty.push({ frame: seen.frames, turns: turns.length, shown: Math.round(shown), scrollTop: Math.round(node.scrollTop) })
+    if (anchor) {
+      const turn = node.querySelector('[data-exchange="' + anchor + '"]')
+      const by = turn ? turn.getBoundingClientRect().top - start : null
+      if (by === null || Math.abs(by) > 3) seen.moved.push({ frame: seen.frames, by: by === null ? 'gone' : Math.round(by) })
+    }
+  }
+  const after = new MessageChannel()
+  after.port1.onmessage = read
+  const tick = () => { after.port2.postMessage(0); requestAnimationFrame(tick) }
+  requestAnimationFrame(tick)
+  return true
+})()`
+
 const FORMS = [
   { form: "desk", path: "/?mock&app=apex&turns=260&idle=1", width: 1440, height: 900, mobile: false,
     open: "(() => { const row = [...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')); row?.click(); return Boolean(row) })()" },
@@ -148,14 +184,15 @@ const FORMS = [
 ]
 
 async function check() {
-  const { app, BrowserWindow } = await import("electron")
+  const { app, BrowserWindow, contentTracing, nativeImage } = await import("electron")
   const root = process.env.MAKO_UI_TEST_ROOT
+  const evidence = process.env.MAKO_SEND_SHOTS ?? root
   const base = process.env.MAKO_UI_TEST_URL.replace(/\/$/, "")
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
   const page = window.webContents
-  const guard = guardElectronCheck({ app, page, name: "The transcript rows check", ms: 300_000 })
+  const guard = guardElectronCheck({ app, page, name: "The transcript rows check", ms: 480_000 })
   page.debugger.attach("1.3")
   const corrected = []
   page.on("console-message", (event) => {
@@ -258,6 +295,27 @@ async function check() {
       await evaluate("window.__overlaps.length = 0; true")
     }
 
+    if (form === "desk") {
+      // A row coming in restyles itself, never the page around it: a rule that makes it do so costs every row a frame at
+      // speed. Elements counted, not milliseconds, so no runner's load decides it.
+      guard.at(`${form}: what a row coming in restyles`)
+      const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + 200, y: box.top + 80 } })()")
+      await contentTracing.startRecording({ included_categories: ["devtools.timeline"], excluded_categories: ["*"] })
+      for (let step = 0; step < 60; step += 1) {
+        await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY: step < 40 ? -300 : 300 })
+        await wait(20)
+      }
+      const trace = JSON.parse(await readFile(await contentTracing.stopRecording(join(root, "style.trace.json")), "utf8"))
+      const elements = await evaluate("document.getElementsByTagName('*').length")
+      const restyled = trace.traceEvents.filter((event) => event.name === "UpdateLayoutTree").map((event) => event.args?.elementCount ?? 0)
+      console.log(`${form}: restyles while rows came in: ${restyled.length}, the most ${Math.max(0, ...restyled)} of the page's ${elements} elements`)
+      assert.ok(restyled.length > 10, `${form}: the trace saw the rows come in`)
+      assert.ok(Math.max(...restyled) < elements / 2, `${form}: a row coming in restyles ${Math.max(...restyled)} of ${elements} elements`)
+      await evaluate(`import('/src/components/transcript/transcript-end.ts').then(({ TRANSCRIPT_END_EVENT }) => { document.querySelector('[data-transcript-viewport]').dispatchEvent(new Event(TRANSCRIPT_END_EVENT, { bubbles: true })); return true })`)
+      await wait(400)
+      await evaluate("window.__overlaps.length = 0; true")
+    }
+
     guard.at(`${form}: turns, rows taken from the observer`)
     await evaluate("window.__deafen(); true")
     await turns(4)
@@ -288,6 +346,165 @@ async function check() {
     }
     console.log(`${form}: corrections logged: ${corrected.length}; the last: ${corrected.at(-1)}`)
   }
+  // The crossing into a window, at every width, under a reader who's up and one at the end, with turns streaming: each
+  // frame paints turns where the frame before had them. Read after the frame's paint, so nothing that lands a frame late
+  // passes for having been there.
+  for (const { form, path, width, height, mobile, open } of [
+    { form: "desk", path: "/?mock&app=apex&turns=12&idle=1", width: 1440, height: 900, mobile: false, open: FORMS[0].open },
+    { form: "a narrow window", path: "/scripts/web-desk.html?app=apex&thread=apex&turns=12&idle=1", width: 1100, height: 800, mobile: false },
+    { form: "phone", path: "/scripts/phone-apex.html?app=apex&turns=12&idle=1", width: 390, height: 844, mobile: true, open: FORMS[2].open },
+  ]) {
+    for (const reader of ["up", "at the end", "scrolling"]) {
+      guard.at(`${form}: crossing into a window, reader ${reader}`)
+      await window.loadURL("about:blank")
+      await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile })
+      await window.loadURL(`${base}${path}`).catch((error) => {
+        if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
+      })
+      if (open) await until(open, `${form}: its list`)
+      await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", `${form}: the Apex's turns`)
+      await evaluate(TURNS)
+      await wait(600)
+      assert.equal(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"), false, `${form}: starts short of a window, or nothing crosses`)
+      const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + 80 } })()")
+      const wheelBy = (deltaY) => page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY })
+      if (reader !== "at the end") {
+        await wheelBy(-500)
+        await wait(400)
+        const away = await evaluate("(() => { const node = document.querySelector('[data-transcript-viewport]'); return node.scrollHeight - node.scrollTop - node.clientHeight })()")
+        assert.ok(away > 96, `${form}: the reader left the end (${away})`)
+      }
+      await evaluate(CROSSING(reader === "up"))
+      let moving = reader === "scrolling"
+      const wheeling = (async () => {
+        for (let step = 0; moving; step += 1) {
+          await wheelBy(step % 12 < 6 ? -80 : 80)
+          await wait(30)
+        }
+      })()
+      for (let turn = 0; turn < 40 && !(await evaluate("window.__crossing.crossed")); turn += 1) await evaluate("window.__turn()")
+      await wait(500)
+      moving = false
+      await wheeling
+      const crossing = await evaluate("window.__crossing")
+      console.log(`${form}, reader ${reader}: crossed after ${crossing.frames} frames, ${crossing.after} frames after it, empty ${crossing.empty.length}, moved ${crossing.moved.length}${crossing.empty[0] ? ` first ${JSON.stringify(crossing.empty[0])}` : ""}${crossing.moved[0] ? ` first ${JSON.stringify(crossing.moved[0])}` : ""}`)
+      if (crossing.empty.length || crossing.moved.length) await shot(`${form} crossing, reader ${reader}`)
+      assert.ok(crossing.crossed, `${form}: the turns crossed into a window`)
+      assert.deepEqual(crossing.empty.slice(0, 3), [], `${form}, reader ${reader}: turns painted in every frame across the crossing`)
+      assert.deepEqual(crossing.moved.slice(0, 3), [], `${form}, reader ${reader}: what's read stays where it was across the crossing`)
+    }
+  }
+  // What the crossing paints, frame by frame, as the screen shows it: a frame can be wrong with every box right by the time
+  // anything can read one. A reader who's still sees no frame that isn't the one before, wherever they rest.
+  for (const up of [500, 1500]) {
+    guard.at(`a narrow window: the crossing in pixels, ${up} px up`)
+    await window.loadURL("about:blank")
+    await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false })
+    await window.loadURL(`${base}/scripts/web-desk.html?app=apex&thread=apex&turns=12&idle=1`).catch((error) => {
+      if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
+    })
+    await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", "the Apex's turns")
+    await evaluate(TURNS)
+    await wait(600)
+    const box = await evaluate("(() => { const b = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: b.left, y: b.top, width: b.width, height: b.height } })()")
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: box.x + box.width / 2, y: box.y + 80, deltaX: 0, deltaY: -up })
+    await wait(500)
+    const frames = []
+    const painted = (_event, method, params) => {
+      if (method !== "Page.screencastFrame") return
+      frames.push({ at: params.metadata.timestamp * 1000, data: params.data })
+      void page.debugger.sendCommand("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => undefined)
+    }
+    page.debugger.on("message", painted)
+    await evaluate("(() => { const node = document.querySelector('[data-transcript-viewport]'); const look = () => { if (node.hasAttribute('data-virtualized')) window.__crossedAt = performance.timeOrigin + performance.now(); else requestAnimationFrame(look) }; requestAnimationFrame(look); return true })()")
+    // The screencast sends a frame only when something on screen changes, and a crossing done right changes nothing: a
+    // speck outside the transcript changes every frame, so each one is sent and both sides of the crossing are seen.
+    await evaluate("(() => { const speck = document.createElement('div'); speck.style.cssText = 'position:fixed;left:0;bottom:0;width:2px;height:2px;z-index:9999;pointer-events:none'; document.body.append(speck); let on = false; const tick = () => { on = !on; speck.style.background = on ? '#fff' : '#000'; requestAnimationFrame(tick) }; requestAnimationFrame(tick); return true })()")
+    await page.debugger.sendCommand("Page.startScreencast", { format: "png", everyNthFrame: 1 })
+    await wait(200)
+    for (let turn = 0; turn < 40 && !(await evaluate("Boolean(window.__crossedAt)")); turn += 1) await evaluate("window.__turn()")
+    await wait(1_800)
+    await page.debugger.sendCommand("Page.stopScreencast")
+    page.debugger.removeListener("message", painted)
+    const crossedAt = await evaluate("window.__crossedAt")
+    assert.ok(crossedAt, "the turns crossed into a window")
+    // The transcript, short of its edges: its scrollbar and the pill that says there's more come and go on their own.
+    const crop = { x: Math.round(box.x), y: Math.round(box.y) + 20, width: Math.round(box.width) - 60, height: Math.round(box.height) - 90 }
+    // What settled is read well after it, when anything a slow machine draws late (code's colours) has come: closer, a
+    // late repaint would pass for a change that stays.
+    const around = frames.filter((frame) => frame.at > crossedAt - 400 && frame.at < crossedAt + 1_500)
+    // A runner paints at its own rate: what matters is frames on both sides of it, not how many.
+    const before = around.filter((frame) => frame.at < crossedAt).length, after = around.length - before
+    assert.ok(before >= 2 && after >= 2, `the screencast saw both sides of the crossing: ${before} frames before it, ${after} after`)
+    // Wrong for a frame is unlike both what was there and what settled: code without its colours, a turn over another. A
+    // reader's text settling a fraction of a pixel over is unlike one of them only, and stays.
+    const pixels = around.map((frame) => nativeImage.createFromBuffer(Buffer.from(frame.data, "base64")).crop(crop).toBitmap())
+    const unlike = (one, other) => {
+      let changed = 0
+      for (let at = 0; at < one.length; at += 4)
+        if (Math.abs(one[at] - other[at]) + Math.abs(one[at + 1] - other[at + 1]) + Math.abs(one[at + 2] - other[at + 2]) > 48) changed += 1
+      return 100 * changed / (one.length / 4)
+    }
+    const was = pixels[0], settled = pixels.at(-1)
+    const stayed = unlike(was, settled)
+    const flash = around.map((frame, index) => ({ frame, by: Math.min(unlike(pixels[index], was), unlike(pixels[index], settled)), at: Math.round(frame.at - crossedAt) })).reduce((most, each) => each.by > most.by ? each : most)
+    console.log(`a narrow window, ${up} px up: ${around.length} painted frames around the crossing, ${before} before it; the most any frame was unlike both sides ${flash.by.toFixed(2)}% ${flash.at} ms from it; what stayed changed ${stayed.toFixed(2)}%`)
+    if (flash.by > 1 || stayed > 10) {
+      await mkdir(evidence, { recursive: true })
+      for (const [name, frame] of [["before", around[0]], ["flash", flash.frame], ["settled", around.at(-1)]])
+        await writeFile(join(evidence, `crossing ${up} px up ${name}.png`), Buffer.from(frame.data, "base64"))
+    }
+    assert.ok(flash.by <= 1, `a narrow window, ${up} px up: the crossing paints a frame ${flash.by.toFixed(2)}% unlike both what was there and what settled, ${flash.at} ms from it`)
+    assert.ok(stayed <= 10, `a narrow window, ${up} px up: the crossing leaves the screen ${stayed.toFixed(2)}% changed`)
+  }
+
+  // A finger, or a fling, in a tall turn as the crossing comes: what's read goes with the gesture, and never leaps. Turns
+  // here run past 5,000 px on a phone, and only a tall one shows a reader sent to its top.
+  for (const { form, width, gesture } of [
+    { form: "phone, a finger", width: 390, gesture: { speed: 900, preventFling: true } },
+    { form: "phone, a fling", width: 390, gesture: { speed: 3000, preventFling: false } },
+    { form: "an iPad's width, a finger", width: 1100, gesture: { speed: 900, preventFling: true } },
+  ]) {
+    guard.at(`${form} across the crossing`)
+    await window.loadURL("about:blank")
+    await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height: 844, deviceScaleFactor: 2, mobile: true })
+    await window.loadURL(`${base}/scripts/transcript-scroll-browser.html?turns=20`).catch((error) => {
+      if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
+    })
+    await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", `${form}: the fixture`)
+    await wait(900)
+    assert.equal(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"), false, `${form}: starts short of a window`)
+    const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + 80 } })()")
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY: -500 })
+    await wait(500)
+    await evaluate(`(() => { const node = document.querySelector('[data-transcript-viewport]'); const view = node.getBoundingClientRect(); const seen = window.__gesture = { steps: [], crossed: false, tallest: 0 }
+      const under = () => [...node.querySelectorAll('[data-exchange]')].find((turn) => { const box = turn.getBoundingClientRect(); return box.top <= view.top + view.height / 2 && box.bottom > view.top + view.height / 2 })
+      let id, before
+      const read = () => { const was = node.hasAttribute('data-virtualized'); if (was && !seen.crossed) { seen.crossed = true; seen.at = seen.steps.length }
+        const turn = (id && node.querySelector('[data-exchange="' + id + '"]')) || under(); if (!turn) return
+        const box = turn.getBoundingClientRect(); seen.tallest = Math.max(seen.tallest, box.height)
+        if (turn.dataset.exchange === id) seen.steps.push(Math.round(box.top - before)); id = turn.dataset.exchange; before = box.top }
+      const after = new MessageChannel(); after.port1.onmessage = read
+      const tick = () => { after.port2.postMessage(0); requestAnimationFrame(tick) }; requestAnimationFrame(tick); return true })()`)
+    let moving = true
+    const mover = (async () => {
+      for (let step = 0; moving; step += 1) {
+        await page.debugger.sendCommand("Input.synthesizeScrollGesture", { x: at.x, y: at.y + 200, yDistance: step % 2 ? -260 : 300, gestureSourceType: "touch", ...gesture }).catch(() => undefined)
+        await wait(90)
+      }
+    })()
+    for (let turn = 0; turn < 60 && !(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')")); turn += 1)
+      await evaluate("(async () => { window.probe.startTurn(); for (let piece = 0; piece < 6; piece += 1) { window.probe.appendToTurn('The answer keeps arriving, a few words a frame. '); await new Promise(requestAnimationFrame) } return true })()")
+    await wait(600)
+    moving = false
+    await mover
+    const seen = await evaluate("window.__gesture")
+    const leaps = seen.steps.map((by, frame) => ({ by, frame })).filter(({ by }) => Math.abs(by) > 400)
+    console.log(`${form}: crossed ${seen.crossed}, ${seen.steps.length} frames, in a turn ${Math.round(seen.tallest)} px tall, the biggest step ${Math.max(...seen.steps.map(Math.abs))} px, leaps ${JSON.stringify(leaps.slice(0, 3))}`)
+    assert.ok(seen.crossed, `${form}: the turns crossed into a window`)
+    assert.deepEqual(leaps.slice(0, 3), [], `${form}: what's read goes with the gesture across the crossing`)
+  }
+
   console.log("Transcript rows: held apart in every frame on the desk, in a laptop's browser and on a phone, with and without the observer")
   app.exit(0)
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { EventEmitter } from "node:events"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
@@ -11,6 +11,7 @@ import type { LivePermissionRequest } from "@mako/host/contracts/providers-acp"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { workingThreads, type WorkingSnapshot } from "@mako/host/conversations/cloud-handoffs"
 import { KeepAwake, assertionName, keepAwakeHold, mayChangeWork, recountsWork } from "@mako/host/conversations/keep-awake"
+import { SLEEP_WATCH_HELPER, sleepWatchHelper } from "@mako/host/conversations/sleep-handoff"
 
 /**
  * Keeping this Mac awake while its agents work (`KeepAwake`), against a stand-in for the native helper: what to hold
@@ -393,4 +394,38 @@ try {
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
+// A host finds the helper and never builds it: a compiler it started would outlive it, and every new data root would
+// start another. Here a compiler stands ready, the helper's source beside it, and nothing may call it.
+{
+  const root = mkdtempSync(join(tmpdir(), "mako-keep-awake-helper-"))
+  const compiled = join(root, "compiled")
+  const path = process.env.PATH
+  try {
+    const tools = join(root, "tools")
+    mkdirSync(tools)
+    for (const tool of ["xcrun", "swiftc"]) writeFileSync(join(tools, tool), `#!/bin/sh\ntouch "${compiled}"\n`, { mode: 0o755 })
+    process.env.PATH = `${tools}:${path}`
+    const checkout = join(root, "checkout")
+    mkdirSync(join(checkout, "native", "sleep-watch-macos"), { recursive: true })
+    mkdirSync(join(checkout, "build"))
+    writeFileSync(join(checkout, "native", "sleep-watch-macos", "main.swift"), "print(1)\n")
+    assert.equal(await sleepWatchHelper({ appRoot: checkout, packaged: false }), undefined, "a checkout that didn't build it has none")
+    assert.ok(!existsSync(compiled), "and no host compiles one")
+    const built = join(checkout, "build", SLEEP_WATCH_HELPER)
+    writeFileSync(built, "")
+    assert.equal(await sleepWatchHelper({ appRoot: checkout, packaged: false }), built, "a checkout's hosts share its build")
+    const app = join(root, "Mako.app", "Contents", "Resources", "app")
+    mkdirSync(app, { recursive: true })
+    assert.equal(await sleepWatchHelper({ appRoot: app, packaged: true }), undefined, "a packaged app without it has none")
+    const packaged = join(root, "Mako.app", "Contents", "MacOS", SLEEP_WATCH_HELPER)
+    mkdirSync(join(packaged, ".."))
+    writeFileSync(packaged, "")
+    assert.equal(await sleepWatchHelper({ appRoot: app, packaged: true }), packaged, "a packaged app's sits beside its executable")
+    assert.ok(!existsSync(compiled), "nothing was compiled along the way")
+  } finally {
+    process.env.PATH = path
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 console.log("keep-awake: ok")

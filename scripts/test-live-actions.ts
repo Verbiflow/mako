@@ -160,6 +160,7 @@ try {
     1
   )
   assert.equal((await owner.act(id, input)).state.kind, "accepted")
+  assert.equal((await owner.act(id, input)).sender, "person", "the receipt keeps who sent it, whatever its words say")
   assert.equal(steeringCalls, 1)
   console.log(
     "PASS: exact active turn, durable duplicate receipt, changed-ID rejection, and queue/receipt ordering"

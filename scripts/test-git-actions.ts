@@ -366,10 +366,29 @@ try {
   assert.equal(await project2.open("c", { repository: `${multi}/api/` }), "api: #102 was already open; pushed 1 commit: https://github.com/o/r/pull/102.", "a repository is named by its folder, absolute or from the project")
   await assert.rejects(project2.status("c", { repository: "nope" }), /^Error: .*multi has no repository named "nope"\. Pass one of: api, web\.$/)
   assert.equal(parseYaml(await project2.status("c", { repository: " ./web/ " })).repository, "web", "a name from the project folder may start with ./ and end with /")
-  const slashes = "/".repeat(100_000) + "x"
-  const started = performance.now()
-  await assert.rejects(project2.status("c", { repository: slashes }), /has no repository named/)
-  assert.ok(performance.now() - started < 1000, "a hostile name is refused in linear time")
+  // Linear, judged against a pass that plainly is over the same name, timed here: counting its slashes. Whatever the
+  // runner's speed does to one it does to the other, so refusing costs a few times the count, where a cost that grows
+  // with the name's square costs thousands. Each the quickest of five, past a first.
+  const hostile = "/".repeat(200_000) + "x"
+  const quickest = async (work: () => Promise<void> | void) => {
+    let best = Infinity
+    for (let run = 0; run < 5; run++) {
+      const began = performance.now()
+      await work()
+      best = Math.min(best, performance.now() - began)
+    }
+    return best
+  }
+  await assert.rejects(project2.status("c", { repository: hostile }), /has no repository named/)
+  const refusing = await quickest(() => assert.rejects(project2.status("c", { repository: hostile }), /has no repository named/))
+  let counted = 0
+  const counting = await quickest(() => {
+    let slashes = 0
+    for (const character of hostile) if (character === "/") slashes++
+    counted = slashes
+  })
+  assert.equal(counted, 200_000)
+  assert.ok(refusing < counting * 50, `a hostile name is refused in linear time: ${refusing.toFixed(2)} ms for 200,000 slashes, against ${counting.toFixed(2)} ms to count them`)
 
   const onlyApi = parseYaml(await project2.status("c", { repository: "api" }))
   assert.deepEqual([onlyApi.repository, onlyApi.pullRequest.number, onlyApi.otherRepositories], ["api", 102, ["web"]], "one repository's report names it and its siblings")
