@@ -637,7 +637,7 @@ export class LiveConversations {
       }
     const question = latestPendingQuestion(conversationControl(resident), resident.snapshot.requests)
     const open = question?.native.questions.filter((item) => !question.answered?.includes(item.id)) ?? []
-    return question && open.length ? { request: question.id, kind: "question", options: [], questions: open } : undefined
+    return question && open.length ? { request: question.id, kind: "question", options: [], questions: open } : this.asks.pending(id)
   }
 
   /**
@@ -1482,6 +1482,8 @@ export class LiveConversations {
     requestId: string,
     response: LivePermissionResponse
   ): Promise<void> {
+    // An agent's ask through Mako's tools is answered on the path a harness's approval is (`agents_answer`, the person).
+    if (this.asks.open(id).some(ask => ask.id === requestId)) return this.asks.answer(id, requestId, response)
     if (conversationControl(this.records.require(id)).questions?.some(question => question.id === requestId)) {
       await this.questions.answer(id, requestId, response)
       return

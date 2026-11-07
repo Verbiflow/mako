@@ -1065,6 +1065,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     step: (conversationId, op, step) => emit({ type: "thread-continue-step", conversationId, op, step }),
   })
   // The same three moves for an agent's `thread_move` and `mako thread move`: its own Thread, or the person's named one.
+  // An agent's ask is answered on the path a harness's approval is, by whoever answers: one answer for each.
+  live.asks.answering = async (conversation, ask, allow) => late.threadMoves?.answer(conversation, ask, allow)
   late.threadMoves = new ThreadMoveTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
     place: (id) => {

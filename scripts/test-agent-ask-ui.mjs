@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // What an agent asked below full access through Mako's tools, on the production components and the mock bridge's Apex
 // scene with an ask in its conversation (`&ask=move`): the desk's card above the composer and the phone's in the dock
@@ -16,7 +16,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-agent-ask-ui-"))
+  const root = testScratch("mako-agent-ask-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-agent-ask-ui", main: fileURLToPath(import.meta.url) }))
   const { createServer } = await import("vite")
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
@@ -100,6 +100,18 @@ async function check() {
   await until("document.querySelectorAll('[data-inbox-kind=agent-ask]').length === 0", "the answered ask leaving the Inbox")
   assert.equal((await answers()).at(-1).allow, true)
   console.log("PASS: the desk's Inbox lists the ask once, and its answer reaches the host")
+
+  // A Fin's ask goes to its Apex first, as its harness's approvals do: the person's Inbox doesn't list it on its own.
+  await window.loadURL(`${base}?mock&app=apex&ask=fin`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the rail")
+  await evaluate("document.querySelector('[data-rail-top-row=inbox]').click(); true")
+  await until("Boolean(document.querySelector('[data-inbox]'))", "the Inbox")
+  // The Fin's conversation held in this window, as it is once opened: its ask is in what the Inbox reads.
+  await evaluate("import('/src/state/live-recovery.ts').then(({ hydrateLive }) => hydrateLive('1ead1ead-5000-4000-8000-000000000004')).then(() => true)")
+  await until("import('/src/state/acp-state.ts').then(({ acpStore }) => Boolean(acpStore.get().conversations['1ead1ead-5000-4000-8000-000000000004']?.control?.asks?.length))", "the Fin's ask, held")
+  await new Promise((done) => setTimeout(done, 300))
+  assert.equal(await evaluate("document.querySelectorAll('[data-inbox-kind=agent-ask]').length"), 0, "a Fin's ask isn't the person's until its Apex leaves it")
+  console.log("PASS: a Fin's ask goes through its Apex, not straight to the person's Inbox")
 
   // An ask arriving with another Thread open is said at once, by the control-only batch that carries it.
   await window.loadURL(`${base}?mock&app=apex`)
