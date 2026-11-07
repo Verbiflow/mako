@@ -103,7 +103,7 @@ async function check() {
   await until("Boolean(document.querySelector('[data-side-rail]'))", "the right rail")
 
   // A row a surface, in their order, with Agents' Fins there to show.
-  assert.deepEqual(await rowIds(), ["changes", "files", "control", "agents"], "the surfaces, in their fixed order")
+  assert.deepEqual(await rowIds(), ["changes", "files", "control", "agents", "setup"], "the surfaces, in their fixed order")
   assert.equal(await evaluate("document.querySelector('[data-side-rail]').getAttribute('aria-orientation')"), "vertical")
   assert.equal(await selectedRow(), "changes", "the rail opens on Changes")
 
@@ -157,9 +157,14 @@ async function check() {
   await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'files'", "Files by the arrow")
   assert.equal(await evaluate("document.activeElement.dataset.surfaceId"), "files", "focus went with it")
   await key("End")
-  await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'agents'", "Agents by End")
+  await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'setup'", "Setup by End")
+  await until("Boolean(document.querySelector('[data-setup-panel]'))", "the Setup panel")
+  await key("ArrowUp")
+  await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'agents'", "Agents by the arrow up")
   await until("Boolean(document.querySelector('[data-apex-fins]'))", "the Agents panel")
   await capture("desk-agents.png")
+  await key("ArrowDown")
+  await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'setup'", "Setup again")
   await key("ArrowDown")
   await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'changes'", "the arrows wrapping to Changes")
 
@@ -210,6 +215,7 @@ async function check() {
   await until("Boolean(document.querySelector('button[aria-label=\"Show the right sidebar\"], [data-side-rail]'))", "the title bar")
   if (!(await evaluate("Boolean(document.querySelector('[data-side-rail]'))"))) await click("button[aria-label='Show the right sidebar']")
   await until("Boolean(document.querySelector('[data-side-rail]'))", "the rail on the plain Thread")
+  // Nor Setup: with no live conversation here, there's no place to read it from.
   assert.deepEqual(await rowIds(), ["changes", "files", "control"], "nobody to show, no Agents row")
 
   // A laptop's browser: Changes and Files, the same rows, the two taking turns, no line beside them.
@@ -217,7 +223,7 @@ async function check() {
   await until("document.querySelectorAll('[data-thread-row]').length > 0", "the web desk")
   await click("button[aria-label='Show the right sidebar']:not(:disabled)")
   await until("Boolean(document.querySelector('[data-side-rail]'))", "the web's right rail")
-  assert.deepEqual(await rowIds(), ["changes", "files", "agents"], "the desk's rows")
+  assert.deepEqual(await rowIds(), ["changes", "files", "agents", "setup"], "the desk's rows")
   assert.equal(await evaluate("document.querySelector('[data-surface-id=changes]').dataset.open"), "true", "the rail opens on Changes")
   assert.equal(await evaluate("Math.round(document.querySelector('.rv-layer').getBoundingClientRect().width)"), 420, "the desk's width")
   assert.equal(await evaluate("Boolean([...document.querySelectorAll('[data-surface-id=agents] span')].find((node) => node.textContent === '2 need you'))"), true, "and its reading")
@@ -240,6 +246,11 @@ async function check() {
   await press("[data-side-rail] [data-surface-id=files]")
   await until("document.querySelector('[data-surface-id=files]')?.dataset.open === 'true'", "Files from its row")
   assert.equal(await evaluate("document.querySelectorAll('.rv-layer').length"), 1, "the two take turns")
+  await press("[data-side-rail] [data-surface-id=setup]")
+  await until("document.querySelector('[data-surface-id=setup]')?.dataset.open === 'true' && Boolean(document.querySelector('.rv-layer[data-setup-layer]'))", "Setup from its row")
+  assert.equal(await evaluate("document.querySelectorAll('.rv-layer').length"), 1, "Setup takes its turn too")
+  await press("[data-side-rail] [data-surface-id=files]")
+  await until("document.querySelector('[data-surface-id=files]')?.dataset.open === 'true' && !document.querySelector('[data-setup-layer]')", "Files again, Setup gone")
   await capture("web-files.png")
   await click("button[aria-label='Hide the right sidebar']")
   await until("!document.querySelector('[data-side-rail]')", "the rail away")
