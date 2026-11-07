@@ -447,6 +447,11 @@ export class LiveConversations {
     return this.records.session(id)
   }
 
+  /** The harness Sessions the conversation is bound to, from what's already listed: this never reads it in. */
+  nativeIds(id: string): readonly { provider: string; nativeId: string }[] {
+    return this.records.nativeIds(id)
+  }
+
   /** What memory holds of the conversation now; `undefined` for one only on disk, which this never reads in. */
   held(id: string): LiveSnapshot | undefined {
     return this.records.get(id)?.snapshot
