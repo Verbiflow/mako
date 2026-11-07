@@ -2,7 +2,7 @@ import { attentionLine } from "@mako/host/contracts/notifications"
 import { formatRelative } from "@/lib/format"
 import type { RunPlace } from "@mako/host/contracts/account-devices"
 import type { MoveWay } from "./move-progress"
-import { CLOUD_WHERE, placeLine, type WebThread } from "./threads"
+import { placeLine, type WebThread } from "./threads"
 
 /** What a row says under its title, and in which tone. */
 export interface RowDetail {
