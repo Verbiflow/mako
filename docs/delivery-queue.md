@@ -114,8 +114,8 @@ schedules, and a failing schedule is pinned there.
     message or a steer after the Fin asked, from anyone, an Apex's or the person's,
     its question is answered, whatever the words, and an answer sent after that is
     refused as answered. An Apex's message answers only a question that has reached
-    that Apex: one that crossed it, with the question still in an unsent digest, is
-    just a message, and the question goes on to the Apex. Queueing isn't delivery: a
+    that Apex: one that crossed it, with the question waiting or being sent but not
+    yet handed over, is just a message, and the question goes on to the Apex. Queueing isn't delivery: a
     message removed unheard leaves the question open. What Mako sends by itself (a digest, a continuation, a goal's
     step) answers nothing, known by where it came from, never by its words. An answer still on its way that fails doesn't reopen a
     question something else closed (`Agents.inputDelivered`).

@@ -77,11 +77,88 @@ async function run(root: string, harness: string, crossing: "apex" | "person"): 
   }
 }
 
+/**
+ * The digest is being sent, prepared and not yet handed to the Apex's harness, as a message crosses the question. Being
+ * sent isn't being heard: only a handoff is, so the question stays open and its answer still goes.
+ */
+async function prepared(root: string, harness: string): Promise<void> {
+  const fin = { conversation: "" }
+  const apexTurn = { conversation: "", gated: false, waiting: false }
+  const finTurn = { gated: false, waiting: false }
+  let letApex!: () => void
+  let letFin!: () => void
+  let asked!: () => void
+  const apexGate = new Promise<void>((resolve) => { letApex = resolve })
+  const finGate = new Promise<void>((resolve) => { letFin = resolve })
+  const asking = new Promise<void>((resolve) => { asked = resolve })
+  const world: AgentsWorld = new AgentsWorld({
+    root,
+    refuseSteers: true,
+    refusePrompt: async (id) => {
+      if (id === fin.conversation && finTurn.gated) {
+        finTurn.waiting = true
+        await finGate
+      }
+      if (id === apexTurn.conversation && apexTurn.gated) {
+        apexTurn.waiting = true
+        await apexGate
+      }
+      return undefined
+    },
+    script: async (turn) => {
+      if (turn.text.includes("Keep busy.")) return turn.world.hold(turn.conversation).then(() => "Done.")
+      if (turn.text.includes("You're fin:")) {
+        fin.conversation = turn.conversation
+        await asking
+        await turn.world.agents.report(turn.caller, { status: "blocked", summary: "Main is red.", question: QUESTION, options: [{ label: "Hold" }], clientKey: "question" })
+      }
+      // Still at it: its question stands as its latest word.
+      if (turn.text.includes("Crossing words.")) return turn.world.hold(turn.conversation).then(() => "Done.")
+      return "ok"
+    },
+  })
+  const label = `${harness}, prepared`
+  try {
+    const apex = await world.apex(harness, "full")
+    apexTurn.conversation = apex.conversation
+    const started = await world.agents.start(apex.caller, { brief: { objective: "Land it" }, harness: "codex", name: "worker", clientKey: "worker", cwd: world.root })
+    assert.ok(!("refused" in started), JSON.stringify(started))
+    await until("the Fin's turn", () => fin.conversation !== "")
+    world.say(apex.conversation, "Keep busy.")
+    await until("the Apex's turn", () => world.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes("Keep busy.")))
+    asked()
+    const digest = () => world.live.snapshot(apex.conversation)?.requests.find((request) => request.digest && request.text.includes(QUESTION))
+    await until("the question to wait", () => digest()?.status === "queued")
+    await until("the Fin's turn to end", () => world.live.session(fin.conversation)?.status === "ready")
+    finTurn.gated = true
+    const sent = await world.agents.send(apex.caller, { to: "worker", text: "Crossing words.", clientKey: "crossing" })
+    assert.ok(!("refused" in sent), JSON.stringify(sent))
+    await until("the message to be on its way", () => finTurn.waiting)
+    apexTurn.gated = true
+    world.release(apex.conversation)
+    await until("the digest to be prepared", () => apexTurn.waiting && digest()?.status === "dispatching")
+    assert.equal(digest()?.nativeDelivery?.evidence.kind, "prepared", label)
+    letFin()
+    await until("the message to reach the Fin", () => world.prompts.some((prompt) => prompt.conversation === fin.conversation && prompt.text.includes("Crossing words.")))
+    assert.equal(world.prompts.filter((prompt) => prompt.conversation === apex.conversation && prompt.text.includes(QUESTION)).length, 0, `${label}: its Apex hasn't heard it`)
+    const answered = await world.agents.answer(apex.caller, { to: "worker", answer: "Hold", clientKey: "answer" })
+    assert.ok(!("refused" in answered), `${label}: it's still open: ${JSON.stringify(answered)}`)
+  } finally {
+    letApex()
+    letFin()
+    for (const summary of world.live.summaries()) world.release(summary.session.id)
+    await world.close()
+  }
+}
+
 const root = mkdtempSync(join(tmpdir(), "mako-question-reaches-"))
 try {
-  for (const harness of HARNESSES) await run(join(root, `apex-${harness}`), harness, "apex")
+  for (const harness of HARNESSES) {
+    await run(join(root, `apex-${harness}`), harness, "apex")
+    await prepared(join(root, `prepared-${harness}`), harness)
+  }
   await run(join(root, "person"), "claude", "person")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
-console.log("question reaches its Apex: a message that crossed it answered nothing, and the Apex heard it once, on all six harnesses; the person's own message still closed it")
+console.log("question reaches its Apex: a message that crossed it answered nothing, sent or being sent, and the Apex heard it once, on all six harnesses; the person's own message still closed it")
