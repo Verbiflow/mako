@@ -5,6 +5,7 @@ import { processKeychain } from "./keychain.js"
 import { onMac } from "./platform.js"
 import { adoptingLegacy, aesSealer, fileKey, fileSecrets, handedKey, legacyFiles, memorySecrets, wrappedKey, type LegacyFiles, type SecretKey, type Secrets } from "./secrets.js"
 import { chromiumSafeStorage, type SecretEncryption } from "./secure-storage.js"
+import { GrantedSecrets } from "./secret-grants.js"
 
 /** How long the host waits after it starts for the desktop's handover before reading the keychain itself. */
 const HANDOVER_GRACE_MS = 5_000
@@ -89,10 +90,10 @@ export function openHostSecrets({ userRoot, keychain, legacy, handoverUntil = 0,
         },
       }
   return {
-    secrets: adoptingLegacy(fileSecrets(join(userRoot, "secrets"), aesSealer(key)), {
+    secrets: new GrantedSecrets(adoptingLegacy(fileSecrets(join(userRoot, "secrets"), aesSealer(key)), {
       encryption: keychain,
       ...legacyFiles(legacy),
-    }),
+    }), join(userRoot, "borrowing")),
     handover: {
       wanted: async () => !handed.held(),
       offer: (value) => handed.offer(value),
