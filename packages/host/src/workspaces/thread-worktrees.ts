@@ -10,7 +10,8 @@ import type { GitDiff } from "../contracts/git-workspace-search.js"
 import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { previewDiffs, projectRepositories } from "../git/index.js"
-import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
+import { CheckoutBorrowing } from "./checkout-borrowing.js"
+import { carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { GitError, numstatEntries, PARALLEL_CHECKOUT, untrackedLines, type Git } from "@mako/git"
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
@@ -210,6 +211,34 @@ const STATUS_FRESH_MS = 15_000
 const STATUS_QUIET_MS = 5 * 60_000
 const STATUS_SPREAD = 0.25
 
+/**
+ * Work every worktree pays for, one pass at a time: one asking while a pass runs gets the next, which starts once that
+ * ends and serves everyone who asked meanwhile, so each answer was read after it was asked.
+ */
+class SharedPasses<T> {
+  private running: Promise<T> | undefined
+  private next: Promise<T> | undefined
+
+  ask(read: () => Promise<T>): Promise<T> {
+    // First: one that ended leaves its successor promised, not yet started, and a caller it wakes asks in that gap.
+    if (this.next) return this.next
+    if (!this.running) return this.start(read)
+    this.next = this.running.catch(() => undefined).then(() => {
+      this.next = undefined
+      return this.start(read)
+    })
+    return this.next
+  }
+
+  private start(read: () => Promise<T>): Promise<T> {
+    const pass = read().finally(() => {
+      if (this.running === pass) this.running = undefined
+    })
+    this.running = pass
+    return pass
+  }
+}
+
 /** `map` with at most `limit` running at once, results in order. */
 async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
   const results: R[] = []
@@ -268,6 +297,8 @@ export class ThreadWorktreeService {
   private readonly working: (path: string) => Promise<string[]>
   private readonly environment: ThreadEnvironmentEnd | undefined
   private readonly setup: CheckoutSetup | undefined
+  /** What a worktree takes from its main checkout, as leases of this device's broker. */
+  readonly borrowing: CheckoutBorrowing
   private readonly conversations: CheckoutConversations | undefined
   private readonly ledger: () => MoveLedger | undefined
   private readonly workingFolders: () => Promise<string[]>
@@ -282,9 +313,8 @@ export class ThreadWorktreeService {
   private readonly pullsRead = new Map<string, WorktreeBranchPull[]>()
   /** Each receipt's `untold`, read without waiting, as a turn is sent. */
   private readonly untold = new Map<string, string[]>()
-  /** The summaries pass under way, and the one queued behind it for whoever asked meanwhile (`summaries`). */
-  private summariesRunning: Promise<WorktreeSummary[]> | undefined
-  private summariesNext: Promise<WorktreeSummary[]> | undefined
+  private readonly summaryPasses = new SharedPasses<WorktreeSummary[]>()
+  private readonly inventoryPasses = new SharedPasses<WorktreeInventory>()
   /** Each worktree's `status` as a summary last read it, with when, its index's modification time then, and how long it answers (`statusOf`). */
   private readonly statuses = new Map<string, { at: number; index: number; status: Promise<string>; freshMs: number }>()
   /** Each receipt as last parsed, by the file's modification time and size then (`receipt`). */
@@ -329,6 +359,7 @@ export class ThreadWorktreeService {
     this.working = working
     this.environment = environment
     this.setup = setup
+    this.borrowing = setup?.borrowing ?? CheckoutBorrowing.inMemory(git)
     this.conversations = conversations
     this.ledger = ledger
     this.workingFolders = workingFolders
@@ -552,12 +583,12 @@ export class ThreadWorktreeService {
     const folder = await realpath(cwd)
     const repoRoot = await this.git.output(folder, ["rev-parse", "--show-toplevel"]).catch(() => "")
     if (repoRoot) {
-      if (await this.git.succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])) await this.spares.want(repoRoot)
+      if (await this.git.succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])) await this.spares.want(this.homeOf(repoRoot))
       return
     }
     const found = await projectRepositories(this.git, folder)
     if ("roots" in found && (await Promise.all(found.roots.map((root) => this.git.succeeds(root, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])))).every(Boolean))
-      await this.spares.want(folder)
+      await this.spares.want(this.homeOf(folder))
   }
 
   /**
@@ -598,7 +629,12 @@ export class ThreadWorktreeService {
    * what runs there, whether its branch landed, and its own size. Sizes are
    * read in the background band, a few at a time.
    */
-  async inventory(): Promise<WorktreeInventory> {
+  /** Every worktree with what decides whether it can go: a walk of each, so whoever asks during one shares the next. */
+  inventory(): Promise<WorktreeInventory> {
+    return this.inventoryPasses.ask(() => this.readInventory())
+  }
+
+  private async readInventory(): Promise<WorktreeInventory> {
     const { worktrees } = await this.list()
     const attached = new Set(worktrees.map((worktree) => worktree.path))
     // Starts that failed or were cut short after their worktree was made: no Thread lists these.
@@ -703,20 +739,7 @@ export class ThreadWorktreeService {
    * caller's answer was read after it asked, and at most one pass runs.
    */
   summaries(pullsOf?: PullsOf): Promise<WorktreeSummary[]> {
-    if (!this.summariesRunning) return this.startSummaries(pullsOf)
-    this.summariesNext ??= this.summariesRunning.catch(() => undefined).then(() => {
-      this.summariesNext = undefined
-      return this.startSummaries(pullsOf)
-    })
-    return this.summariesNext
-  }
-
-  private startSummaries(pullsOf: PullsOf | undefined): Promise<WorktreeSummary[]> {
-    const pass = this.readSummaries(pullsOf).finally(() => {
-      if (this.summariesRunning === pass) this.summariesRunning = undefined
-    })
-    this.summariesRunning = pass
-    return pass
+    return this.summaryPasses.ask(() => this.readSummaries(pullsOf))
   }
 
   /** One pass: each repository's facts read once, then each worktree's status, and what its commits say where they moved. */
@@ -1087,6 +1110,7 @@ export class ThreadWorktreeService {
       else await this.git.output(worktree.repoRoot, ["worktree", "prune"]).catch(() => {})
     }
     if (checkout !== path) await this.trashFolder(checkout)
+    await this.borrowing.forget(checkout)
     if (attached) {
       for (const worktree of together) this.threads.detachWorktree(worktree.path)
       await this.environment?.discard(attached.thread, checkout)
@@ -1460,7 +1484,7 @@ export class ThreadWorktreeService {
       await this.git.output(receipt.path, ["checkout", "-q", receipt.branch])
     const recipe = await this.setup?.recipe(receipt.path).catch(() => undefined)
     if (recipe?.carry?.length) onStep?.("carry")
-    const copied = await carryFiles(this.git, receipt.repoRoot, receipt.path, recipe?.carry ?? [])
+    const { copied } = await this.borrowing.carry(conversationId, receipt.repoRoot, receipt.path, recipe?.carry ?? [])
     const ready: Receipt = { ...receipt, state: "ready", copied, tookMs: Math.round(performance.now() - began) }
     if (spare) ready.spare = true
     await this.save(ready)
@@ -1543,7 +1567,7 @@ export class ThreadWorktreeService {
     })
     const recipe = await this.setup?.recipe(receipt.path).catch(() => undefined)
     if (recipe?.carry?.length) onStep?.("carry")
-    const copied = await carryFiles(this.git, source, receipt.path, recipe?.carry ?? [])
+    const { copied } = await this.borrowing.carry(conversationId, source, receipt.path, recipe?.carry ?? [])
     const ready: Receipt = { ...receipt, state: "ready", copied, tookMs: Math.round(performance.now() - began) }
     if (spare) ready.spare = true
     await this.save(ready)
@@ -1552,8 +1576,28 @@ export class ThreadWorktreeService {
     return ready
   }
 
+  /**
+   * The project a folder is a worktree of, however many starts back: a Fin starts from its Apex's worktree, which has no
+   * spares of its own, and shares its repository with the project's.
+   */
+  private homeOf(folder: string): string {
+    const roots = new Map<string, string>()
+    for (const { path, repoRoot, project } of this.threads.worktrees()) {
+      roots.set(path, repoRoot)
+      // One repository of a project folder's checkout: the folder around it stands for the project.
+      if (project !== repoRoot) roots.set(dirname(path), project)
+    }
+    const seen = new Set<string>()
+    let home = folder
+    for (let up = roots.get(home); up !== undefined && !seen.has(up); up = roots.get(home)) {
+      seen.add(up)
+      home = up
+    }
+    return home
+  }
+
   private wantSpares(repoRoot: string): void {
-    const wanted = this.spares.want(repoRoot).catch(() => {})
+    const wanted = this.spares.want(this.homeOf(repoRoot)).catch(() => {})
     this.wanting.add(wanted)
     void wanted.finally(() => this.wanting.delete(wanted))
   }
@@ -1561,10 +1605,14 @@ export class ThreadWorktreeService {
   /** A spare placed at the receipt's path and branched, or none; a spare that fails is given back and the send checks out fresh. */
   private async fromSpare(receipt: Receipt): Promise<Spare | undefined> {
     const members = membersOf(receipt)
-    const spare = await this.spares.claim(receipt.repoRoot, receipt.members?.map((member) => member.repoRoot))
+    const home = this.homeOf(receipt.repoRoot)
+    const atHome = (repoRoot: string) => join(home, relative(receipt.repoRoot, repoRoot))
+    const spare = await this.spares.claim(home, receipt.members?.map((member) => atHome(member.repoRoot)))
     if (!spare) return undefined
     try {
-      await this.spares.place(spare, receipt.path, receipt.branch, members.map(({ repoRoot, base }) => ({ repoRoot, base })))
+      // Filed under the folder it started from, which a spare of the project isn't.
+      await mkdir(dirname(receipt.path), { recursive: true, mode: 0o700 })
+      await this.spares.place(spare, receipt.path, receipt.branch, members.map(({ repoRoot, base }) => ({ repoRoot: atHome(repoRoot), base })))
     } catch {
       await this.spares.discard(spare)
       if (!existsSync(receipt.path)) return undefined

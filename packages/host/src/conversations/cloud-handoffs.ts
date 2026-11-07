@@ -129,10 +129,22 @@ export type WorkingSnapshot = Pick<LiveSnapshot, "permissions" | "nativeAgents">
 
 /** What `workingThreads` reads of the live conversations and the Thread store. */
 export type WorkingSources = {
-  live: { summaries(): ReadonlyArray<{ session: Pick<LiveSummary["session"], "id"> }>; loaded(id: string): boolean; snapshot(id: string): WorkingSnapshot | null }
+  live: { listed(): ReadonlyArray<{ session: Pick<LiveSummary["session"], "id"> }>; loaded(id: string): boolean; snapshot(id: string): WorkingSnapshot | null }
   threads: { journalPlacement(conversationId: string): ThreadPlacement | undefined; execution(session: SessionId): Pick<SessionExecution, "state"> | undefined } | undefined
   /** Whether a conversation runs on a cloud machine already (`CloudConversations.has`). */
   cloud(conversationId: string): boolean
+  /** Only what an agent does itself (`doingItself`), not what waits on the person; a handoff takes both, so it's off by default. */
+  ownWork?: boolean
+}
+
+/**
+ * Whether an agent here is doing something itself. A turn stopped on an approval or a question still reads running with
+ * its request dispatching, but it's the person who's awaited; what it left running goes on regardless. A Fin is a Thread
+ * of its own, counted by its own conversation, so one open in a roster is no work of this one's.
+ */
+function doingItself(snapshot: WorkingSnapshot, running: boolean): boolean {
+  if (running && snapshot.permissions.length === 0) return true
+  return Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some((agent) => isBusyNativeAgent(agent) && !agent.child)
 }
 
 /**
@@ -143,7 +155,7 @@ export function workingThreads(sources: WorkingSources): WorkingThread[] {
   const { threads } = sources
   if (!threads) return []
   const byThread = new Map<string, WorkingThread & { running: boolean }>()
-  for (const summary of sources.live.summaries()) {
+  for (const summary of sources.live.listed()) {
     const id = summary.session.id
     // One only on disk is at rest (memory keeps whatever works), and its snapshot would read it back in: every
     // conversation this host has, each round.
@@ -153,7 +165,7 @@ export function workingThreads(sources: WorkingSources): WorkingThread[] {
     const snapshot = sources.live.snapshot(id)
     if (!snapshot) continue
     const running = snapshot.session.status === "running" || snapshot.requests.some((request) => request.status === "dispatching")
-    const working = running || snapshot.permissions.length > 0 || Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)
+    const working = sources.ownWork ? doingItself(snapshot, running) : running || snapshot.permissions.length > 0 || Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)
     if (!working) continue
     const known = byThread.get(placed.thread)
     if (known && (known.running || !running)) continue

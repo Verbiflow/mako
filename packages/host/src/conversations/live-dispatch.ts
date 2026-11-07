@@ -3,14 +3,15 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
+import { digestAsks } from "../contracts/agents.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
 import { quietSwitch } from "../contracts/conversation-control.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
-import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
+import { transientCause, waitsAgain } from "../contracts/delivery-retry.js"
 import { nextInLine } from "../contracts/request-hold.js"
-import { DIGEST_WAITS, WAKES_PER_MINUTE } from "../contracts/children.js"
+import { ASK_EVERY_MS, DIGEST_WAITS, WAKES_PER_MINUTE } from "../contracts/children.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
 import { SessionBusyError } from "../contracts/session-hold.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
@@ -47,7 +48,8 @@ export function nextQueued(snapshot: Pick<LiveSnapshot, "session" | "requests">)
 
 /**
  * Whether the harness's own transcript shows the Fin's brief `briefId` (`transcriptHolds`): under the message id it
- * was sent with, where the harness keeps that, or by its "You're fin:" line, which the brief sent again carries too.
+ * was sent with, where the harness keeps that, or by its "You're fin:" line, which the brief sent again carries too. A
+ * digest is known by its id alone.
  * False when its session has no transcript, or one Mako can't read.
  */
 async function briefInTranscript(snapshot: LiveSnapshot, control: ConversationControl, briefId: string, history: (path: string, before?: number) => Promise<ThreadPage | null>): Promise<boolean> {
@@ -59,7 +61,8 @@ async function briefInTranscript(snapshot: LiveSnapshot, control: ConversationCo
     hostWarn("live", "a harness's transcript couldn't be read to see whether it had a Fin's brief", { conversation: snapshot.session.id, error: errorMessage({ error }) })
     return null
   })
-  const marker = brief.text.split("\n").find((line) => line.includes("You're fin:")) ?? ""
+  // A digest has no line of its own: any of them could be in what the Thread was told before, so only its id proves it.
+  const marker = brief.digest ? "" : brief.text.split("\n").find((line) => line.includes("You're fin:")) ?? ""
   return page ? transcriptHolds(page.entries, { attemptId: brief.nativeDelivery?.attemptId, marker }) : false
 }
 
@@ -136,16 +139,23 @@ export class LiveDispatch {
 
   /**
    * The minute's budget for an Apex's digests (`WAKES_PER_MINUTE`), counted from when each was sent: one past it is held
-   * until the oldest of the minute is a minute old, and the one timer sends it then. True when it was held.
+   * until the oldest of the minute is a minute old, and the one timer sends it then. One that asks something can't wait
+   * that out, so past the budget it goes at most every `ASK_EVERY_MS`, and what's asked meanwhile joins it. True when
+   * it was held.
    */
   private overBudget(resident: Resident, request: LiveRequest): boolean {
     const now = Date.now()
-    const sent = resident.snapshot.requests.flatMap((candidate) => {
+    const recent = resident.snapshot.requests.flatMap((candidate) => {
       const at = candidate.digest?.sentAt
-      return at !== undefined && at > now - MINUTE_MS ? [at] : []
-    }).sort((left, right) => left - right)
-    if (sent.length < WAKES_PER_MINUTE) return false
-    const at = sent[sent.length - WAKES_PER_MINUTE]! + MINUTE_MS
+      return at !== undefined && at > now - MINUTE_MS ? [{ at, asks: digestAsks(candidate.digest!.notices) }] : []
+    }).sort((left, right) => left.at - right.at)
+    if (recent.length < WAKES_PER_MINUTE) return false
+    let at = recent[recent.length - WAKES_PER_MINUTE]!.at + MINUTE_MS
+    if (digestAsks(request.digest!.notices)) {
+      const asked = recent.filter((sent) => sent.asks).at(-1)
+      if (!asked || asked.at + ASK_EVERY_MS <= now) return false
+      at = asked.at + ASK_EVERY_MS
+    }
     const previous = resident.snapshot
     resident.snapshot = { ...previous, requests: previous.requests.map((candidate) => candidate === request ? { ...candidate, status: "held" as const, wake: { at, after: DIGEST_WAITS } } : candidate) }
     try {
@@ -250,6 +260,7 @@ export class LiveDispatch {
       nativeDelivery,
       usageFrom: usageFrom && (usageFrom.tokens || usageFrom.cost || usageFrom.unrecorded) ? usageFrom : undefined,
       status: "dispatching" as const,
+      dispatchedAt: Date.now(),
       ...request.digest && { digest: { ...request.digest, sentAt: Date.now() } },
       mode: resident.snapshot.session.currentMode ?? undefined,
       context: [
@@ -524,16 +535,17 @@ export class LiveDispatch {
         }
         // The harness refused it unsent for a cause that clears by itself: it waits and goes again, never a failure.
         const cause = refused ? transientCause(errorMessage({ error }), classifyProviderFailure(errorMessage({ error })).kind, error instanceof SessionBusyError) : undefined
-        const retry = cause && nextRetry(target.retry, cause, errorMessage({ error }), Date.now())
-        if (retry) {
+        const waits = refused ? waitsAgain(target, cause, errorMessage({ error }), Date.now()) : undefined
+        const retry = waits?.retry
+        if (waits) {
           resident.snapshot = {
             ...resident.snapshot,
             requests: resident.snapshot.requests.map((candidate) =>
-              candidate === target ? { ...candidate, status: "held", retry, error: undefined, snapshots: undefined } : candidate),
+              candidate === target ? { ...waits, error: undefined, snapshots: undefined } : candidate),
           }
           dependencies.workspaceSnapshots?.abandonRun(request.id)
           this.access.flush(resident)
-          hostWarn("live", "a message its harness refused for now goes again by itself", { conversation: session.id, request: request.id, cause, attempt: retry.attempt, at: new Date(retry.at).toISOString() })
+          hostWarn("live", "a message its harness refused for now goes again by itself", { conversation: session.id, request: request.id, ...(cause && { cause }), ...(retry && { attempt: retry.attempt, at: new Date(retry.at).toISOString() }) })
           return
         }
         resident.snapshot = {

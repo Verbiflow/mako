@@ -3,11 +3,14 @@ import { resolveObjectURL } from "node:buffer"
 import { createHash } from "node:crypto"
 import { zstdCompressSync } from "node:zlib"
 import { test } from "node:test"
-import type { ListedSession } from "@mako/protocol/thread-listing"
+import type { ListedFin, ListedSession } from "@mako/protocol/thread-listing"
+import { threadChildren } from "../src/state/apex-fins"
+import { rollup } from "@mako/host/contracts/children"
 import { foldThreads, openingSession } from "../src/web-client/threads"
 import { parseRoute, routeHref, type WebRoute } from "../src/web-client/route"
 import { typedRepository } from "../src/web-client/account"
 import { Gateway, GatewayError } from "../src/web-client/gateway"
+import { webGitHubAuthorships } from "../src/web-client/github-authorship"
 import { renewAtMs } from "@mako/protocol"
 import { deviceOf, errorReading, note, openingThread, readingsStore, readingWords } from "../src/web-client/probe"
 import { rowDetail } from "../src/web-client/rows"
@@ -86,6 +89,12 @@ function row(n: number, fields: Partial<ListedSession>): ListedSession {
 }
 
 const devices = new Map([[STUDIO, { id: STUDIO, kind: "desktop", name: "Studio", platform: "macOS" }]])
+
+test("a gateway without who commits are authored as says so with no error, and any other failure stays one", async () => {
+  const answering = (status: number) => webGitHubAuthorships({ rest: async () => { throw new GatewayError(status, "No such route", undefined) } }, "u1")
+  assert.equal(await answering(404).read(), null)
+  await assert.rejects(answering(500).read(), GatewayError)
+})
 
 test("one row per Thread, folded by its ID, the ones that need the person first", () => {
   const rows = [
@@ -1452,6 +1461,20 @@ test("a listed Session keeps its Thread's name and its time once its owner's sna
   applyLiveSnapshot({ ...summary!, session: { ...summary!.session, connection: "connected", status: "ready" }, threadTitle: undefined, movedAt: undefined, revision: 2, base: null, permissions: [], requests: [], blocks: [] })
   assert.equal(listed()?.threadTitle, "Rotate the keys", "the owner's snapshot doesn't say the Thread's name; the list's stays")
   assert.equal(listed()?.movedAt, Date.parse(at(40)))
+})
+
+test("a listed Apex's Fins reach the rail from its row, and keep coming from it once it's opened here without a roster of its own", () => {
+  const fin = (name: string, state: ListedFin["state"]): ListedFin => ({ thread: uuid(5100 + name.length), name, harness: "cursor", state, startedAt: at(1) })
+  const rowOf = (fins: ListedFin[]) => row(51, { thread: uuid(510), runsOn: { kind: "device", deviceId: STUDIO }, activityAt: at(2), fins })
+  const counts = () => ({ ...rollup(threadChildren(acpStore.get(), uuid(510))) })
+  const [summary] = listedSummaries({ rows: [rowOf([fin("one", { kind: "working" }), fin("three", { kind: "queued", reason: "place-full", ahead: 0 })])], devices, quiet: new Map(), waiting: new Map() })
+  listLive([summary!])
+  assert.deepEqual(counts(), { total: 2, needs: 0, working: 1, queued: 1, idle: 0, failed: 0, done: 0 }, "from the row, as its owner counts them")
+  applyLiveSnapshot({ ...summary!, fins: undefined, session: { ...summary!.session, connection: "connected", status: "ready" }, revision: 2, base: null, permissions: [], requests: [], blocks: [] })
+  assert.equal(counts().total, 2, "opened here, its owner's snapshot holds no roster: its row's Fins stay")
+  const [later] = listedSummaries({ rows: [rowOf([fin("one", { kind: "ended", outcome: "done" }), fin("three", { kind: "working" })])], devices, quiet: new Map(), waiting: new Map() })
+  listLive([later!])
+  assert.deepEqual(counts(), { total: 2, needs: 0, working: 1, queued: 0, idle: 0, failed: 0, done: 1 }, "opened here, it still takes the list's word on its Fins")
 })
 
 test("when the person last sent a listed Session a message reaches the desk's rail, and its owner's snapshot only moves it later", () => {

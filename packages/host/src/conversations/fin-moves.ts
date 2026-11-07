@@ -66,7 +66,7 @@ export class FinMoves {
   }
 
   /** The steps from `from`, at a Fin's start or mid-run, for a Fin at `tier` in `cwd`, past `visited` (`placeKey`). */
-  async order(input: { from: FinPlace; when: "start" | "mid-run"; tier: AccessTier; cwd?: string; visited?: readonly string[]; accounts?: readonly FallbackAccount[] }): Promise<FinOrder> {
+  async order(input: { from: FinPlace; when: "start" | "mid-run"; tier: AccessTier; cwd?: string; visited?: readonly string[]; accounts?: readonly FallbackAccount[]; personAsked?: true }): Promise<FinOrder> {
     const { from, when, tier, cwd } = input
     const live = this.deps.harnesses()
     const ordered = [...new Set([...((await this.deps.harnessOrder().catch(() => undefined)) ?? []), ...live])].filter((harness) => live.includes(harness))
@@ -84,7 +84,8 @@ export class FinMoves {
     const ordering: FallbackInput = {
       from: { ...from, ...(account !== undefined && { account }) },
       when,
-      on: this.on(),
+      // Settings' switch is about Mako moving a Thread by itself: the person's own press isn't.
+      on: input.personAsked ?? this.on(),
       accounts,
       ...(continuation && { continuation }),
       connections,

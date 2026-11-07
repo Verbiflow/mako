@@ -35,6 +35,9 @@ type Priority = NonNullable<DiscoveryOptions["priority"]>
  * The provider CLIs a host runs to discover settings, accounts and versions:
  * four at once, three of them in the background, sixty-four waiting.
  */
+/** How long a broken pipe to a child waits to hear it exit before it stands as the failure. */
+const STDIN_CLOSED_GRACE_MS = 1_000
+
 export class DiscoveryProcesses {
   private readonly pending = { launch: new Array<() => void>(), background: new Array<() => void>() }
   private active = 0
@@ -156,7 +159,14 @@ export class DiscoveryProcesses {
         })
         const fail = (error: Error) => reject(error)
         child.on("error", fail)
-        child.stdin.on("error", fail)
+        // A write to a child that has just gone fails before its exit is heard, and its exit says why: that goes first.
+        // A child alive with its input closed answers to the write's error, a moment on.
+        child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+          if (error.code !== "EPIPE") return fail(error)
+          const unheard = setTimeout(() => fail(error), STDIN_CLOSED_GRACE_MS)
+          unheard.unref()
+          void exited.then(() => clearTimeout(unheard))
+        })
         child.stdout.on("error", fail)
         child.stderr.on("error", fail)
         child.stderr.resume()

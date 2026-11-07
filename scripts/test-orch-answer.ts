@@ -448,7 +448,7 @@ try {
       onDecision: async (world, caller, text) => {
         const decided = state()
         assert.ok(decided?.kind === "ended" && decided.outcome === "done", "it reads as done, not blocked")
-        assert.deepEqual(decided.decision && { question: decided.decision.question, on: decided.decision.on, options: decided.decision.ask.options?.map((option) => option.label) }, { question: "Merge #371?", on: "lead", options: ["Merge", "Leave open"] })
+        assert.deepEqual(decided.decision && { question: decided.decision.question, on: decided.decision.on, options: decided.decision.ask!.options?.map((option) => option.label) }, { question: "Merge #371?", on: "lead", options: ["Merge", "Leave open"] })
         assert.match(text, /1 needs a decision:\n {2}• "tests" \(Codex\) done; decide: Merge #371\? \(Merge · Leave open, recommends Merge\) \(\+37 chars: agents_read\)\n {4}pull-request: https:\/\/git\.example\.com\/acme\/app\/pull\/371/)
         assert.doesNotMatch(text, /finished:/)
         assert.equal(world.agents.personAsk(apex.conversation), undefined, "the Apex's to decide, not the person's")
@@ -504,7 +504,7 @@ try {
     assert.match(wakes[1]!, /1 waits on the person:\n {2}• "tests" \(Claude\) done; the person decides: Merge #371\? \(Merge · Leave open, recommends Merge\) \(\+37 chars: agents_read\)\. Mako asked the person too/)
     const decided = state()
     assert.ok(decided?.kind === "ended" && decided.decision)
-    assert.equal(answered(await world.agents.respond(apex.conversation, { fin: thread(), ask: decided.decision.ask.id, option: 0, request: "r-merge" })).answered, "report")
+    assert.equal(answered(await world.agents.respond(apex.conversation, { fin: thread(), ask: decided.decision.ask!.id, option: 0, request: "r-merge" })).answered, "report")
     await until("the person's answer to reach the Fin", () => world.prompts.some((prompt) => prompt.conversation === fin && prompt.text.includes("Answer: Merge")))
     assert.ok(!world.prompts.find((prompt) => prompt.conversation === fin && prompt.text.includes("Answer: Merge"))!.text.startsWith(fromAgent(YOUR_APEX)), "as the person's words")
     await until("the Fin at work on it", () => state()?.kind === "working")
@@ -560,13 +560,13 @@ try {
       onDecision: async (world, caller) => {
         const decided = state()
         assert.ok(decided?.kind === "ended" && decided.decision)
-        const id = decided.decision.ask.id
+        const id = decided.decision.ask!.id
         // A delivery that fails: the Fin's Thread archived, which takes no message.
         world.archived.add(fin)
         const failed = await world.agents.answer(caller, { to: "tests", answer: "Merge", clientKey: "archived" })
         assert.ok("refused" in failed, "an archived Fin takes no answer")
         const again = state()
-        assert.ok(again?.kind === "ended" && again.decision?.ask.id === id, "and the decision is open again, for the next answer")
+        assert.ok(again?.kind === "ended" && again.decision?.ask?.id === id, "and the decision is open again, for the next answer")
         world.archived.delete(fin)
         results = await Promise.all([
           world.agents.answer(caller, { to: "tests", answer: "Merge", clientKey: "apex-merge" }),
@@ -600,7 +600,7 @@ try {
       asks: async (world, conversation) => void await world.agents.report(world.caller(conversation), MERGE),
       onDecision: async (world, caller) => {
         const decided = state()
-        if (decided?.kind === "ended") id = decided.decision?.ask.id
+        if (decided?.kind === "ended") id = decided.decision?.ask?.id
         answered = await world.agents.answer(caller, { to: "tests", answer: "Merge", clientKey: "merge" })
       },
       // The answer's turn holds, as the review's run did: the host restarts while the Fin works on it.
@@ -642,13 +642,13 @@ try {
     // What answering keeps before any delivery, as a host that stopped right then left it.
     const session = apex.caller.kind === "agent" ? apex.caller.session : ""
     world.store.claimAnswer({
-      ask: decided.decision.ask.id, child: ThreadIdSchema.parse(thread()), op: `answer:${session}:merge`, by: "lead", answer: "Merge",
+      ask: decided.decision.ask!.id, child: ThreadIdSchema.parse(thread()), op: `answer:${session}:merge`, by: "lead", answer: "Merge",
       request: "0c1a1ec7-0000-4000-8000-00000000c1a1", text: `${fromAgent(YOUR_APEX)}\nYour question: Merge #371?\nAnswer: Merge`,
       actor: { kind: "agent", session: SessionIdSchema.parse(session) }, at: Date.now(),
     })
     await world.restart()
     await until("the kept answer to reach the Fin", () => world.prompts.some((prompt) => prompt.conversation === fin && prompt.text.includes("Answer: Merge")))
-    const ask = decided.decision.ask.id
+    const ask = decided.decision.ask!.id
     await until("its delivery kept", () => world.store.answerOf(ask)?.delivered !== undefined)
     await world.settle(600)
     await world.restart()

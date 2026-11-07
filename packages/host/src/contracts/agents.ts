@@ -122,8 +122,8 @@ export function decisionOn(asked: Pick<ChildSpec, "mode" | "wake">, report: Pick
  * (Merge · Leave open, recommends Merge)", or "the person decides" for theirs.
  */
 export function decisionWords(decision: Pick<FinDecision, "question" | "on" | "ask">): string {
-  const options = decision.ask.options ?? []
-  const recommended = decision.ask.recommended === undefined ? undefined : options[decision.ask.recommended]?.label
+  const options = decision.ask?.options ?? []
+  const recommended = decision.ask?.recommended === undefined ? undefined : options[decision.ask.recommended]?.label
   const offered = options.length ? ` (${options.map((option) => option.label).join(" · ")}${recommended ? `, recommends ${recommended}` : ""})` : ""
   return `done; ${decision.on === "lead" ? "decide" : "the person decides"}: ${decision.question}${offered}`
 }
@@ -314,6 +314,21 @@ export const FinTurnSchema = z.object({
 })
 export type FinTurn = z.infer<typeof FinTurnSchema>
 
+/** A limit's one notice for a tree (`limit_notices`, by its root Thread): said once, kept until seen or its reset passes. */
+export const LimitNoticeSchema = z.object({
+  id: z.string().min(1).max(600),
+  fin: z.string().min(1).max(200),
+  /** The harness that ran out, which the Fin that carries it has left. */
+  harness: z.string().min(1).max(100),
+  line: z.string().max(512),
+  at: z.number(),
+  until: z.number().optional(),
+  seen: z.literal(true).optional(),
+  /** What the limit did to its tree so far, kept as it happens so a restart loses none of it: nobody reads it until it's said. */
+  gathering: z.object({ account: z.string().optional(), apex: z.string().optional(), moved: z.array(z.string()), stopped: z.number() }).optional(),
+})
+export type LimitNotice = z.infer<typeof LimitNoticeSchema>
+
 /**
  * The edge: one row of `thread_parents`, keyed by the child Thread, written
  * by the child's owner. It holds only what nothing else does; the child's
@@ -429,6 +444,11 @@ export const NoticeSchema = z.object({
 })
 export type Notice = z.infer<typeof NoticeSchema>
 
+/** Whether a digest of these notices asks its Apex something: it goes as soon as it can, whatever the minute's budget. */
+export function digestAsks(notices: readonly Notice[]): boolean {
+  return notices.some(({ report, decision }) => report.status === "blocked" || report.status === "needs-input" || decision !== undefined)
+}
+
 /** Why a spawn waits: the tree's running budget, the person's limit of Fins at once (`place-full`), or (from 8.4) another place. */
 export type QueueReason = "tree-running" | "place-full" | "device-offline"
 
@@ -466,6 +486,10 @@ export interface ChildThread {
   step?: string
   /** Its turn ended on work of its own Fins or its move, which it waits for: at work, but holding no room its Fins need. */
   awaiting?: string
+  /** When its work now began: its turn's start, or with `awaiting`, when that turn ended. Absent when nothing says. */
+  workSince?: number
+  /** The requests its turn took: the one that began it and any steered into it. A process Mako follows has none. */
+  workInputs?: readonly string[]
   /** An approval or question in it waits, on whom, and what answers it. */
   waiting?: { question: string; on: "lead" | "person" | "approval"; ask?: FinAsk }
   /** How its last turn or run ended; absent while one runs or before any ended. */
@@ -479,7 +503,36 @@ export interface ChildThread {
 export interface ChildJournal {
   latest?: Report
   /** The last answer to a question in its report: who gave it, when, and the ask it answers, which it settles alone. */
-  answered?: FinAnswered & { ask: string; at: number; /** It reached the Fin, so the question no longer holds it. */ delivered?: true }
+  answered?: FinAnswered & {
+    ask: string
+    /** The request that carried it to the Fin. */
+    request?: string
+    at: number
+    /** It reached the Fin, so the question no longer holds it. */
+    delivered?: true
+    /** It came as a message, not through a door that answers: from an Apex, that's its next job more than an answer. */
+    routine?: true
+  }
+}
+
+/**
+ * Whether a row says who answered: an answer to this turn, by the request that carried it, however long that waited
+ * and however soon the next turn began. A process has no requests to tell by, so only an answer since its turn began
+ * counts. A plain message from its Apex may close a question (`inputDelivered`), and it's still the next job and not an answer.
+ */
+function answerShown(journal: ChildJournal, thread: ChildThread): boolean {
+  const answer = journal.answered
+  if (!answer || (answer.routine && answer.by !== "person")) return false
+  if (thread.workInputs) return answer.request !== undefined && thread.workInputs.includes(answer.request)
+  return thread.workSince === undefined || answer.at >= thread.workSince
+}
+
+/**
+ * When a turn failed: the last anything was heard of it, its provider's activity or else its sending. A request keeps
+ * no time of its own for this, and its admission is only when it was asked for, an hour ago for a Fin's long turn.
+ */
+export function turnFailedAt(request: { createdAt?: number; dispatchedAt?: number }, activityAt: number | undefined, start: number): number {
+  return Math.max(request.dispatchedAt ?? request.createdAt ?? start, activityAt ?? 0)
 }
 
 /** Its last report's first sentence: what a strip and the digest show it at. */
@@ -505,14 +558,16 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   // A stop after its last report is how it ended, in the words of whoever stopped it, whatever its harness still winds down.
   if (edge.closedAt !== undefined && (!latest || latest.at <= edge.closedAt)) {
     const reason = stuckWords(edge.run, edge.name) ?? edge.closedReason ?? (thread.ended?.outcome === "stopped" ? thread.ended.reason : undefined)
-    return { kind: "ended", outcome: "stopped", ...(reason && { reason }) }
+    // Stopped for want of an account, not by anyone's choice: its work isn't finished, and it never reads as done.
+    const unfinished = reason !== undefined && reason === edge.tuned?.rerouted?.line
+    return { kind: "ended", outcome: "stopped", ...(reason && { reason }), ...(unfinished && { unfinished: true as const }) }
   }
   if (thread.starting) return { kind: "starting", step: thread.starting }
   if (thread.waiting) return { kind: "blocked", question: thread.waiting.question, on: thread.waiting.on, ...(thread.waiting.ask && { ask: thread.waiting.ask }) }
   const phase = latest?.status === "progress" ? reportPhase(latest) : undefined
   // By identity, never by time: an answer settles the ask it names, and a newer ask is open whatever the clocks say.
   const answered = journal.answered && latest && journal.answered.ask === reportAsk(latest).id ? { by: journal.answered.by, answer: journal.answered.answer } : undefined
-  if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && { answered }) }
+  if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && answerShown(journal, thread) && { answered }) }
   // A question it waits on blocks it until the answer has reached it: that answer is what it goes on with.
   if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !(answered && journal.answered?.delivered) && !edge.closedAt)
     return {
@@ -542,6 +597,29 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   return { kind: "idle" }
 }
 
+/**
+ * When a Fin came to stand as it does, the one rule every row's time reads. A working Fin's is its turn, however long
+ * ago it was spawned, and one waiting on its own Fins counts from when that turn ended; each other state, from when it
+ * got there. A working Fin with no known turn says none, since its age would read as a turn it isn't on.
+ */
+export function childSince(edge: ThreadParent, thread: ChildThread, journal: ChildJournal, state: ChildState): number | undefined {
+  const latest = journal.latest?.at
+  switch (state.kind) {
+    case "queued":
+    case "starting":
+      // A Fin held or starting again counts from what it last did, and only one that never has from when it was asked.
+      return thread.updatedAt ?? thread.startedAt ?? edge.createdAt
+    case "working":
+      return thread.workSince ?? (thread.source === "followed" ? thread.startedAt : undefined)
+    case "blocked":
+      return (thread.waiting ? thread.updatedAt : latest) ?? latest ?? thread.updatedAt
+    case "idle":
+      return state.since ?? thread.updatedAt ?? latest ?? thread.ended?.at ?? edge.closedAt ?? edge.createdAt
+    case "ended":
+      return thread.ended?.at ?? latest ?? edge.closedAt ?? edge.createdAt
+  }
+}
+
 /** What a Fin whose stop outlived its kill says, in place of its stop's reason, while its process still runs (`FollowedRun.stopping`). */
 export function stuckWords(run: FollowedRun | undefined, name: string): string | undefined {
   if (!run?.process) return undefined
@@ -564,6 +642,16 @@ export function reportAsk(report: Report): FinAsk {
 /** A roster entry's id for a child: stable for its whole life, whatever runs its turns. */
 export function childEntryId(child: ThreadId): string {
   return `mako-child:${child}`
+}
+
+/**
+ * Whether a Fin's entry says what `before` says. Its time alone doesn't count: that's its conversation's last activity,
+ * which moves with every token, and each move resends its Apex's whole roster to every conversation of the Thread. On
+ * 2026-11-07 one Fin did that about twice a second to 14 of them, 2 to 10 MB/s to every window, past what a stream may
+ * hold. What it reads moves the time along with it.
+ */
+export function sameChildEntry(before: NativeAgent, entry: NativeAgent): boolean {
+  return JSON.stringify({ ...before, observedAt: 0 }) === JSON.stringify({ ...entry, observedAt: 0 })
 }
 
 /**
@@ -595,6 +683,8 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
   if (edge.role !== "worker") entry.role = edge.role
   if (thread.toolUses) entry.usage = { toolUses: thread.toolUses }
   if (state.kind === "ended") entry.settledAt = thread.ended?.at ?? journal.latest?.at ?? edge.closedAt ?? edge.createdAt
+  const since = childSince(edge, thread, journal, state)
+  if (since !== undefined) entry.since = since
   return entry
 }
 
@@ -630,7 +720,7 @@ export function queuedWords(state: Extract<ChildState, { kind: "queued" }>): str
   return `Queued: ${state.ahead} ahead`
 }
 
-function entryState(state: ChildState): NativeAgent["state"] {
+export function entryState(state: ChildState): NativeAgent["state"] {
   switch (state.kind) {
     case "queued":
       return { kind: "waiting", reason: queuedWords(state) }

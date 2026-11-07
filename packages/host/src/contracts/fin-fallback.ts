@@ -186,11 +186,64 @@ export function movedLine(move: FinMove, label: (harness: string) => string, now
   return `${words.to}: ${words.why}`
 }
 
-/** "Out of accounts: personal and work are at their limits until 3:10 PM PST": a Fin with no step left, stopped. */
+/** "Out of accounts until 3:10 PM PST: personal and work": a Fin with no step left, stopped. Its time first, so a cut line keeps it. */
 export function outOfAccountsLine(from: { harness: string; account?: string }, spent: readonly FallbackStep[], label: (harness: string) => string, until: number | undefined, now: number): string {
   const names = [from.account ?? label(from.harness), ...spent.map((step) => step.why === "account" ? (step.harness === from.harness ? step.label : `${label(step.harness)} (${step.label})`) : step.why === "connection" ? step.connectionName : label(step.harness))]
   const unique = [...new Set(names)]
   const listed = unique.length > 1 ? `${unique.slice(0, -1).join(", ")} and ${unique.at(-1)}` : unique[0]!
   const reset = until === undefined ? "" : ` until ${resetWords(until, now)}`
-  return `Out of accounts: ${listed} ${unique.length > 1 ? "are at their limits" : "is at its limit"}${reset}`
+  return `Out of accounts${reset}: ${listed}`
+}
+
+/** What one notice says of a limit, for a whole tree: what ran out, until when, what moved where and what stopped or waits. */
+export interface LimitFacts {
+  harness: string
+  account?: string
+  until?: number
+  /** Where the Apex itself went, when it did. */
+  apex?: string
+  /** Where each Fin went, as the person reads it ("Claude Code"), and what stopped with nowhere to go. */
+  moved: readonly string[]
+  stopped: number
+  /** Fins' reports waiting for an Apex that can't run yet. */
+  waiting: number
+}
+
+const LIMIT_ASK = "limit:"
+
+/** The episode's key: one notice per account and reset, however many Fins it stopped. */
+export function limitNoticeId(facts: Pick<LimitFacts, "harness" | "account" | "until">, now: number): string {
+  return `${LIMIT_ASK}${facts.harness}:${facts.account ?? ""}:${facts.until ?? new Date(now).toDateString()}`
+}
+
+/** Whether an ask's id is a limit's notice, which asks nothing: "Got it" says it was seen. */
+export const isLimitAsk = (id: string) => id.startsWith(LIMIT_ASK)
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
+/** A notice in two parts: what ran out until when, as a transcript's line heads it, and what that did to the tree. */
+export interface LimitNoticeWords {
+  ran: string
+  did: string
+}
+
+/** "Cursor ran out until Sun 12:00 AM PST" and "3 Fins moved to Claude Code. 7 reports are waiting for their Apex." */
+export function limitNoticeWords(facts: LimitFacts, label: (harness: string) => string, now: number): LimitNoticeWords {
+  const where = facts.account ? `${label(facts.harness)} (${facts.account})` : label(facts.harness)
+  const by = new Map<string, number>()
+  for (const to of facts.moved) by.set(to, (by.get(to) ?? 0) + 1)
+  return {
+    ran: `${where} ran out${facts.until === undefined ? "" : ` until ${resetWords(facts.until, now)}`}`,
+    did: [
+      ...(facts.apex ? [`This Thread ${by.has(facts.apex) ? `and ${count(by.get(facts.apex)!, "Fin", "Fins")} ` : ""}moved to ${facts.apex}.`] : []),
+      ...[...by].filter(([to]) => to !== facts.apex).map(([to, n]) => `${count(n, "Fin", "Fins")} moved to ${to}.`),
+      ...(facts.stopped ? [`${count(facts.stopped, "Fin has", "Fins have")} nowhere to go.`] : []),
+      ...(facts.waiting ? [`${count(facts.waiting, "report is waiting for its Apex", "reports are waiting for their Apex")}.`] : []),
+    ].join(" "),
+  }
+}
+
+/** One line of those, fixed once said, since a notice is said again whenever its row's line changes. */
+export function limitNoticeLine(words: LimitNoticeWords): string {
+  return [`${words.ran}.`, words.did].filter(Boolean).join(" ")
 }
