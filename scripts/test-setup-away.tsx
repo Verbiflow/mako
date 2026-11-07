@@ -6,10 +6,11 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { Grant, LeaseEvent, SourceAsk } from "@mako/protocol/borrow"
-import { partSummary, rowAction, type SetupView } from "@mako/host/contracts/setup"
+import { partSummary, rowAction, type SetupAsk, type SetupView } from "@mako/host/contracts/setup"
 import { PhoneSetup, SetupPage, ThreadSetup } from "@/components/setup/setup-page"
+import { AskRow } from "@/components/setup/setup-parts"
 import { ZodError } from "zod"
-import { allAsks, readFailure, readSetup, setSetupSource, setupAskCard, setupStore } from "@/state/setup"
+import { allAsks, readFailure, readSetup, setSetupDrafter, setSetupSource, setupAskCard, setupDrafter, setupStore } from "@/state/setup"
 import { ASK_TOUCH, askNotice, runChoice } from "@/lib/ask-card"
 import { inboxCount, inboxModel } from "@/state/inbox"
 import DeskSettings from "@/web-client/desk-settings"
@@ -85,6 +86,33 @@ openSetup()
 assert.equal(setupOpenStore.get().open, true)
 closeSetup()
 
+// "Add to setup" drafts the request in a new Thread of the project: it has landed only once a Thread opened and its
+// composer took the words. A Thread that can't open, or words nobody took, leave the ask open to answer again.
+{
+  Reflect.set(globalThis, "window", Object.assign(new EventTarget(), { requestAnimationFrame: (run: () => void) => setTimeout(run, 0) }))
+  const toolAsk: SetupAsk = { id: "ask-tool", kind: "tool", tool: "terraform", version: "1.9", by: { thread: "t-1", title: "Fix the webhooks", fin: false }, at: NOW, why: "provision the database", place: "cloud" }
+  setupStore.set((state) => ({ byFolder: { ...state.byFolder, tools: { project: "tools", root: "/Users/you/tools", repository: null, places: [], at: NOW } } }))
+  const addToSetup = () => setupAskCard("tools", toolAsk, false).choices.find((choice) => choice.answer === "add-to-setup")!
+  let opened = 0
+  const composed: string[] = []
+  const draft = (open: boolean, take: boolean) => setupDrafter(async () => (opened++, open), async (text) => (take && composed.push(text), take))
+  const steps: boolean[] = []
+  setSetupDrafter(draft(false, true))
+  assert.equal(await runChoice(addToSetup(), (busy) => steps.push(busy)), false, "a new Thread that couldn't open drafted nothing")
+  assert.deepEqual([opened, composed.length, steps], [1, 0, [true, false]], "so the ask's buttons come back")
+  steps.length = 0
+  setSetupDrafter(draft(true, false))
+  assert.equal(await runChoice(addToSetup(), (busy) => steps.push(busy)), false, "words no composer took aren't a draft")
+  assert.deepEqual(steps, [true, false])
+  steps.length = 0
+  setSetupDrafter(draft(true, true))
+  assert.equal(await runChoice(addToSetup(), (busy) => steps.push(busy)), true, "a Thread opened with the request written")
+  assert.deepEqual([composed.length, steps], [1, [true]])
+  assert.match(composed[0]!, /^Add terraform 1\.9 to this project's recipe prepare/)
+  setSetupDrafter(undefined)
+  Reflect.deleteProperty(globalThis, "window")
+}
+
 // 2. On a page built away from the Mac, what only the Mac can do isn't offered.
 const page = setupStore.get().byFolder.shop!
 assert.equal(page.away, true)
@@ -134,6 +162,14 @@ assert.match(phone, /12m/)
 // Its answers are as tall as the card's under a finger.
 assert.ok(phone.includes(ASK_TOUCH), "the phone's Decline takes the card's touch height")
 
+// A long asking title gives way; what's asked for is said whole, on its own line, on every card and in the notice.
+const longTitle = "I'll read the MetaHarness track plan and the phone composer notes, then fix the webhook retries"
+const longAsk = { ...asked, by: { ...asked.by, title: longTitle } }
+const row = renderToStaticMarkup(<AskRow folder="shop" ask={longAsk} now={NOW} compact />)
+assert.match(row, /data-ask-want[^>]*>Wants a copy of <span[^>]*>\.env\.local<\/span>/, "the want, whole")
+assert.match(row, new RegExp(`data-ask-who[^>]*><span class="min-w-0 truncate">${longTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/'/g, "&#x27;")}</span>`), "the name, which gives way")
+assert.equal(askNotice("setup-ask", setupAskCard("shop", longAsk, false)).title, "Wants a copy of .env.local", "the notice's line is the want")
+
 // A read that fails says why in words and offers Try again; a reply this build can't read isn't printed.
 assert.equal(readFailure(new ZodError([])), "Its answer wasn't one this version of Mako reads.")
 setupStore.set((state) => ({ failed: { ...state.failed, gone: "The account didn't answer." } }))
@@ -141,6 +177,7 @@ const failedPhone = renderToStaticMarkup(<PhoneSetup folder="gone" />)
 assert.match(failedPhone, /data-setup-failed/)
 assert.match(failedPhone, /Setup couldn(&#x27;|')t be read\. The account didn(&#x27;|')t answer\./)
 assert.match(failedPhone, /Try again/)
+assert.ok(failedPhone.split("Try again")[0]!.includes(ASK_TOUCH), "Try again is as tall as the answers under a finger")
 for (const surface of [<SetupPage folder="gone" />, <ThreadSetup folder="gone" thread="t-1" elsewhere={undefined} />]) assert.match(renderToStaticMarkup(surface), /Try again/)
 
 // 4. An ask a project's two folders hold is one ask, in the Inbox and to answer.

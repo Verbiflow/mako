@@ -157,7 +157,8 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   account: { id: "account-check", name: "You", email: "you@example.com", image: null, entitlements: [] },
   deviceId: "browser-check",
   options: { origin: location.origin, base: "/", build: "fixture" },
-  gateway: { wake: () => undefined, rest: async (_method: string, path: string) => ((search.get("setup") || search.get("side") === "setup") && path.startsWith("/v1/borrow/") ? { grants: [], leases: [], events: [], asks: [] } : Promise.reject(new Error("The fixture has no gateway"))) },
+  gateway: { wake: () => undefined, connection: async () => ({ cloud: location.origin }), rest: async (_method: string, path: string) => ((search.get("setup") || search.get("side") === "setup") && path.startsWith("/v1/borrow/") ? { grants: [], leases: [], events: [], asks: [] } : Promise.reject(new Error("The fixture has no gateway"))) },
+  list: { refreshDevices: async () => undefined },
   push: { seen: async () => undefined, standing: async () => ({ standing: "unsupported", quietHours: null, timeZone: "UTC" }) },
   conversations: async () => ({
     open: (session: WebSession) => {

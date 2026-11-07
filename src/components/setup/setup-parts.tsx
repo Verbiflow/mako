@@ -29,7 +29,8 @@ import { LiveMark } from "@/components/ui/live-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { ASK_TOUCH } from "@/lib/ask-card"
+import { ASK_TOUCH, wantLine } from "@/lib/ask-card"
+import { AskHeading } from "@/components/ui/ask-heading"
 import { addTo, answerAsk, readSetup, rowTap, useAway, useSetup } from "@/state/setup"
 
 /** The dot's colour by its tone; the words beside it always say the same. */
@@ -137,17 +138,21 @@ export function AskRow({ folder, ask, now, compact }: { folder: string; ask: Set
       aria-busy={busy || undefined}
       className="bg-[color-mix(in_oklab,var(--attention)_8%,var(--raised))] px-3 py-2.5 shadow-[inset_2px_0_0_var(--attention)]"
     >
-      <div className="flex items-center gap-2">
-        <LiveMark state="needs" kind={ask.by.fin ? "fin" : "thread"} cut="var(--raised)">
-          {ask.by.harness ? <HarnessIcon harness={ask.by.harness} /> : null}
-        </LiveMark>
-        <span className={cn("min-w-0 truncate text-ui text-foreground/90", compact && "flex-1")}>
-          <span className="font-medium text-foreground">{ask.by.title}</span> {line.verb} <span className="font-mono text-label">{line.thing}</span>
-          {line.after && !compact ? `, ${line.after}` : null}
-        </span>
-        {compact ? null : <span className="flex-1" />}
-        <span className="shrink-0 text-label text-faint tabular-nums">{minutes(now - ask.at)}</span>
-      </div>
+      <AskHeading
+        mark={
+          <LiveMark state="needs" kind={ask.by.fin ? "fin" : "thread"} cut="var(--raised)">
+            {ask.by.harness ? <HarnessIcon harness={ask.by.harness} /> : null}
+          </LiveMark>
+        }
+        want={
+          <>
+            {wantLine({ want: line.verb })} <span className="font-mono text-label">{line.thing}</span>
+            {line.after && !compact ? `, ${line.after}` : null}
+          </>
+        }
+        who={ask.by.title}
+        age={minutes(now - ask.at)}
+      />
       <p className="mt-1 pl-7 text-label leading-relaxed text-muted-foreground">“{ask.why}”</p>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-7">
         {away && askAnswers(ask).length > 1 ? <span data-setup-away-allow className="mr-1 text-label text-muted-foreground">{SETUP_AWAY_ALLOW}</span> : null}
@@ -281,7 +286,7 @@ export function SetupReadFailed({ folder, why, className }: { folder: string; wh
   return (
     <div data-setup-failed className={cn("flex flex-col items-start gap-2", className)}>
       <p className="text-ui text-negative">Setup couldn&apos;t be read. {why}</p>
-      <Action tone="outline" size="sm" disabled={trying} onClick={() => {
+      <Action tone="outline" size="sm" className={ASK_TOUCH} disabled={trying} onClick={() => {
         setTrying(true)
         void readSetup(folder).finally(() => setTrying(false))
       }}>

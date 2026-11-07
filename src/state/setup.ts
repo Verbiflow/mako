@@ -175,11 +175,23 @@ async function act(folder: string, key: string, request: SetupAct): Promise<Setu
  * A new Thread in the project with the request written, which the person reads and sends: how the recipe changes
  * (a tool into its prepare, a file into its carry), since each change is proved before every Thread gets it.
  */
-let drafter: ((root: string, text: string) => Promise<void>) | undefined
+let drafter: ((root: string, text: string) => Promise<boolean>) | undefined
 
 /** How this window starts a Thread with a request written: the desk's own; a browser away from the Mac has none. */
 export function setSetupDrafter(next: typeof drafter) {
   drafter = next
+}
+
+/**
+ * The desk's drafter: a new Thread of the project, then the request written into its composer. It has drafted only
+ * when both happened: a Thread that couldn't open, or words no composer took, answer false.
+ */
+export function setupDrafter(open: (root: string) => Promise<boolean>, compose: (text: string) => Promise<boolean>) {
+  return async (root: string, text: string): Promise<boolean> => {
+    window.dispatchEvent(new CustomEvent("mako:close-settings"))
+    if (!(await open(root))) return false
+    return compose(text)
+  }
 }
 
 async function draftInNewThread(root: string, text: string): Promise<boolean> {
@@ -187,8 +199,9 @@ async function draftInNewThread(root: string, text: string): Promise<boolean> {
     toast("Ask for this from a Thread on your Mac")
     return false
   }
-  await drafter(root, text)
-  return true
+  const drafted = await drafter(root, text)
+  if (!drafted) toast("The request couldn't be written in a new Thread. Try again.")
+  return drafted
 }
 
 /**
@@ -242,7 +255,8 @@ export function setupAskCard(folder: string, ask: SetupAsk, away: boolean): AskC
   const line = askLine(ask)
   const offered = askAnswers(ask)
   return {
-    title: `${ask.by.title} ${line.verb} ${line.thing}`,
+    who: ask.by.title,
+    want: `${line.verb} ${line.thing}`,
     ...(line.after && { description: line.after }),
     detail: `“${ask.why}”. Answering here is the same as in this Thread's Setup and your Inbox; nothing is added until you do.`,
     ...(away && offered.length > 1 && { note: SETUP_AWAY_ALLOW }),

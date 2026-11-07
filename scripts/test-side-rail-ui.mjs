@@ -102,6 +102,10 @@ async function check() {
   await until("Boolean(document.querySelector('[data-crew]'))", "the crew card")
   await until("Boolean(document.querySelector('[data-side-rail]'))", "the right rail")
 
+  // The composer on screen marks words written into it as taken, so Setup's "Add to setup" counts only a real draft.
+  await until("Boolean(document.querySelector('[data-composer] textarea'))", "the composer")
+  assert.equal(await evaluate("window.dispatchEvent(new CustomEvent('mako:compose', { detail: { text: '' }, cancelable: true }))"), false, "the composer took the words")
+
   // A row a surface, in their order, with Agents' Fins there to show.
   assert.deepEqual(await rowIds(), ["changes", "files", "control", "agents", "setup"], "the surfaces, in their fixed order")
   assert.equal(await evaluate("document.querySelector('[data-side-rail]').getAttribute('aria-orientation')"), "vertical")
@@ -217,6 +221,13 @@ async function check() {
   await until("Boolean(document.querySelector('[data-side-rail]'))", "the rail on the plain Thread")
   // Nor Setup: with no live conversation here, there's no place to read it from.
   assert.deepEqual(await rowIds(), ["changes", "files", "control"], "nobody to show, no Agents row")
+
+  // A laptop's browser's Settings draws, Devices and each project's Setup in it, and Setup opens in the pane.
+  await load("/scripts/web-desk.html?settings&theme=dark")
+  await until("document.querySelectorAll('[data-setup-project]').length > 0", "Settings in the laptop browser, with Setup")
+  assert.ok(await evaluate("document.querySelector('main').innerText.includes('Devices')"), "and Devices")
+  await press("[data-setup-project]")
+  await until("Boolean(document.querySelector('[data-setup-page], [data-setup-failed]'))", "a project's Setup in the pane")
 
   // A laptop's browser: Changes and Files, the same rows, the two taking turns, no line beside them.
   await load("/scripts/web-desk.html?thread=apex&theme=dark")

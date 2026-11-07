@@ -18,9 +18,11 @@ export type AskChoice = {
 }
 
 export type AskCard = {
-  /** Who asks and what for, in one line. */
-  title: string
-  /** The rest of that line. */
+  /** Who asks: a Thread's title, often its first message and long, so it's what gives way. */
+  who: string
+  /** What it asks for, always said whole: "wants a copy of .env.local". */
+  want: string
+  /** The rest of what it wants. */
   description?: string
   /** Why, and what answering does: what the line leaves out. */
   detail?: string
@@ -46,7 +48,15 @@ export async function runChoice(choice: AskChoice, busy: (held: boolean) => void
   return landed
 }
 
-/** An ask as a notice above the composer: in the attention hue, ahead of the stack's other notices. */
+/** An ask's want as a line of its own: "Wants a copy of .env.local". */
+export function wantLine(card: Pick<AskCard, "want">): string {
+  return card.want.charAt(0).toUpperCase() + card.want.slice(1)
+}
+
+/**
+ * An ask as a notice above the composer: in the attention hue, ahead of the stack's other notices. It stands in the
+ * asking Thread itself, so its line is the want, whole; the icon says which agent asked.
+ */
 export function askNotice(id: string, card: AskCard, extra: { icon?: ReactNode; data?: ComposerNotice["data"] } = {}): ComposerNotice {
   const description = [card.description, card.note].filter(Boolean).join(". ")
   return {
@@ -54,7 +64,7 @@ export function askNotice(id: string, card: AskCard, extra: { icon?: ReactNode; 
     tone: "attention",
     priority: 0,
     ...(extra.icon !== undefined && { icon: extra.icon }),
-    title: card.title,
+    title: wantLine(card),
     ...(description && { description }),
     ...(card.detail && { detail: card.detail }),
     actions: card.choices.map((choice) => ({ label: choice.label, ...(choice.primary && { primary: true }), onClick: choice.choose })),
