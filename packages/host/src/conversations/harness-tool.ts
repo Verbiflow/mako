@@ -7,6 +7,7 @@ import { HarnessUpdateResultSchema } from "../contracts/harness-updates.js"
 import type { JsonValue } from "../contracts/json.js"
 import { AFTER_ACT, type HarnessActInput, type HarnessActResult } from "../contracts/thread-tools.js"
 import type { AgentAskGate } from "./agent-ask-gate.js"
+import { OnceByKey } from "./once-by-key.js"
 
 export interface HarnessToolDeps {
   /** The conversation a Session's agent runs in here. */
@@ -26,6 +27,7 @@ const ReceiptSchema = z.object({ result: HarnessUpdateResultSchema.optional() })
 /** An agent's or a shell's Install and Update of a harness, through the calls Settings › Harnesses makes. */
 export class HarnessTool {
   readonly #deps: HarnessToolDeps
+  readonly #once = new OnceByKey<HarnessActResult>()
 
   constructor(deps: HarnessToolDeps) {
     this.#deps = deps
@@ -41,7 +43,14 @@ export class HarnessTool {
       const ask = this.#deps.gate.ask(own, { kind: "harness", action: input.action, harness: input.harness })
       return { outcome: "asked", ask: ask.id, next: AFTER_ACT.asked }
     }
-    return this.run(input.action, input.harness)
+    const { action, harness } = input
+    return this.#once.run(`${caller.kind === "agent" ? caller.session : "person"}\0${input.clientKey}\0${action}\0${harness}`, () => this.run(action, harness))
+  }
+
+  /** The person allowed the ask: what the call would have run, and its failure is their answer's to say. */
+  async allowed(action: "install" | "update", harness: string): Promise<void> {
+    const answer = await this.run(action, harness)
+    if ("refused" in answer) throw new Error(answer.why)
   }
 
   /** Starts it, as Settings does, and answers once it's under way: an install outlasts a tool call. One refused at once says so. */

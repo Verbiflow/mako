@@ -211,6 +211,34 @@ const STATUS_FRESH_MS = 15_000
 const STATUS_QUIET_MS = 5 * 60_000
 const STATUS_SPREAD = 0.25
 
+/**
+ * Work every worktree pays for, one pass at a time: one asking while a pass runs gets the next, which starts once that
+ * ends and serves everyone who asked meanwhile, so each answer was read after it was asked.
+ */
+class SharedPasses<T> {
+  private running: Promise<T> | undefined
+  private next: Promise<T> | undefined
+
+  ask(read: () => Promise<T>): Promise<T> {
+    // First: one that ended leaves its successor promised, not yet started, and a caller it wakes asks in that gap.
+    if (this.next) return this.next
+    if (!this.running) return this.start(read)
+    this.next = this.running.catch(() => undefined).then(() => {
+      this.next = undefined
+      return this.start(read)
+    })
+    return this.next
+  }
+
+  private start(read: () => Promise<T>): Promise<T> {
+    const pass = read().finally(() => {
+      if (this.running === pass) this.running = undefined
+    })
+    this.running = pass
+    return pass
+  }
+}
+
 /** `map` with at most `limit` running at once, results in order. */
 async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
   const results: R[] = []
@@ -285,9 +313,8 @@ export class ThreadWorktreeService {
   private readonly pullsRead = new Map<string, WorktreeBranchPull[]>()
   /** Each receipt's `untold`, read without waiting, as a turn is sent. */
   private readonly untold = new Map<string, string[]>()
-  /** The summaries pass under way, and the one queued behind it for whoever asked meanwhile (`summaries`). */
-  private summariesRunning: Promise<WorktreeSummary[]> | undefined
-  private summariesNext: Promise<WorktreeSummary[]> | undefined
+  private readonly summaryPasses = new SharedPasses<WorktreeSummary[]>()
+  private readonly inventoryPasses = new SharedPasses<WorktreeInventory>()
   /** Each worktree's `status` as a summary last read it, with when, its index's modification time then, and how long it answers (`statusOf`). */
   private readonly statuses = new Map<string, { at: number; index: number; status: Promise<string>; freshMs: number }>()
   /** Each receipt as last parsed, by the file's modification time and size then (`receipt`). */
@@ -602,7 +629,12 @@ export class ThreadWorktreeService {
    * what runs there, whether its branch landed, and its own size. Sizes are
    * read in the background band, a few at a time.
    */
-  async inventory(): Promise<WorktreeInventory> {
+  /** Every worktree with what decides whether it can go: a walk of each, so whoever asks during one shares the next. */
+  inventory(): Promise<WorktreeInventory> {
+    return this.inventoryPasses.ask(() => this.readInventory())
+  }
+
+  private async readInventory(): Promise<WorktreeInventory> {
     const { worktrees } = await this.list()
     const attached = new Set(worktrees.map((worktree) => worktree.path))
     // Starts that failed or were cut short after their worktree was made: no Thread lists these.
@@ -707,20 +739,7 @@ export class ThreadWorktreeService {
    * caller's answer was read after it asked, and at most one pass runs.
    */
   summaries(pullsOf?: PullsOf): Promise<WorktreeSummary[]> {
-    if (!this.summariesRunning) return this.startSummaries(pullsOf)
-    this.summariesNext ??= this.summariesRunning.catch(() => undefined).then(() => {
-      this.summariesNext = undefined
-      return this.startSummaries(pullsOf)
-    })
-    return this.summariesNext
-  }
-
-  private startSummaries(pullsOf: PullsOf | undefined): Promise<WorktreeSummary[]> {
-    const pass = this.readSummaries(pullsOf).finally(() => {
-      if (this.summariesRunning === pass) this.summariesRunning = undefined
-    })
-    this.summariesRunning = pass
-    return pass
+    return this.summaryPasses.ask(() => this.readSummaries(pullsOf))
   }
 
   /** One pass: each repository's facts read once, then each worktree's status, and what its commits say where they moved. */

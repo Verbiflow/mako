@@ -334,6 +334,12 @@ interface Ruled {
   rule: { n?: number; when: string }
 }
 
+/** Whether a harness took a request: `prepared` and `uncertain` say it may not have, and a refusal that it didn't. */
+function handedOver(request: LiveRequest): boolean {
+  const evidence = request.nativeDelivery?.evidence.kind
+  return request.status === "completed" || evidence === "submitted" || evidence === "accepted"
+}
+
 /** A request waiting out a limit, which a move can take over: a Stop's latch leaves it where it is. */
 function waitsOnLimit(request: LiveRequest): boolean {
   return request.status === "held" && request.retry?.cause === "rate-limited" && request.pause !== "stop"
@@ -1644,11 +1650,25 @@ export class Agents implements AgentOperations, ConversationChildren {
       this.answersHeld.set(edge.child, { ...held, delivered })
       return this.childMoved(edge, false)
     }
+    // An Apex's message answers only what reached it: one that crossed the question is just a message, and the question goes on.
+    if (actor?.kind === "agent" && !this.reachedApex(edge, latest)) return hostLog("agents", "a message crossed a question its Apex hasn't heard", { op: edge.op, ask, request })
     const claim = store.claimAnswer({ ask, child: ThreadIdSchema.parse(edge.child), op: request, by: actor?.kind === "agent" ? "lead" : "person", answer: text.slice(0, 400), request, text, ...(actor?.kind === "agent" && { actor }), at: this.now() })
     if (!claim.claimed) return
     store.markAnswerDelivered(ask, delivered)
     this.answersHeld.set(edge.child, { ...claim.answer, delivered })
     this.childMoved(edge, false)
+  }
+
+  /**
+   * Whether a Fin's report has reached its Apex. A digest carrying it reached it once it was handed over: being sent
+   * isn't being heard. One no digest carries took another way, so the store's receipt says, unless a steer still has it.
+   */
+  private reachedApex(edge: ThreadParent, report: Report): boolean {
+    const apex = this.frontOf(edge.parent, edge.parentSession)
+    const id = `notice:${edge.child}:${report.id}`
+    if (apex && this.wakes.steered(id)) return false
+    const carriers = (apex ? this.deps.live.snapshot(apex)?.requests ?? [] : []).filter((request) => request.status !== "canceled" && request.digest?.notices.some((notice) => notice.id === id))
+    return carriers.length ? carriers.some(handedOver) : !this.store()!.undeliveredReports().some((waiting) => waiting.report.id === report.id)
   }
 
   private async answerOnce(by: Answerer, edge: ThreadParent, op: string, input: Pick<AgentsAnswerInput, "answer" | "allow" | "person">): Promise<AgentsAnswered | AgentRefused> {

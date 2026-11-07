@@ -21,6 +21,7 @@ const TESTS = [
   "scripts/test-event-loop.ts",
   "scripts/test-host-methods.ts",
   "scripts/test-secrets.ts",
+  "scripts/test-secret-grants.ts",
   "scripts/test-host-secrets.ts",
   "scripts/test-secret-key-handover.ts",
   "scripts/test-keychain-safe-storage.ts",

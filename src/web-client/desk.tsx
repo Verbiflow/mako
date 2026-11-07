@@ -1,5 +1,7 @@
 import { useLimitContinueNotice } from "@/components/composer/account-notice"
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { useAgentAskNotice } from "@/components/composer/agent-ask-card"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { CloudIcon, LaptopIcon, LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
 import { toast } from "sonner"
 import { CommandPalette } from "@/components/palette/command-palette"
@@ -10,7 +12,9 @@ import { AgentThreads } from "@/components/rail/agent-threads"
 import { Divider } from "@/components/shell/divider"
 import { RailToggle, TitleStrip } from "@/components/shell/title-bar"
 import { useStaleSendNotice } from "@/components/composer/stale-send-notice"
+import { FinTab } from "@/components/stage/child-tabs"
 import { SessionTabList } from "@/components/stage/session-tabs"
+import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { Welcome } from "@/components/transcript/transcript"
 import { OceanScene } from "@/components/ui/ocean-scene"
 import { WorkbenchStrip } from "@/components/stage/stage-strip"
@@ -29,8 +33,11 @@ import { store } from "@/state/session"
 import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
+import { AgentsLayer } from "./agents-layer"
+import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
+import { FinOfApexContext, childSession } from "./fin-of-apex"
 import { webHarnessLabel } from "./labels"
 import { StartForm, StartSheet, type AddingTo, type StartIn } from "./new-thread"
 import { CLOUD_PLACE } from "./places"
@@ -47,7 +54,7 @@ import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
 import { ReviewLayer } from "./review-layer"
 import { FilesLayer } from "./files-layer"
-import { closeFiles, filesOpenStore, openFiles } from "./files-open"
+import { closeFiles, filesOpenStore, openFiles, useFilesOpen } from "./files-open"
 import { closeReview, deskReviewCode, openReview, reviewOpenStore, useReviewOpen } from "./review-open"
 
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
@@ -99,6 +106,8 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
     () =>
       routeWindow({
         open: (presence) => {
+          // A Session tab or a rail row opens that Session, even the one a Fin stands in front of.
+          closeDeskFin()
           if (presence.threadId) latest.current.open({ kind: "thread", thread: presence.threadId, ...(presence.sessionId && { session: presence.sessionId }) })
         },
         newSession: () => addSession.current?.() ?? false,
@@ -108,15 +117,23 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           latest.current.newThread(row ? { place: row.runsOn.kind === "cloud" ? CLOUD_PLACE : row.runsOn.deviceId, project: cwd } : undefined)
         },
         threadMenu: (thread) => <DeskThreadMenu thread={thread} />,
+        agents: toggleAgents,
+        fin: (thread, agent) => {
+          const listed = foldThreads(latest.current.list).threads.find((each) => each.id === thread)
+          if (listed) openDeskFin(agent, thread, openingSession(listed).row.conversation)
+          latest.current.open({ kind: "thread", thread })
+        },
       }),
     []
   )
   // The Inbox lies over whatever the desk shows; its address opens it, and going anywhere else puts it away.
   useEffect(() => (under.kind === "inbox" ? inboxView.open() : inboxView.close()), [route, under.kind])
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
-  // Of the desk's notices above its composer, the one a laptop's browser needs: a send to an old Session asks first.
+  // Of the desk's notices above its composer, those a laptop's browser needs: a send to an old Session asks first, and
+  // what an agent asked is answered here as on the desk.
   useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
   useEffect(() => registerNotice("limit-continue", useLimitContinueNotice, -4), [])
+  useEffect(() => registerNotice("agent-ask", useAgentAskNotice), [])
 
   return (
     <TooltipProvider delayDuration={350}>
@@ -157,6 +174,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         </main>
         <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
         <FilesLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
+        <AgentsLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
       </div>
       <CommandPalette />
       <ConfirmHost />
@@ -174,6 +192,8 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
   const running = useAcp((state) => activeLiveAcp(state)?.session.status === "running")
   const live = useAcp((state) => activeLiveAcp(state)?.key)
   const changes = useReviewOpen((state) => state.open !== null)
+  const files = useFilesOpen((state) => state.open !== null)
+  const agents = useAgentsOpen((state) => state.open)
   const railOpen = usePrefs((prefs) => prefs.railOpen)
   return (
     <TitleStrip
@@ -198,13 +218,20 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
           <IconAction label="Search threads and commands" keys={formatChord("mod+k")} onClick={() => window.dispatchEvent(new CustomEvent("mako:palette"))}>
             <SearchIcon />
           </IconAction>
-          <IconAction label={changes ? "Hide changed files" : "Show changed files"} data-on={changes} disabled={!changes && !live} onClick={toggleChanges}>
+          <IconAction label={changes || files || agents ? "Hide the right sidebar" : "Show the right sidebar"} data-on={changes || files || agents} disabled={!changes && !files && !agents && !live} onClick={toggleSide}>
             <PanelRightIcon />
           </IconAction>
         </>
       }
     />
   )
+}
+
+/** The right rail, for the Session on screen, on Changes as the desktop's starts, or away again, whichever row is open. */
+function toggleSide(): void {
+  if (filesOpenStore.get().open) return closeFiles()
+  if (agentsOpenStore.get().open) return closeAgents()
+  toggleChanges()
 }
 
 /** Changes beside the transcript, for the Session on screen, or away again: the desktop's right sidebar, here. */
@@ -437,6 +464,22 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
   }, [addSessionRef, canAdd])
   const tabs = useThreadTabs(useMemo(() => ({ thread: threadId, session: session?.row.session }), [threadId, session?.row.session]))
   const shown = session?.row.session
+  // The Fin opened from the crew card or Agents, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
+  const apexConversation = session?.row.conversation
+  const child = useDeskFin((state) => (state.fin?.thread === threadId ? state.fin.agent : null))
+  const openChild = useCallback(
+    (agent: NativeAgent) => {
+      if (apexConversation) openDeskFin(agent, threadId, apexConversation)
+    },
+    [threadId, apexConversation]
+  )
+  // Leaving the Thread leaves its Fin; one the rail just opened in the Thread being gone to stands.
+  useEffect(
+    () => () => {
+      if (deskFinStore.get().fin?.thread === threadId) closeDeskFin()
+    },
+    [threadId]
+  )
   // The address named none: the Session is the Thread's own choice, and a send to it may ask first (`openedBy`).
   useEffect(() => {
     if (sessionId === undefined && shown) noteOpenedByScreen(shown)
@@ -456,8 +499,9 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
     )
   }
   const Place = session.row.runsOn.kind === "cloud" ? CloudIcon : session.quietSince ? MoonIcon : LaptopIcon
+  const opened = child ? childSession(session, child) : undefined
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-thread-screen={thread.id}>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-thread-screen={thread.id} data-child-of={opened ? thread.id : undefined}>
       <WorkbenchStrip
         end={
           <>
@@ -469,9 +513,14 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
           </>
         }
       >
-        {tabs.length ? <SessionTabList tabs={tabs} here={{ thread: thread.id, session: session.row.session }} paneId="main" agentActive /> : null}
+        {tabs.length ? <SessionTabList tabs={tabs} here={{ thread: thread.id, session: session.row.session }} paneId="main" agentActive={!opened} /> : null}
+        {child && opened ? <FinTab agent={child} onClose={closeDeskFin} /> : null}
       </WorkbenchStrip>
-      <ThreadBody thread={thread} session={session} desk />
+      <RoutedOpenContext value={openChild}>
+        <FinOfApexContext value={opened ? thread.title : undefined}>
+          <ThreadBody key={opened?.row.conversation} thread={thread} session={opened ?? session} desk />
+        </FinOfApexContext>
+      </RoutedOpenContext>
       {addingTo ? (
         <StartSheet
           open={adding}
