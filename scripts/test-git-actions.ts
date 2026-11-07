@@ -366,20 +366,29 @@ try {
   assert.equal(await project2.open("c", { repository: `${multi}/api/` }), "api: #102 was already open; pushed 1 commit: https://github.com/o/r/pull/102.", "a repository is named by its folder, absolute or from the project")
   await assert.rejects(project2.status("c", { repository: "nope" }), /^Error: .*multi has no repository named "nope"\. Pass one of: api, web\.$/)
   assert.equal(parseYaml(await project2.status("c", { repository: " ./web/ " })).repository, "web", "a name from the project folder may start with ./ and end with /")
-  // Linear, by how its time grows with the name rather than the runner's clock: four times the name takes about four
-  // times as long, where a cost that grows with its square takes sixteen. Each the quickest of five, past a first.
-  const refusing = async (slashes: number) => {
-    let quickest = Infinity
+  // Linear, judged against a pass that plainly is over the same name, timed here: counting its slashes. Whatever the
+  // runner's speed does to one it does to the other, so refusing costs a few times the count, where a cost that grows
+  // with the name's square costs thousands. Each the quickest of five, past a first.
+  const hostile = "/".repeat(200_000) + "x"
+  const quickest = async (work: () => Promise<void> | void) => {
+    let best = Infinity
     for (let run = 0; run < 5; run++) {
       const began = performance.now()
-      await assert.rejects(project2.status("c", { repository: "/".repeat(slashes) + "x" }), /has no repository named/)
-      quickest = Math.min(quickest, performance.now() - began)
+      await work()
+      best = Math.min(best, performance.now() - began)
     }
-    return quickest
+    return best
   }
-  await refusing(1_000)
-  const [short, long] = [await refusing(25_000), await refusing(100_000)]
-  assert.ok(long < short * 8, `a hostile name is refused in linear time: ${short.toFixed(2)} ms for 25,000 slashes, ${long.toFixed(2)} ms for four times as many`)
+  await assert.rejects(project2.status("c", { repository: hostile }), /has no repository named/)
+  const refusing = await quickest(() => assert.rejects(project2.status("c", { repository: hostile }), /has no repository named/))
+  let counted = 0
+  const counting = await quickest(() => {
+    let slashes = 0
+    for (const character of hostile) if (character === "/") slashes++
+    counted = slashes
+  })
+  assert.equal(counted, 200_000)
+  assert.ok(refusing < counting * 50, `a hostile name is refused in linear time: ${refusing.toFixed(2)} ms for 200,000 slashes, against ${counting.toFixed(2)} ms to count them`)
 
   const onlyApi = parseYaml(await project2.status("c", { repository: "api" }))
   assert.deepEqual([onlyApi.repository, onlyApi.pullRequest.number, onlyApi.otherRepositories], ["api", 102, ["web"]], "one repository's report names it and its siblings")

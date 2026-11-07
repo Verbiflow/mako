@@ -101,23 +101,24 @@ for (const harness of [...registeredHarnessIds(), "future-fixture"]) {
 const message = { id: "same", role: "user" as const, blocks: [], anchor: { id: "native", index: 0, at: 1 } }
 assert.notEqual(reconcileMessages([message], [{ ...message, anchor: { ...message.anchor, at: 2 } }])[0], message)
 
-const many = Array.from({ length: 20_000 }, (_, index) => ({ ...request, id: auditId(index + 1),
+const many = Array.from({ length: 32_000 }, (_, index) => ({ ...request, id: auditId(index + 1),
   nativePrompt: { ...reference, messageId: `u${index}` },
   nativeDelivery: { ...request.nativeDelivery, evidence: { ...accepted, referenceId: `u${index}` } },
 }))
 assert.equal(nativePromptRequestIds(source, many).size, many.length)
-// Linear, by how its time grows rather than the runner's clock: four times the requests take about four times as long,
-// where a cost that grows with their square takes sixteen. Each the quickest of five, past the first above.
-const correspond = (count: number) => {
-  const some = many.slice(0, count)
-  let quickest = Infinity
+// Linear, judged against a pass that plainly is over the same requests, timed here: putting them in a map by message.
+// Whatever the runner's speed, caches and collections do to one they do to the other, so the correspondence costs a few
+// times the map, where a cost that grows with their square costs thousands. Each the quickest of five.
+const quickest = (work: () => void) => {
+  let best = Infinity
   for (let run = 0; run < 5; run++) {
     const began = performance.now()
-    nativePromptRequestIds(source, some)
-    quickest = Math.min(quickest, performance.now() - began)
+    work()
+    best = Math.min(best, performance.now() - began)
   }
-  return quickest
+  return best
 }
-const [fewer, more] = [correspond(5_000), correspond(20_000)]
-assert.ok(more < fewer * 8, `exact correspondences in linear time: ${fewer.toFixed(2)} ms for 5,000, ${more.toFixed(2)} ms for 20,000`)
-console.log(`Native prompt correspondence: exact receipts, source/attempt/binding fencing, ambiguity refusal, six registry labels plus future fixture, metadata/object reuse; ${fewer.toFixed(2)} ms for 5,000 lookups and ${more.toFixed(2)} ms for 20,000. No native prompt sent.`)
+const corresponding = quickest(() => nativePromptRequestIds(source, many))
+const mapping = quickest(() => new Map(many.map((each) => [each.nativePrompt.messageId, each.id])))
+assert.ok(corresponding < mapping * 100, `exact correspondences in linear time: ${corresponding.toFixed(2)} ms for 32,000, against ${mapping.toFixed(2)} ms to map them`)
+console.log(`Native prompt correspondence: exact receipts, source/attempt/binding fencing, ambiguity refusal, six registry labels plus future fixture, metadata/object reuse; ${corresponding.toFixed(2)} ms for 32,000 lookups, ${mapping.toFixed(2)} ms to map them. No native prompt sent.`)
