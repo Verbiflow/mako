@@ -23,7 +23,8 @@ import type { JsonValue } from "@mako/host/contracts/json"
  * container. Open each page signed in to the account the proof should run on and approve, within ten minutes, or have
  * whatever started this read the lines and confirm them. Nothing here signs in for anyone or holds a credential.
  *
- * The approval: near the end it prints `ASK {"device","thread","name","title","question"}`. A Fin on the container
+ * The approvals: near the end it prints `ASK {"device","thread","name","title","question","decision"}` twice, the
+ * first to allow and the second to reject, and reads the answer's effect on the container itself. A Fin on the container
  * asks to run a command, and the container has no window to allow it in. Open that Fin's Thread from the account's
  * list, on the web or another device signed in to the account, and allow it, within ten minutes.
  *

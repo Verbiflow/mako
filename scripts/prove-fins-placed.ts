@@ -38,8 +38,13 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  *   the Apex's device can't be what answers. The second device has no window, so it prints
  *   `ASK {"device","thread","name","title","question","apex"}` and waits ten minutes for a person to allow the command
  *   where they can: the Fin's own row, which its device writes to the account's list and every other device shows
- *   under its Apex, on the web or from another device. Allowed, the command runs there; the first device, back, takes
- *   the Fin's result and it wakes its Apex.
+ *   under its Apex, on the web or from another device. Allowed, the command runs there, which only the device can
+ *   show: the command writes a marker file named for this run in the Fin's worktree, and the proof reads it back on
+ *   the device itself (`docker exec` in a container), never taking the model's resumed word for it. The first device,
+ *   back, takes the Fin's result and it wakes its Apex;
+ * - a fourth Fin starts there on `ask` the same way, and the proof prints a second `ASK`, with `"decision": "reject"`:
+ *   the person rejects it. Its turn ends without the command running, the marker it would have written is absent on
+ *   the device, and the permission line its host logged says so; a marker found would fail the proof.
  *
  * Every word a turn is asked for is one only this run knows, so where each ran is plain: each device's scripted model
  * hears only its own device's turns. The report (`report.json`: each step with its time, the devices, Threads and
@@ -92,7 +97,9 @@ const say = (word: string, value?: JsonValue) => console.log(value === undefined
 const pause = (ms: number) => new Promise((done) => setTimeout(done, ms))
 // Letters alone: the scripted models hear "single word X" for X in capitals.
 const tag = Array.from({ length: 5 }, () => String.fromCharCode(65 + randomInt(26))).join("")
-const WORDS = { apex: `ALPHA${tag}`, fin: `FOXTROT${tag}`, held: `GOLF${tag}`, asks: `HOTEL${tag}` }
+const WORDS = { apex: `ALPHA${tag}`, fin: `FOXTROT${tag}`, held: `GOLF${tag}`, asks: `HOTEL${tag}`, deny: `INDIA${tag}` }
+/** The file the asked command writes in the Fin's worktree, named for this run and its word, which only the device can show. */
+const marker = (word: string) => `.mako-proof-${word}`
 const ONE_WORD = /Reply with the single word ([A-Za-z0-9-]+)\./g
 const mako = join(process.cwd(), "packages", "host", "dist", "mako-host.js")
 
@@ -179,6 +186,8 @@ interface ProofDevice {
   heard: string[]
   call(channel: string, args: JsonValue[]): Promise<RuntimeValue>
   log(): Promise<string[]>
+  /** What a file of that name holds anywhere under the device's data, read on the device; undefined when there's none. */
+  wrote(name: string): Promise<string | undefined>
   stop(): Promise<void>
 }
 
@@ -190,6 +199,8 @@ interface ContainerDevice {
   /** A command inside the container, as its user: what it printed. */
   inside(command: string): Promise<string>
   log(): Promise<string[]>
+  /** What a file of that name holds anywhere under the device's data, read on the device; undefined when there's none. */
+  wrote(name: string): Promise<string | undefined>
   stop(): Promise<void>
 }
 
@@ -254,6 +265,11 @@ async function makeContainer(name: string, of: string): Promise<ContainerDevice>
     heard,
     inside,
     log: async () => (await inside("cat /data/logs/host.log 2>/dev/null").catch(() => "")).split("\n").filter(Boolean),
+    // Read on the device itself: a marker the command wrote is there or it isn't, whatever any model said.
+    wrote: async (name) => {
+      const found = (await inside(`find /data -name '${name}' -type f 2>/dev/null | head -1`).catch(() => "")).trim()
+      return found ? (await inside(`cat '${found}'`)).trim() : undefined
+    },
     stop: async () => {
       await keepLogs()
       await inside("mako-host leave").catch(() => undefined)
@@ -268,14 +284,15 @@ async function makeContainer(name: string, of: string): Promise<ContainerDevice>
  * and with the word once that command's result comes back.
  */
 function answers(heard: string[]): (text: string) => Promise<ScriptedReply> {
-  let asked = false
+  const asked = new Set<string>()
   return async (text) => {
     const word = [...text.matchAll(ONE_WORD)].at(-1)?.[1]
     if (!word) return { text: "OK" }
     if (word === WORDS.held) await heldGate
-    if (word === WORDS.asks && !asked) {
-      asked = true
-      return { text: "Running it.", call: { id: `call_${tag.toLowerCase()}`, name: "shell", arguments: { command: `echo ${WORDS.asks}` } } }
+    if ((word === WORDS.asks || word === WORDS.deny) && !asked.has(word)) {
+      asked.add(word)
+      // The command writes the run's marker where the Fin works: the device shows whether it ran, the model's word never does.
+      return { text: "Running it.", call: { id: `call_${word.toLowerCase()}`, name: "shell", arguments: { command: `echo ${word} > ${marker(word)}` } } }
     }
     heard.push(word)
     return { text: word }
@@ -354,6 +371,10 @@ async function makeDevice(key: string, name: string, reach: string): Promise<Pro
     heard,
     call,
     log: async () => (await readFile(logFile, "utf8").catch(() => "")).split("\n").filter(Boolean),
+    wrote: async (name) => {
+      const found = (await run("find", [dataRoot, "-name", name, "-type", "f"]).catch(() => ({ stdout: "" }))).stdout.split("\n").find(Boolean)
+      return found ? (await readFile(found, "utf8")).trim() : undefined
+    },
     stop: async () => {
       await run(process.execPath, [mako, "leave"], { env }).catch(() => undefined)
       const exited = host.exitCode === null && host.signalCode === null ? new Promise((done) => host.once("exit", done)) : Promise.resolve()
@@ -583,11 +604,18 @@ try {
     return { at: new Date().toISOString() }
   })
   const askedAt = Date.now()
-  await step("the person allows it from under the Apex, in the Fin's own Thread, with the Apex's device off", async () => {
-    say("ASK", { device: names.place, thread: asker.child, name: asker.name, title, ...(asker.state.question && { question: asker.state.question }), apex: { thread: apexThread.thread, title: `Placed Fins proof ${tag}`, offSince: apexOffAt.at } })
-    // Ten minutes for whoever answers it: there's no window on that device to answer it in.
-    await until("the person's answer", async () => (place.heard.includes(WORDS.asks) ? true : undefined), 10 * 60_000)
-    return { msToAnswer: Date.now() - askedAt, heardOnPlace: [...place.heard], permission: (await place.log()).filter((line) => /permission/i.test(line) && !/gateway trace/.test(line)).slice(-6).map((line) => line.slice(0, 300)) }
+  // The person's answer as the device's host logged it: the gateway operation that carried it (`host.live-permission`).
+  const permissionLines = async () => (await place.log()).filter((line) => /permission/i.test(line) && !/gateway trace/.test(line)).slice(-8).map((line) => line.slice(0, 300))
+  const answered = (lines: string[], since: number) => lines.filter((line) => /live-permission/.test(line) && Date.parse(line.slice(0, 24)) >= since - 1_000)
+  await step("the person allows it from under the Apex, in the Fin's own Thread, with the Apex's device off, and the command runs on the device", async () => {
+    say("ASK", { device: names.place, thread: asker.child, name: asker.name, title, decision: "allow", ...(asker.state.question && { question: asker.state.question }), apex: { thread: apexThread.thread, title: `Placed Fins proof ${tag}`, offSince: apexOffAt.at } })
+    // Ten minutes for whoever answers it: there's no window on that device to answer it in. What ends the wait is the
+    // marker the command wrote, read on the device: the model resuming with its word is never the evidence.
+    const ran = await until("the command's marker on the device", () => place.wrote(marker(WORDS.asks)), 10 * 60_000)
+    if (ran !== WORDS.asks) throw new Error(`the marker on the device holds ${JSON.stringify(ran)}, not the command's word`)
+    const permission = await permissionLines()
+    if (!answered(permission, askedAt).length) throw new Error(`the device's host logged no answer to the permission since the ask: ${JSON.stringify(permission)}`)
+    return { msToAnswer: Date.now() - askedAt, marker: { name: marker(WORDS.asks), holds: ran }, heardOnPlace: [...place.heard], permission }
   })
   if (apex.heard.includes(WORDS.asks)) throw new Error("the asking Fin's turn ran on the wrong device")
   await step("the first device is back, and the Fin's result wakes the Apex", async () => {
@@ -601,9 +629,37 @@ try {
     return { request: wake.id, notices: wake.digest?.notices.map((each) => each.id), state: strip.state, heardOnApex: [...apex.heard] }
   })
 
+  // The person rejects: nothing runs, and the device shows it, whatever the model said when its tool call failed.
+  const denier = await step("a fourth Fin on ask starts on the second device, and its harness asks to run a command", async () => {
+    const answer = StartedSchema.parse(await apex.call("mako:agents-start", [caller, { brief: { objective: `Run the command you're given. Reply with the single word ${WORDS.deny}.` }, harness: "opencode", name: "denier", title: `Rejection proof ${tag}`, access: "ask", place: where, clientKey: `deny-${tag}`, mode: "background" }]))
+    if (answer.refused || !answer.child) throw new Error(`the start was refused: ${answer.refused}: ${answer.why}`)
+    const child = answer.child
+    const strip = await until("its ask to reach its Apex's device", async () => {
+      const found = await stripOf(child)
+      return found?.state.kind === "blocked" ? found : undefined
+    })
+    return { child, name: answer.name, state: strip.state }
+  })
+  if (await place.wrote(marker(WORDS.deny)) !== undefined) throw new Error("the command ran with nobody asked")
+  const rejectAskedAt = Date.now()
+  await step("the person rejects it in the Fin's own Thread, and the command never runs on the device", async () => {
+    say("ASK", { device: names.place, thread: denier.child, name: denier.name, title: `Rejection proof ${tag}`, decision: "reject", ...(denier.state.question && { question: denier.state.question }), apex: { thread: apexThread.thread, title: `Placed Fins proof ${tag}` } })
+    // Its turn ends once the rejection reaches its harness: the Fin reads as ended, or as blocked no more.
+    const strip = await until("the rejected Fin's turn to end", async () => {
+      const found = await stripOf(denier.child)
+      return found && found.state.kind !== "blocked" && found.state.kind !== "working" ? found : undefined
+    }, 10 * 60_000)
+    const wrote = await place.wrote(marker(WORDS.deny))
+    if (wrote !== undefined) throw new Error(`the command ran though the person rejected it: the marker holds ${JSON.stringify(wrote)}`)
+    // The device took an answer to the permission since the ask, and nothing ran: the model's word after its failed call counts for nothing.
+    const permission = await permissionLines()
+    if (!answered(permission, rejectAskedAt).length) throw new Error(`the device's host logged no answer to the permission since the ask: ${JSON.stringify(permission)}`)
+    return { msToAnswer: Date.now() - rejectAskedAt, state: strip.state, marker: { name: marker(WORDS.deny), holds: null }, heardOnPlace: [...place.heard], permission }
+  })
+
   // What each host logged of the calls between them, with the correlation IDs the gateway carried.
   const between = (lines: string[]) => lines.filter((line) => /agents-(place|capabilities|notice|list|read|answer|respond)|ask routed|start placed|notice (sent|waits|taken)|edge written|cloned a project|"wake"|\bwake\b/.test(line)).map((line) => line.slice(0, 600))
-  report.apex = DetailSchema.parse(JSON.parse(JSON.stringify({ ...apexThread, fin: fin.child, held: held.child, asker: asker.child })))
+  report.apex = DetailSchema.parse(JSON.parse(JSON.stringify({ ...apexThread, fin: fin.child, held: held.child, asker: asker.child, denier: denier.child })))
   report.log = { apex: between(await apex.log()), place: between(await place.log()) }
   const cloned = (await place.log()).find((line) => line.includes("cloned a project"))?.slice(0, 400)
   if (cloned) report.worktree = cloned
