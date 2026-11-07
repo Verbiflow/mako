@@ -42,8 +42,6 @@ import {
   FolderIcon,
   FolderOpenIcon,
   GitBranchIcon,
-  ListIcon,
-  ListTreeIcon,
   Maximize2Icon,
   MinusIcon,
   PanelBottomCloseIcon,
@@ -84,7 +82,7 @@ export function ChangesPanel() {
 
 function RepositoryChanges({ snapshot }: { snapshot: GitStatus }) {
   // The Review stream fills the open repository; the Files tree fits its rows.
-  const grow = usePrefs((prefs) => prefs.changesLayout) === "review" ? "flex-1" : "shrink"
+  const grow = usePrefs((prefs) => prefs.changesView) === "review" ? "flex-1" : "shrink"
   const [collapsed, setCollapsed] = useState(false)
   const [pending, setPending] = useState<string>()
   const [error, setError] = useState<string>()
@@ -172,7 +170,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   // A turn the transcript asked to review is read in the Review layout, whichever
   // layout the person keeps and even on a clean tree, until they pick another scope.
   const reviewingTurn = useReviewScope((state) => requestedTurn(state.requested, workspace) !== null)
-  const layout = usePrefs((prefs) => prefs.changesLayout)
+  const layout = usePrefs((prefs) => prefs.changesView)
   const autoOpenDiff = usePrefs((prefs) => prefs.autoOpenDiff)
   const diffStyle = usePrefs((prefs) => prefs.diffStyle)
   const wrapDiff = usePrefs((prefs) => prefs.wrapDiff)
@@ -424,34 +422,32 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   return (
     <div className={cn("flex min-h-0 flex-col", inline ? "shrink" : "h-full")}>
       <WorktreeReview />
-      <div className="flex h-8 shrink-0 items-center gap-2 pr-1.5 pl-3 text-label">
+      <div className="group/head flex h-7 shrink-0 items-center gap-2 pr-2 pl-3.5 text-label">
         {/* The counts already project pending checkbox intent, so a stage
             write in flight only marks the reading busy; swapping the whole
-            sentence for "Updating..." and back made every click blink. */}
-        <span role="status" aria-busy={staging || undefined} className="tabular min-w-0 truncate text-muted-foreground">
+            sentence for "Updating..." and back made every click blink. Lines
+            changed are the Changes row's reading, right above this. */}
+        <span role="status" aria-busy={staging || undefined} className="tabular min-w-0 truncate text-faint">
           {`${files.length} ${files.length === 1 ? "change" : "changes"}`}
-          {staged > 0 ? <span className="text-faint">{` · ${staged} staged`}</span> : null}
+          {staged > 0 ? ` · ${staged} staged` : null}
         </span>
-        {/* Line totals are deferred for large changesets; an unknown total
-            shows nothing rather than a label explaining its absence. */}
-        {files.every((file) => file.insertions !== null && file.deletions !== null) ? (
-          <LineCounts insertions={files.reduce((sum, file) => sum + (file.insertions ?? 0), 0)} deletions={files.reduce((sum, file) => sum + (file.deletions ?? 0), 0)} />
-        ) : null}
+        {/* What's for now stands; what's for now and then shows under the pointer. The list's shape is Settings' (Git). */}
         <div className="ml-auto flex items-center text-faint">
-          <IconAction
-            label="Review current changes in the center"
-            size="xs"
-            onClick={openWorkingTree}
-          >
-            <Maximize2Icon />
-          </IconAction>
-          <IconAction
-            label={filesView === "tree" ? "List by folder" : "Show as a tree"}
-            size="xs"
-            onClick={() => setPref("filesView", filesView === "tree" ? "folders" : "tree")}
-          >
-            {filesView === "tree" ? <ListIcon /> : <ListTreeIcon />}
-          </IconAction>
+          <span className="flex items-center opacity-0 transition-opacity duration-100 group-hover/head:opacity-100 focus-within:opacity-100">
+            <IconAction label="Refresh" size="xs" onClick={() => void actions.refreshGit()}>
+              <RefreshCwIcon />
+            </IconAction>
+            {selectedFile ? (
+              <IconAction
+                label={showDiff ? "Hide the diff" : "Show the diff"}
+                size="xs"
+                data-on={showDiff || undefined}
+                onClick={() => togglePref("autoOpenDiff")}
+              >
+                {showDiff ? <PanelBottomCloseIcon /> : <PanelBottomOpenIcon />}
+              </IconAction>
+            ) : null}
+          </span>
           <IconAction
             label={staged === files.length ? "Unstage everything" : "Stage everything"}
             size="xs"
@@ -460,16 +456,11 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
             {staged === files.length ? <MinusIcon /> : <PlusIcon />}
           </IconAction>
           <IconAction
-            label={selectedFile ? showDiff ? "Hide the diff" : "Show the diff" : "Select a file to preview"}
+            label="Review current changes in the center"
             size="xs"
-            disabled={!selectedFile}
-            data-on={showDiff || undefined}
-            onClick={() => togglePref("autoOpenDiff")}
+            onClick={openWorkingTree}
           >
-            {showDiff ? <PanelBottomCloseIcon /> : <PanelBottomOpenIcon />}
-          </IconAction>
-          <IconAction label="Refresh" size="xs" onClick={() => void actions.refreshGit()}>
-            <RefreshCwIcon />
+            <Maximize2Icon />
           </IconAction>
         </div>
       </div>
@@ -622,8 +613,6 @@ function CommitsSection({
   const hasRepo = useSession((state) => Boolean(state.git?.root))
   const branch = useSession((state) => state.git?.branch)
   const ahead = useSession((state) => state.git?.ahead ?? 0)
-  // With several repositories, each one's header already names its branch.
-  const named = useSession((state) => Boolean(state.git?.repositories?.length))
   if (!hasRepo) return null
   return (
     <div className="flex min-h-0 shrink-0 flex-col">
@@ -632,17 +621,11 @@ function CommitsSection({
         aria-expanded={open}
         aria-label={branch ? `History on ${branch}` : "History"}
         onClick={() => setOpen((value) => !value)}
-        className="pressable flex h-8 w-full shrink-0 items-center gap-2 pr-2.5 pl-3 text-left text-label transition-colors duration-100 hover:bg-fill-hover"
+        className="pressable flex h-7 w-full shrink-0 items-center gap-2 pr-3.5 pl-3.5 text-left text-label transition-colors duration-100 hover:bg-fill-hover"
       >
         <span className="text-muted-foreground">History</span>
-        {ahead > 0 ? <span className="tabular text-caution/80">{ahead} not pushed</span> : null}
+        {ahead > 0 ? <span className="tabular text-faint">{ahead} not pushed</span> : null}
         <span className="flex-1" />
-        {branch && !named ? (
-          <span className="flex min-w-0 items-center gap-1 text-faint">
-            <GitBranchIcon className="size-3 shrink-0" />
-            <span className="truncate">{branch}</span>
-          </span>
-        ) : null}
         <ChevronRightIcon className={cn("size-3 shrink-0 text-faint transition-transform duration-200 ease-[var(--ease-out)]", open ? "-rotate-90" : "rotate-90")} />
       </button>
       <Collapse open={open}>
@@ -748,7 +731,7 @@ function DirRow({
   const state = row.staged === 0 ? "off" : row.staged === row.files ? "on" : "partial"
   const FolderGlyph = row.collapsed ? FolderIcon : FolderOpenIcon
   return (
-    <div className="group relative flex h-6 items-center gap-1 select-none transition-colors duration-100 hover:bg-fill-hover">
+    <div className="group relative flex h-7 items-center gap-1 select-none transition-colors duration-100 hover:bg-fill-hover">
       <Guides depth={row.depth} />
       <button
         type="button"
@@ -811,7 +794,7 @@ function FileRow({
   const mark = MARK[file.status]
   return (
     <div className={cn(
-      "group relative flex h-6 items-center gap-1 select-none transition-colors duration-100",
+      "group relative flex h-7 items-center gap-1 select-none transition-colors duration-100",
       active ? "bg-fill-selected" : "hover:bg-fill-hover"
     )}>
       <Guides depth={row.depth} />

@@ -30,6 +30,8 @@ const reads = [
   "mako:handoff-candidates",
   "mako:handoff-settings",
   "mako:conversation-settings",
+  /** Where keeping this Mac awake stands; reads what `KeepAwake` holds. */
+  "mako:keep-awake",
   "mako:git-status",
   "mako:git-diff",
   "mako:git-diff-all",
@@ -290,7 +292,7 @@ const replays = [
   "mako:threads-act",
   /** `SettingsTool.call`: a read, or a setting set to a value; asked twice, the same end state. */
   "mako:settings-act",
-  /** `HarnessTool.act`: an install or update under way refuses a second, and one done is the same end state. */
+  /** `HarnessTool.act`: a repeat under its key gets the first outcome (`OnceByKey`), and after a restart an install under way refuses a second and one done is the same end state. */
   "mako:harnesses-act",
   /** `AgentAskGate.answer`: the ask's id; an answered ask ignores a repeat. */
   "mako:agent-ask-answer",
@@ -333,6 +335,8 @@ const replays = [
   "mako:handoff-settings-set",
   /** The same settings saved twice are one choice. */
   "mako:conversation-settings-set",
+  /** The same choice saved twice is one choice. */
+  "mako:keep-awake-set",
   /** `LiveAutoContinue.continueNow`: the request id is the continuation's; a repeat finds it and changes nothing. */
   "mako:live-continue-turn",
   /** `ThreadStore.renameThread` and `clearThreadTitle`: the operation id is receipted. */

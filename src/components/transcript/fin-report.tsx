@@ -1,7 +1,8 @@
-import { memo, useState } from "react"
+import { memo, use, useState } from "react"
 import { GitPullRequestIcon, LinkIcon } from "lucide-react"
 import type { FinReportCard } from "@mako/host/contracts/fin-reports"
 import { AgentAvatar } from "@/components/transcript/message-avatar"
+import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { useTranscriptSource } from "@/components/transcript/source-context"
 import { formatTime } from "@/lib/format"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
@@ -52,6 +53,7 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
       if (!answered) setSent(undefined)
     })
   }
+  const routed = use(RoutedOpenContext)
   const options = card.options ?? []
   const made = (card.artifacts ?? []).filter((artifact) => artifact.kind === "pull-request" || artifact.kind === "link")
   return (
@@ -61,7 +63,7 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
           {fin && thread ? (
             <button
               type="button"
-              onClick={() => openFinInApex(thread, apexTitle ?? "Apex", fin)}
+              onClick={() => (routed ? routed(fin) : openFinInApex(thread, apexTitle ?? "Apex", fin))}
               title={`Open ${card.name}`}
               className="pressable min-w-0 truncate text-ui font-medium text-foreground hover:underline"
             >

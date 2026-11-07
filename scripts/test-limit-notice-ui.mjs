@@ -205,6 +205,8 @@ async function check() {
   await until("document.querySelectorAll('[data-fin-row]').length > 0", "the phone's rows")
   await evaluate("[...document.querySelectorAll('button, a')].find((each) => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
   await until("Boolean(document.querySelector('[data-apex-count]'))", "the phone's Thread")
+  // The notice stands in the crew card, which mounts after the bar does: the card is what a read of it waits for.
+  await until("Boolean(document.querySelector('[data-crew]'))", "the phone's crew card")
   await settle()
   assert.equal(await evaluate("document.querySelectorAll('[data-limit-notice]').length"), 1, "a phone's Thread says the notice once")
   assert.ok(await evaluate("Boolean(document.querySelector('[data-limit-notice] [data-limit-seen]'))"), "and Got it is there")
