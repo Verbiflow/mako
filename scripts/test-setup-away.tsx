@@ -11,6 +11,8 @@ import { PhoneSetup, SetupPage } from "@/components/setup/setup-page"
 import { allAsks, answerAsk, readSetup, setSetupSource, setupStore } from "@/state/setup"
 import { inboxCount, inboxModel } from "@/state/inbox"
 import DeskSettings from "@/web-client/desk-settings"
+import { closeSetup, openSetup, setupOpenStore } from "@/web-client/setup-open"
+import { SetupRailRow } from "@/web-client/setup-rail-row"
 import type { ScreenRoute } from "@/web-client/route"
 import { Settings } from "@/web-client/settings"
 import { SetupScreen } from "@/web-client/setup-screen"
@@ -71,6 +73,12 @@ assert.deepEqual(opened.at(-1), { kind: "settings" }, "and goes back to Settings
 setSetupSource(source)
 await readSetup("shop")
 assert.match(renderToStaticMarkup(<SetupPage folder="shop" />), /data-setup-page=/, "the desk's form draws on the account broker's source")
+
+// The laptop's right rail has a Setup row, which opens Setup's layer.
+assert.match(renderToStaticMarkup(<SetupRailRow open={false} conversation="c-1" />), /data-surface-id="setup"/, "the laptop browser's rail has a Setup row")
+openSetup()
+assert.equal(setupOpenStore.get().open, true)
+closeSetup()
 
 // 2. On a page built away from the Mac, what only the Mac can do isn't offered.
 const page = setupStore.get().byFolder.shop!

@@ -94,8 +94,11 @@ export function SetupPage({ folder, addOpen }: { folder: string; addOpen?: boole
   )
 }
 
-/** A Thread's own place, in its side panel: its asks first, then what its place has, compact. */
-export function ThreadSetup({ folder, thread, elsewhere }: { folder: string | undefined; thread: string | undefined; elsewhere: string | undefined }) {
+/**
+ * A Thread's own place, in its side panel: its asks first, then what its place has, compact. "All of" opens the
+ * project's whole page: in the app's Settings, or where `onAll` says.
+ */
+export function ThreadSetup({ folder, thread, elsewhere, onAll }: { folder: string | undefined; thread: string | undefined; elsewhere: string | undefined; onAll?: (project: string) => void }) {
   const { view, failed } = useSetupView(folder)
   if (!folder) return <p className="px-4 py-3 text-label text-faint">Open a Thread to see what its place has.</p>
   if (!view) return <p className="px-4 py-3 text-label text-faint">{failed ? `Setup couldn't be read: ${failed}` : <Shimmer text="Reading this Thread's setup…" />}</p>
@@ -110,7 +113,7 @@ export function ThreadSetup({ folder, thread, elsewhere }: { folder: string | un
           {place.place.kind === "cloud" ? "This Thread's cloud machine" : place.title}
         </Chip>
         <span className="flex-1" />
-        <Action size="xs" className="text-faint" onClick={() => openAppSetup(view.root, "setup")}>
+        <Action size="xs" className="text-faint" onClick={() => (onAll ? onAll(view.root) : openAppSetup(view.root, "setup"))}>
           All of {view.project}
           <ArrowUpRightIcon />
         </Action>

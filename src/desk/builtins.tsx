@@ -1,5 +1,6 @@
 import { AgentsPanel } from "@/components/inspector/agents-panel"
 import { SetupPanel, SetupReading } from "@/components/inspector/setup-panel"
+import { useSetupOffered } from "@/components/inspector/setup-offered"
 import { setSetupDrafter } from "@/state/setup"
 import { actions } from "@/state/session"
 import { ControlPreviewOverlay } from "@/components/inspector/control-preview-overlay"
@@ -90,7 +91,7 @@ export function installBuiltins(): () => void {
       reading: ControlReading,
     }),
     registerSurface({ id: "agents", label: "Agents", icon: ApexMark, render: AgentsPanel, order: 4, reading: AgentsReading, useOffered: () => useAgentsOffered() }),
-    registerSurface({ id: "setup", label: "Setup", icon: PackageIcon, render: SetupPanel, order: 6, reading: SetupReading }),
+    registerSurface({ id: "setup", label: "Setup", icon: PackageIcon, render: SetupPanel, order: 6, reading: SetupReading, useOffered: useSetupOffered }),
     installSetupDrafter(),
     installSimulatorSurface(),
     // Identity, through the same slots a plugin would use. It lives in the

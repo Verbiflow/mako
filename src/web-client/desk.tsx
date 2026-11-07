@@ -33,6 +33,8 @@ import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { AgentsLayer } from "./agents-layer"
+import { SetupLayer } from "./setup-layer"
+import { closeSetup, setupOpenStore } from "./setup-open"
 import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
@@ -172,6 +174,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
         <FilesLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
         <AgentsLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
+        <SetupLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} onAll={(project) => open({ kind: "setup", project })} />
       </div>
       <CommandPalette />
       <ConfirmHost />
@@ -228,6 +231,7 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
 function toggleSide(): void {
   if (filesOpenStore.get().open) return closeFiles()
   if (agentsOpenStore.get().open) return closeAgents()
+  if (setupOpenStore.get().open) return closeSetup()
   toggleChanges()
 }
 

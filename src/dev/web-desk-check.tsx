@@ -11,6 +11,7 @@ import { applyLiveBatch, applyLiveSnapshot } from "@/state/live-recovery"
 import { store } from "@/state/session"
 import { threadsStore } from "@/state/thread-store"
 import { setSetupSource } from "@/state/setup"
+import { openSetup } from "@/web-client/setup-open"
 import { accountListStore } from "@/web-client/account-list"
 import { WebClient, WebClientContext } from "@/web-client/client"
 import Desk from "@/web-client/desk"
@@ -155,7 +156,7 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   account: { id: "account-check", name: "You", email: "you@example.com", image: null, entitlements: [] },
   deviceId: "browser-check",
   options: { origin: location.origin, base: "/", build: "fixture" },
-  gateway: { wake: () => undefined, rest: async (_method: string, path: string) => (search.get("setup") && path.startsWith("/v1/borrow/") ? { grants: [], leases: [], events: [], asks: [] } : Promise.reject(new Error("The fixture has no gateway"))) },
+  gateway: { wake: () => undefined, rest: async (_method: string, path: string) => ((search.get("setup") || search.get("side") === "setup") && path.startsWith("/v1/borrow/") ? { grants: [], leases: [], events: [], asks: [] } : Promise.reject(new Error("The fixture has no gateway"))) },
   push: { seen: async () => undefined, standing: async () => ({ standing: "unsupported", quietHours: null, timeZone: "UTC" }) },
   conversations: async () => ({
     open: (session: WebSession) => {
@@ -182,6 +183,8 @@ Reflect.set(window, "webDeskCheck", {
   },
 })
 
+// `&side=setup` opens Setup in the right rail over the Thread on screen.
+if (search.get("side") === "setup") openSetup()
 // The mock bridge would answer the page's first read; a real browser has only the account broker's source.
 if (search.get("setup")) setSetupSource(webSetup(client.gateway, "acct", () => []))
 
