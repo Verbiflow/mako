@@ -25,12 +25,13 @@
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
-import { homedir, tmpdir } from "node:os"
+import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { createInterface } from "node:readline"
 import { promisify } from "node:util"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /** A preferences domain of the test's own: its file is what the holder watches here, in place of System Settings'. */
 const DOMAIN = "dev.mako.test-appshot-taken-later"
@@ -75,7 +76,7 @@ async function holderProcess() {
 
 async function check() {
   const run = promisify(execFile)
-  const root = await mkdtemp(join(tmpdir(), "mako-appshot-taken-later-"))
+  const root = testScratch("mako-appshot-taken-later-")
   const evidence = resolve(process.argv[2] ?? join(root, "evidence"))
   await mkdir(evidence, { recursive: true })
   const electron = createRequire(import.meta.url)("electron")

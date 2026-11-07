@@ -1209,6 +1209,45 @@ async function finsAtWorkByBinding(): Promise<void> {
 }
 
 /** A stopped Fin's own queued Fins wait for it, whatever room there is, and start once it resumes. */
+/** A Fin's activity time moves with every token: alone it tells no one, or one Fin resends its Apex's whole roster to each conversation of its Thread. */
+async function activityTellsNoOne(): Promise<void> {
+  let began = false
+  const w = world("activity", (turn) => {
+    if (!turn.text.includes("You're fin:")) return "Started it."
+    began = true
+    return turn.world.hold(turn.conversation).then(() => "Done: it's finished.")
+  })
+  try {
+    const apex = await w.apex("codex")
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Keep working." }, harness: "claude", name: "busy", clientKey: "k-busy", cwd: w.root })
+    assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+    const fin = started.conversation
+    await waitFor(() => began, "the Fin's turn began")
+    // Its turn began: that's a move, which the first look below would tell.
+    w.agents.moved(fin)
+    const told: string[] = []
+    const childrenChanged = w.live.childrenChanged.bind(w.live)
+    w.live.childrenChanged = (id, progressOnly) => { told.push(id); childrenChanged(id, progressOnly) }
+    const held = w.live.held.bind(w.live)
+    let activityAt = Date.now()
+    w.live.held = (id) => { const reading = held(id); return reading && id === fin ? { ...reading, activityAt } : reading }
+    const before = w.agents.roster(apex.conversation)
+    for (let tick = 0; tick < 20; tick += 1) {
+      activityAt += 200
+      w.agents.moved(fin)
+    }
+    assert.equal(told.length, 0, "twenty activity ticks tell its Apex nothing")
+    assert.equal(w.agents.roster(apex.conversation), before, "and leave the roster the same roster")
+    const childrenBefore = told.length
+    w.release(fin)
+    await w.settle()
+    assert.ok(told.length > childrenBefore, "a Fin that really moved still tells its Apex")
+    assert.equal(w.agents.roster(apex.conversation).find((entry) => entry.child?.name === "busy")?.state.kind === "working", false, "and the roster shows it")
+  } finally {
+    await w.close()
+  }
+}
+
 async function stoppedApexHolds(): Promise<void> {
   let working = 0
   const w = new AgentsWorld({
@@ -1874,6 +1913,7 @@ try {
   await startedFinsOldQueueRow()
   await finsAtWorkByBinding()
   await stoppedApexHolds()
+  await activityTellsNoOne()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()

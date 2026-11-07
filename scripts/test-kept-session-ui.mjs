@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // Sessions their harness deleted, against the mock bridge's kept scene
 // (`?mock&app=kept`), light and dark: one only Mako's copy keeps
@@ -24,7 +24,7 @@ if (process.versions.electron) {
 } else {
   const { createServer } = await import("vite")
   const { default: electronPath } = await import("electron")
-  const root = process.argv[2] ?? await mkdtemp(join(tmpdir(), "mako-kept-session-ui-"))
+  const root = testScratch("mako-kept-session-ui-", { given: process.argv[2] })
   await mkdir(root, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, watch: null, fs: { strict: false } } })
   await server.listen()
@@ -40,7 +40,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Kept session UI evidence: ${root}`)
 }
 
 async function check() {
