@@ -557,6 +557,7 @@ export function ConversationTimeline({
   const steadyEnd = useRef<HTMLDivElement>(null)
   const highWater = useRef(0)
   const highWaterWidth = useRef(0)
+  const reflowing = useRef(0)
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
   /**
    * Each turn's React key, for the turns that came back under another id. A
@@ -1145,12 +1146,21 @@ export function ConversationTimeline({
           // A transcript followed at its end never moves back under the reader: a column that got shorter (a sending
           // row giving way to its turn's own) keeps its height as room at the end, which what it writes next fills.
           // At another width every line has flowed again (a phone turned sideways, a pane resized), and a height from
-          // before says nothing of what's under the reader: kept, it would leave the end blank.
+          // before says nothing of what's under the reader: kept, it would leave the end blank. Windowed rows take their
+          // new sizes after this first reads the width, so the frame after it is that same reflow, and no shrink.
           // Rows still at their estimate aren't height the column had: one measured below it is no shrink.
           const natural = column.offsetHeight
           const measured = natural - estimated.current()
           const width = column.offsetWidth
-          highWater.current = width === highWaterWidth.current ? Math.max(highWater.current, measured) : measured
+          if (width !== highWaterWidth.current) {
+            cancelAnimationFrame(reflowing.current)
+            reflowing.current = requestAnimationFrame(() => {
+              reflowing.current = requestAnimationFrame(() => {
+                reflowing.current = 0
+              })
+            })
+          }
+          highWater.current = reflowing.current ? measured : Math.max(highWater.current, measured)
           highWaterWidth.current = width
           spacer.style.height = `${highWater.current - measured}px`
         } else {
