@@ -647,10 +647,15 @@ export function ConversationTimeline({
    * doesn't change that one's size.
    */
   const [rowCheck] = useState(rowChecker)
+  /** The viewport and offset a live crossing into a window starts from (`carryIntoWindow`): `initialRect` is read as it's enabled. */
+  const crossingRect = useRef({ width: 0, height: 0 })
+  const crossingOffset = useRef(0)
   const rows = useVirtualizer({
     count: exchanges.length,
     enabled: windowed,
     getScrollElement: () => viewport.current,
+    initialRect: crossingRect.current,
+    initialOffset: () => crossingOffset.current,
     estimateSize: () => ESTIMATED_ROW,
     getItemKey: (index) => rowKey(index),
     overscan: 6,
@@ -672,11 +677,41 @@ export function ConversationTimeline({
       if (viewport.current) owned(viewport.current)
     },
   })
+  /**
+   * A conversation that grows into a window is on screen as it crosses, and the virtualizer's first commit knows neither
+   * the viewport nor its rows: it would mount the first turns at offset 0, and the column would paint empty until a seek
+   * landed a frame later. The rows are still laid out here, so it starts from their sizes, the viewport, and the offset
+   * that keeps the first row in view where it is, and that first commit paints what the last one did.
+   */
+  const carryIntoWindow = () => {
+    const node = viewport.current
+    if (!node?.clientHeight || named.current.identity !== identity || node.querySelector("[data-virtual-transcript]")) return
+    const view = node.getBoundingClientRect()
+    const indexes = new Map(exchanges.map((exchange, index) => [exchange.id, index]))
+    let anchor: { index: number; top: number } | undefined
+    for (const turn of node.querySelectorAll("[data-exchange]")) {
+      const index = indexes.get(turn.getAttribute("data-exchange") ?? "")
+      if (index === undefined) continue
+      const box = turn.getBoundingClientRect()
+      rows.itemSizeCache.set(rowKey(index), Math.round(box.height))
+      if (!anchor && box.bottom > view.top) anchor = { index, top: box.top }
+    }
+    if (!anchor) return
+    let start = rows.options.scrollMargin
+    for (let index = 0; index < anchor.index; index += 1)
+      start += (rows.itemSizeCache.get(rowKey(index)) ?? ESTIMATED_ROW) + ROW_GAP
+    crossingRect.current.width = node.clientWidth
+    crossingRect.current.height = node.clientHeight
+    crossingOffset.current = Math.max(0, start + view.top - anchor.top)
+  }
   const seeded = useRef<string | undefined>(undefined)
-  if (!windowed) seeded.current = undefined
-  else if (seeded.current !== identity) {
+  if (!windowed) {
+    seeded.current = undefined
+    crossingRect.current.width = crossingRect.current.height = crossingOffset.current = 0
+  } else if (seeded.current !== identity) {
     seeded.current = identity
     seedMeasured(readingSource, rows.itemSizeCache)
+    carryIntoWindow()
   }
   const mountedRows = useRef<() => boolean>(() => false)
   mountedRows.current = () => rowCheck.check({

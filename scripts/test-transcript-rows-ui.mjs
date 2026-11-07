@@ -139,6 +139,33 @@ const TURNS = `Promise.all([import('/src/state/live-recovery.ts'), import('/src/
   return true
 })`
 
+/** Each frame, once painted: the turns in view, how much of the view they fill, and for a reader up, the line they read. */
+const CROSSING = (up) => `(() => {
+  const node = document.querySelector('[data-transcript-viewport]')
+  const view = node.getBoundingClientRect()
+  const first = [...node.querySelectorAll('[data-exchange]')].find((turn) => turn.getBoundingClientRect().bottom > view.top + 40)
+  const anchor = ${up} ? first.dataset.exchange : null
+  const start = first.getBoundingClientRect().top
+  const seen = window.__crossing = { frames: 0, after: 0, crossed: false, empty: [], moved: [] }
+  const read = () => {
+    seen.frames += 1
+    if (node.hasAttribute('data-virtualized')) { seen.crossed = true; seen.after += 1 }
+    const turns = [...node.querySelectorAll('[data-exchange]')].map((turn) => turn.getBoundingClientRect())
+    const shown = turns.reduce((all, box) => all + Math.max(0, Math.min(box.bottom, view.bottom) - Math.max(box.top, view.top)), 0)
+    if (shown < view.height * (anchor ? 0.5 : 0.05)) seen.empty.push({ frame: seen.frames, turns: turns.length, shown: Math.round(shown), scrollTop: Math.round(node.scrollTop) })
+    if (anchor) {
+      const turn = node.querySelector('[data-exchange="' + anchor + '"]')
+      const by = turn ? turn.getBoundingClientRect().top - start : null
+      if (by === null || Math.abs(by) > 3) seen.moved.push({ frame: seen.frames, by: by === null ? 'gone' : Math.round(by) })
+    }
+  }
+  const after = new MessageChannel()
+  after.port1.onmessage = read
+  const tick = () => { after.port2.postMessage(0); requestAnimationFrame(tick) }
+  requestAnimationFrame(tick)
+  return true
+})()`
+
 const FORMS = [
   { form: "desk", path: "/?mock&app=apex&turns=260&idle=1", width: 1440, height: 900, mobile: false,
     open: "(() => { const row = [...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')); row?.click(); return Boolean(row) })()" },
@@ -308,6 +335,54 @@ async function check() {
       await faults("turns under a reader who wheeled up")
     }
     console.log(`${form}: corrections logged: ${corrected.length}; the last: ${corrected.at(-1)}`)
+  }
+  // The crossing into a window, at every width, under a reader who's up and one at the end, with turns streaming: each
+  // frame paints turns where the frame before had them. Read after the frame's paint, so nothing that lands a frame late
+  // passes for having been there.
+  for (const { form, path, width, height, mobile, open } of [
+    { form: "desk", path: "/?mock&app=apex&turns=12&idle=1", width: 1440, height: 900, mobile: false, open: FORMS[0].open },
+    { form: "a narrow window", path: "/scripts/web-desk.html?app=apex&thread=apex&turns=12&idle=1", width: 1100, height: 800, mobile: false },
+    { form: "phone", path: "/scripts/phone-apex.html?app=apex&turns=12&idle=1", width: 390, height: 844, mobile: true, open: FORMS[2].open },
+  ]) {
+    for (const reader of ["up", "at the end", "scrolling"]) {
+      guard.at(`${form}: crossing into a window, reader ${reader}`)
+      await window.loadURL("about:blank")
+      await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile })
+      await window.loadURL(`${base}${path}`).catch((error) => {
+        if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
+      })
+      if (open) await until(open, `${form}: its list`)
+      await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", `${form}: the Apex's turns`)
+      await evaluate(TURNS)
+      await wait(600)
+      assert.equal(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"), false, `${form}: starts short of a window, or nothing crosses`)
+      const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + 80 } })()")
+      const wheelBy = (deltaY) => page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY })
+      if (reader !== "at the end") {
+        await wheelBy(-500)
+        await wait(400)
+        const away = await evaluate("(() => { const node = document.querySelector('[data-transcript-viewport]'); return node.scrollHeight - node.scrollTop - node.clientHeight })()")
+        assert.ok(away > 96, `${form}: the reader left the end (${away})`)
+      }
+      await evaluate(CROSSING(reader === "up"))
+      let moving = reader === "scrolling"
+      const wheeling = (async () => {
+        for (let step = 0; moving; step += 1) {
+          await wheelBy(step % 12 < 6 ? -80 : 80)
+          await wait(30)
+        }
+      })()
+      for (let turn = 0; turn < 40 && !(await evaluate("window.__crossing.crossed")); turn += 1) await evaluate("window.__turn()")
+      await wait(500)
+      moving = false
+      await wheeling
+      const crossing = await evaluate("window.__crossing")
+      console.log(`${form}, reader ${reader}: crossed after ${crossing.frames} frames, ${crossing.after} frames after it, empty ${crossing.empty.length}, moved ${crossing.moved.length}${crossing.empty[0] ? ` first ${JSON.stringify(crossing.empty[0])}` : ""}${crossing.moved[0] ? ` first ${JSON.stringify(crossing.moved[0])}` : ""}`)
+      if (crossing.empty.length || crossing.moved.length) await shot(`${form} crossing, reader ${reader}`)
+      assert.ok(crossing.crossed, `${form}: the turns crossed into a window`)
+      assert.deepEqual(crossing.empty.slice(0, 3), [], `${form}, reader ${reader}: turns painted in every frame across the crossing`)
+      assert.deepEqual(crossing.moved.slice(0, 3), [], `${form}, reader ${reader}: what's read stays where it was across the crossing`)
+    }
   }
   console.log("Transcript rows: held apart in every frame on the desk, in a laptop's browser and on a phone, with and without the observer")
   app.exit(0)
