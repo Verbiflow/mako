@@ -18,6 +18,7 @@ import {
   LIVE_FRAME_MS,
   requestsDelta,
   compactLiveBatch,
+  rosteredLiveBatch,
   sessionDelta,
   sharedFields,
   sharedSession,
@@ -26,6 +27,7 @@ import {
   type LiveBatch,
   type LiveDriverEvent,
   type LiveRequest,
+  type LiveRoster,
   type LiveSnapshot,
   type LiveStartOptions,
   type LiveSummary,
@@ -645,6 +647,13 @@ export class LiveConversations {
     if (!resident) return null
     this.flush(resident)
     return this.stamp(resident.snapshot)
+  }
+
+  /** What a batch last told `id`'s windows of its roster: as of its last batch, not what's waiting to go in the next. */
+  async roster(id: string): Promise<LiveRoster | null> {
+    const resident = this.records.get(id)
+    const told = resident ? resident.journalSnapshot ?? resident.snapshot : await this.refreshedSnapshot(id)
+    return told && { ...(told.nativeAgents && { roster: told.nativeAgents }), revision: told.revision, epoch: this.epoch }
   }
 
   refreshedSnapshot(id: string): Promise<LiveSnapshot | null> {
@@ -1978,7 +1987,8 @@ export class LiveConversations {
     }
     // Readers hold `previous`; its updates were reduced against the blocks it held only when nothing replaced them since.
     const compact = compactLiveBatch(batch, { blocks: previous.blocks === delivered ? delivered : [], requests: previous.requests, ...(previous.control && { control: previous.control }) })
-    this.dependencies.emit({ type: "live-batch", batch, compact })
+    const rostered = rosteredLiveBatch(compact, previous.nativeAgents)
+    this.dependencies.emit({ type: "live-batch", batch, compact, ...(rostered && { rostered }) })
     this.relocations.changed(resident)
     // A turn that ended, as it ended, failed included: what its record holds is all it will.
     if (previous.session.status === "running" && settled(snapshot.session.status))

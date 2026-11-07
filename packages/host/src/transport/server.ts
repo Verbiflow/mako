@@ -8,7 +8,7 @@ import { once } from "node:events"
 import { chmod } from "node:fs/promises"
 import { packageLoads } from "@mako/lazy"
 import { z } from "zod"
-import { saidLiveForm, type LiveForm } from "@mako/protocol/live-form"
+import { saidWindowForm, type WindowLiveForm } from "@mako/protocol/live-form"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { TerminalEvent } from "../contracts/terminal.js"
 import { CORRELATION_HEADER, CorrelationIdSchema, LIVE_FORM_HEADER, RuntimeCallSchema, decodeRuntimeArgs, runtimeEventRouting, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
@@ -42,7 +42,7 @@ type EventStream = {
   observer: boolean
   history: boolean
   eventLimit: number
-  live: LiveForm
+  live: WindowLiveForm
   openedAt: number
   /**
    * Past `STREAM_BEHIND_BYTES`, until it catches up: the notice to read each conversation again, at the latest revision
@@ -241,7 +241,7 @@ export async function startWebHost(
         ? requestedLimit : 512 * 1024
       const stream: EventStream = { client: clientId, observer: request.headers["x-mako-observer"] === "1",
         history: request.headers["x-mako-history"] === "1", eventLimit,
-        live: saidLiveForm(request.headers[LIVE_FORM_HEADER]?.toString()), openedAt: Date.now(), missedBytes: 0 }
+        live: saidWindowForm(request.headers[LIVE_FORM_HEADER]?.toString()), openedAt: Date.now(), missedBytes: 0 }
       streams.set(response, stream)
       subscribersChanged()
       response.once("close", () => {

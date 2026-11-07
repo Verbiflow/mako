@@ -126,6 +126,7 @@ const reads = [
   "mako:read-file",
   "mako:capabilities",
   "mako:live-snapshot",
+  "mako:live-roster",
   /** A Thread's children, a child's report or transcript, and a wait for the next report (`contracts/agent-tools.ts`). */
   "mako:agents-list",
   "mako:agents-read",

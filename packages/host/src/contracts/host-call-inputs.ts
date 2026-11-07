@@ -1054,6 +1054,7 @@ const inputs = {
   "mako:live-sign-in-readiness": () => z.tuple([z.string()]),
   "mako:live-sign-in-resume": () => z.tuple([z.string(), z.boolean()]),
   "mako:live-snapshot": () => z.tuple([z.string()]),
+  "mako:live-roster": () => z.tuple([z.string()]),
   "mako:live-start": () =>
     z.tuple([
       z.string(),
@@ -2851,6 +2852,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-sign-in-readiness", "conversations"],
   ["mako:live-sign-in-resume", "conversations"],
   ["mako:live-snapshot", "conversations"],
+  ["mako:live-roster", "conversations"],
   ["mako:live-start", "conversations"],
   ["mako:live-state", "conversations"],
   ["mako:live-steer-queued", "conversations"],

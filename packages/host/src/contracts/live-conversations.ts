@@ -6,6 +6,7 @@ import { TRACE_PREFIX } from "@mako/protocol/live-tail"
 import { COMPACT_LIVE_FORM } from "@mako/protocol/live-form"
 import type { AttentionKind, WaitingFor } from "@mako/protocol/attention"
 import type {
+  NativeAgent,
   NativeAgentObservation,
   NativeAgentRoster,
 } from "./native-agents.js"
@@ -913,14 +914,86 @@ function bindingPatches(held: ConversationControl, next: ConversationControl): F
  * - `requestPatches`: each changed request a reader holds, as the fields that changed; new ones stay in `requestChanges`;
  * - `bindingPatches`: the control's bindings that changed, likewise, when nothing else of the control did;
  * - no `changedFrom` when only the last block changed (it's `blockCount - 1`), and neither it nor `blockCount` when no
- *   block did.
+ *   block did;
+ * - `rosterPatch`, in place of `nativeAgents`, only as a host's own windows hear it (`rosteredLiveBatch`).
  */
 export type CompactLiveBatch = Omit<LiveBatch, "updates"> & {
   form: typeof COMPACT_LIVE_FORM
   updates: CompactLiveUpdate[]
   requestPatches?: FieldPatch<LiveRequest>[]
   bindingPatches?: FieldPatch<ConversationBinding>[]
+  rosterPatch?: RosterPatch
 }
+
+/**
+ * What changed of a roster: each entry new or changed, whole, and the entries gone. An Apex with 81 entries sent all of
+ * them for each one that moved: on 2026-11-06 that was 202 MB of a window's 203 MB in five minutes, 199 KB a batch.
+ * `seal` is the roster it makes, which its reader checks: a held roster that isn't the one the host wrote this against
+ * (a conversation read back from its journal holds only its provider's entries) reads as a gap, never as a wrong roster.
+ */
+export type RosterPatch = { agents?: NativeAgent[]; gone?: string[]; limited?: boolean; seal: number }
+
+const agentKey = (agent: NativeAgent) => `${agent.bindingId}\0${agent.nativeId}`
+
+/** A roster's entries, their order, and when each last moved and how it stands, as a number (FNV-1a), cheap enough for every batch. */
+function rosterSeal(roster: NativeAgentRoster): number {
+  let seal = 0x811c9dc5 ^ (roster.limited ? 1 : 0)
+  for (const agent of roster.agents) {
+    const key = `${agentKey(agent)}\0${agent.observedAt}\0${agent.state.kind}\0`
+    for (let at = 0; at < key.length; at += 1) seal = Math.imul(seal ^ key.charCodeAt(at), 0x01000193)
+  }
+  return seal >>> 0
+}
+
+/** `held` with `patch` applied: new entries land last. Undefined when that isn't the roster `patch` was written to make. */
+export function applyRosterPatch(held: NativeAgentRoster, patch: RosterPatch): NativeAgentRoster | undefined {
+  const changed = new Map((patch.agents ?? []).map((agent) => [agentKey(agent), agent]))
+  const gone = new Set(patch.gone)
+  const agents: NativeAgent[] = []
+  for (const agent of held.agents) {
+    const key = agentKey(agent)
+    if (gone.has(key)) continue
+    agents.push(changed.get(key) ?? agent)
+    changed.delete(key)
+  }
+  agents.push(...changed.values())
+  const roster = { ...held, agents, ...(patch.limited !== undefined && { limited: patch.limited }) }
+  return rosterSeal(roster) === patch.seal ? roster : undefined
+}
+
+/** `next` as what changed of `held`, where that makes `next` exactly, order included, in fewer characters than `next` whole. */
+function rosterPatch(held: NativeAgentRoster, next: NativeAgentRoster): RosterPatch | undefined {
+  const heldEntries = new Map(held.agents.map((agent) => [agentKey(agent), agent]))
+  const stays = new Set(next.agents.map(agentKey))
+  const agents = next.agents.filter((agent) => {
+    const was = heldEntries.get(agentKey(agent))
+    return agent !== was && (!was || canonicalJson(agent) !== canonicalJson(was))
+  })
+  const gone = held.agents.map(agentKey).filter((key) => !stays.has(key))
+  const patch: RosterPatch = {
+    ...(agents.length && { agents }),
+    ...(gone.length && { gone }),
+    ...(next.limited !== held.limited && { limited: next.limited }),
+    seal: rosterSeal(next),
+  }
+  if (applyRosterPatch(held, patch)?.agents.length !== next.agents.length) return undefined
+  return JSON.stringify(patch).length < JSON.stringify(next).length ? patch : undefined
+}
+
+/**
+ * `batch` as a host's own windows hear it, where its roster goes as what changed of `held`, the one they hold at the
+ * revision before; undefined where it has no roster to say so or a whole one says it better. A window that can't read it
+ * reads the whole roster (`mako:live-roster`).
+ */
+export function rosteredLiveBatch(batch: CompactLiveBatch, held: NativeAgentRoster | undefined): CompactLiveBatch | undefined {
+  const { nativeAgents, ...rest } = batch
+  if (!held || !nativeAgents) return undefined
+  const patch = rosterPatch(held, nativeAgents)
+  return patch && { ...rest, rosterPatch: patch }
+}
+
+/** The roster its windows have been told, as of `revision`, for one that couldn't read a batch's change to it. */
+export type LiveRoster = { roster?: NativeAgentRoster; revision: number; epoch?: string }
 
 /** A batch as a reader hears it: whole, or in the compact form where it said it reads that. */
 export type HeardLiveBatch = LiveBatch | CompactLiveBatch
@@ -963,15 +1036,16 @@ export function compactLiveBatch(batch: LiveBatch, before: LiveBatchBase): Compa
 }
 
 /** A compact batch as its reader read it (`expandLiveBatch`). */
-export type ExpandedLiveBatch = { batch: LiveBatch; unread: boolean; unheld: FieldPatch<LiveRequest>[] }
+export type ExpandedLiveBatch = { batch: LiveBatch; unread: boolean; unheld: FieldPatch<LiveRequest>[]; unreadRoster?: RosterPatch }
 
 /**
  * A compact batch read against what its reader holds (`held`), as the whole batch its owner wrote it from. What `held`
  * doesn't hold to read it against is left out and `unread`: a reader that holds the conversation reads it again; one that
- * only lists it takes the rest. `unheld` are the patches of requests `held` doesn't hold.
+ * only lists it takes the rest. `unheld` are the patches of requests `held` doesn't hold; `unreadRoster`, the change to a
+ * roster it can't read, which one that only lists it reads whole, since the rail draws from it.
  */
-export function expandLiveBatch(batch: CompactLiveBatch, held: { blocks: Entry[]; requests?: readonly LiveRequest[]; control?: ConversationControl }): ExpandedLiveBatch {
-  const { updates, changedFrom, requestChanges, requestPatches, control, bindingPatches: bindings, ...rest } = batch
+export function expandLiveBatch(batch: CompactLiveBatch, held: { blocks: Entry[]; requests?: readonly LiveRequest[]; control?: ConversationControl; nativeAgents?: NativeAgentRoster }): ExpandedLiveBatch {
+  const { updates, changedFrom, requestChanges, requestPatches, control, bindingPatches: bindings, rosterPatch: roster, ...rest } = batch
   const expanded = expandLiveUpdates(held.blocks, updates)
   let unread = expanded === undefined
   const whole: LiveBatch = { ...rest, updates: expanded ?? [] }
@@ -999,6 +1073,9 @@ export function expandLiveBatch(batch: CompactLiveBatch, held: { blocks: Entry[]
       }) }
     else unread = true
   }
+  const nativeAgents = roster && held.nativeAgents && applyRosterPatch(held.nativeAgents, roster)
+  if (nativeAgents) whole.nativeAgents = nativeAgents
+  else if (roster) return { batch: whole, unread: true, unheld, unreadRoster: roster }
   return { batch: whole, unread, unheld }
 }
 

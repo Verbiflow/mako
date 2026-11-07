@@ -8,7 +8,7 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { noteFinAsks, noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import { changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch } from "@mako/host/contracts/live-conversations"
+import { applyRosterPatch, changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch, type RosterPatch } from "@mako/host/contracts/live-conversations"
 import { laterPrompt, personPromptedAt, promptedAfter } from "@mako/host/contracts/worked-at"
 import { projectLive } from "@/state/live-projection"
 import { toast } from "sonner"
@@ -20,6 +20,8 @@ import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, HeardLiveBatch[]>()
+/** The conversations whose whole roster this window is reading (`readRoster`), with each change to it heard since. */
+const rosterReads = new Map<string, { patch: RosterPatch; revision: number }[]>()
 // Invalid/oversized snapshots cannot be repaired by refetching on every token.
 // Activation and reconnect retry them. Transient outages may recover on a later
 // batch even if the independent event stream stayed connected throughout.
@@ -337,9 +339,37 @@ export function applyLiveBatch(heard: HeardLiveBatch): void {
   if (!isCompactBatch(heard)) return applyBatch(heard, heard, false)
   const current = acpStore.get().conversations[heard.id]
   const held = current?.kind === "live" && sameEpoch(current, heard) && heard.revision === (current.revision ?? 0) + 1 ? current : undefined
-  const read = expandLiveBatch(heard, held ? { blocks: held.hydrated ? held.blocks : [], requests: held.requests ?? [], ...(held.control && { control: held.control }) } : { blocks: [] })
+  const roster = held?.hydrated || !rosterReads.has(heard.id) ? held?.nativeAgents : undefined
+  const read = expandLiveBatch(heard, held ? { blocks: held.hydrated ? held.blocks : [], requests: held.requests ?? [], ...(held.control && { control: held.control }), ...(roster && { nativeAgents: roster }) } : { blocks: [] })
   for (const patch of read.unheld) settleMessage(patch.id, true)
   applyBatch(read.batch, heard, read.unread)
+  if (read.unreadRoster) readRoster(heard.id, read.unreadRoster, heard.revision)
+}
+
+/**
+ * The whole roster of a conversation this window only lists, whose change to it it couldn't read: it attached after the
+ * roster last went whole, missed a batch, or holds another. One this window shows is read again with its snapshot. What
+ * changes while this reads is laid over the answer, and if that can't be read either, the next change asks again.
+ */
+function readRoster(id: string, patch: RosterPatch, revision: number): void {
+  const listed = acpStore.get().conversations[id]
+  if (listed?.kind !== "live" || listed.hydrated || fetching.has(id)) return
+  const heard = rosterReads.get(id)
+  if (heard) return void heard.push({ patch, revision })
+  rosterReads.set(id, [{ patch, revision }])
+  void getMako().liveRoster(id).then((told) => {
+    const since = rosterReads.get(id) ?? []
+    rosterReads.delete(id)
+    const current = acpStore.get().conversations[id]
+    if (current?.kind !== "live" || current.hydrated) return
+    if (!told || !sameEpoch(current, told)) return
+    let roster = told.roster
+    for (const each of since) if (each.revision > told.revision) roster = roster && applyRosterPatch(roster, each.patch)
+    if (!roster) return
+    const next = { ...current, nativeAgents: reconcileRoster(current.nativeAgents, roster) }
+    replaceAcpConversation(id, next)
+    noteFinAsks(next)
+  }, () => void rosterReads.delete(id))
 }
 
 /**
@@ -390,6 +420,8 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
           ? current.threadPath
           : (batch.threadPath ?? undefined),
       revision: batch.revision,
+      // Unloaded after a host's restart it holds the last host's, and no change to its roster would read against it.
+      epoch: batch.epoch ?? current.epoch,
       activityAt: batch.activityAt ?? current.activityAt,
       nativeActivity: batchNativeActivity(batch, current),
       updatedAt: Date.now(),
