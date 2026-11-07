@@ -292,9 +292,13 @@ export function finAskWaiting(ask: Pick<FinAsk, "id" | "kind">, name: string, li
   return { for: ask.kind === "approval" ? "approval" : "question", line: `${name}: ${line}` }
 }
 
-/** Who answered a Fin's question, while it works on the answer: "You answered: Merge", "Apex answered: Merge". */
-export function answeredWords(answered: FinAnswered): string {
-  return `${answered.by === "person" ? "You" : APEX_WORD} answered: ${answered.answer}`
+/**
+ * Who answered a Fin's question, while it works on the answer: "You answered: Merge", "Apex answered: Merge". Answers
+ * kept before their header was left off lose it here, and one with nothing else in it says nothing.
+ */
+export function answeredWords(answered: FinAnswered): string | undefined {
+  const answer = (agentWords(answered.answer)?.body ?? answered.answer).trim()
+  return answer ? `${answered.by === "person" ? "You" : APEX_WORD} answered: ${answer}` : undefined
 }
 
 type ListedWaitingOn = NonNullable<Extract<ListedFinState, { kind: "idle" }>["waitingOn"]>[number]
@@ -549,7 +553,7 @@ export function childLine(state: ChildState, now?: number): string | undefined {
     case "starting":
       return "Starting"
     case "working":
-      return state.phase ?? (state.answered && answeredWords(state.answered)) ?? readableStep(state.step)
+      return state.phase ?? (state.answered && answeredWords(state.answered)) ?? readableStep(state.step) ?? "At work"
     case "blocked":
       return state.question
     case "idle":

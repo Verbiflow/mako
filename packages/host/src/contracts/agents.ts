@@ -481,6 +481,8 @@ export interface ChildThread {
   step?: string
   /** Its turn ended on work of its own Fins or its move, which it waits for: at work, but holding no room its Fins need. */
   awaiting?: string
+  /** When its work now began: its turn's start, or with `awaiting`, when that turn ended. Absent when nothing says. */
+  workSince?: number
   /** An approval or question in it waits, on whom, and what answers it. */
   waiting?: { question: string; on: "lead" | "person" | "approval"; ask?: FinAsk }
   /** How its last turn or run ended; absent while one runs or before any ended. */
@@ -494,7 +496,24 @@ export interface ChildThread {
 export interface ChildJournal {
   latest?: Report
   /** The last answer to a question in its report: who gave it, when, and the ask it answers, which it settles alone. */
-  answered?: FinAnswered & { ask: string; at: number; /** It reached the Fin, so the question no longer holds it. */ delivered?: true }
+  answered?: FinAnswered & {
+    ask: string
+    at: number
+    /** It reached the Fin, so the question no longer holds it. */
+    delivered?: true
+    /** A message that happened to cross the question, rather than an answer given to it. */
+    routine?: true
+  }
+}
+
+/** An answer lands a moment either side of the turn it starts. */
+const ANSWER_TURN_SLACK_MS = 5_000
+
+/** Whether a row says who answered: an answer to this turn. An Apex's message that crossed the question closed it, and answered nothing. */
+function answerShown(journal: ChildJournal, thread: ChildThread): boolean {
+  const answer = journal.answered
+  if (!answer || (answer.routine && answer.by !== "person")) return false
+  return thread.workSince === undefined || answer.at >= thread.workSince - ANSWER_TURN_SLACK_MS
 }
 
 /** Its last report's first sentence: what a strip and the digest show it at. */
@@ -529,7 +548,7 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   const phase = latest?.status === "progress" ? reportPhase(latest) : undefined
   // By identity, never by time: an answer settles the ask it names, and a newer ask is open whatever the clocks say.
   const answered = journal.answered && latest && journal.answered.ask === reportAsk(latest).id ? { by: journal.answered.by, answer: journal.answered.answer } : undefined
-  if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && { answered }) }
+  if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && answerShown(journal, thread) && { answered }) }
   // A question it waits on blocks it until the answer has reached it: that answer is what it goes on with.
   if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !(answered && journal.answered?.delivered) && !edge.closedAt)
     return {
@@ -557,6 +576,29 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   if (edge.closedAt) return { kind: "ended", outcome: "stopped" }
   if (latest?.status === "progress" && latest.waitingOn?.length) return { kind: "idle", waitingOn: latest.waitingOn, since: latest.at }
   return { kind: "idle" }
+}
+
+/**
+ * When a Fin came to stand as it does, the one rule every row's time reads. A working Fin's is its turn, however long
+ * ago it was spawned, and one waiting on its own Fins counts from when that turn ended; each other state, from when it
+ * got there. A working Fin with no known turn says none, since its age would read as a turn it isn't on.
+ */
+export function childSince(edge: ThreadParent, thread: ChildThread, journal: ChildJournal, state: ChildState): number | undefined {
+  const latest = journal.latest?.at
+  switch (state.kind) {
+    case "queued":
+    case "starting":
+      // A Fin held or starting again counts from what it last did, and only one that never has from when it was asked.
+      return thread.updatedAt ?? thread.startedAt ?? edge.createdAt
+    case "working":
+      return thread.workSince ?? (thread.source === "followed" ? thread.startedAt : undefined)
+    case "blocked":
+      return (thread.waiting ? thread.updatedAt : latest) ?? latest ?? thread.updatedAt
+    case "idle":
+      return state.since ?? thread.updatedAt ?? latest ?? thread.ended?.at ?? edge.closedAt ?? edge.createdAt
+    case "ended":
+      return thread.ended?.at ?? latest ?? edge.closedAt ?? edge.createdAt
+  }
 }
 
 /** What a Fin whose stop outlived its kill says, in place of its stop's reason, while its process still runs (`FollowedRun.stopping`). */
@@ -612,6 +654,8 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
   if (edge.role !== "worker") entry.role = edge.role
   if (thread.toolUses) entry.usage = { toolUses: thread.toolUses }
   if (state.kind === "ended") entry.settledAt = thread.ended?.at ?? journal.latest?.at ?? edge.closedAt ?? edge.createdAt
+  const since = childSince(edge, thread, journal, state)
+  if (since !== undefined) entry.since = since
   return entry
 }
 

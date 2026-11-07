@@ -337,9 +337,10 @@ function took(ms: number): string {
 }
 
 /**
- * The time on a row. The shared clock ticks once a second only while the Fin
- * works; a minute or an hour is the same string for that whole stretch, so
- * the row's label doesn't repaint on the seconds in between.
+ * The time on a row: how long the Fin has stood as it does (`since`), a working
+ * one's current turn and never its age. The shared clock ticks once a second; a
+ * minute or an hour is the same string for that whole stretch, so the row's
+ * label doesn't repaint on the seconds in between.
  */
 const CrewElapsed = memo(function CrewElapsed({
   agent,
@@ -348,12 +349,9 @@ const CrewElapsed = memo(function CrewElapsed({
   agent: NativeAgent
   className?: string
 }) {
-  const state = childStateOf(agent)
-  const working = state.kind === "working" || state.kind === "starting"
-  const start = agent.startedAt ?? agent.observedAt
-  const frozen = (agent.settledAt ?? agent.observedAt) - start
-  const text = useTickingText(working, (now) =>
-    took(working ? now - start : frozen)
+  const since = agent.since
+  const text = useTickingText(since !== undefined, (now) =>
+    since === undefined ? "" : took(now - since)
   )
   if (!text) return null
   return <span className={cn("tabular shrink-0", className)}>{text}</span>

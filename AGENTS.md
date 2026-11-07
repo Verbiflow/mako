@@ -2614,6 +2614,13 @@ deliberate action and never rides along with a commit.
   home path. "Waiting on 4 agents" beside "3 Fins working" is what happens
   without this; `npm run test:fin-counts-ui` draws every surface from one
   roster and requires the same numbers, and `test:fin-words` holds the words.
+- **A Fin's row says how long it has stood as it does, never how old it is.** `childSince` is the one rule, carried
+  as the entry's `since`: a working Fin's current turn, from when its request was dispatched (`dispatchedAt`), since a
+  message can wait long after it's admitted; one waiting on its own Fins from when its turn ended; each other state
+  from when it got there. A working Fin with no known turn says no time. Its line always says something (`At work`
+  with nothing else known), and "answered" only for an answer to this turn, in plain words: a message from its Apex
+  that crossed a question closes it (rule 13) and answers nothing. `npm run test:fin-row-time` holds the rule, and
+  `test:orch-deliver` and `test:crew-card-ui` the real turn and every form.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, at its last line; an agent's
   fin, still, with its harness as the badge, on its reply's byline; and a
