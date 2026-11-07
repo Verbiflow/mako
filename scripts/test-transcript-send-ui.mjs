@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * A long Apex Thread (`?mock&app=apex&turns=260`, windowed rows, the crew card and the Fins' reports below them) on
@@ -23,7 +23,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-transcript-send-"))
+  const root = testScratch("mako-transcript-send-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-transcript-send", main: fileURLToPath(import.meta.url) }))
   const given = process.argv.slice(2).find((arg) => /^https?:/.test(arg))
   let server
@@ -43,7 +43,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Transcript send evidence: ${root}`)
 }
 
 /**

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * The rail's top rows and the Inbox, against the production components on the Apex scene (`?mock&app=apex`, "Mobile
@@ -26,7 +26,7 @@ if (process.versions.electron) {
   const { createServer } = await import("vite")
   const portAt = process.argv.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(process.argv[portAt + 1])
-  const root = await mkdtemp(join(tmpdir(), "mako-inbox-ui-"))
+  const root = testScratch("mako-inbox-ui-")
   const server = await createServer({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
@@ -46,7 +46,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`UI evidence: ${root}`)
 }
 
 /** The needs-you facts, read in the page from the contract and the Thread status the marks read, not from the Inbox. */

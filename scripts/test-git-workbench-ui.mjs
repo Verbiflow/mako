@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (process.versions.electron) {
   void check().catch(async (error) => {
@@ -14,7 +14,7 @@ if (process.versions.electron) {
 } else {
   const { createServer } = await import("vite")
   const { default: electronPath } = await import("electron")
-  const root = await mkdtemp(join(tmpdir(), "mako-git-workbench-"))
+  const root = testScratch("mako-git-workbench-")
   // A Thread already has its supervised Vite app on its own address.
   const threadUrl = process.env.MAKO_THREAD_URL
   const server = threadUrl ? undefined : await createServer({
@@ -46,7 +46,6 @@ if (process.versions.electron) {
   } finally {
     if (server) await server.close()
   }
-  console.log(`Git workbench evidence: ${root}`)
 }
 
 async function check() {

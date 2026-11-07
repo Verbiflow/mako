@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // The crew card (`crew-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
 // its own turn settles and its Fins still work, on the mock bridge's Apex scene (`?mock&app=apex`): every Fin
@@ -19,7 +19,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-crew-card-ui-"))
+  const root = testScratch("mako-crew-card-ui-")
   await writeFile(
     join(root, "package.json"),
     JSON.stringify({
@@ -60,7 +60,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Crew card UI evidence: ${root}`)
 }
 
 /**
