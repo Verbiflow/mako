@@ -52,6 +52,7 @@ export const MAKO_CALLS: readonly { tool: string; args: ToolArguments; output: s
   { tool: "app_own_packages", args: {}, output: "owned: 2" },
   { tool: "port_holder", args: { port: 5173 }, output: "free" },
   { tool: "thread_move", args: { to: "cloud", clientKey: "k8" }, output: "moving: true" },
+  { tool: "harness", args: { action: "update", harness: "codex", clientKey: "k11" }, output: "started" },
   { tool: "settings", args: { action: "set", setting: "harness-order", value: ["claude", "codex"], clientKey: "k10" }, output: "set" },
   { tool: "thread", args: { action: "rename", title: "Ship the importer", clientKey: "k9" }, output: "renamed" },
 ]
