@@ -454,6 +454,7 @@ export class CloudAccounts {
           return true
         },
         (error) => {
+          this.#options.log?.("cloud sign-in didn't finish", { error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) })
           this.#endSignIn({ kind: "failed", message: messageOf(error, "Signing in didn't finish. Try again.") }, { graceful: true })
           finish()
           return false
