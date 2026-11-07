@@ -1638,7 +1638,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const first = asks[0]
     if (!first) return undefined
     // A harness's own ask in its words; the reason it's the person's is the Agents panel's to say.
-    const finConversation = first.ask.kind === "report" ? undefined : this.conversationOf(first.edge.child)
+    const finConversation = first.ask.kind === "report" ? undefined : this.askingConversation(first.edge.child)
     const line = (finConversation && this.deps.live.waitingOn(finConversation)?.line) || first.question
     return { fin: first.edge.child, name: first.edge.name, line, ask: first.ask, more: asks.length - 1 }
   }
@@ -1737,7 +1737,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const tier = by.kind === "apex" ? this.tierOf(by.apex) : "full"
     if (ask.kind === "approval" && tier !== "full")
       return { refused: "access", why: `${edge.name}'s approval is the person's: this Thread is on ${tier}, and only an ${APEX_WORD} on full access answers its ${FIN_WORD}s' approvals. Leave it to them with person: true.` }
-    const conversation = this.conversationOf(edge.child)
+    const conversation = this.askingConversation(edge.child)
     const pending = conversation ? this.deps.live.pendingAsk(conversation) : undefined
     if (!conversation || !pending || pending.request !== ask.id) return { refused: "conflict", why: `${edge.name} no longer waits on that: it was answered.` }
     if (pending.gone) return { refused: "unavailable", why: `${edge.name}'s harness exited while it waited, so no answer reaches it: agents_send gives it a message to go on.` }
@@ -3248,7 +3248,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** What the Fin's Thread shows now, from whatever runs its current turn: one source at a time. */
   private childReading(edge: ThreadParent): ChildThread {
     const run = edge.run
-    const conversation = this.conversationOf(edge.child)
+    const conversation = this.askingConversation(edge.child)
     // A run Mako stopped is read from its process until that has exited (`AgentRuns.isTerminating`), whatever reads after it.
     if (run && (!run.ended || !conversation || this.runs.isTerminating(edge.child))) return this.runs.reading(edge.child) ?? { source: "followed", harness: run.harness }
     if (!conversation) return { source: "live", ...(this.starting.has(edge.op) && { starting: "launching" as const }) }
@@ -3399,7 +3399,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * (`escalate`), so no ask sits on an Apex busy with a long turn of its own.
    */
   private askApex(edge: ThreadParent): void {
-    const conversation = this.conversationOf(edge.child)
+    const conversation = this.askingConversation(edge.child)
     const waiting = conversation ? this.deps.live.waitingOn(conversation) : undefined
     if (!conversation || !waiting) {
       this.asked.delete(edge.child)
@@ -4602,6 +4602,21 @@ export class Agents implements AgentOperations, ConversationChildren {
       return conversation
     }
     return undefined
+  }
+
+  /**
+   * The conversation a Fin's standing is read from and its ask answered in: of its Thread's Sessions, the newest one
+   * waiting on the person (a question or an approval), else its newest (`conversationOf`). A Fin read its newest Session
+   * alone, so an approval in an older tab, beside a newer one left idle, was never its Apex's or the person's to see. What
+   * waits is held in memory (`waitingOn`), so nothing is read in to find it.
+   */
+  private askingConversation(thread: string): string | undefined {
+    const store = this.store()
+    const sessions = store?.thread(ThreadIdSchema.parse(thread))?.sessions ?? []
+    for (let index = sessions.length - 1; index >= 0; index -= 1)
+      for (const conversation of store?.conversationsOf(sessions[index]!) ?? [])
+        if (this.deps.live.waitingOn(conversation)) return conversation
+    return this.conversationOf(thread)
   }
 
   /**

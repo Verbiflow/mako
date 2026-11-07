@@ -306,7 +306,10 @@ const byThread = new WeakMap<AcpState["conversations"], { order: AcpState["threa
  * holds, and of one Session the fullest. A Fin's moves, its progress and its start, end or change of state alike, reach
  * only its Apex's newest Session (`finReaders`), so every surface takes its Fins by this one rule, from a roster this
  * window holds or a row the account lists alike, as what a Session waits on does (`conversationWork`). A Thread with no
- * group has one Session.
+ * group has one Session. These are copies of the Fins, current only in the newest, so an ask in an older copy isn't
+ * ranked first: it's one answered since. An ask a Session makes itself always surfaces where it's read: a Fin's
+ * standing is read from whichever of its Sessions waits on the person (`askingConversation` on its host), and a ranking
+ * of a Session's own standing ranks one with an open ask above one without, then by this order.
  */
 export function newestSaid<Value>(state: AcpState, said: (conversation: Extract<AcpConversation, { kind: "live" }>) => { value: Value; fullness: number } | undefined): Map<string, Value> {
   const index = new Map<string, Value>()

@@ -19,7 +19,7 @@ import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/backgro
 import { AFTER_LIMIT, CHILDREN_BINDING, withChildren } from "@mako/host/contracts/native-agents"
 import { listedAsThread, threadList } from "@mako/host/contracts/thread-list"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
-import { HANDED_OVER_NOTE } from "@mako/host/contracts/children"
+import { HANDED_OVER_NOTE, listedFins } from "@mako/host/contracts/children"
 import { END_CONFIRM_MS, lastStep, PROCESS_READS, type ProcessReads } from "@mako/host/conversations/agent-runs"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { namedUuid } from "@mako/host/conversations/cloud-moves"
@@ -1377,6 +1377,46 @@ async function finsMoveInTheNewestSession(): Promise<void> {
   }
 }
 
+/**
+ * An open ask always surfaces: whichever Session of a Fin's Thread waits on an approval, the older or the newer, beside
+ * one left idle, is what the Fin's standing says, here (its Apex's roster and the person's ask) and on another device
+ * (the row it draws from the account's list), and the answer reaches the Session that asked. A Fin read one Session
+ * alone, the one its host first found, so an approval in another tab was nobody's to see.
+ */
+async function anySessionAsks(): Promise<void> {
+  for (const asker of ["newer", "older"] as const) {
+    const w = world(`asks-${asker}`, (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : "Started it."))
+    try {
+      const apex = await w.apex("codex")
+      const started = await w.agents.start(apex.caller, { brief: { objective: "Finish." }, harness: "claude", name: "asker", clientKey: "k-asker", cwd: w.root })
+      assert.ok(!("refused" in started) && started.conversation && started.child, JSON.stringify(started))
+      await waitFor(() => w.live.held(started.conversation!)?.requests[0]?.status === "completed", "the Fin's first turn ends")
+      // A new tab of the Fin's Thread, idle once its first turn ends: its newest Session.
+      const tab = w.store.createSession({ operationId: randomUUID(), thread: ThreadIdSchema.parse(started.child), actor: w.store.person() })
+      const newer = randomUUID()
+      await w.live.start("claude", w.root, { conversationId: newer, session: tab.session, initialRequest: { id: randomUUID(), text: "Anything else?", attachments: [] } })
+      await waitFor(() => w.live.held(newer)?.requests[0]?.status === "completed", "the new tab's first turn ends")
+      const entry = () => w.agents.roster(apex.conversation).find((agent) => agent.child?.thread === started.child)
+      assert.notEqual(entry()?.child?.state?.kind, "blocked", `${asker}: nothing asks yet`)
+      const asking = asker === "newer" ? newer : started.conversation!
+      const answered = w.ask(asking, "Run the migration?")
+      await waitFor(() => entry()?.child?.state?.kind === "blocked", `${asker}: its Apex's roster says the ${asker} Session asks, not that the other is idle`)
+      const ask = w.agents.personAsk(apex.conversation)
+      assert.equal(ask?.line, "Approve: Run the migration?", `${asker}: the person is asked it`)
+      // Another device draws the Fin from the account's list of the Apex: it asks there too.
+      const listed = listedFins(w.agents.roster(apex.conversation))?.find((fin) => fin.thread === started.child)
+      assert.equal(listed?.state.kind, "blocked", `${asker}: the row another device draws from says it asks`)
+      // The answer goes to the Session that asked.
+      const respond = await w.agents.respond(apex.conversation, { fin: ask!.fin, ask: ask!.ask.id, request: randomUUID(), allow: true })
+      assert.ok(!("refused" in respond), JSON.stringify(respond))
+      await answered
+      assert.equal(w.live.waitingOn(asking), undefined, `${asker}: the answer reached the Session that asked`)
+    } finally {
+      await w.close()
+    }
+  }
+}
+
 /** A list reads what the listing and the store hold, never a journal: one Fin's search once read 74 back at once. */
 async function listsReadNoJournal(): Promise<void> {
   const rows: ThreadRef[] = []
@@ -2121,6 +2161,7 @@ try {
   await activityTellsNoOne()
   await progressGoesWhereItsRead()
   await finsMoveInTheNewestSession()
+  await anySessionAsks()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()
