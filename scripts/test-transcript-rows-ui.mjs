@@ -417,17 +417,22 @@ async function check() {
     }
     page.debugger.on("message", painted)
     await evaluate("(() => { const node = document.querySelector('[data-transcript-viewport]'); const look = () => { if (node.hasAttribute('data-virtualized')) window.__crossedAt = performance.timeOrigin + performance.now(); else requestAnimationFrame(look) }; requestAnimationFrame(look); return true })()")
+    // The screencast sends a frame only when something on screen changes, and a crossing done right changes nothing: a
+    // speck outside the transcript changes every frame, so each one is sent and both sides of the crossing are seen.
+    await evaluate("(() => { const speck = document.createElement('div'); speck.style.cssText = 'position:fixed;left:0;bottom:0;width:2px;height:2px;z-index:9999;pointer-events:none'; document.body.append(speck); let on = false; const tick = () => { on = !on; speck.style.background = on ? '#fff' : '#000'; requestAnimationFrame(tick) }; requestAnimationFrame(tick); return true })()")
     await page.debugger.sendCommand("Page.startScreencast", { format: "png", everyNthFrame: 1 })
     await wait(200)
     for (let turn = 0; turn < 40 && !(await evaluate("Boolean(window.__crossedAt)")); turn += 1) await evaluate("window.__turn()")
-    await wait(400)
+    await wait(1_800)
     await page.debugger.sendCommand("Page.stopScreencast")
     page.debugger.removeListener("message", painted)
     const crossedAt = await evaluate("window.__crossedAt")
     assert.ok(crossedAt, "the turns crossed into a window")
     // The transcript, short of its edges: its scrollbar and the pill that says there's more come and go on their own.
     const crop = { x: Math.round(box.x), y: Math.round(box.y) + 20, width: Math.round(box.width) - 60, height: Math.round(box.height) - 90 }
-    const around = frames.filter((frame) => Math.abs(frame.at - crossedAt) < 400)
+    // What settled is read well after it, when anything a slow machine draws late (code's colours) has come: closer, a
+    // late repaint would pass for a change that stays.
+    const around = frames.filter((frame) => frame.at > crossedAt - 400 && frame.at < crossedAt + 1_500)
     // A runner paints at its own rate: what matters is frames on both sides of it, not how many.
     const before = around.filter((frame) => frame.at < crossedAt).length, after = around.length - before
     assert.ok(before >= 2 && after >= 2, `the screencast saw both sides of the crossing: ${before} frames before it, ${after} after`)
