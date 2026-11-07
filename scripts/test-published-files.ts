@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url"
 import { FileLockBusyError, withFileLock, withFileLockSync } from "@mako/host/base/file-lock"
 import { publishFile, publishFileSync, publisherFile } from "@mako/host/base/published-files"
 import { FinDefaultsStore } from "@mako/host/harnesses/fin-defaults"
+import { ranOut } from "./lib/ran-out.ts"
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")
 const worker = join(repo, "scripts/lib/published-files-worker.ts")
@@ -66,9 +67,8 @@ try {
     assert.equal(staged(folder).length, 1, "the killed writer's bytes are staged beside the file")
     await writer.kill()
     assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { tag: "before" }, "a writer killed mid-write leaves the file as it was")
-    const started = Date.now()
-    await publishFile(file, JSON.stringify({ tag: "after" }), { waitMs: 300 })
-    assert.ok(Date.now() - started < 300, "the killed writer's lock went with it")
+    const { waits } = await ranOut(() => publishFile(file, JSON.stringify({ tag: "after" }), { waitMs: 300 }))
+    assert.deepEqual(waits, [], "the killed writer's lock went with it: taken at the first try, never waited for")
     assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { tag: "after" })
     assert.deepEqual(staged(folder), [], "the next writer deleted what the dead one staged")
   }

@@ -12,6 +12,8 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { acpStore } from "@/state/acp-state"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
+import { ASK_TOUCH, runChoice, type AskCard as AskWords } from "@/lib/ask-card"
+import { setupAskCard } from "@/state/setup"
 import {
   answerApproval,
   inboxView,
@@ -156,8 +158,25 @@ function Crumb({ item }: { item: InboxAsk }) {
       ) : null}
       <span className="min-w-0 shrink-[0.5] truncate font-medium text-foreground/90">{item.title}</span>
       <span aria-hidden className="shrink-0 opacity-60">·</span>
-      <span className="shrink-0">{harnessLabel(item.harness)}</span>
+      {item.harness ? <span className="shrink-0">{harnessLabel(item.harness)}</span> : null}
     </span>
+  )
+}
+
+/**
+ * An ask's answers as the Inbox draws every ask (`AskCard`): what can't be given here said first, the one to take
+ * filled. An answer that didn't land frees them again (`runChoice`).
+ */
+function AskChoices({ card, sending, setSending }: { card: AskWords; sending: boolean; setSending: (held: boolean) => void }) {
+  return (
+    <>
+      {card.note ? <span className="text-label text-muted-foreground">{card.note}</span> : null}
+      {card.choices.map((choice) => (
+        <button key={choice.answer} type="button" data-inbox-answer={choice.answer} disabled={sending} onClick={() => void runChoice(choice, setSending)} className={cn(BUTTON, ASK_TOUCH, choice.primary ? PRIMARY : QUIET)}>
+          {choice.label}
+        </button>
+      ))}
+    </>
   )
 }
 
@@ -203,6 +222,8 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
           <FinAnswers item={item} sending={sending} send={(answer) => settle(answerFin(item.apex.conversation, item.ask, answer))} />
         ) : item.kind === "approval" && item.answerable ? (
           <ApprovalAnswers item={item} sending={sending} send={(option) => settle(answerApproval(item, option))} />
+        ) : item.kind === "setup" ? (
+          <AskChoices card={setupAskCard(item.folder, item.ask, item.away)} sending={sending} setSending={setSending} />
         ) : null}
         <span className="flex-1" />
         <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">
@@ -215,6 +236,12 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
 
 function AskMark({ item }: { item: InboxAsk }) {
   if (item.kind === "fin") return <FinMark agent={item.agent} state={childStateOf(item.agent)} read />
+  if (item.kind === "setup")
+    return (
+      <LiveMark state="needs" kind={item.ask.by.fin ? "fin" : "thread"} label="Needs you">
+        {item.harness ? <HarnessIcon harness={item.harness} /> : null}
+      </LiveMark>
+    )
   return (
     <LiveMark state="needs" label={`Needs you in ${harnessLabel(item.harness)}`}>
       <HarnessIcon harness={item.harness} />

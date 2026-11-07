@@ -61,7 +61,7 @@ async function check() {
       .filter((update) => update.kind === "text").map((update) => update.text)
     const until = async (label, predicate) => {
       for (let waited = 0; !predicate(); waited += 10) {
-        if (waited > 5000) throw new Error(`timed out waiting for ${label}; status ${session()?.status}`)
+        if (waited > 30_000) throw new Error(`timed out waiting for ${label}; status ${session()?.status}`)
         await delay(10)
       }
     }

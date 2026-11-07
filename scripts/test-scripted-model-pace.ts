@@ -5,6 +5,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { z } from "zod"
+import { ranOut } from "./lib/ran-out.ts"
 import { scriptedModel } from "./scripted-model.ts"
 
 const REPLY = "one two three four five six"
@@ -46,9 +47,10 @@ test("a paced reply's deltas arrive that far apart, and each event is told as it
 test("unpaced, a reply is written at once", async () => {
   const model = await scriptedModel({ reply: () => ({ text: REPLY }) })
   try {
-    const arrived = await deltasOverHttp(model.url)
+    const { result: arrived, waits } = await ranOut(() => deltasOverHttp(model.url))
     assert.equal(arrived.length, 6)
-    assert.ok(arrived.at(-1)! - arrived[0]! < 30, `the deltas took ${Math.round(arrived.at(-1)! - arrived[0]!)} ms`)
+    // At once, by what was waited for rather than the runner's clock: a paced delta waits its pace first.
+    assert.deepEqual(waits, [], `the deltas took ${Math.round(arrived.at(-1)! - arrived[0]!)} ms, with no wait before any`)
   } finally {
     await model.close()
   }
