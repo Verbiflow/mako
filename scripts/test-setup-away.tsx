@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import type { Grant, LeaseEvent, SourceAsk } from "@mako/protocol/borrow"
 import { partSummary, rowAction, type SetupView } from "@mako/host/contracts/setup"
 import { PhoneSetup, SetupPage, ThreadSetup } from "@/components/setup/setup-page"
+import { AskRow } from "@/components/setup/setup-parts"
 import { ZodError } from "zod"
 import { allAsks, readFailure, readSetup, setSetupSource, setupAskCard, setupStore } from "@/state/setup"
 import { ASK_TOUCH, askNotice, runChoice } from "@/lib/ask-card"
@@ -134,6 +135,14 @@ assert.match(phone, /12m/)
 // Its answers are as tall as the card's under a finger.
 assert.ok(phone.includes(ASK_TOUCH), "the phone's Decline takes the card's touch height")
 
+// A long asking title gives way; what's asked for is said whole, on its own line, on every card and in the notice.
+const longTitle = "I'll read the MetaHarness track plan and the phone composer notes, then fix the webhook retries"
+const longAsk = { ...asked, by: { ...asked.by, title: longTitle } }
+const row = renderToStaticMarkup(<AskRow folder="shop" ask={longAsk} now={NOW} compact />)
+assert.match(row, /data-ask-want[^>]*>Wants a copy of <span[^>]*>\.env\.local<\/span>/, "the want, whole")
+assert.match(row, new RegExp(`data-ask-who[^>]*><span class="min-w-0 truncate">${longTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/'/g, "&#x27;")}</span>`), "the name, which gives way")
+assert.equal(askNotice("setup-ask", setupAskCard("shop", longAsk, false)).title, "Wants a copy of .env.local", "the notice's line is the want")
+
 // A read that fails says why in words and offers Try again; a reply this build can't read isn't printed.
 assert.equal(readFailure(new ZodError([])), "Its answer wasn't one this version of Mako reads.")
 setupStore.set((state) => ({ failed: { ...state.failed, gone: "The account didn't answer." } }))
@@ -141,6 +150,7 @@ const failedPhone = renderToStaticMarkup(<PhoneSetup folder="gone" />)
 assert.match(failedPhone, /data-setup-failed/)
 assert.match(failedPhone, /Setup couldn(&#x27;|')t be read\. The account didn(&#x27;|')t answer\./)
 assert.match(failedPhone, /Try again/)
+assert.ok(failedPhone.split("Try again")[0]!.includes(ASK_TOUCH), "Try again is as tall as the answers under a finger")
 for (const surface of [<SetupPage folder="gone" />, <ThreadSetup folder="gone" thread="t-1" elsewhere={undefined} />]) assert.match(renderToStaticMarkup(surface), /Try again/)
 
 // 4. An ask a project's two folders hold is one ask, in the Inbox and to answer.

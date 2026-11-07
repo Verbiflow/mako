@@ -242,7 +242,8 @@ export function setupAskCard(folder: string, ask: SetupAsk, away: boolean): AskC
   const line = askLine(ask)
   const offered = askAnswers(ask)
   return {
-    title: `${ask.by.title} ${line.verb} ${line.thing}`,
+    who: ask.by.title,
+    want: `${line.verb} ${line.thing}`,
     ...(line.after && { description: line.after }),
     detail: `“${ask.why}”. Answering here is the same as in this Thread's Setup and your Inbox; nothing is added until you do.`,
     ...(away && offered.length > 1 && { note: SETUP_AWAY_ALLOW }),

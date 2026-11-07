@@ -218,6 +218,13 @@ async function check() {
   // Nor Setup: with no live conversation here, there's no place to read it from.
   assert.deepEqual(await rowIds(), ["changes", "files", "control"], "nobody to show, no Agents row")
 
+  // A laptop's browser's Settings draws, Devices and each project's Setup in it, and Setup opens in the pane.
+  await load("/scripts/web-desk.html?settings&theme=dark")
+  await until("document.querySelectorAll('[data-setup-project]').length > 0", "Settings in the laptop browser, with Setup")
+  assert.ok(await evaluate("document.querySelector('main').innerText.includes('Devices')"), "and Devices")
+  await press("[data-setup-project]")
+  await until("Boolean(document.querySelector('[data-setup-page], [data-setup-failed]'))", "a project's Setup in the pane")
+
   // A laptop's browser: Changes and Files, the same rows, the two taking turns, no line beside them.
   await load("/scripts/web-desk.html?thread=apex&theme=dark")
   await until("document.querySelectorAll('[data-thread-row]').length > 0", "the web desk")
