@@ -2,13 +2,13 @@ import { reconcileRoster } from "@/lib/native-roster"
 import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
-import type { LiveAction, LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
+import type { LiveAction, LiveBatch, LiveSnapshot, LiveSummary, NativeAgentRoster } from "@/lib/types"
 import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation } from "@/state/acp-state"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { noteFinAsks, noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import { applyRosterPatch, changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch, type RosterPatch } from "@mako/host/contracts/live-conversations"
+import { applyRosterPatch, changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch, type LiveRoster, type RosterPatch } from "@mako/host/contracts/live-conversations"
 import { laterPrompt, personPromptedAt, promptedAfter } from "@mako/host/contracts/worked-at"
 import { projectLive } from "@/state/live-projection"
 import { toast } from "sonner"
@@ -20,8 +20,12 @@ import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, HeardLiveBatch[]>()
-/** The conversations whose whole roster this window is reading (`readRoster`), with each change to it heard since. */
-const rosterReads = new Map<string, { patch: RosterPatch; revision: number }[]>()
+/** What a read of the whole roster is laid over with: each change heard since it was asked, or a roster that went whole. */
+type HeardRoster = { revision: number; patch: RosterPatch } | { revision: number; roster: NativeAgentRoster | undefined }
+/** The conversations whose whole roster this window is reading (`readRoster`), with what it heard since, and the try. */
+const rosterReads = new Map<string, { heard: HeardRoster[]; tries: number }>()
+/** How many reads of a roster in a row may fail to make sense of what came meanwhile, before its snapshot is read. */
+const ROSTER_TRIES = 3
 // Invalid/oversized snapshots cannot be repaired by refetching on every token.
 // Activation and reconnect retry them. Transient outages may recover on a later
 // batch even if the independent event stream stayed connected throughout.
@@ -90,6 +94,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
   for (const transfer of snapshot.control?.transfers ?? []) settleMessage(transfer.input.id, true)
   for (const action of snapshot.control?.actions ?? []) if (steerTaken(action)) settleMessage(action.input.id, true)
   const id = snapshot.session.id
+  heardWholeRoster(id, snapshot.revision, snapshot.nativeAgents)
   const existing = acpStore.get().conversations[id]
   const stale = existing?.hydrated && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision
   const narrower = !stale && dropsLoadedHistory(existing, snapshot, covers)
@@ -336,40 +341,69 @@ function batchHistoryFailure(batch: LiveBatch, current: { historyFailure?: strin
  * when it's next in line, so a snapshot taken meanwhile is what it's read against.
  */
 export function applyLiveBatch(heard: HeardLiveBatch): void {
-  if (!isCompactBatch(heard)) return applyBatch(heard, heard, false)
+  if (!isCompactBatch(heard)) {
+    if (heard.nativeAgents) heardWholeRoster(heard.id, heard.revision, heard.nativeAgents)
+    return applyBatch(heard, heard, false)
+  }
   const current = acpStore.get().conversations[heard.id]
   const held = current?.kind === "live" && sameEpoch(current, heard) && heard.revision === (current.revision ?? 0) + 1 ? current : undefined
   const roster = held?.hydrated || !rosterReads.has(heard.id) ? held?.nativeAgents : undefined
   const read = expandLiveBatch(heard, held ? { blocks: held.hydrated ? held.blocks : [], requests: held.requests ?? [], ...(held.control && { control: held.control }), ...(roster && { nativeAgents: roster }) } : { blocks: [] })
   for (const patch of read.unheld) settleMessage(patch.id, true)
+  if (!heard.rosterPatch && read.batch.nativeAgents) heardWholeRoster(heard.id, heard.revision, read.batch.nativeAgents)
   applyBatch(read.batch, heard, read.unread)
   if (read.unreadRoster) readRoster(heard.id, read.unreadRoster, heard.revision)
 }
 
 /**
  * The whole roster of a conversation this window only lists, whose change to it it couldn't read: it attached after the
- * roster last went whole, missed a batch, or holds another. One this window shows is read again with its snapshot. What
- * changes while this reads is laid over the answer, and if that can't be read either, the next change asks again.
+ * roster last went whole, missed a batch, or holds another. One this window shows is read again with its snapshot.
+ * Everything heard of the roster while this reads is laid over the answer in order, a roster that went whole included,
+ * so an answer older than what's held never undoes it; one that still can't be read is read again.
  */
 function readRoster(id: string, patch: RosterPatch, revision: number): void {
   const listed = acpStore.get().conversations[id]
   if (listed?.kind !== "live" || listed.hydrated || fetching.has(id)) return
-  const heard = rosterReads.get(id)
-  if (heard) return void heard.push({ patch, revision })
-  rosterReads.set(id, [{ patch, revision }])
-  void getMako().liveRoster(id).then((told) => {
-    const since = rosterReads.get(id) ?? []
+  const pending = rosterReads.get(id)
+  if (pending) return void pending.heard.push({ patch, revision })
+  askRoster(id, [{ patch, revision }], 1)
+}
+
+/** A roster that went whole while a read of it is out: by a batch, or a snapshot. */
+function heardWholeRoster(id: string, revision: number, roster: NativeAgentRoster | undefined): void {
+  rosterReads.get(id)?.heard.push({ revision, roster })
+}
+
+function askRoster(id: string, heard: HeardRoster[], tries: number): void {
+  rosterReads.set(id, { heard, tries })
+  const answered = (told: LiveRoster | null | undefined) => {
+    const read = rosterReads.get(id)
     rosterReads.delete(id)
     const current = acpStore.get().conversations[id]
-    if (current?.kind !== "live" || current.hydrated) return
-    if (!told || !sameEpoch(current, told)) return
-    let roster = told.roster
-    for (const each of since) if (each.revision > told.revision) roster = roster && applyRosterPatch(roster, each.patch)
-    if (!roster) return
+    if (current?.kind !== "live" || current.hydrated || told === null) return
+    let roster = told?.roster
+    let readable = told !== undefined && sameEpoch(current, told)
+    for (const each of read?.heard ?? []) {
+      if (told && each.revision <= told.revision) continue
+      if ("patch" in each) {
+        const next = roster && applyRosterPatch(roster, each.patch)
+        if (!next) readable = false
+        roster = next ?? roster
+      } else {
+        roster = each.roster
+        readable = true
+      }
+    }
+    if (!readable) {
+      if (tries < ROSTER_TRIES) return askRoster(id, [], tries + 1)
+      return void hydrateLive(id, true)
+    }
+    if (roster === current.nativeAgents) return
     const next = { ...current, nativeAgents: reconcileRoster(current.nativeAgents, roster) }
     replaceAcpConversation(id, next)
     noteFinAsks(next)
-  }, () => void rosterReads.delete(id))
+  }
+  void getMako().liveRoster(id).then(answered, () => answered(undefined))
 }
 
 /**

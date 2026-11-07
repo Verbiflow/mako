@@ -928,21 +928,45 @@ export type CompactLiveBatch = Omit<LiveBatch, "updates"> & {
 /**
  * What changed of a roster: each entry new or changed, whole, and the entries gone. An Apex with 81 entries sent all of
  * them for each one that moved: on 2026-11-06 that was 202 MB of a window's 203 MB in five minutes, 199 KB a batch.
- * `seal` is the roster it makes, which its reader checks: a held roster that isn't the one the host wrote this against
- * (a conversation read back from its journal holds only its provider's entries) reads as a gap, never as a wrong roster.
+ * `seal` is the whole roster it makes, every field of every entry, which its reader checks: a held roster that isn't the
+ * one the host wrote this against (a conversation read back from its journal holds only its provider's entries, or one
+ * entry's title moved without a batch it heard) reads as a gap, never as a wrong roster.
  */
 export type RosterPatch = { agents?: NativeAgent[]; gone?: string[]; limited?: boolean; seal: number }
 
 const agentKey = (agent: NativeAgent) => `${agent.bindingId}\0${agent.nativeId}`
 
-/** A roster's entries, their order, and when each last moved and how it stands, as a number (FNV-1a), cheap enough for every batch. */
-function rosterSeal(roster: NativeAgentRoster): number {
-  let seal = 0x811c9dc5 ^ (roster.limited ? 1 : 0)
-  for (const agent of roster.agents) {
-    const key = `${agentKey(agent)}\0${agent.observedAt}\0${agent.state.kind}\0`
-    for (let at = 0; at < key.length; at += 1) seal = Math.imul(seal ^ key.charCodeAt(at), 0x01000193)
+/** Each entry's seal, kept by the entry: an entry is never changed in place, and a roster keeps the ones that didn't move. */
+const entrySeals = new WeakMap<NativeAgent, [number, number]>()
+
+/** Every field of an entry, as two independent hashes (FNV-1a and djb2) of its JSON with its keys in order. */
+function entrySeal(agent: NativeAgent): [number, number] {
+  const held = entrySeals.get(agent)
+  if (held) return held
+  const text = canonicalJson(agent) ?? ""
+  let fnv = 0x811c9dc5, djb = 5381
+  for (let at = 0; at < text.length; at += 1) {
+    const code = text.charCodeAt(at)
+    fnv = Math.imul(fnv ^ code, 0x01000193)
+    djb = (Math.imul(djb, 33) + code) | 0
   }
-  return seal >>> 0
+  const seal: [number, number] = [fnv >>> 0, djb >>> 0]
+  entrySeals.set(agent, seal)
+  return seal
+}
+
+/**
+ * A roster as one number: every field of every entry, in order, and whether it reached its limit, so a held roster that
+ * differs anywhere a surface reads fails it. 53 bits; only an entry that moved is hashed again.
+ */
+function rosterSeal(roster: NativeAgentRoster): number {
+  let low = 0x811c9dc5 ^ (roster.limited ? 1 : 0), high = 5381 + roster.agents.length
+  for (const agent of roster.agents) {
+    const [fnv, djb] = entrySeal(agent)
+    low = Math.imul(low ^ fnv, 0x01000193)
+    high = (Math.imul(high, 33) + djb) | 0
+  }
+  return ((high >>> 0) % 0x200000) * 0x100000000 + (low >>> 0)
 }
 
 /** `held` with `patch` applied: new entries land last. Undefined when that isn't the roster `patch` was written to make. */
