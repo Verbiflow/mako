@@ -70,6 +70,36 @@ const overridden = z.string()
 overridden.parse = () => "mine"
 assert.equal(overridden.parse("x"), "mine", "a method set on a schema is its own")
 
+// A schema locked before its first use (frozen, sealed, not extensible) parses as zod's own did, whose methods were its
+// own properties: the method is bound afresh each time instead of kept on it.
+const locks: [(schema: z.ZodType) => z.ZodType, string][] = [[(schema) => Object.freeze(schema), "frozen"], [(schema) => Object.seal(schema), "sealed"], [(schema) => Object.preventExtensions(schema), "locked"]]
+for (const [lock, how] of locks) {
+  for (const [kind, make, good, bad] of [
+    ["string", () => z.string(), "yes", 1],
+    ["object", () => z.object({ a: z.string() }), { a: "yes" }, { a: 1 }],
+    ["lazy", () => z.lazy(() => z.string()), "yes", 1],
+  ] as const) {
+    const schema: z.ZodType = lock(make())
+    assert.deepEqual(schema.safeParse(good), { success: true, data: good }, `a ${how} ${kind} parses`)
+    assert.equal(schema.safeParse(bad).success, false, `and refuses, ${how}`)
+    assert.deepEqual(schema.parse(good), good)
+    assert.deepEqual(await schema.parseAsync(good), good)
+    const { safeParse: detached } = schema
+    assert.equal(detached(good).success, true, `a ${how} ${kind}'s method apart from it`)
+    const checked = schema["~standard"].validate(good)
+    assert.ok(!(checked instanceof Promise) && "value" in checked, `a ${how} ${kind}'s standard schema validates`)
+    assert.equal(schema["~standard"], schema["~standard"], "the same standard schema each time")
+    assert.ok(schema.toJSONSchema(), `a ${how} ${kind} says its JSON schema`)
+  }
+}
+// A value set on a sealed schema stays, as on zod's own property; a frozen one refuses it, as zod's own did.
+const sealed = Object.seal(z.string())
+sealed.parse = () => "mine"
+assert.equal(sealed.parse("x"), "mine", "a sealed schema keeps a method set on it")
+const frozen = Object.freeze(z.string())
+assert.throws(() => Object.assign(frozen, { safeParse: () => "theirs" }), TypeError, "a frozen schema refuses one")
+assert.equal(frozen.safeParse("x").success, true)
+
 // A schema is small: 7.5 KB each before (2026-11-07), measured here over many.
 const gc = globalThis.gc
 if (gc) {

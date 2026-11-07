@@ -60,7 +60,7 @@ let methods = []
 let at
 let moved = 0
 const flush = () => {
-  if (methods.length) out.splice(at, 0, `    _installLazyMethods(inst, "${name}#bound", {\n${methods.join(",\n")}\n    });`)
+  if (methods.length) out.splice(at, 0, `    _installBoundMethods(inst, "${name}", {\n${methods.join(",\n")}\n    });`)
   methods = []
   at = undefined
 }
@@ -90,7 +90,53 @@ for (const line of source.split("\n")) {
 }
 flush()
 let patched = out.join("\n")
-// The JSON schema helpers zod adds to `~standard`, made when `~standard` is first read, as the rest of it already is.
+// A method bound on first use, as zod's own builder methods are (`_installLazyMethods`), but kept only where the schema
+// can take it: a frozen, sealed or locked one gets it bound afresh each time, and one set on a locked schema is kept
+// beside it, so every schema behaves as when each was its own property, a frozen one refusing a new value included.
+patched = replaceOnce(patched, `function _installLazyMethods(inst, group, methods) {`, `const _boundGroups = new WeakMap();
+const _boundSet = new WeakMap();
+function _installBoundMethods(inst, group, methods) {
+    const proto = Object.getPrototypeOf(inst);
+    let installed = _boundGroups.get(proto);
+    if (!installed) {
+        installed = new Set();
+        _boundGroups.set(proto, installed);
+    }
+    if (installed.has(group))
+        return;
+    installed.add(group);
+    for (const key in methods) {
+        const fn = methods[key];
+        Object.defineProperty(proto, key, {
+            configurable: true,
+            enumerable: false,
+            get() {
+                const set = _boundSet.get(this);
+                if (set && Object.prototype.hasOwnProperty.call(set, key))
+                    return set[key];
+                const bound = fn.bind(this);
+                if (Object.isExtensible(this))
+                    Object.defineProperty(this, key, { configurable: true, writable: true, enumerable: true, value: bound });
+                return bound;
+            },
+            set(value) {
+                if (Object.isExtensible(this)) {
+                    Object.defineProperty(this, key, { configurable: true, writable: true, enumerable: true, value });
+                    return;
+                }
+                if (Object.isFrozen(this))
+                    throw new TypeError(\`Cannot assign to read only property '\${key}' of object\`);
+                let set = _boundSet.get(this);
+                if (!set)
+                    _boundSet.set(this, (set = Object.create(null)));
+                set[key] = value;
+            },
+        });
+    }
+}
+function _installLazyMethods(inst, group, methods) {`)
+// The JSON schema helpers zod adds to \`~standard\`, made when \`~standard\` is first read, as the rest of it already is,
+// and kept as zod keeps it, in its getter rather than on the schema, so a schema frozen first still reads it.
 patched = replaceOnce(patched, `    Object.assign(inst["~standard"], {
         jsonSchema: {
             input: createStandardJSONSchemaMethod(inst, "input"),
@@ -100,23 +146,23 @@ patched = replaceOnce(patched, `    Object.assign(inst["~standard"], {
     inst.toJSONSchema = createToJSONSchemaMethod(inst, {});`, `    const standard = Object.getOwnPropertyDescriptor(inst, "~standard");
     if (standard && standard.get) {
         const made = standard.get;
+        let value;
         Object.defineProperty(inst, "~standard", {
             configurable: true,
             enumerable: false,
             get() {
-                const value = made.call(inst);
-                Object.assign(value, { jsonSchema: { input: createStandardJSONSchemaMethod(inst, "input"), output: createStandardJSONSchemaMethod(inst, "output") } });
-                Object.defineProperty(inst, "~standard", { value, configurable: true, writable: true, enumerable: false });
+                if (value === undefined) {
+                    value = made.call(inst);
+                    if (value)
+                        Object.assign(value, { jsonSchema: { input: createStandardJSONSchemaMethod(inst, "input"), output: createStandardJSONSchemaMethod(inst, "output") } });
+                }
                 return value;
             },
-            set(value) {
-                Object.defineProperty(inst, "~standard", { value, configurable: true, writable: true, enumerable: false });
-            },
+            set: standard.set,
         });
-    }`)
-patched = replaceOnce(patched, `    _installLazyMethods(inst, "ZodType", {
-        check(...chks) {`, `    _installLazyMethods(inst, "ZodType", {
+    }
+    _installBoundMethods(inst, "ZodType#json", {
         toJSONSchema(params) { return createToJSONSchemaMethod(this, {})(params); },
-        check(...chks) {`)
+    });`)
 if (moved < 75) throw new Error(`patch-zod: only ${moved} methods matched; zod ${VERSION}'s classic schemas aren't as this patch expects`)
 writeFileSync(file, `${MARK}\n${patched}`)
