@@ -158,6 +158,8 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
       if (said !== undefined) return said
       if (channel === "mako:handoff-settings-set") return { onSleep: args[0] === true }
       if (channel === "mako:conversation-settings-set") return z.record(z.string(), z.json()).parse(args[0])
+      if (channel === "mako:keep-awake-set") return { settings: { on: true, lidClosed: false, ...z.record(z.string(), z.boolean()).parse(args[0]) }, hold: { kind: "rest" } }
+      if (channel === "mako:keep-awake") return { settings: { on: true, lidClosed: false }, hold: { kind: "rest" } }
       if (channel === "mako:harness-order") savedOrder = z.array(z.string()).parse(args[0])
       return channel === "mako:harness-order-saved" ? savedOrder : { saved: true }
     },
@@ -165,7 +167,7 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
   })
   gate.runs = { setting: async (_id, want) => void (await tool.run(want.setting)) }
   const read = await tool.call(agent("s-mine"), { action: "read", clientKey: "k" })
-  assert.deepEqual(read, { outcome: "read", settings: { handOff: { saved: true }, conversations: { saved: true }, harnessOrder: ["claude"] } })
+  assert.deepEqual(read, { outcome: "read", settings: { handOff: { saved: true }, conversations: { saved: true }, harnessOrder: ["claude"], keepAwake: { on: true, lidClosed: false } } })
   answers.clear()
   calls.length = 0
   const asked = await tool.call(agent("s-mine"), { action: "set", setting: "hand-off-on-sleep", value: true, clientKey: "k" })
@@ -184,6 +186,13 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
     assert.deepEqual(await tool.call(agent("s-mine"), { action: "set", setting, value, clientKey: "k" }), { outcome: "set", setting, value })
     assert.ok(calls.some((call) => call.channel === channel && JSON.stringify(call.args) === JSON.stringify(args)), channel)
   }
+  // Keeping this Mac awake while agents work, and with its lid closed, as Settings sets them.
+  assert.deepEqual(await tool.call(agent("s-mine"), { action: "set", setting: "keep-awake", value: false, clientKey: "ka" }), { outcome: "set", setting: "keep-awake", value: false })
+  assert.deepEqual(calls.at(-1), { channel: "mako:keep-awake-set", args: [{ on: false }] })
+  assert.deepEqual(await tool.call(agent("s-mine"), { action: "set", setting: "keep-awake-lid-closed", value: true, clientKey: "kl" }), { outcome: "set", setting: "keep-awake-lid-closed", value: true })
+  answers.set("mako:keep-awake-set", { settings: { on: false, lidClosed: false }, hold: { kind: "rest" }, unavailable: "This Mako doesn't keep a Mac awake." })
+  assert.deepEqual(await tool.call(agent("s-mine"), { action: "set", setting: "keep-awake", value: true, clientKey: "kc" }), { refused: "failed", why: "This Mako doesn't keep a Mac awake." })
+  answers.clear()
   // What the host kept is what's said: a host that can't hand off keeps it off, and says why.
   answers.set("mako:handoff-settings-set", { onSleep: false, unavailable: "This Mako doesn't hand agents to the cloud." })
   assert.deepEqual(await tool.call(agent("s-mine"), { action: "set", setting: "hand-off-on-sleep", value: true, clientKey: "k" }), { refused: "failed", why: "This Mako doesn't hand agents to the cloud." })

@@ -14,7 +14,7 @@ export const THREAD_HELP = `  mako thread move cloud|back [--conversation <id>] 
                     Rename, Archive and Restore on the Thread's menu, as the thread tool does.
   mako settings read | set <setting> <value>
                     What the settings tool reads and changes: hand-off-on-sleep, continue-after-restart, harness-order
-                    (harnesses first to last, comma-separated) and commit-model.`
+                    (harnesses first to last, comma-separated), commit-model, keep-awake and keep-awake-lid-closed.`
 
 const OPTIONS = {
   conversation: { type: "string" },

@@ -69,7 +69,7 @@ export type ThreadActResult =
 /** Reads what `settings` covers, or changes one. `value` is the setting's own: true or false, a list of harnesses, a model. */
 export interface SettingsInput {
   action: "read" | "set"
-  /** set: hand-off-on-sleep, continue-after-restart, harness-order or commit-model. */
+  /** set: hand-off-on-sleep, continue-after-restart, harness-order, commit-model, keep-awake or keep-awake-lid-closed. */
   setting?: string
   value?: boolean | string | string[]
   /** The caller's own key for this. */
@@ -77,7 +77,7 @@ export interface SettingsInput {
 }
 
 export type SettingsResult =
-  | { outcome: "read"; settings: { handOff: JsonValue; conversations: JsonValue; harnessOrder: JsonValue } }
+  | { outcome: "read"; settings: { handOff: JsonValue; conversations: JsonValue; harnessOrder: JsonValue; keepAwake: JsonValue } }
   /** `note`: kept, but it can't take effect yet, and why. */
   | { outcome: "set"; setting: string; value: boolean | string | string[]; note?: string }
   | { outcome: "asked"; ask: string; next: string }
@@ -139,7 +139,7 @@ export const SETTINGS_TOOL: ThreadToolDefinition = {
   filled: [],
   mcp: {
     name: "settings",
-    description: "Read or change the settings an agent may change for the person, as Settings does: hand-off-on-sleep, continue-after-restart, harness-order and commit-model. Call it when the person asks for one of these. read answers at once; set happens now on full access, and on other access Mako asks the person first. Sign-ins, access and spend are the person's own: this can't change them.",
+    description: "Read or change the settings an agent may change for the person, as Settings does: hand-off-on-sleep, continue-after-restart, harness-order, commit-model, keep-awake and keep-awake-lid-closed. Call it when the person asks for one of these. read answers at once; set happens now on full access, and on other access Mako asks the person first. Sign-ins, access and spend are the person's own: this can't change them.",
     fields: {
       action: "read or set.",
       setting: "set: which one.",
