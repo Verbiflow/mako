@@ -73,8 +73,8 @@ async function check() {
       if (event.level === "error") errors.push(event.message)
     })
     const evaluate = (code) => page.executeJavaScript(code)
-    const until = async (code, what = code) => {
-      const deadline = Date.now() + 20_000
+    const until = async (code, what = code, ms = 20_000) => {
+      const deadline = Date.now() + ms
       while (!(await evaluate(code))) {
         if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}${errors.length ? `; the page said: ${errors.join(" | ")}` : ""}`)
         await new Promise((done) => setTimeout(done, 40))
@@ -93,10 +93,12 @@ async function check() {
       await capture(`${name}-light`)
       await theme(false)
     }
-    const click = (selector) => evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true })()`)
+    // Selectors here are this script's own literals: none comes from outside it.
+    const click = (selector) => evaluate(`(() => { const node = document.querySelector('${selector}'); if (!node) return false; (node.closest('button') ?? node).click(); return true })()`)
     const activeKey = () => evaluate("import('/src/state/acp.ts').then(({ acpStore }) => acpStore.get().activeKey)")
+    const activeIs = (key, what, ms) => until(`import('/src/state/acp.ts').then(({ acpStore }) => acpStore.get().activeKey === '${key}')`, what, ms)
     await window.loadURL(url)
-    return { window, evaluate, until, capture, both, click, activeKey, errors, close: () => window.close() }
+    return { window, evaluate, until, capture, both, click, activeKey, activeIs, errors, close: () => window.close() }
   }
 
   try {
@@ -109,9 +111,10 @@ async function check() {
       const openable = await desk.evaluate(`document.querySelector('.thread-jump-scope [data-asking-fin="${FIN_THREAD}"]').dataset.openable`)
       assert.equal(openable, scene === "unlisted" ? "false" : "true", `the row says whether it opens (${scene})`)
       await desk.both(`desk-rail-${scene}`)
-      // The crew card, in the Apex's Thread: the same row, the same word on whether it opens.
-      await desk.click(`.thread-jump-scope [data-thread-row]`)
-      await desk.until(`Boolean(document.querySelector('[data-crew-row="${FIN_THREAD}"]'))`, "the Fin in the Apex's crew card")
+      // The crew card, in the Apex's Thread: the same row, the same word on whether it opens. A cold runner's first
+      // transcript takes a while to come up.
+      await desk.click(`.thread-jump-scope [data-apex-row]`)
+      await desk.until(`Boolean(document.querySelector('[data-crew-row="${FIN_THREAD}"]'))`, "the Fin in the Apex's crew card", 90_000)
       // The crew card's row for a Fin that needs the person opens from its title; every other row is the button itself.
       assert.equal(await desk.evaluate(`document.querySelector('[data-crew-row="${FIN_THREAD}"][data-openable], [data-crew-row="${FIN_THREAD}"] [data-openable]').dataset.openable`), scene === "unlisted" ? "false" : "true")
       await desk.both(`desk-crew-${scene}`)
@@ -122,7 +125,7 @@ async function check() {
         assert.equal(await desk.activeKey(), before, "a row with nothing behind it opens nothing")
         assert.equal(await desk.evaluate("import('/src/state/apex-fins.ts').then(({ apexViewStore }) => apexViewStore.get().open)"), null, "and sets no Fin view")
       } else {
-        await desk.until(`import('/src/state/acp.ts').then(({ acpStore }) => acpStore.get().activeKey === ${JSON.stringify(FIN_CONVERSATION)})`, "Loft's conversation of the Fin open in place")
+        await desk.activeIs(FIN_CONVERSATION, "Loft's conversation of the Fin open in place")
         await desk.until("Boolean(document.querySelector('[data-apex-breadcrumb], [data-fin-of-apex], [data-child-of]')) || true")
         await desk.both(`desk-open-${scene}`)
       }
@@ -141,7 +144,7 @@ async function check() {
         assert.ok(!rows.some((text) => text.includes(FIN_TITLE)), `no row of its own in the laptop's rail (${scene}): ${JSON.stringify(rows)}`)
         await laptop.capture(`laptop-rail-${scene}-${theme}`)
         await laptop.click(`[data-asking-fin="${FIN_THREAD}"]`)
-        await laptop.until(`import('/src/state/acp.ts').then(({ acpStore }) => acpStore.get().activeKey === ${JSON.stringify(FIN_CONVERSATION)})`, "Loft's conversation open in the laptop's browser")
+        await laptop.activeIs(FIN_CONVERSATION, "Loft's conversation open in the laptop's browser")
         await laptop.capture(`laptop-open-${scene}-${theme}`)
         laptop.close()
       }
