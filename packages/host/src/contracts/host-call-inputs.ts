@@ -2499,6 +2499,23 @@ const inputs = {
         .object({ cwd: z.string().optional(), harness: z.string().optional() })
         .optional(),
     ]),
+  "mako:threads-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+      ]),
+      z.object({
+        action: z.union([
+          z.literal("rename"),
+          z.literal("archive"),
+          z.literal("restore"),
+        ]),
+        title: z.string().optional(),
+        conversation: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:threads-move": () =>
     z.tuple([
       z.union([
@@ -3015,6 +3032,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-titles-import", "threads"],
   ["mako:thread-unfollow", "threads"],
   ["mako:threads", "threads"],
+  ["mako:threads-act", "conversations"],
   ["mako:threads-move", "conversations"],
   ["mako:transcript-document", "conversations"],
   ["mako:unread-records", "threads"],

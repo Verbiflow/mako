@@ -288,7 +288,9 @@ const replays = [
   "mako:thread-return",
   /** `ThreadMoveTool.move`: the move is named by the caller's key, so a repeat joins it or answers how it went. */
   "mako:threads-move",
-  /** `ThreadMoveTool.answer`: the ask's id; an answered ask ignores a repeat. */
+  /** `ThreadActTool.act`: named by the caller's key, as Rename and Archive are by their operation. */
+  "mako:threads-act",
+  /** `AgentAskGate.answer`: the ask's id; an answered ask ignores a repeat. */
   "mako:agent-ask-answer",
   /** Whether a machine has its folder for a move only reads. */
   "mako:move-ready",
