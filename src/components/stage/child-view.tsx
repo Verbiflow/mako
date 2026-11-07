@@ -6,10 +6,13 @@ import { childStateOf } from "@mako/host/contracts/children"
 import { FinMark } from "@/components/stage/child-tabs"
 import { StillMark } from "@/components/transcript/message-avatar"
 import { ApexMark } from "@/components/ui/apex-mark"
+import { PlaceMark } from "@/components/ui/place-mark"
+import { runPlace } from "@mako/host/contracts/account-devices"
+import { CLOUD_WHERE } from "@/state/cloud-moves"
 import { acp, acpStore, activeAcp, useAcp } from "@/state/acp"
 import { followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
 import { APEX_WORD, FIN_WORD } from "@mako/host/contracts/agents"
-import { addressableFins, backToApex, childConversation, apexConversation, threadChildren, unaddress, useAddressee, useApexView, useThreadChildren, type FinInApex } from "@/state/apex-fins"
+import { backToApex, childConversation, apexConversation, threadChildren, unaddress, useAddressee, useApexView, useThreadChildren, type FinInApex } from "@/state/apex-fins"
 import { useOnScreen } from "@/state/thread-sessions"
 
 /** The Fin open in place on screen, with its entry in its Apex's roster: nothing while anything else is shown. */
@@ -29,6 +32,7 @@ export function ChildBreadcrumb() {
   const child = shown?.open.child
   const cwd = useAcp((state) => (child ? childConversation(state, child)?.cwd : undefined))
   const elsewhere = useAcp((state) => (child ? childConversation(state, child)?.elsewhere : undefined))
+  const elsewhereKind = useAcp((state) => (child ? childConversation(state, child)?.elsewhereKind : undefined))
   useEffect(() => {
     if (cwd) followCheckouts([cwd])
   }, [cwd])
@@ -47,7 +51,7 @@ export function ChildBreadcrumb() {
         type="button"
         onClick={backToApex}
         title={`Back to ${open.apexTitle}`}
-        className="pressable flex h-6 shrink-0 items-center gap-1 rounded-md pr-1.5 pl-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+        className="pressable flex h-6 shrink-0 items-center gap-1 pr-1.5 pl-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
       >
         <ChevronLeftIcon className="size-3.5" />
         <ApexMark className="size-3" />
@@ -57,6 +61,7 @@ export function ChildBreadcrumb() {
       {agent ? <FinMark agent={agent} state={childStateOf(agent)} read size={16} /> : null}
       <span className="min-w-0 truncate text-ui font-medium text-foreground">{agent?.title ?? FIN_WORD}</span>
       <span className="flex min-w-0 shrink items-center gap-1.5 overflow-hidden pl-1">
+        {elsewhere ? <PlaceMark place={runPlace(elsewhere === CLOUD_WHERE, elsewhereKind)} /> : null}
         <span className="truncate">{elsewhere ? capitalized(elsewhere) : "This Mac"}</span>
         {branch ? <span className="truncate font-mono text-label">· {branch}</span> : null}
       </span>
@@ -87,18 +92,12 @@ export function ChildComposerNote() {
   const conversation = useAcp((state) => (shown ? undefined : activeAcp(state)?.key))
   const addressee = useAddressee((state) => (conversation ? state.to[conversation] : undefined))
   const apexTitle = useAcp((state) => (conversation ? state.conversations[conversation]?.title : undefined))
-  if (shown)
-    return (
-      <div data-child-note="fin" className="flex items-center gap-1.5 px-4 pt-2.5 text-label text-faint">
-        <ApexMark className="size-3" />
-        Straight to {shown.agent?.title ?? `this ${FIN_WORD}`} · {shown.open.apexTitle} sees what you said
-      </div>
-    )
+  if (shown) return null
   if (!fins.length) return null
   if (addressee && conversation)
     return (
       <div data-child-note="direct" data-addressee={addressee.name} className="flex min-w-0 items-center gap-1.5 px-4 pt-2.5 text-label text-faint">
-        <span className="flex h-6 min-w-0 shrink items-center gap-1.5 rounded-md bg-fill-hover pr-0.5 pl-2 text-ui text-foreground">
+        <span title={`Straight to ${addressee.title}, with no turn of ${apexTitle ?? `the ${APEX_WORD}`}; it sees what you said`} className="flex h-6 min-w-0 shrink items-center gap-1.5 bg-fill-hover pr-0.5 pl-2 text-ui text-foreground">
           <StillMark harness={addressee.provider} size={16} cut="var(--fill-hover)" />
           <span className="min-w-0 truncate">To {addressee.title}</span>
           <button
@@ -106,21 +105,12 @@ export function ChildComposerNote() {
             aria-label={`Write to ${apexTitle ?? `the ${APEX_WORD}`} instead`}
             title={`Write to ${apexTitle ?? `the ${APEX_WORD}`} instead`}
             onClick={() => unaddress(conversation)}
-            className="pressable flex size-5 shrink-0 items-center justify-center rounded text-faint hover:text-foreground"
+            className="pressable flex size-5 shrink-0 items-center justify-center text-faint hover:text-foreground"
           >
             <XIcon className="size-3" />
           </button>
         </span>
-        <span className="min-w-0 truncate">Straight · {apexTitle ?? `its ${APEX_WORD}`} sees what you said</span>
       </div>
     )
-  return (
-    <div data-child-note="apex" className="flex items-center gap-1.5 px-4 pt-2.5 text-label text-faint">
-      <ApexMark className="size-3" />
-      <span className="min-w-0 truncate">
-        To the {APEX_WORD} · it passes it on to the right {FIN_WORD}
-        {addressableFins(fins).length ? <>, or @ a {FIN_WORD} to write to it straight</> : null}
-      </span>
-    </div>
-  )
+  return null
 }

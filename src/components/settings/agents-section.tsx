@@ -1,3 +1,4 @@
+import { Toggle } from "@/components/ui/kit"
 import { useThreads } from "@/state/thread-store"
 import { useEffect } from "react"
 import { harnessLabels } from "@/components/rail/harness-meta"
@@ -40,8 +41,8 @@ export function AgentsSection() {
         Manage sign-in and updates for the agents Mako uses on this machine.
       </p>
       <ProviderTable harnesses={harnesses} availability={availability} />
-      <div className="mt-5 border-t border-hairline pt-4">
-        <p className="mb-3 flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1.5 text-label text-faint">
+      <div className="mt-5 pt-4">
+        <p className="mb-3 flex items-center gap-1.5 bg-surface px-2.5 py-1.5 text-label text-faint">
           <span
             className={cn(
               "size-1.5 rounded-full",
@@ -54,17 +55,10 @@ export function AgentsSection() {
               : "Sync daemon not running — the app is watching sessions itself while open"}
           </span>
           {loginStart !== null ? (
-            <label className="flex shrink-0 cursor-pointer items-center gap-1.5">
-              <input
-                type="checkbox"
-                checked={loginStart}
-                onChange={(event) => {
-                  void providers.setDaemonLogin(event.target.checked)
-                }}
-                className="size-3 accent-current"
-              />
-              keep syncing when closed
-            </label>
+            <span className="flex shrink-0 items-center gap-2">
+              Keep syncing when closed
+              <Toggle label="Keep syncing when closed" on={loginStart} onChange={() => void providers.setDaemonLogin(!loginStart)} />
+            </span>
           ) : null}
         </p>
       </div>

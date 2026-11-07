@@ -23,6 +23,7 @@ import { ChangeList } from "@/components/inspector/change-list"
 import { ReviewStream } from "@/components/inspector/review-stream"
 import { requestedTurn, useReviewScope } from "@/state/review-scope"
 import { DIFF_THEME } from "@/lib/diff-theme"
+import { HighlightPool } from "@/lib/highlight-pool"
 import { buildFileTree, type TreeRow } from "@/lib/file-tree"
 import { cn } from "@/lib/utils"
 import { Collapse } from "@/components/ui/collapse"
@@ -31,7 +32,7 @@ import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
 import { viewer } from "@/state/viewer"
 import type { GitDiff, GitFile, GitStatus } from "@/lib/types"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { LineCounts } from "@/components/inspector/change-marks"
 import { MARK, type StatusMark } from "@/lib/git-marks"
 import {
@@ -41,8 +42,6 @@ import {
   FolderIcon,
   FolderOpenIcon,
   GitBranchIcon,
-  ListIcon,
-  ListTreeIcon,
   Maximize2Icon,
   MinusIcon,
   PanelBottomCloseIcon,
@@ -83,7 +82,7 @@ export function ChangesPanel() {
 
 function RepositoryChanges({ snapshot }: { snapshot: GitStatus }) {
   // The Review stream fills the open repository; the Files tree fits its rows.
-  const grow = usePrefs((prefs) => prefs.changesLayout) === "review" ? "flex-1" : "shrink"
+  const grow = usePrefs((prefs) => prefs.changesView) === "review" ? "flex-1" : "shrink"
   const [collapsed, setCollapsed] = useState(false)
   const [pending, setPending] = useState<string>()
   const [error, setError] = useState<string>()
@@ -171,7 +170,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   // A turn the transcript asked to review is read in the Review layout, whichever
   // layout the person keeps and even on a clean tree, until they pick another scope.
   const reviewingTurn = useReviewScope((state) => requestedTurn(state.requested, workspace) !== null)
-  const layout = usePrefs((prefs) => prefs.changesLayout)
+  const layout = usePrefs((prefs) => prefs.changesView)
   const autoOpenDiff = usePrefs((prefs) => prefs.autoOpenDiff)
   const diffStyle = usePrefs((prefs) => prefs.diffStyle)
   const wrapDiff = usePrefs((prefs) => prefs.wrapDiff)
@@ -423,34 +422,32 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   return (
     <div className={cn("flex min-h-0 flex-col", inline ? "shrink" : "h-full")}>
       <WorktreeReview />
-      <div className="flex h-8 shrink-0 items-center gap-2 pr-1.5 pl-3 text-label">
+      <div className="group/head flex h-7 shrink-0 items-center gap-2 pr-2 pl-3.5 text-label">
         {/* The counts already project pending checkbox intent, so a stage
             write in flight only marks the reading busy; swapping the whole
-            sentence for "Updating..." and back made every click blink. */}
-        <span role="status" aria-busy={staging || undefined} className="tabular min-w-0 truncate text-muted-foreground">
+            sentence for "Updating..." and back made every click blink. Lines
+            changed are the Changes row's reading, right above this. */}
+        <span role="status" aria-busy={staging || undefined} className="tabular min-w-0 truncate text-faint">
           {`${files.length} ${files.length === 1 ? "change" : "changes"}`}
-          {staged > 0 ? <span className="text-faint">{` · ${staged} staged`}</span> : null}
+          {staged > 0 ? ` · ${staged} staged` : null}
         </span>
-        {/* Line totals are deferred for large changesets; an unknown total
-            shows nothing rather than a label explaining its absence. */}
-        {files.every((file) => file.insertions !== null && file.deletions !== null) ? (
-          <LineCounts insertions={files.reduce((sum, file) => sum + (file.insertions ?? 0), 0)} deletions={files.reduce((sum, file) => sum + (file.deletions ?? 0), 0)} />
-        ) : null}
+        {/* What's for now stands; what's for now and then shows under the pointer. The list's shape is Settings' (Git). */}
         <div className="ml-auto flex items-center text-faint">
-          <IconAction
-            label="Review current changes in the center"
-            size="xs"
-            onClick={openWorkingTree}
-          >
-            <Maximize2Icon />
-          </IconAction>
-          <IconAction
-            label={filesView === "tree" ? "List by folder" : "Show as a tree"}
-            size="xs"
-            onClick={() => setPref("filesView", filesView === "tree" ? "folders" : "tree")}
-          >
-            {filesView === "tree" ? <ListIcon /> : <ListTreeIcon />}
-          </IconAction>
+          <span className="flex items-center opacity-0 transition-opacity duration-100 group-hover/head:opacity-100 focus-within:opacity-100">
+            <IconAction label="Refresh" size="xs" onClick={() => void actions.refreshGit()}>
+              <RefreshCwIcon />
+            </IconAction>
+            {selectedFile ? (
+              <IconAction
+                label={showDiff ? "Hide the diff" : "Show the diff"}
+                size="xs"
+                data-on={showDiff || undefined}
+                onClick={() => togglePref("autoOpenDiff")}
+              >
+                {showDiff ? <PanelBottomCloseIcon /> : <PanelBottomOpenIcon />}
+              </IconAction>
+            ) : null}
+          </span>
           <IconAction
             label={staged === files.length ? "Unstage everything" : "Stage everything"}
             size="xs"
@@ -459,16 +456,11 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
             {staged === files.length ? <MinusIcon /> : <PlusIcon />}
           </IconAction>
           <IconAction
-            label={selectedFile ? showDiff ? "Hide the diff" : "Show the diff" : "Select a file to preview"}
+            label="Review current changes in the center"
             size="xs"
-            disabled={!selectedFile}
-            data-on={showDiff || undefined}
-            onClick={() => togglePref("autoOpenDiff")}
+            onClick={openWorkingTree}
           >
-            {showDiff ? <PanelBottomCloseIcon /> : <PanelBottomOpenIcon />}
-          </IconAction>
-          <IconAction label="Refresh" size="xs" onClick={() => void actions.refreshGit()}>
-            <RefreshCwIcon />
+            <Maximize2Icon />
           </IconAction>
         </div>
       </div>
@@ -524,67 +516,69 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
             {diff.binary ? "Binary file — no text diff." : "No text content to compare."}
           </p>
         ) : (
-          <Virtualizer className="min-h-full">
-            <MultiFileDiff
-              {...(diff.oldFile && diff.newFile
-                ? { oldFile: diff.oldFile, newFile: diff.newFile }
-                : diff.newFile
-                  ? { oldFile: null, newFile: diff.newFile }
-                  : { oldFile: diff.oldFile!, newFile: null })}
-              options={{
-                theme: DIFF_THEME,
-                disableFileHeader: true,
-                diffStyle,
-                overflow: wrapDiff ? "wrap" : "scroll",
-                // Off by default, which is why the comment control rendered
-                // nowhere at all. `onGutterUtilityClick` is the other half of
-                // this API and the two are mutually exclusive — a custom slot
-                // owns its own click.
-                enableGutterUtility: true,
-                // A press on a line number picks it, shift or a drag extends
-                // the range, and the field under it adds the lines as a chip.
-                enableLineSelection: true,
-                onLineSelectionEnd,
-              }}
-              selectedLines={pickedRange}
-              lineAnnotations={annotations}
-              renderAnnotation={(annotation) => (
-                <Annotation
-                  workspace={workspace}
-                  path={path ?? ""}
-                  line={annotation.lineNumber}
-                  side={annotation.side}
-                  comments={comments}
-                  selection={pickedRange && path && isPickEnd(pickedRange, annotation) ? (
-                    <PickedDiffLines
-                      path={workspacePath(`${workspace}/${path}`, store.get().meta?.cwd)}
-                      base="HEAD"
-                      diff={pickedDiff}
-                      range={pickedRange}
-                      onDone={() => setPicked(null)}
-                    />
-                  ) : undefined}
-                />
-              )}
-              renderGutterUtility={(getHoveredLine) => (
-                <GutterAdd
-                  onClick={() => {
-                    const hovered = getHoveredLine()
-                    if (!hovered || !path) return
-                    setPicked(null)
-                    review.start({
-                      workspace,
-                      path,
-                      line: hovered.lineNumber,
-                      side: hovered.side,
-                      code: lineAt(diff, hovered.lineNumber, hovered.side),
-                      base: "HEAD",
-                    })
-                  }}
-                />
-              )}
-            />
-          </Virtualizer>
+          <HighlightPool>
+            <Virtualizer className="min-h-full">
+              <MultiFileDiff
+                {...(diff.oldFile && diff.newFile
+                  ? { oldFile: diff.oldFile, newFile: diff.newFile }
+                  : diff.newFile
+                    ? { oldFile: null, newFile: diff.newFile }
+                    : { oldFile: diff.oldFile!, newFile: null })}
+                options={{
+                  theme: DIFF_THEME,
+                  disableFileHeader: true,
+                  diffStyle,
+                  overflow: wrapDiff ? "wrap" : "scroll",
+                  // Off by default, which is why the comment control rendered
+                  // nowhere at all. `onGutterUtilityClick` is the other half of
+                  // this API and the two are mutually exclusive — a custom slot
+                  // owns its own click.
+                  enableGutterUtility: true,
+                  // A press on a line number picks it, shift or a drag extends
+                  // the range, and the field under it adds the lines as a chip.
+                  enableLineSelection: true,
+                  onLineSelectionEnd,
+                }}
+                selectedLines={pickedRange}
+                lineAnnotations={annotations}
+                renderAnnotation={(annotation) => (
+                  <Annotation
+                    workspace={workspace}
+                    path={path ?? ""}
+                    line={annotation.lineNumber}
+                    side={annotation.side}
+                    comments={comments}
+                    selection={pickedRange && path && isPickEnd(pickedRange, annotation) ? (
+                      <PickedDiffLines
+                        path={workspacePath(`${workspace}/${path}`, store.get().meta?.cwd)}
+                        base="HEAD"
+                        diff={pickedDiff}
+                        range={pickedRange}
+                        onDone={() => setPicked(null)}
+                      />
+                    ) : undefined}
+                  />
+                )}
+                renderGutterUtility={(getHoveredLine) => (
+                  <GutterAdd
+                    onClick={() => {
+                      const hovered = getHoveredLine()
+                      if (!hovered || !path) return
+                      setPicked(null)
+                      review.start({
+                        workspace,
+                        path,
+                        line: hovered.lineNumber,
+                        side: hovered.side,
+                        code: lineAt(diff, hovered.lineNumber, hovered.side),
+                        base: "HEAD",
+                      })
+                    }}
+                  />
+                )}
+              />
+            </Virtualizer>
+          </HighlightPool>
             )}
           </div>
         </div>
@@ -619,8 +613,6 @@ function CommitsSection({
   const hasRepo = useSession((state) => Boolean(state.git?.root))
   const branch = useSession((state) => state.git?.branch)
   const ahead = useSession((state) => state.git?.ahead ?? 0)
-  // With several repositories, each one's header already names its branch.
-  const named = useSession((state) => Boolean(state.git?.repositories?.length))
   if (!hasRepo) return null
   return (
     <div className="flex min-h-0 shrink-0 flex-col">
@@ -629,17 +621,11 @@ function CommitsSection({
         aria-expanded={open}
         aria-label={branch ? `History on ${branch}` : "History"}
         onClick={() => setOpen((value) => !value)}
-        className="pressable flex h-8 w-full shrink-0 items-center gap-2 pr-2.5 pl-3 text-left text-label transition-colors duration-100 hover:bg-fill-hover"
+        className="pressable flex h-7 w-full shrink-0 items-center gap-2 pr-3.5 pl-3.5 text-left text-label transition-colors duration-100 hover:bg-fill-hover"
       >
         <span className="text-muted-foreground">History</span>
-        {ahead > 0 ? <span className="tabular text-caution/80">{ahead} not pushed</span> : null}
+        {ahead > 0 ? <span className="tabular text-faint">{ahead} not pushed</span> : null}
         <span className="flex-1" />
-        {branch && !named ? (
-          <span className="flex min-w-0 items-center gap-1 text-faint">
-            <GitBranchIcon className="size-3 shrink-0" />
-            <span className="truncate">{branch}</span>
-          </span>
-        ) : null}
         <ChevronRightIcon className={cn("size-3 shrink-0 text-faint transition-transform duration-200 ease-[var(--ease-out)]", open ? "-rotate-90" : "rotate-90")} />
       </button>
       <Collapse open={open}>
@@ -745,7 +731,7 @@ function DirRow({
   const state = row.staged === 0 ? "off" : row.staged === row.files ? "on" : "partial"
   const FolderGlyph = row.collapsed ? FolderIcon : FolderOpenIcon
   return (
-    <div className="group relative flex h-6 items-center gap-1 rounded select-none transition-colors duration-100 hover:bg-fill-hover">
+    <div className="group relative flex h-7 items-center gap-1 select-none transition-colors duration-100 hover:bg-fill-hover">
       <Guides depth={row.depth} />
       <button
         type="button"
@@ -808,7 +794,7 @@ function FileRow({
   const mark = MARK[file.status]
   return (
     <div className={cn(
-      "group relative flex h-6 items-center gap-1 rounded select-none transition-colors duration-100",
+      "group relative flex h-7 items-center gap-1 select-none transition-colors duration-100",
       active ? "bg-fill-selected" : "hover:bg-fill-hover"
     )}>
       <Guides depth={row.depth} />
@@ -821,7 +807,7 @@ function FileRow({
       >
         {/* Files sit under their folder's label, past the chevron column. */}
         <span className="w-3 shrink-0" />
-        <FileTypeIcon path={file.path} className="size-3.5 shrink-0 text-faint/80" />
+        <FileIcon path={file.path} className="size-3.5 shrink-0 text-faint/80" />
         <span className={cn(
           "min-w-0 truncate text-ui",
           file.status === "deleted" ? "text-faint line-through decoration-faint/60" : file.status === "conflicted" ? "text-removed" : active ? "text-foreground" : "text-foreground/85"

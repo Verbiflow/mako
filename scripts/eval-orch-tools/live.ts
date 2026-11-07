@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { chmod, mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -6,7 +8,8 @@ import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { admitted } from "../fixtures/admitted-start.ts"
 import { routeShellCall } from "@mako/host/contracts/native-calls"
-import { caseCallThread, priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
+import { primerText } from "@mako/host/contracts/primer"
+import { apexesAnswer, caseCallThread, priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
 import { bareName, isShell, makoTool, shellCommand } from "./names.ts"
 import type { StubMako } from "./stub-mako.ts"
 
@@ -20,6 +23,8 @@ import type { StubMako } from "./stub-mako.ts"
  * print and exit. Cursor has no asking mode; the stubs are what stands
  * between it and a real run.
  */
+
+const execFileAsync = promisify(execFile)
 
 /** The harnesses whose driver routes each shell call (`NativeCallsCapability` per-call): a command routing denies there never ran. */
 const ROUTED_CALLS = new Set(["claude", "cursor", "grok", "devin", "codex", "opencode"])
@@ -56,20 +61,28 @@ function toolArgs(input: string): ToolArgs {
   }
 }
 
-/** The case's Thread as one prompt: its earlier turns as a transcript, then the person's message. */
-function prompt(orchCase: OrchCase): string {
+/** The case's Thread as one prompt. A harness with no instruction slot gets the blocks ahead of the message, as the host's note does. */
+function prompt(orchCase: OrchCase, primer: boolean, note: boolean): string {
   const prior = priorTurns(orchCase).map((turn) => `${turn.role === "user" ? "The person" : "You"}: ${turn.text}${turn.toolCalls?.length ? ` [${turn.toolCalls.map((call) => `${call.tool} → ${JSON.stringify(call.result)}`).join("; ")}]` : ""}`)
   const asked = turnText(orchCase)
-  return prior.length ? `Earlier in this Thread:\n${prior.join("\n")}\n\n${asked}` : asked
+  const body = prior.length ? `Earlier in this Thread:\n${prior.join("\n")}\n\n${asked}` : asked
+  if (!primer || !note) return body
+  const blocks = primerText({ role: orchCase.setup.role === "apex" ? "apex" : "thread", noRecipe: orchCase.setup.thread?.recipe === "none", computer: true })
+  return `${blocks}\n\n${body}`
 }
 
 export async function liveSample(input: {
   harness: string; driver: ProviderLiveDriver; stub: StubMako; orchCase: OrchCase; routing: "on" | "off"
+  /** Off is the launch before the primer: the show line only, over HTTP, with no `fin` agent. */
+  primer?: boolean
+  /** Claude: `false` serves `mako` over HTTP. */
+  inProcessMako?: boolean
   env: NodeJS.ProcessEnv; project: string; model?: string
   /** How long a turn may run before the sample counts as an error: 180 s unless the run says (`--turn-seconds`). */
   turnSeconds?: number
 }): Promise<Sample & { seconds: number }> {
   const { harness, driver, stub, orchCase, routing, env, project } = input
+  const primer = input.primer !== false
   const id = randomUUID()
   const events: LiveDriverEvent[] = []
   const refused: string[] = []
@@ -90,16 +103,18 @@ export async function liveSample(input: {
   const status = () => events.findLast((event) => event.type === "live-session")?.session.status
   try {
     const mode = ASKING_MODE.get(harness)
-    const grant = stub.grant(id)
+    // The project's branch is the one the case's Thread works on: main in the main checkout, the Thread's own in its worktree.
+    await execFileAsync("git", ["-C", project, "checkout", "-q", "-f", orchCase.setup.thread?.place === "main" ? "main" : "mako/thread-work"]).catch(() => undefined)
+    const grant = stub.grant(id, apexesAnswer(orchCase))
     if (routing === "on") stub.routes(id, caseCallThread(orchCase, project))
     if (orchCase.setup.answers) stub.answers(id, orchCase.setup.answers)
     await driver.start(project, admitted(harness, {
       conversationId: id, emit, ...mode && { modeId: mode }, ...input.model && { tuning: { model: input.model } },
-      conversationTools: grant,
+      conversationTools: grant, primer, ...input.inProcessMako === false && { inProcessMako: false },
       mcpSnapshot: async () => ({ cwd: project, generatedAt: Date.now(), servers: [], providers: [] }),
       ...routing === "on" && { nativeRouting: () => ({ role: orchCase.setup.role === "apex" ? "apex" as const : "thread" as const }), nativeCalls: () => caseCallThread(orchCase, project) },
     }, { env }))
-    await driver.prompt(id, prompt(orchCase), [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+    await driver.prompt(id, prompt(orchCase, primer, !driver.makoInstructions), [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
     const seconds = input.turnSeconds ?? 180
     const deadline = Date.now() + seconds * 1000
     while (Date.now() < deadline && !(status() !== "running" && status() !== "starting" && Date.now() - quiet > 5000)) await delay(250)

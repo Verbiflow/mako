@@ -32,6 +32,8 @@ const reads = [
   "mako:thread-move-asks",
   "mako:handoff-settings",
   "mako:conversation-settings",
+  /** Where keeping this Mac awake stands; reads what `KeepAwake` holds. */
+  "mako:keep-awake",
   "mako:git-status",
   "mako:git-diff",
   "mako:git-diff-all",
@@ -114,6 +116,13 @@ const reads = [
   "mako:thread-continuation-resolve",
   "mako:thread-owner-resolve",
   "mako:list-files",
+  "mako:files-folders",
+  "mako:files-find",
+  "mako:live-files-folders",
+  "mako:live-files-find",
+  /** A text search changes nothing; a newer one in the same folder stops the last. */
+  "mako:files-grep",
+  "mako:live-files-grep",
   "mako:read-file",
   "mako:capabilities",
   "mako:live-snapshot",
@@ -165,6 +174,8 @@ const reads = [
   "mako:cloud-carried-files",
   /** Who the account's own GitHub token belongs to, read from the cloud; never the token. */
   "mako:github-token",
+  /** Who the account's cloud commits and pull requests are authored as, read from the cloud. */
+  "mako:github-authorship",
   /** Waits on a sign-in the host finishes by itself, whoever is waiting. */
   "mako:account-login-wait",
   "mako:native-authoring-catalog",
@@ -185,6 +196,10 @@ const reads = [
   "mako:session-reader-history",
   "mako:daemon-login",
   "mako:utility-model-settings",
+  /** Read from one small file; never a key. */
+  "mako:model-connections",
+  /** Asks Ollama's and LM Studio's usual ports on this Mac what they have loaded. */
+  "mako:model-connection-local",
   "mako:harness-order-saved",
   /** Reads Settings › Fins and what the person used on each harness from one small file. */
   "mako:fin-defaults",
@@ -215,6 +230,8 @@ const reads = [
  * content differs.
  */
 const replays = [
+  /** Snoozes fseventsd's notice until the day ends: a repeat sets the same snooze. */
+  "mako:file-events-dismiss",
   /** `MakoStorage.free`: a pass asked for while one runs is that pass, and a second finds nothing more to free. */
   "mako:storage-free",
   /** `LiveConversations.submit`: the request id; content is fingerprinted. */
@@ -239,6 +256,7 @@ const replays = [
   "mako:native-submit",
   /** A spawn, a link, a report, a message and an answer are settled by the caller's key; stopping a stopped child stops nothing. */
   "mako:agents-start",
+  "mako:agents-move",
   "mako:agents-link",
   "mako:agents-report",
   "mako:agents-send",
@@ -250,6 +268,8 @@ const replays = [
   "mako:agents-direct",
   /** The person's answer to a Fin's ask is settled by its request id: a repeat answers once. */
   "mako:agents-respond",
+  /** A move is settled by its id: a repeat is the same move. */
+  "mako:agents-continue-next",
   /** Cancelling a turn that has already stopped stops nothing. */
   "mako:live-cancel",
   /** Stopping a background task that has already ended stops nothing. */
@@ -301,6 +321,8 @@ const replays = [
   /** The same token saved twice is kept once; removing it twice leaves it off. */
   "mako:github-token-save",
   "mako:github-token-remove",
+  /** Choosing who cloud commits are authored as a second time is the same choice. */
+  "mako:github-authorship-save",
   /** Setting the mode a session already has is a no-op. */
   "mako:live-mode",
   /** The ledger keeps one mode per thread; the same write twice is one write. */
@@ -313,6 +335,8 @@ const replays = [
   "mako:handoff-settings-set",
   /** The same settings saved twice are one choice. */
   "mako:conversation-settings-set",
+  /** The same choice saved twice is one choice. */
+  "mako:keep-awake-set",
   /** `LiveAutoContinue.continueNow`: the request id is the continuation's; a repeat finds it and changes nothing. */
   "mako:live-continue-turn",
   /** `ThreadStore.renameThread` and `clearThreadTitle`: the operation id is receipted. */
@@ -327,6 +351,14 @@ const replays = [
   "mako:fin-default-choose",
   /** `FinDefaultsStore.savePolicy`: the whole policy replaces the last, so saving it twice is saving it once. */
   "mako:fin-policy-save",
+  /** `FinDefaultsStore.saveRoleRules`: the same words for a role saved twice are saved once. */
+  "mako:fin-role-rules-save",
+  /** `FinDefaultsStore.setLimit`: the same number saved twice is one choice. */
+  "mako:fin-limit-set",
+  /** `FinDefaultsStore.setCeiling`: the same number saved twice is one choice. */
+  "mako:fin-ceiling-set",
+  /** `FinDefaultsStore.chooseMoveOnLimit`: the same switch set twice is set once. */
+  "mako:fin-move-on-limit",
   /** `Telemetry.choose`: the same choice saved twice is one choice. */
   "mako:telemetry-choose",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */

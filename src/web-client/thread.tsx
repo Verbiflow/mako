@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, FolderTreeIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, ServerIcon, XIcon } from "lucide-react"
 import { sessionStanding, type OpenedBy } from "@mako/host/contracts/session-choice"
 import { forkedFrom, sessionBrief, sessionDetail, sessionName } from "@/lib/session-words"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
@@ -39,10 +39,11 @@ import { DiagnosisCard } from "./trouble"
 import { useNow, useTryAgain } from "./trouble-state"
 import { QuietStrip } from "./quiet-strip"
 import { activeLiveAcp, useAcp } from "@/state/acp"
+import { openFiles } from "./files-open"
 import { openReview } from "./review-open"
 import { useCopyMissing } from "./copies"
 import { FinOfApexContext, OpenChildContext, childSession } from "./fin-of-apex"
-import { PhoneChildChips } from "./apex-fins"
+import { PhoneFinCount } from "./apex-fins"
 import { transcriptChunk } from "./chunks"
 import { ApexMark } from "@/components/ui/apex-mark"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
@@ -109,7 +110,7 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
           backLabel={thread.title}
           title={child.agent.title}
           subtitle={subtitle(thread, session)}
-          place={session.row.runsOn.kind === "cloud" ? "cloud" : "device"}
+          place={session.row.runsOn.kind === "cloud" ? "cloud" : session.machine ? "machine" : "device"}
           headingRef={heading}
         />
         <FinOfApexContext value={thread.title}>
@@ -119,18 +120,24 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
     )
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-surface" data-thread-screen={thread.id}>
-      <ThreadBar
-        onBack={wide ? undefined : onBack}
-        title={thread.title}
-        subtitle={syncing ?? subtitle(thread, session)}
-        place={session.row.runsOn.kind === "cloud" ? "cloud" : session.quietSince ? "quiet" : "device"}
-        headingRef={heading}
-        actions={thread.archived ? undefined : <ThreadActions thread={thread} session={session} onArchived={onBack} onAdd={addingTo && thread.sessions.length === 1 ? () => setAdding(true) : undefined} />}
-      />
-      {thread.sessions.length > 1 ? <SessionSwitcher thread={thread} current={session} wide={wide} onSession={onSession} onAdd={addingTo ? () => setAdding(true) : undefined} /> : null}
       <OpenChildContext value={openChild}>
+        <ThreadBar
+          onBack={wide ? undefined : onBack}
+          title={thread.title}
+          subtitle={syncing ?? subtitle(thread, session)}
+          place={session.row.runsOn.kind === "cloud" ? "cloud" : session.quietSince ? "quiet" : session.machine ? "machine" : "device"}
+          headingRef={heading}
+          actions={
+            thread.archived ? undefined : (
+              <>
+                <PhoneFinCount thread={thread.id} conversation={session.row.conversation} />
+                <ThreadActions thread={thread} session={session} onArchived={onBack} onAdd={addingTo && thread.sessions.length === 1 ? () => setAdding(true) : undefined} />
+              </>
+            )
+          }
+        />
+        {thread.sessions.length > 1 ? <SessionSwitcher thread={thread} current={session} wide={wide} onSession={onSession} onAdd={addingTo ? () => setAdding(true) : undefined} /> : null}
         <RoutedOpenContext value={openChild}>
-          <PhoneChildChips thread={thread.id} conversation={session.row.conversation} />
           <ThreadBody thread={thread} session={session} openedBy={sessionId === undefined ? "screen" : "person"} onSession={onSession} />
         </RoutedOpenContext>
       </OpenChildContext>
@@ -263,9 +270,9 @@ function ServerCards({ session }: { session: WebSession }) {
   )
 }
 
-function ThreadBar({ onBack, backLabel, title, subtitle, place, headingRef, actions }: { onBack: (() => void) | undefined; backLabel?: string; title: string; subtitle: string | undefined; place?: "cloud" | "device" | "quiet"; headingRef: React.Ref<HTMLHeadingElement>; actions?: React.ReactNode }) {
+function ThreadBar({ onBack, backLabel, title, subtitle, place, headingRef, actions }: { onBack: (() => void) | undefined; backLabel?: string; title: string; subtitle: string | undefined; place?: "cloud" | "device" | "machine" | "quiet"; headingRef: React.Ref<HTMLHeadingElement>; actions?: React.ReactNode }) {
   // Where it runs, as the desk's strip and the list's rows draw it: a Mac asleep or offline under the moon.
-  const Place = place === "cloud" ? CloudIcon : place === "quiet" ? MoonIcon : LaptopIcon
+  const Place = place === "cloud" ? CloudIcon : place === "quiet" ? MoonIcon : place === "machine" ? ServerIcon : LaptopIcon
   return (
     <header className="web-bar web-bar-thread flex shrink-0 items-center gap-1 px-1.5">
       {onBack && backLabel ? (
@@ -287,7 +294,7 @@ function ThreadBar({ onBack, backLabel, title, subtitle, place, headingRef, acti
         </h1>
         {subtitle ? (
           <p className="flex min-w-0 items-center gap-1 text-label text-faint">
-            {place ? <Place aria-hidden className="size-3 shrink-0" /> : null}
+            {place ? <Place aria-hidden data-place={place} className="size-3 shrink-0" /> : null}
             <span className="truncate">{subtitle}</span>
           </p>
         ) : null}
@@ -341,7 +348,7 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
       <Menu>
         <MenuTrigger asChild>
           {desk ? (
-            <button type="button" aria-label="More for this Thread" className="pressable mr-1 flex size-7 shrink-0 items-center justify-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground">
+            <button type="button" aria-label="More for this Thread" className="pressable mr-1 flex size-7 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground">
               <MoreHorizontalIcon className="size-3.5" />
             </button>
           ) : (
@@ -361,6 +368,12 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
             <MenuItem onSelect={() => openReview({ conversation: session.row.conversation, scope: { kind: "thread" } })} className={item}>
               <FileDiffIcon className={glyph} />
               Changes
+            </MenuItem>
+          ) : null}
+          {!session.quietSince ? (
+            <MenuItem onSelect={() => openFiles({ conversation: session.row.conversation })} className={item}>
+              <FolderTreeIcon className={glyph} />
+              Files
             </MenuItem>
           ) : null}
           {session.row.folder && !session.quietSince && !moving ? (
@@ -564,7 +577,7 @@ export function QuietSession({ session }: { session: WebSession }) {
         {session.waiting.length ? (
           <ul role="list" className="mx-auto mt-4 flex max-w-[460px] flex-col gap-2">
             {session.waiting.map((message) => (
-              <li key={message.id} className="web-waiting flex items-start gap-2 rounded-xl bg-raised px-3.5 py-2.5 ring-1 ring-hairline">
+              <li key={message.id} className="web-waiting flex items-start gap-2 bg-raised px-3.5 py-2.5 ring-1 ring-hairline">
                 <p className="min-w-0 flex-1 text-ui whitespace-pre-wrap">{message.displayText ?? message.text}</p>
                 <span className="shrink-0 pt-0.5 text-label text-faint">Waiting</span>
                 <button type="button" aria-label="Take this message back" onClick={() => remove(message.id)} className="web-icon-button -my-1.5 -mr-2 size-8">
@@ -585,7 +598,7 @@ export function QuietSession({ session }: { session: WebSession }) {
 export function ArchivedThread({ thread }: { thread: WebThread }) {
   return (
     <div className="mx-auto flex max-w-[420px] flex-col items-center px-6 pt-16 text-center">
-      <span className="flex size-11 items-center justify-center rounded-2xl bg-raised ring-1 ring-hairline">
+      <span className="flex size-11 items-center justify-center bg-raised ring-1 ring-hairline">
         <ArchiveIcon className="size-5 text-muted-foreground" />
       </span>
       <p className="mt-4 text-title font-medium">Archived</p>
@@ -598,10 +611,10 @@ export function ArchivedThread({ thread }: { thread: WebThread }) {
 export function TranscriptLoading() {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 px-5 pt-8" aria-busy aria-label="Opening the conversation">
-      <span className="skeleton ml-auto h-12 w-3/5 rounded-2xl" />
-      <span className="skeleton h-3.5 w-4/5 rounded" />
-      <span className="skeleton h-3.5 w-2/3 rounded" />
-      <span className="skeleton h-3.5 w-3/4 rounded" />
+      <span className="skeleton ml-auto h-12 w-3/5" />
+      <span className="skeleton h-3.5 w-4/5" />
+      <span className="skeleton h-3.5 w-2/3" />
+      <span className="skeleton h-3.5 w-3/4" />
     </div>
   )
 }

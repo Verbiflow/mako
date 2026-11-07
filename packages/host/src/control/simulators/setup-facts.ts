@@ -34,6 +34,8 @@ export interface SetupFacts {
   wantedRuntime?: string
   devices: SimDevice[]
   deviceTypes: SimDeviceType[]
+  /** Each runtime's device types, by identifier: a device's own runtime runs only it. */
+  runtimeTypes?: Record<string, string[]>
   tools: SetupTool[]
   consent: SetupConsent[]
   tried?: { at: number; firstFrameMs?: number }
@@ -60,6 +62,8 @@ export interface SimDeviceType {
   identifier: string
   name: string
   family: string
+  /** The oldest iOS it runs, as simctl numbers it (`27.0` is 1769472): newer models run only newer iOS. */
+  minRuntime?: number
 }
 
 /** Room to ask for before each download: Xcode expands its App Store download to about 12 GB, and an iOS runtime is about 8 GB. */
@@ -112,9 +116,19 @@ function entries<Entry extends z.ZodType>(entry: Entry) {
 }
 
 const SimctlListing = z.object({
-  runtimes: entries(z.object({ identifier: z.string(), platform: z.string().optional(), name: z.string().optional(), version: z.string().optional(), buildversion: z.string().optional(), isAvailable: z.boolean().optional() })).default([]),
+  runtimes: entries(
+    z.object({
+      identifier: z.string(),
+      platform: z.string().optional(),
+      name: z.string().optional(),
+      version: z.string().optional(),
+      buildversion: z.string().optional(),
+      isAvailable: z.boolean().optional(),
+      supportedDeviceTypes: z.array(z.object({ identifier: z.string() }).nullable().catch(null)).optional().catch(undefined),
+    })
+  ).default([]),
   devices: z.record(z.string(), entries(z.object({ udid: z.string(), name: z.string(), deviceTypeIdentifier: z.string().optional(), state: z.string().optional(), isAvailable: z.boolean().optional() }))).catch({}).default({}),
-  devicetypes: entries(z.object({ identifier: z.string(), name: z.string(), productFamily: z.string().optional() })).default([]),
+  devicetypes: entries(z.object({ identifier: z.string(), name: z.string(), productFamily: z.string().optional(), minRuntimeVersion: z.number().optional() })).default([]),
 })
 
 const ShowSdks = entries(z.object({ platform: z.string().optional(), sdkVersion: z.string().optional() }))
@@ -123,6 +137,7 @@ export interface SimctlList {
   runtimes: RuntimeFound[]
   devices: SimDevice[]
   deviceTypes: SimDeviceType[]
+  runtimeTypes: Record<string, string[]>
 }
 
 /** `xcrun simctl list -j`: the iOS runtimes, every iOS simulator, and the iPhone and iPad types. */
@@ -135,6 +150,9 @@ export function parseSimctlList(stdout: string): SimctlList {
       ? [{ identifier: entry.identifier, name: entry.name ?? entry.identifier, version: entry.version ?? "", ...(entry.buildversion !== undefined && { build: entry.buildversion }), available: entry.isAvailable === true }]
       : []
   )
+  const runtimeTypes = Object.fromEntries(
+    list.runtimes.flatMap((entry) => (entry?.platform === "iOS" && entry.supportedDeviceTypes ? [[entry.identifier, entry.supportedDeviceTypes.flatMap((type) => (type ? [type.identifier] : []))]] : []))
+  )
   const ios = new Set(runtimes.map((runtime) => runtime.identifier))
   const devices = Object.entries(list.devices).flatMap(([runtime, listed]) =>
     ios.has(runtime)
@@ -144,9 +162,11 @@ export function parseSimctlList(stdout: string): SimctlList {
       : []
   )
   const deviceTypes = list.devicetypes.flatMap((entry): SimDeviceType[] =>
-    entry && (entry.productFamily === "iPhone" || entry.productFamily === "iPad") ? [{ identifier: entry.identifier, name: entry.name, family: entry.productFamily }] : []
+    entry && (entry.productFamily === "iPhone" || entry.productFamily === "iPad")
+      ? [{ identifier: entry.identifier, name: entry.name, family: entry.productFamily, ...(entry.minRuntimeVersion !== undefined && { minRuntime: entry.minRuntimeVersion }) }]
+      : []
   )
-  return { runtimes, devices, deviceTypes }
+  return { runtimes, devices, deviceTypes, runtimeTypes }
 }
 
 /** `xcodebuild -showsdks -json`: the iOS simulator SDK's version, the runtime this Xcode wants. */
@@ -193,19 +213,27 @@ export interface FormTypes {
 }
 
 /**
- * The newest iPhone Pro and the newest 13-inch iPad Pro this Xcode knows, the forms the suite grades on. `simctl` lists
- * types oldest first, so the last match is the newest.
+ * The newest iPhone Pro and the newest 13-inch iPad Pro this Xcode knows that `runs` (the runtime's types, when simctl
+ * says), the forms the suite grades on. Newest is the one needing the newest iOS, then the plain model over a memory
+ * variant, then the later in simctl's list, which older Xcodes write oldest first and Xcode 27 newest first.
  */
-export function chooseForms(types: readonly SimDeviceType[]): FormTypes {
-  const last = (test: RegExp, family: string) => types.filter((type) => type.family === family && test.test(type.name)).at(-1)
-  const phone = last(/^iPhone \d+ Pro$/, "iPhone") ?? last(/^iPhone \d+/, "iPhone")
-  const tablet = last(/^iPad Pro 13-inch/, "iPad") ?? last(/^iPad Pro/, "iPad")
+export function chooseForms(types: readonly SimDeviceType[], runs?: readonly string[]): FormTypes {
+  const runnable = runs?.length ? types.filter((type) => runs.includes(type.identifier)) : types
+  const newest = (test: RegExp, family: string) =>
+    runnable
+      .map((type, index) => ({ type, index }))
+      .filter(({ type }) => type.family === family && test.test(type.name))
+      .sort((a, b) => (a.type.minRuntime ?? 0) - (b.type.minRuntime ?? 0) || b.type.name.length - a.type.name.length || a.index - b.index)
+      .at(-1)?.type
+  const phone = newest(/^iPhone \d+ Pro$/, "iPhone") ?? newest(/^iPhone \d+/, "iPhone")
+  const tablet = newest(/^iPad Pro 13-inch/, "iPad") ?? newest(/^iPad Pro/, "iPad")
   return { ...(phone && { phone }), ...(tablet && { tablet }) }
 }
 
 /** Mako's simulator for each form: the one it made, if it's there on an available runtime, else the one it would make. */
-export function makoSimulators(facts: Pick<SetupFacts, "devices" | "deviceTypes" | "runtimes">): SetupSimulator[] {
-  const forms = chooseForms(facts.deviceTypes)
+export function makoSimulators(facts: Pick<SetupFacts, "devices" | "deviceTypes" | "runtimes" | "runtimeTypes" | "wantedRuntime">): SetupSimulator[] {
+  const runtime = chooseRuntime(facts.runtimes, facts.wantedRuntime, facts.runtimeTypes)
+  const forms = chooseForms(facts.deviceTypes, runtime && facts.runtimeTypes?.[runtime.identifier])
   const available = new Set(facts.runtimes.filter((runtime) => runtime.available).map((runtime) => runtime.identifier))
   return (["phone", "tablet"] as const).flatMap((form): SetupSimulator[] => {
     const type = forms[form]
@@ -234,9 +262,13 @@ function simulatorState(state: string): NonNullable<SetupSimulator["state"]> {
   }
 }
 
-/** The runtime Mako's simulators use: the available one matching what Xcode wants, else the newest available. */
-export function chooseRuntime(runtimes: readonly RuntimeFound[], wanted: string | undefined): RuntimeFound | undefined {
-  const available = runtimes.filter((runtime) => runtime.available)
+/**
+ * The runtime Mako's simulators use: the available one matching what Xcode wants, else the newest available. Of two
+ * with one version, the one running the most device types: Xcode 27 adds runtimes made for a single device.
+ */
+export function chooseRuntime(runtimes: readonly RuntimeFound[], wanted: string | undefined, runtimeTypes: Record<string, string[]> = {}): RuntimeFound | undefined {
+  const runs = (runtime: RuntimeFound) => runtimeTypes[runtime.identifier]?.length ?? 0
+  const available = runtimes.filter((runtime) => runtime.available).sort((a, b) => runs(b) - runs(a))
   return (
     (wanted ? available.find((runtime) => runtime.version === wanted || runtime.version.startsWith(`${wanted}.`)) : undefined) ??
     [...available].sort((a, b) => compareVersions(b.version, a.version))[0]
@@ -263,7 +295,9 @@ export function setupFromFacts(facts: SetupFacts): SimulatorSetup {
     })
 
   const selected = xcode ? selects(facts.developerDir, xcode) : false
-  const finished = Boolean(xcode) && selected && facts.license === "done" && facts.firstLaunch === "done"
+  // Mako runs this Xcode's tools through its own folder (`DEVELOPER_DIR`), so a Mac left on the Command Line Tools is
+  // finished once the license and first launch are: switching the active folder would cost a password for nothing.
+  const finished = Boolean(xcode) && facts.license === "done" && facts.firstLaunch === "done"
   steps.push({
     id: "finish",
     state: !xcode ? "later" : finished ? "done" : working("finish") ? "working" : "yours",
@@ -273,7 +307,7 @@ export function setupFromFacts(facts: SetupFacts): SimulatorSetup {
     ...(xcode && !finished && { fix: "finish-xcode" as const }),
   })
 
-  const runtime = chooseRuntime(facts.runtimes, facts.wantedRuntime)
+  const runtime = chooseRuntime(facts.runtimes, facts.wantedRuntime, facts.runtimeTypes)
   // simctl answers once the license is accepted, whichever folder is active, since Mako asks through this Xcode's own.
   const canList = Boolean(xcode) && facts.license === "done"
   steps.push({

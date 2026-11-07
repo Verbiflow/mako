@@ -34,6 +34,11 @@ export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" 
   })
   return {
     ...driver,
+    // The settings worker outlives every session it checked for; its port would keep the host's event loop alive.
+    stop: () => {
+      driver.stop?.()
+      settings.close()
+    },
     startPrefetch: {
       via: "The Claude Code build a session runs, in the SDK's stream-JSON mode, through `initialize`, with its binary read alongside: its first `initialize` on a copy took 3.5 s alone, 0.9 s so (2026-10-20); and the settings reader each start checks before it spawns, its SDK loaded.",
       files: async (env) => {

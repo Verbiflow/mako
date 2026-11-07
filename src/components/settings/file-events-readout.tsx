@@ -19,7 +19,7 @@ const LISTED = 6
 export function FileEventsReadout({ service }: { service: FileEventsService }) {
   const degraded = service.state === "degraded"
   return (
-    <div data-file-events-readout={service.state} className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+    <div data-file-events-readout={service.state} className="mt-2 bg-raised">
       <div className="flex items-start gap-2 px-3 py-2">
         <div className="min-w-0 flex-1">
           <p className="text-ui">macOS file-change service</p>
@@ -31,7 +31,7 @@ export function FileEventsReadout({ service }: { service: FileEventsService }) {
           Copy the readings
         </Action>
       </div>
-      <div className="divide-y divide-hairline border-t border-hairline">
+      <div className="">
         <div className="flex items-baseline gap-2 px-3 py-2">
           <div className="min-w-0 flex-1">
             <p className="truncate text-ui">Now</p>
@@ -74,8 +74,17 @@ export function FileEventsReadout({ service }: { service: FileEventsService }) {
 }
 
 function nowText(service: FileEventsService): string {
-  if (service.state === "degraded") return `Degraded for ${spanText(Date.now() - service.degraded!.since)}. ${degradedText(service)} Restarting it fixes this; macOS asks for your password.`
+  const snoozed = service.snoozedUntil ? ` "Not now" holds until ${formatTime(service.snoozedUntil)} unless it gets twice as bad.` : ""
+  if (service.state === "degraded") return `Degraded for ${spanText(Date.now() - service.degraded!.since)}. ${degradedText(service)} Restarting it fixes this; macOS asks for your password.${snoozed}`
   const memory = service.residentBytes !== undefined ? `fseventsd${service.pid ? ` (pid ${service.pid})` : ""} holds ${formatBytes(service.residentBytes)}.` : ""
+  const held = [
+    service.settlingUntil ? `Just restarted, so only its memory is judged until ${formatTime(service.settlingUntil)}.` : "",
+    service.busy ? "This Mac is busy with other work, so a late file change isn't held against it." : "",
+  ].filter(Boolean).join(" ")
+  return `${healthyText(service, memory)} ${held}`.trim()
+}
+
+function healthyText(service: FileEventsService, memory: string): string {
   if (service.lagMs === undefined) return `${service.state === "healthy" ? "Healthy. " : ""}Delivery isn't measured yet: Mako times it while it watches a folder. ${memory}`.trim()
   return `Healthy. File changes arrive in ${lagText(service.lagMs)} at the median of the last ${Math.min(service.beats, LAG_BEATS)} checks (slowest ${lagText(service.slowestMs ?? service.lagMs)}). ${memory}`.trim()
 }

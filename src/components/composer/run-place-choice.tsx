@@ -9,7 +9,9 @@ import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useCloudAccount } from "@/state/cloud-account"
 import { decideCarriedFiles, readCarriedFiles, useCarriedFiles } from "@/state/carried-files"
-import { bringBack, checkHarnesses, moveToCloud, updateThen, useCloudMoves } from "@/state/cloud-moves"
+import { bringBack, checkHarnesses, CLOUD_WHERE, moveToCloud, updateThen, useCloudMoves } from "@/state/cloud-moves"
+import { PlaceMark } from "@/components/ui/place-mark"
+import { runPlace } from "@mako/host/contracts/account-devices"
 import { HarnessesBehind } from "./harnesses-behind"
 import { runPlaceStore, useRunPlace } from "@/state/run-place"
 import { shallowEqual } from "@/state/store"
@@ -17,7 +19,7 @@ import { useSession } from "@/state/session"
 import { useOnScreen } from "@/state/thread-sessions"
 import { useWorktrees } from "@/state/worktrees"
 
-const triggerClass = "pressable flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground aria-pressed:text-foreground"
+const triggerClass = "pressable flex h-7 min-w-0 items-center gap-1.5 px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground aria-pressed:text-foreground"
 
 /**
  * The composer's Local/Cloud choice for a new Thread in a Git project, for an
@@ -29,6 +31,12 @@ export function RunPlaceChoice() {
   const cloud = useRunPlace((state) => state.cloud)
   const inRepository = useSession((state) => Boolean(state.git?.root))
   const invited = useCloudAccount((state) => state.account?.state.status === "signed-in" && state.account.state.account.entitlements.includes("cloud"))
+  // On another of the account's devices: its kind and name, as one line so the chip wakes only when either changes.
+  const device = useAcp((state) => {
+    const active = activeLiveAcp(state)
+    return active?.elsewhere && active.elsewhere !== CLOUD_WHERE ? `${active.elsewhereKind ?? ""}\n${active.elsewhere}` : undefined
+  })
+  if (device !== undefined) return <DeviceRunPlace kind={device.slice(0, device.indexOf("\n")) || undefined} name={device.slice(device.indexOf("\n") + 1)} />
   if (here.thread && invited) return <ThreadRunPlace thread={here.thread} />
   if (here.thread || here.draft || here.cwd || !inRepository || !invited) return null
   const describe = cloud ? "Runs in the cloud, in a clone of this project's GitHub repository" : "Runs on this Mac"
@@ -47,6 +55,22 @@ export function RunPlaceChoice() {
         {cloud ? "Cloud" : "Local"}
       </span>
     </button>
+  )
+}
+
+/**
+ * Where an open Thread runs when that's another of the account's devices: its name under its kind's glyph, a server
+ * for a machine of the person's own and a laptop for a Mac. It says where and offers nothing: a Thread moves between
+ * this Mac and the cloud, not yet between devices.
+ */
+function DeviceRunPlace({ name, kind }: { name: string; kind: string | undefined }) {
+  return (
+    <span data-run-place="device" title={`Runs on ${name}`} className="flex h-7 min-w-0 items-center gap-1.5 px-2 text-ui text-faint">
+      <PlaceMark place={runPlace(false, kind)} />
+      <span data-collapse="1" className="truncate">
+        {name}
+      </span>
+    </span>
   )
 }
 
@@ -205,7 +229,7 @@ function OfferRow({ data, icon, title, detail, disabled, onClick }: { data: Reco
   )
   if (!onClick) return <div {...data} aria-disabled={disabled || undefined} className={cn("flex w-full items-start gap-2 px-2 py-1.5", disabled && "opacity-60")}>{body}</div>
   return (
-    <button type="button" {...data} disabled={disabled} onClick={onClick} className="pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60">
+    <button type="button" {...data} disabled={disabled} onClick={onClick} className="pressable flex w-full items-start gap-2 px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60">
       {body}
     </button>
   )

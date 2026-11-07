@@ -325,7 +325,7 @@ const LineRow = memo(function LineRow({
       type="button"
       onClick={onOpen}
       className={cn(
-        "flex h-full w-full items-center gap-2 rounded px-1.5 text-left",
+        "flex h-full w-full items-center gap-2 px-1.5 text-left",
         "transition-colors duration-100 hover:bg-fill-hover"
       )}
     >

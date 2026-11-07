@@ -20,7 +20,8 @@ export const GROK_VOCABULARY = defineVocabulary({
   },
   mcp: ["s__t"],
   tools: {
-    run_terminal_command: { kind: "shell", effects: { cwd: "result.current_dir", exitCode: "result.exit_code", background: "is_background" } },
+    // Its words for a failed command's result (`output_for_prompt`) end `exit: 1`.
+    run_terminal_command: { kind: "shell", effects: { cwd: "result.current_dir", exitCode: "result.exit_code", background: "is_background", exitText: /(?:^|\n)exit: (-?\d+)\s*$/ } },
     monitor: { kind: "shell", effects: { background: true } },
     get_command_or_subagent_output: { kind: "shell-output", label: "Command output" },
     kill_command_or_subagent: { kind: "shell-stop" },
@@ -44,6 +45,7 @@ export const GROK_VOCABULARY = defineVocabulary({
     scheduler_create: { kind: "other", label: "Schedule" },
     scheduler_delete: { kind: "other", label: "Remove schedule" },
     scheduler_list: { kind: "other", label: "Schedules" },
+    update_goal: { kind: "other", label: "Update goal" },
     send_feedback: { kind: "other", label: "Send feedback" },
     image_gen: { kind: "image" },
     image_edit: { kind: "image", label: "Edit image" },

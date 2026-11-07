@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /*
  * Every surface that counts an Apex's Fins, drawn from one roster, says the same numbers in the same words: the
@@ -21,7 +21,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-fin-counts-ui-"))
+  const root = testScratch("mako-fin-counts-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-fin-counts-ui", main: fileURLToPath(import.meta.url) }))
   const given = process.argv.slice(2).find((arg) => /^https?:/.test(arg))
   let server
@@ -100,9 +100,9 @@ async function check() {
   // Three Fins at work, their steps as a harness reports them, and one idle: the screenshot's crew.
   await evaluate(`(() => {
     const steps = [
-      "Shell cd /Users/kashyab/.mako/worktrees/makomono-f6c41fc1/dogfood && npm run typecheck",
+      "Shell cd /Users/someone/.mako/worktrees/makomono-0a1b2c3d/dogfood && npm run typecheck",
       "Shell gh pr checks 340 -R Verbiflow/mako 2>&1 | awk '{print $1, $2}'",
-      "Read /Users/kashyab/makomono/mako/src/web-client/desk.tsx",
+      "Read /Users/someone/makomono/mako/src/web-client/desk.tsx",
     ]
     const four = window.apexScene.children().slice(0, 4).map((agent, index) => index < 3
       ? { ...agent, state: { kind: "working", activity: steps[index] }, child: { ...agent.child, state: { kind: "working", step: steps[index] } } }
@@ -123,7 +123,9 @@ async function check() {
   for (const [surface, selector] of Object.entries(surfaces)) {
     const at = selector === "[data-crew] header" ? "[data-crew] [data-fin-counts]" : selector
     assert.equal(await counts(at), label, `${surface} counts the roster as every surface does`)
-    agrees(surface, await text(selector), truth)
+    // The composer's chip shows the count and says the rest by its name, the line its tooltip reads.
+    const words = selector === "[data-agents-toggle]" ? await evaluate(`document.querySelector(${JSON.stringify(selector)})?.getAttribute("aria-label") ?? ""`) : await text(selector)
+    agrees(surface, words, truth)
   }
   assert.equal(await evaluate("document.querySelector('[data-thread-row] [data-fin-pips]').dataset.finPips"), "wwwi", "one pip per Fin: three working, one idle")
 
@@ -135,7 +137,9 @@ async function check() {
   assert.equal(await evaluate("Boolean(document.querySelector('[data-background-work]'))"), false, "no background line beside the crew card")
   assert.doesNotMatch(await text("[data-composer]"), /Waiting on/, "no 'Waiting on' over the composer")
 
-  // Steps are phrases: no home folder, no shell plumbing.
+  // Steps are phrases: no home folder, no shell plumbing. The idle Fin is under the settled line, opened.
+  await evaluate("(() => { const el = document.querySelector('[data-crew-scroller]'); if (el) el.scrollTop = el.scrollHeight; const line = document.querySelector('[data-crew-settled=folded]'); line?.click(); return true })()")
+  await until("document.querySelector('[data-crew-settled]')?.dataset.crewSettled === 'open'", "the settled line opening")
   const rows = await evaluate("[...document.querySelectorAll('[data-crew-row]')].map((row) => row.innerText.replace(/\\s+/g, ' '))")
   for (const row of rows) assert.doesNotMatch(row, /\/Users\/|2>&1|&&|\| awk/, `a Fin's step is a phrase: "${row}"`)
   assert.ok(rows.some((row) => row.includes("Running gh pr checks 340")), `the shell step reads as what it does: ${JSON.stringify(rows)}`)
@@ -168,6 +172,5 @@ async function check() {
   agrees("the phone's row", await evaluate("document.querySelector('[data-fin-pips]').getAttribute('aria-label')"), numbers(desktop))
 
   console.log(`Fin counts agree on every surface: ${label}; on the phone, ${desktop}`)
-  console.log(`Evidence: ${join(root, "shots")}`)
   app.exit(0)
 }

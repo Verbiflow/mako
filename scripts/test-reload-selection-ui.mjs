@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { testScratch } from "./lib/test-scratch.mjs"
 if (!process.versions.electron) {
   const { createServer } = await import('vite')
-  const root = await mkdtemp(join(tmpdir(), 'mako-reload-ui-'))
+  const root = testScratch('mako-reload-ui-')
   const server = await createServer({ cacheDir: join(root, 'cache'), server: { host: '127.0.0.1', port: 0, hmr: false, watch: { ignored: ['**'] } } })
   await server.listen()
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'mako-reload-ui', main: fileURLToPath(import.meta.url) }))

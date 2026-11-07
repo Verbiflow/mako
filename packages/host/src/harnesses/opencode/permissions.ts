@@ -2,7 +2,8 @@ import { parse, type ParseError } from "jsonc-parser"
 import { z } from "zod"
 import type { AccessTier } from "../../contracts/access.js"
 import type { RoutedThread } from "../../contracts/native-routing.js"
-import { launchSpawnsOff } from "../native-routing.js"
+import { layerOf } from "../mako-layer.js"
+import { opencodeLayer } from "./layer.js"
 
 const Rule = z.looseObject({ action: z.string(), resource: z.string(), effect: z.enum(["ask", "allow", "deny"]) })
 const Agent = z.looseObject({ permissions: z.array(Rule).optional() })
@@ -42,7 +43,7 @@ const ROUTED_AGENTS = ["build", "plan"]
 
 /** In a Thread whose spawns go to Mako, a deny on the subagent action for every agent Mako runs, after its other rules. */
 export function configureOpenCodeRouting(env: NodeJS.ProcessEnv, conversation: string, routing: (() => RoutedThread) | undefined): void {
-  if (!launchSpawnsOff("opencode", `${OPENCODE_SPAWN_ACTION} denied`, conversation, routing)) return
+  if (!opencodeLayer.apply(layerOf({ nativeRouting: routing }), conversation).spawnsDenied()) return
   const config = inlineConfig(env)
   const deny = { action: OPENCODE_SPAWN_ACTION, resource: "*", effect: "deny" as const }
   const agents = { ...config.agents }

@@ -59,6 +59,16 @@ export function cpuTicks(): CpuTicks {
   return { busy, total }
 }
 
+/**
+ * The cores kept busy between two readings of `cpuTicks`, on average: time the CPU really spent, so what's left of
+ * `cores` is idle. Not the load average, which counts every thread that wanted a core at the kernel's sample, however
+ * briefly: on 2026-11-05 this 14-core Mac's stood at 18 while 5 cores sat idle, with six short `git status` at a time.
+ */
+export function coresBusy(from: CpuTicks, to: CpuTicks, cores = availableParallelism()): number {
+  const elapsed = to.total - from.total
+  return elapsed > 0 ? ((to.busy - from.busy) / elapsed) * cores : 0
+}
+
 export interface MachineReading {
   cores: number
   /** Cores kept busy, on average over the reading, by work other than the caller's. */
@@ -75,8 +85,7 @@ export async function readMachine(windowMs = 2_000): Promise<MachineReading> {
   await new Promise((resolve) => setTimeout(resolve, windowMs))
   const to = cpuTicks()
   const cores = availableParallelism()
-  const elapsed = to.total - from.total
-  const othersBusy = elapsed > 0 ? ((to.busy - from.busy) / elapsed) * cores : 0
+  const othersBusy = coresBusy(from, to, cores)
   const [memory, thermal] = await Promise.all([memoryPressure(), thermalPressure()])
   return { cores, othersBusy, loadAverage: loadavg()[0] ?? 0, memory, thermal }
 }
@@ -97,4 +106,22 @@ export function busyReasons(reading: MachineReading): string[] {
 export function describeMachine(reading: MachineReading): string {
   const thermal = reading.thermal ? `, thermal ${reading.thermal}` : ""
   return `other work ${reading.othersBusy.toFixed(1)} of ${reading.cores} cores, load average ${reading.loadAverage.toFixed(1)}, memory ${reading.memory}${thermal}`
+}
+
+/**
+ * Whether other work kept this machine busy since the last ask: more than
+ * `BUSY_SHARE` of the cores, or the cores slowed for heat. Memory pressure
+ * doesn't count, since a degraded fseventsd is itself one cause of it. The
+ * first ask counts from when this was made.
+ */
+export function busySinceLastAsk(): () => Promise<boolean> {
+  let last = cpuTicks()
+  return async () => {
+    const now = cpuTicks()
+    const cores = availableParallelism()
+    const othersBusy = coresBusy(last, now, cores)
+    last = now
+    const thermal = await thermalPressure()
+    return othersBusy > cores * BUSY_SHARE || (thermal !== undefined && thermal !== "nominal")
+  }
 }

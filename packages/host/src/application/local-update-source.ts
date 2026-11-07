@@ -1,6 +1,8 @@
+import { join } from "node:path"
 import { fastForward, GitError, type Git } from "@mako/git"
 import {
   CHANGE_TITLES,
+  type CheckoutStanding,
   UNCOMMITTED_LISTED,
   UncommittedChangesSchema,
   type RevisionChanges,
@@ -16,10 +18,14 @@ import {
  *
  * A build used to take whatever the checkout had checked out. A checkout 21
  * commits behind `origin/main` built and installed the revision already
- * running, and the update read as done. Every build now reads this first:
- * a checkout on the branch that tracks the upstream, behind it and with no
- * changes to tracked files, is fast-forwarded; anything else is built as it
- * is and the reading says why. The CLI (`update-local.mjs`) reads the same.
+ * running, and the update read as done; later one 35 commits behind, with
+ * another session's 8 uncommitted files, built that old code three times
+ * and failed on a test main had already fixed. Every build now reads this
+ * first, and Build offers both: the upstream's newest commit, checked out
+ * clean in Mako's own copy (`upstream-copy.ts`), recommended whenever the
+ * checkout is behind or has uncommitted files and no commits of its own;
+ * and the checkout as it is. Settings never moves the checkout. The CLI
+ * (`update-local.mjs`) builds in place, so it asks to fast-forward instead.
  */
 
 /** A remote that hasn't answered by now is treated as unreachable; the reading uses what was fetched before. */
@@ -32,8 +38,12 @@ export interface ReadSourceOptions {
   fetch: boolean
   /** The running build's revision, and whether it carried uncommitted changes. */
   installed: { revision: string | null; dirty: boolean } | null
+  /** Who changed each file (absolute paths), as the change journal knows: Thread titles, "you". */
+  writers?: Writers
   signal?: AbortSignal
 }
+
+export type Writers = (paths: string[]) => Record<string, string[]> | undefined
 
 const lines = (text: string) => text.split("\n").filter(Boolean)
 
@@ -64,9 +74,9 @@ export async function readUpdateSource(git: Git, root: string, options: ReadSour
   const untracked = files.filter((file) => file.change === "untracked").length
   const changed = files.length - untracked
   const plan = planFor({ head, branch, upstream, ahead, behind, changed, untracked }, options.installed)
-  const target = plan.kind === "fast-forward" && upstream ? upstream.commit : head
+  const target = upstream && (plan.recommended === "upstream" || (plan.recommended === null && plan.upstream?.installed)) ? upstream.commit : head
   const changes = options.installed?.revision ? await changesSince(git, root, options.installed.revision, target, options.signal) : null
-  return { kind: "checkout", head, branch, upstream, ahead, behind, changed, untracked, uncommitted: listed(files), fetch, plan, target, changes, readAt: new Date().toISOString() }
+  return { kind: "checkout", head, branch, upstream, ahead, behind, changed, untracked, uncommitted: listed(files, root, options.writers), fetch, plan, target, changes, readAt: new Date().toISOString() }
 }
 
 /**
@@ -99,11 +109,27 @@ async function uncommittedFiles(git: Git, root: string, signal?: AbortSignal): P
   return files
 }
 
-const listed = (files: UncommittedFile[]): UncommittedChanges => ({ count: files.length, files: files.slice(0, UNCOMMITTED_LISTED) })
+/** The first `UNCOMMITTED_LISTED` files, each with who changed it when `writers` knows; a lookup that fails names nobody. */
+function listed(files: UncommittedFile[], root?: string, writers?: Writers): UncommittedChanges {
+  const shown = files.slice(0, UNCOMMITTED_LISTED)
+  let found: Record<string, string[]> | undefined
+  try {
+    found = root && writers && shown.length ? writers(shown.map((file) => join(root, file.path))) : undefined
+  } catch {
+    found = undefined
+  }
+  return {
+    count: files.length,
+    files: found ? shown.map((file) => {
+      const by = found[join(root!, file.path)]
+      return by?.length ? { ...file, by } : file
+    }) : shown,
+  }
+}
 
 /** The checkout's uncommitted files, named: what a build of it as it is takes beyond its revision. */
-export async function readUncommitted(git: Git, root: string, signal?: AbortSignal): Promise<UncommittedChanges> {
-  return listed(await uncommittedFiles(git, root, signal))
+export async function readUncommitted(git: Git, root: string, signal?: AbortSignal, writers?: Writers): Promise<UncommittedChanges> {
+  return listed(await uncommittedFiles(git, root, signal), root, writers)
 }
 
 /**
@@ -129,10 +155,10 @@ export async function buildUncommitted(env: NodeJS.ProcessEnv, read: () => Promi
 }
 
 /**
- * The plan for a reading. A build that would carry exactly the installed,
- * clean revision is `current` when nothing newer can reach the checkout,
- * and an `as-is` marked `installed` when the upstream has more that it can't
- * take: either way there is nothing to build.
+ * The plan for a reading (`UpdateSourcePlan`). The checkout's own commits on
+ * top of the upstream are what the person is building; anything else it
+ * holds beyond the upstream (uncommitted files, often another session's
+ * half-done work, or an older HEAD) is offered, never recommended.
  */
 export function planFor(
   reading: Pick<Checkout, "head" | "branch" | "upstream" | "ahead" | "behind" | "changed" | "untracked">,
@@ -140,40 +166,52 @@ export function planFor(
 ): UpdateSourcePlan {
   const { head, branch, upstream, ahead, behind, changed, untracked } = reading
   const home = upstream !== null && branch !== null && upstream.branch === branch
-  const forward = home && behind > 0 && ahead === 0 && changed === 0
-  const target = forward ? upstream.commit : head
-  const dirty = forward ? untracked > 0 : changed + untracked > 0
-  const same = Boolean(installed?.revision && !installed.dirty && !dirty && target.startsWith(installed.revision))
-  if (same && (forward || !upstream || behind === 0)) return { kind: "current" }
-  if (forward) return { kind: "fast-forward" }
-  const why = !upstream ? "no-upstream"
+  const standing: CheckoutStanding = !upstream ? "no-upstream"
     : !branch ? "detached"
     : !home ? "branch"
     : ahead && behind ? "diverged"
-    : behind ? "changes"
+    : behind ? "behind"
     : ahead ? "ahead"
     : "level"
-  return { kind: "as-is", why, installed: same }
+  const runs = (commit: string) => Boolean(installed?.revision && !installed.dirty && commit.startsWith(installed.revision))
+  const checkout = { standing, installed: changed + untracked === 0 && runs(head) }
+  const fromUpstream = upstream ? { installed: runs(upstream.commit) } : null
+  const own = ahead > 0 && behind === 0
+  const recommended = !fromUpstream || own ? (checkout.installed ? null : "checkout")
+    : fromUpstream.installed ? null
+    : "upstream"
+  return { recommended, upstream: fromUpstream, checkout }
 }
 
 /**
- * Brings the checkout to the reading's target when its plan is a
- * fast-forward, refusing if anything moved since it was read. Answers the
- * branch moved and from where, or null when there was nothing to do.
+ * Whether `update:local`, which builds the checkout in place, can bring it
+ * to the upstream first: on the branch that tracks it, behind it, with no
+ * commits of its own and no changes to tracked files.
+ */
+export function forwardable(reading: UpdateSource): reading is Checkout & { branch: string; upstream: NonNullable<Checkout["upstream"]> } {
+  return reading.kind === "checkout" && reading.plan.checkout.standing === "behind" && reading.changed === 0 && reading.branch !== null && reading.upstream !== null
+}
+
+/**
+ * Fast-forwards the checkout to the upstream's commit when it's
+ * `forwardable`, refusing if anything moved since it was read. Answers the
+ * branch moved and from where, or null when there was nothing to do. Only
+ * `update:local` calls this, after asking; Settings never moves a checkout.
  */
 export async function bringForward(git: Git, root: string, reading: UpdateSource, signal?: AbortSignal): Promise<{ branch: string; from: string; to: string } | null> {
-  if (reading.kind !== "checkout" || reading.plan.kind !== "fast-forward" || !reading.branch) return null
+  if (!forwardable(reading)) return null
+  const to = reading.upstream.commit
   const repository = await git.openRepository(root, signal)
   if (!repository) throw new Error(`${root} isn't a Git checkout.`)
   try {
-    await fastForward(repository, { branch: reading.branch, head: reading.head }, reading.target, signal)
+    await fastForward(repository, { branch: reading.branch, head: reading.head }, to, signal)
   } catch (error) {
     const reason = error instanceof GitError && error.kind === "untracked_files"
       ? "untracked files there would be overwritten"
       : error instanceof Error ? error.message : String(error)
-    throw new Error(`Couldn't bring ${reading.branch} up to ${reading.target.slice(0, 8)}: ${reason} Nothing in the checkout changed.`, { cause: error })
+    throw new Error(`Couldn't bring ${reading.branch} up to ${to.slice(0, 8)}: ${reason} Nothing in the checkout changed.`, { cause: error })
   }
-  return { branch: reading.branch, from: reading.head, to: reading.target }
+  return { branch: reading.branch, from: reading.head, to }
 }
 
 /** What `to` has that `from` doesn't, along first parents. `from` missing from the checkout counts from nothing known. */

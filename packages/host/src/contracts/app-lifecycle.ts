@@ -9,6 +9,11 @@ export const UncommittedFileSchema = z.object({
   change: z.enum(["edited", "added", "deleted", "renamed", "untracked", "conflicted"]),
   /** A renamed file's earlier path. */
   from: z.string().optional(),
+  /**
+   * Who changed it, as Mako's change journal knows: each Thread by its title,
+   * "you" for the person. Absent when the journal names nobody.
+   */
+  by: z.array(z.string()).optional(),
 })
 export type UncommittedFile = z.infer<typeof UncommittedFileSchema>
 
@@ -95,36 +100,47 @@ export interface RevisionChanges {
 export const CHANGE_TITLES = 8
 
 /**
- * What Build does with the source checkout as it stands. Only a checkout on
- * the branch that tracks the upstream, behind it, without changes to tracked
- * files, is brought forward first; anything else is built as it is, and
- * `why` says what kept it from the upstream.
+ * Where a build comes from. `upstream` is the upstream's newest commit,
+ * checked out in a clean copy of Mako's own: the person's checkout is read,
+ * never moved, and none of its uncommitted files go in. `checkout` is the
+ * checkout as it is, its HEAD with every uncommitted file.
  */
-export type UpdateSourcePlan =
-  /** The build would carry the installed revision and nothing newer can reach the checkout. */
-  | { kind: "current" }
-  /** Fast-forward the branch that tracks the upstream to the upstream's commit, then build that. */
-  | { kind: "fast-forward" }
-  | {
-      kind: "as-is"
-      why:
-        /** On the branch that tracks the upstream, at its commit. */
-        | "level"
-        /** On that branch with commits the upstream doesn't have, and none it has. */
-        | "ahead"
-        /** Behind, but tracked files have uncommitted changes. */
-        | "changes"
-        /** Both have commits the other doesn't. */
-        | "diverged"
-        /** On a branch other than the one that tracks the upstream. */
-        | "branch"
-        /** HEAD isn't on a branch. */
-        | "detached"
-        /** No remote with a default branch to compare with. */
-        | "no-upstream"
-      /** The commit it would build is the installed one, without changes: there is nothing to build. */
-      installed: boolean
-    }
+export const UpdateBuildFromSchema = z.enum(["upstream", "checkout"])
+export type UpdateBuildFrom = z.infer<typeof UpdateBuildFromSchema>
+
+/** How the checkout's HEAD stands against the upstream. */
+export type CheckoutStanding =
+  /** On the branch that tracks the upstream, at its commit. */
+  | "level"
+  /** On that branch with commits the upstream doesn't have, and none it has. */
+  | "ahead"
+  /** On that branch, behind it. */
+  | "behind"
+  /** Both have commits the other doesn't. */
+  | "diverged"
+  /** On a branch other than the one that tracks the upstream. */
+  | "branch"
+  /** HEAD isn't on a branch. */
+  | "detached"
+  /** No remote with a default branch to compare with. */
+  | "no-upstream"
+
+/**
+ * What Build can make from the source checkout as it stands, and which of
+ * the two it makes when the person doesn't choose (`recommended`). A
+ * checkout behind the upstream, or with uncommitted files and no commits of
+ * its own, builds the upstream; one with its own commits on top of the
+ * upstream builds as it is. Nothing is recommended when the installed app
+ * already carries the upstream and the checkout adds nothing but changes
+ * the person didn't ask for.
+ */
+export interface UpdateSourcePlan {
+  recommended: UpdateBuildFrom | null
+  /** The upstream's newest commit in a clean copy; null without an upstream. `installed`: the app runs that commit already. */
+  upstream: { installed: boolean } | null
+  /** The checkout as it is. `installed`: the app runs its HEAD already, and it has no uncommitted files. */
+  checkout: { standing: CheckoutStanding; installed: boolean }
+}
 
 /** The source checkout against the upstream updates come from, as Mako last read it. */
 export type UpdateSource =
@@ -152,7 +168,7 @@ export type UpdateSource =
       /** Whether this reading fetched the upstream first; a failure says why, and the reading uses what was fetched before. */
       fetch: { kind: "fetched" } | { kind: "skipped" } | { kind: "failed"; reason: string }
       plan: UpdateSourcePlan
-      /** The revision Build would build: the upstream's commit for a fast-forward, HEAD otherwise. */
+      /** The revision the recommended build would build: the upstream's commit, or HEAD. */
       target: string
       /** What `target` has that the installed build doesn't; null without an installed revision. */
       changes: RevisionChanges | null
@@ -180,14 +196,37 @@ export interface UnsurePerformance {
   measuredAt: string
 }
 
+/** A build's steps, in order. */
+export type BuildPhase = "copying" | "installing" | "compiling" | "checking" | "packaging" | "verifying"
+
+/**
+ * Why a build stopped, said for the person: which step, whether it reads as
+ * the code's fault, the Mac's, or the checkout's, and what to do next.
+ * `details` is the failing command's own last lines.
+ */
+export interface BuildFailure {
+  step: BuildPhase
+  blame: "code" | "machine" | "checkout"
+  /** What failed, in a sentence. */
+  what: string
+  /** What to do next, in a sentence. */
+  next: string
+  details?: string
+}
+
 export type LocalBuildState =
   | { kind: "idle" }
   | {
       kind: "building"
-      /** `installing` runs npm install in the source checkout first, only when its node_modules is behind its package-lock.json. */
-      phase: "installing" | "copying" | "compiling" | "checking" | "packaging" | "verifying"
-      /** The commit being built, once the checkout has been read and brought forward. */
+      /** `installing` runs npm install in Mako's own copy, only when its node_modules is behind its package-lock.json. */
+      phase: BuildPhase
+      /** Where the build comes from. */
+      from?: UpdateBuildFrom
+      /** The commit being built, once the checkout has been read. */
       revision?: string
+      /** When the build started, and when this step did. */
+      startedAt?: string
+      phaseAt?: string
       /** What the install brings, while `phase` is `installing`. */
       dependencies?: MissingDependencies
       /** Measuring a built update's performance again, after a Mac too busy to measure it; nothing is rebuilt. */
@@ -198,16 +237,20 @@ export type LocalBuildState =
       build: BuildIdentity
       /** What the build has that the installed one doesn't. */
       changes: RevisionChanges | null
-      /** The branch fast-forwarded before building, and to which commit. */
-      forwarded: { branch: string; from: string; to: string } | null
+      /** Where it came from; absent from a build made before the choice. */
+      from?: UpdateBuildFrom
       /** Set when the performance check couldn't settle; absent when it passed. */
       performance?: UnsurePerformance
+      /** How long the build took, all told, and each step. */
+      took?: { ms: number; steps: Partial<Record<BuildPhase, number>> }
     }
   | {
       kind: "error"
       message: string
       /** A command that fixes it, run by hand in a terminal: `cd '<checkout>' && npm install`. */
       command?: string
+      /** The failure in parts, when the build knows them; `message` says it whole. */
+      failure?: BuildFailure
     }
 export interface UpdateInstallation {
   distribution: "development" | "local" | "signed" | "unsigned"

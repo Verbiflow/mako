@@ -15,6 +15,7 @@ import {
   type CursorSdkLiveClient,
 } from "@mako/host/harnesses/cursor/sdk/driver"
 import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
+import { HandoffRefused } from "@mako/host/harnesses/prompt-dispatch"
 import {
   CURSOR_SDK_WIRE_VERSION,
   type SdkEvent,
@@ -154,6 +155,17 @@ try {
   assert.equal(sends, 1, "preflight refusal cannot send")
   await driver.close(id)
   await driver.start(root, admitted("cursor", { conversationId: id, emit() {} }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
+  // The handoff refused, as a Stop during preparation or a journal that can't record it as sent refuses it: no send,
+  // and the session isn't left reading a turn that never began.
+  await assert.rejects(driver.prompt(id, "after a stop", [], undefined, {
+    ...dispatch(),
+    report: (e: PromptDeliveryEvidence) => {
+      if (e.kind === "submitted") throw new HandoffRefused("stopped")
+      evidence.push(e)
+    },
+  }), HandoffRefused)
+  assert.equal(sends, 1, "a refused handoff sends nothing")
+  assert.equal(evidence.at(-1)?.kind, "not-accepted", "and is proof nothing was sent")
   const lost = driver.prompt(id, "lost reply", [], undefined, dispatch())
   const rejected = assert.rejects(lost, /reply lost/)
   await tick()

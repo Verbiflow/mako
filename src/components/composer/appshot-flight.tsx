@@ -106,7 +106,7 @@ function Landing({ flight }: { flight: Extract<Flight, { phase: "landing" }> }) 
       src={flight.image}
       alt={`Appshot of ${flight.app}`}
       style={{ visibility: "hidden" }}
-      className="pointer-events-none fixed top-1/2 left-1/2 z-[60] max-h-[45vh] w-[min(28rem,45vw)] -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-asset)] object-contain shadow-[var(--elevation-overlay)] ring-1 ring-border"
+      className="pointer-events-none fixed top-1/2 left-1/2 z-[60] max-h-[45vh] w-[min(28rem,45vw)] -translate-x-1/2 -translate-y-1/2 object-contain shadow-[var(--elevation-overlay)] ring-1 ring-border"
     />
   )
 }

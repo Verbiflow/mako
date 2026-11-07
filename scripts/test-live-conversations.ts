@@ -24,7 +24,7 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { projectLive } from "../src/state/live-projection.js"
 import { compactionAvailable } from "@mako/host/contracts/recovery"
-import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
+import { continueTurnPrompt, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { namedWork } from "@mako/host/base/event-loop"
 import { BULK_LOADS } from "@mako/host/conversations/live-records"
@@ -88,6 +88,8 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
   const events: HostEvent[] = []
   let closed = 0
   let cancels = 0
+  /** While set, a prompt is still being prepared, never handed over: the driver hasn't reported it submitted. */
+  const preparing = { on: false }
   const driver: ProviderLiveDriver = {
     ...fixtureCapabilities,
     resume: fixtureResume(),
@@ -95,6 +97,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
     available: () => true,
     start: () => started.promise,
     prompt: async (_id, text, _attachments, tuning, dispatch) => {
+      if (preparing.on) await new Promise(() => {})
       // Sent, as every driver reports it: a turn that ends from here on is this message's.
       dispatch.report({ kind: "submitted", source: "transport-call" })
       sent.push(text)
@@ -133,6 +136,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
     events,
     owner,
     dependencies,
+    preparing,
     closed: () => closed,
     cancels: () => cancels,
     cleanup: () => {
@@ -603,18 +607,25 @@ async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close
     observer.hold("test-provider", "native-hibernate", "other-conversation")
     const refused = randomUUID()
     owner.submit(id, refused, "must not double-open")
+    // Another host's hold lets go by itself: the message waits to go again, the session asleep, rather than failing.
     await waitFor(
       () =>
         owner.snapshot(id)?.requests.find((request) => request.id === refused)
-          ?.status === "failed",
+          ?.retry?.cause === "busy",
       "a competing host hold did not refuse the wake"
     )
+    assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === refused)?.status, "held")
     assert.equal(starts, 2, "ownership refusal happens before provider spawn")
-    assert.equal(owner.snapshot(id)?.session.connection, "disconnected")
+    assert.equal(owner.snapshot(id)?.session.connection, "hibernated")
     observer.release(
       "test-provider",
       "native-hibernate",
       "other-conversation"
+    )
+    owner.wakeDue(Date.now() + 11 * 60_000)
+    await waitFor(
+      () => starts === 3,
+      "the wake was not tried again once the other host let go"
     )
   } finally {
     owner.stop()
@@ -839,6 +850,13 @@ async function bulkLoadsAreNamed() {
     const memory = owner.residency().memory
     assert.deepEqual(memory.loads, [{ by: "a list reading journals", count: ids.length }])
     assert.ok(memory.held.length > 0 && memory.held.every((held) => held.by === "a list reading journals"), "each conversation in memory says who read it in")
+    // One running as no work at all is named by who called it, or the log can only say "unnamed work".
+    for (const id of ids) owner["records"].release(id)
+    const noWorkOfItsOwn = () => { for (const id of ids) owner.snapshot(id) }
+    noWorkOfItsOwn()
+    assert.equal(warned.length, 2, "a second reader gets a line of its own")
+    assert.equal(warned[1]?.fields?.by, "unnamed work")
+    assert.match(String(warned[1]?.fields?.from), /noWorkOfItsOwn/, "and says who called it")
     archives.close()
     console.log("PASS: the report and the lifecycle load no journal; a reader loading in bulk is named")
   } finally {
@@ -1361,6 +1379,90 @@ async function closeDuringStartup() {
     assert.ok(f.closed() >= 1)
   } finally {
     f.cleanup()
+  }
+}
+
+/**
+ * A host that dies while a message is still being prepared never handed it to its harness: the next host has it wait
+ * again, as the messages behind it do, not stand for a cut turn that "Continue" would pick up (`test:orch-crash` sends
+ * a Fin's whole). A journal an older build wrote, whose drivers could send before `submitted` was written, keeps the
+ * cautious reading: its turn may have run.
+ */
+async function unhandedMessageWaitsAfterCrash() {
+  for (const written of ["gated", "older"] as const) {
+    const f = fixture()
+    // A journal an older build wrote, before a driver sent only once `submitted` held: no `gated` on its attempts.
+    const commit = LiveJournal.prototype.commit
+    const older = written === "older" ? mock.method(LiveJournal.prototype, "commit", function (this: LiveJournal, ...[snapshot, ...rest]: Parameters<LiveJournal["commit"]>) {
+      const stripped = { ...snapshot, requests: snapshot.requests.map(({ nativeDelivery, ...request }) => (nativeDelivery ? { ...request, nativeDelivery: { ...nativeDelivery, gated: undefined } } : request)) }
+      return commit.call(this, stripped, ...rest)
+    }) : undefined
+    try {
+      await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+      f.started.resolve(f.state)
+      await tick()
+      f.preparing.on = true
+      const brief = randomUUID()
+      f.owner.submit(f.id, brief, "the brief")
+      await tick()
+      assert.equal(f.owner.snapshot(f.id)?.requests[0]?.nativeDelivery?.evidence.kind, "prepared")
+      older?.mock.restore()
+      const afterCrash = new LiveConversations(f.dependencies)
+      try {
+        const found = afterCrash.snapshot(f.id)!.requests[0]!
+        if (written === "older") {
+          assert.deepEqual([found.status, found.interruption?.reason], ["uncertain", "host-crashed"], "an older journal's prepared attempt may have run: it's read as cautiously as before")
+          continue
+        }
+        assert.equal(found.status, "held", "it waits again")
+        assert.equal(found.interruption, undefined, "no turn was cut")
+        assert.deepEqual([found.pause, found.retry, found.wake], [undefined, undefined, undefined], "paused as Mako's exit pauses what waits")
+        assert.equal(crashedChildTurn([found]), undefined, "a Fin's is no turn to continue")
+        // Drawn already, and a send reads a refused attempt's message as drawn, so it isn't drawn twice.
+        assert.equal(found.nativeDelivery?.evidence.kind, "not-accepted")
+        const drawn = afterCrash.snapshot(f.id)!.blocks.filter((block) => block.type === "user" && block.requestId === brief)
+        assert.equal(drawn.length, 1, "its message is drawn once")
+        assert.deepEqual(f.sent, [], "nothing reached the harness")
+      } finally {
+        afterCrash.stop()
+      }
+    } finally {
+      older?.mock.restore()
+      f.owner.stop()
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  }
+}
+
+/**
+ * Mako quits or updates while a message is still being prepared: it was never handed to its harness, so it waits to be
+ * sent again, as the messages queued behind it do, and is no cut turn for the next host to continue with "Continue".
+ */
+async function unhandedMessageWaitsAfterQuit() {
+  const f = fixture()
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.preparing.on = true
+    const brief = randomUUID()
+    f.owner.submit(f.id, brief, "the brief")
+    await tick()
+    assert.equal(f.owner.snapshot(f.id)?.requests[0]?.nativeDelivery?.evidence.kind, "prepared")
+    await f.owner.stop()
+    const afterQuit = new LiveConversations(f.dependencies)
+    try {
+      const found = afterQuit.snapshot(f.id)!.requests[0]!
+      assert.equal(found.status, "held", "it waits again")
+      assert.equal(found.interruption, undefined, "no turn was cut")
+      assert.equal(found.nativeDelivery?.evidence.kind, "not-accepted")
+      assert.equal(afterQuit.snapshot(f.id)!.blocks.filter((block) => block.type === "user" && block.requestId === brief).length, 1, "its message is drawn once")
+      assert.deepEqual(f.sent, [], "nothing reached the harness")
+    } finally {
+      afterQuit.stop()
+    }
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
   }
 }
 
@@ -2780,6 +2882,8 @@ await startedAheadTakesFirstMessage()
 await closeDuringStartup()
 await closeBeforeNativeSpawn()
 await durabilityAndBatching()
+await unhandedMessageWaitsAfterCrash()
+await unhandedMessageWaitsAfterQuit()
 await resumedHibernatesBeforeATurn()
 await hibernatesAndWakesExactlyOnce()
 await hibernatesAndWakesExactlyOnce(true)

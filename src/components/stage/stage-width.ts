@@ -8,7 +8,9 @@
 
 export const CHAT_MIN = 450
 export const CHAT_HEIGHT_MIN = 260
-export const COMPANION_MIN_DEFAULT = 380
+export const COMPANION_MIN_DEFAULT = 340
+/** The right rail until it is dragged: the left rail's widest, as they are twins. */
+export const COMPANION_DEFAULT = 420
 /** The visible divider between tiled workbench panes. */
 export const STAGE_GUTTERS = 1
 

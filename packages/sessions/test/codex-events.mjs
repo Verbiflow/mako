@@ -50,7 +50,7 @@ await writeFile(paginated,
 const thread = await new CodexProvider(nativeStores, home).read(paginated)
 assert.ok(thread)
 assert.deepEqual(markers(thread), [
-  { label: "Context compacted", detail: "from 245k tokens" },
+  { label: "Context compacted", detail: "from 245K tokens" },
   { label: "Turn failed", detail: "Server overloaded", body: "Selected model is at capacity. Please try a different model.", tone: "error" },
   { label: "Turn failed", detail: "The model requires a newer version of Codex.", tone: "error" },
   { label: "Compaction failed", detail: "Connection lost", tone: "warning" },

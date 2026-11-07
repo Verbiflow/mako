@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs"
 import { join } from "node:path"
 import { devHostBuild } from "@mako/host/base/dev-host-build"
 import { RuntimeInfoSchema } from "@mako/host/contracts/runtime"
+import { testScratch } from "./lib/test-scratch.mjs"
 
-const root = mkdtempSync(join(tmpdir(), "mako-host-build-"))
+const root = testScratch("mako-host-build-")
 try {
   mkdirSync(join(root, "dist-electron"))
   mkdirSync(join(root, "packages/sessions/dist"), { recursive: true })

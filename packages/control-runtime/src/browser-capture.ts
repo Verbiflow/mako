@@ -56,7 +56,7 @@ export class BrowserCapture {
   private readonly sessionId: string
   private releaseFocus?: () => Promise<void>
   private ending?: Promise<void>
-  constructor(connection: CaptureConnection, sessionId: string, private readonly focus?: BrowserFocus) {
+  constructor(connection: CaptureConnection, sessionId: string, private readonly focus?: BrowserFocus, private readonly stopMs = 2_000) {
     this.connection = connection
     this.sessionId = sessionId
     this.unlisten = connection.onEvent((event) => {
@@ -206,7 +206,7 @@ export class BrowserCapture {
       await this.connection.send(
         "Page.stopScreencast",
         {},
-        AbortSignal.timeout(2000),
+        AbortSignal.timeout(this.stopMs),
         this.sessionId
       )
     } catch {

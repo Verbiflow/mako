@@ -10,17 +10,16 @@ import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import {
   mkdir,
-  mkdtemp,
   writeFile,
   readFile,
   rm,
   symlink,
   unlink,
 } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const nativeStores = new NativeStores(false)
 
@@ -35,7 +34,7 @@ if (
     "Launch-only checks cannot be combined with prompt or mutation scenarios"
   )
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-provider-e2e-"))
+  const root = testScratch("mako-provider-e2e-")
   await writeFile(
     join(root, "package.json"),
     JSON.stringify({ name: "mako-e2e", main: fileURLToPath(import.meta.url) })
@@ -154,7 +153,7 @@ async function runElectron() {
     },
     controlInstructions: (binding) => {
       const session = sessions.get(binding)
-      return session ? [controlLine(session)] : []
+      return { standing: { control: session && controlLine(session) }, notices: [] }
     },
     revokeTools: async (binding, id) => {
       mcp?.revoke(binding, id)
@@ -1213,7 +1212,6 @@ async function runElectron() {
       join(root, "results.json"),
       JSON.stringify(results, null, 2)
     )
-    console.log(`Evidence: ${root}`)
     process.exitCode = results.some((result) => result.status === "failed")
       ? 1
       : 0

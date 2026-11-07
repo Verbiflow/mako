@@ -2,7 +2,7 @@ import { createElement, type ComponentType } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { type ToolViewProps } from "@/extend/slots"
 import { Ending, Output } from "@/components/transcript/tool-row"
-import type { ToolKind } from "@mako/sessions/tool-identity"
+import type { MakoToolGroup, ToolKind } from "@mako/sessions/tool-identity"
 import {
   argAt,
   editsOf,
@@ -17,11 +17,18 @@ import {
 import { cn } from "@/lib/utils"
 import { fileDir, fileName } from "@/lib/format"
 import {
+  AppWindowIcon,
   ArrowLeftRightIcon,
   BookOpenIcon,
   BotIcon,
   BrainIcon,
+  CloudIcon,
   CodeIcon,
+  FolderGit2Icon,
+  GitPullRequestIcon,
+  HistoryIcon,
+  NetworkIcon,
+  ScrollTextIcon,
   ScanSearchIcon,
   CircleHelpIcon,
   FolderInputIcon,
@@ -79,21 +86,38 @@ const ICONS = {
   other: WrenchIcon,
 } satisfies { readonly [Kind in ToolKind]: ComponentType<{ className?: string }> }
 
+/** Mako's own tools by what they're about: an agents tool draws as the agent kinds do, the rest as what they act on. */
+const MAKO_ICONS = {
+  agents: BotIcon,
+  "pull-request": GitPullRequestIcon,
+  app: AppWindowIcon,
+  worktree: FolderGit2Icon,
+  recipe: ScrollTextIcon,
+  history: HistoryIcon,
+  media: ImageIcon,
+  port: NetworkIcon,
+  cloud: CloudIcon,
+  other: PlugIcon,
+} satisfies { readonly [Group in MakoToolGroup]: ComponentType<{ className?: string }> }
+
 /**
- * Resolves a tool's glyph: a registered view's override first, then the
- * kind's. Rendering it through a component (rather than picking a component
+ * Resolves a tool's glyph: a registered view's override first, then a Mako
+ * tool's, then the kind's. Rendering it through a component (rather than picking a component
  * type at the call site) keeps the element type stable across renders.
  */
 export function ToolGlyph({
   kind,
   override,
+  mako,
   className,
 }: {
   kind: ToolKind
   override?: ComponentType<{ className?: string }>
+  /** For a tool of Mako's own server, what it's about (`makoToolGroup`). */
+  mako?: MakoToolGroup
   className?: string
 }) {
-  return createElement(override ?? ICONS[kind], { className })
+  return createElement(override ?? (mako ? MAKO_ICONS[mako] : ICONS[kind]), { className })
 }
 
 /* ------------------------------------------------------------------ */
@@ -156,7 +180,7 @@ function diffLines(before: string, after: string): DiffLine[] {
 
 function DiffBlock({ lines }: { lines: DiffLine[] }) {
   return (
-    <div className="overflow-x-auto rounded-md font-mono text-label leading-[1.6]">
+    <div className="overflow-x-auto font-mono text-label leading-[1.6]">
       {lines.map((line, index) => (
         <div
           key={index}

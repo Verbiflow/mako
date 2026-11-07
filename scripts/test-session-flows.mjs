@@ -35,8 +35,8 @@ import { execFileSync, spawn } from "node:child_process"
 import { once } from "node:events"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
-import { appendFile, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises"
-import { homedir, tmpdir } from "node:os"
+import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises"
+import { homedir } from "node:os"
 import { basename, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
@@ -46,6 +46,7 @@ import { carryFlows } from "./session-flows-carry.mjs"
 import { CONTINUATIONS, SWITCHED } from "./session-flows-continuations.mjs"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { REVIEW_FENCE, makoReviewReport } from "@mako/sessions/review"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const nativeStores = new NativeStores(false)
 
@@ -56,7 +57,7 @@ if (!process.versions.electron) {
   const args = process.argv.slice(2)
   const dir = (flag) => { const at = args.indexOf(flag); return at >= 0 ? resolve(args[at + 1] ?? "") : undefined }
   const kept = dir("--record") ?? dir("--continue")
-  const root = kept ?? await mkdtemp(join(tmpdir(), "mako-session-flows-"))
+  const root = testScratch("mako-session-flows-", { given: kept })
   await mkdir(root, { recursive: true })
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-session-flows", main: fileURLToPath(import.meta.url) }))
   console.log(`Session flows: ${root}`)
@@ -97,7 +98,7 @@ if (!process.versions.electron) {
   })
   void main(app).then(() => {
     if (unhandled.length) throw new Error(`The host left ${unhandled.length} unhandled rejection(s) or listener leak(s)`)
-  }).then(() => app.exit(0), (error) => { console.error(error.message); app.exit(1) })
+  }).then(() => app.exit(0), (error) => { console.error(error.stack); app.exit(1) })
 }
 
 function options() {

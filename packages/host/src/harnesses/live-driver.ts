@@ -9,6 +9,7 @@ import type { PromptDispatch } from "./prompt-dispatch.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
+import { primerBlocks } from "../contracts/primer.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import type { NativeResumeEvidence } from "./native-continuation.js"
 import type { LivePermissionResponse, PromptAttachment, LiveSessionState, LiveSessionMode, LiveSteering } from "../contracts/providers-acp.js"
@@ -21,8 +22,11 @@ import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import type { AccountLaunch } from "./accounts.js"
 import type { UsageAmendment } from "./account-usage-readings.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
+import type { InstructionBlock, LayerCapabilities } from "../contracts/mako-layer.js"
 import type { NativeRoutingCapability, RoutedThread } from "../contracts/native-routing.js"
 import type { CallThread } from "../contracts/native-calls.js"
+import type { ModelRouteAdapter } from "./model-routes.js"
+import type { AccountContinuation } from "../contracts/fin-fallback.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../contracts/mcp-reach.js"
 import { LaunchEnvironmentCapabilitySchema, NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type LaunchEnvironmentCapability, type NativeIdentityCapability, type NativeExclusionCapability } from "../contracts/execution-context.js"
 import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapability } from "../contracts/native-prompt-identity.js"
@@ -316,10 +320,8 @@ export function conversationServers(tools: ConversationTools): Array<{ name: str
 }
 
 /**
- * What Mako tells the agent itself, beside the instructions of its servers:
- * how media reaches the person (`SHOW_MEDIA_LINE`). An adapter whose
- * harness takes instructions of its own hands it them there and declares
- * `makoInstructions`; elsewhere Mako's note before each prompt carries it.
+ * How media reaches the person, on its own. A launch's words are
+ * `launchBlocks`: the primer when it's on, and this line when it's off.
  */
 export function conversationInstructions(tools: ConversationTools | undefined): string | undefined {
   return tools?.makoUrl ? SHOW_MEDIA_LINE : undefined
@@ -363,6 +365,43 @@ export interface ProviderStartOptions extends LiveStartOptions {
    * would ask a person to sign in fails at once, saying the harness isn't signed in, instead of waiting for an answer.
    */
   unattended?: boolean
+  /**
+   * The account this conversation runs on instead of the harness's selected one: a Fin moved off an account at its
+   * limit (`contracts/fin-fallback.ts`). Read as it launches and before each input, so a pin set or cleared since
+   * reopens the session on the account it names, as a change of selection does. Absent: the selected account.
+   */
+  pinnedAccount?: () => string | undefined
+  /**
+   * Whether this launch carries Mako's instruction blocks (`primerText`),
+   * and on Claude the `fin` subagent and the in-process `mako` server.
+   * Absent means yes. The eval's off arm passes false: only how media is
+   * shown, over HTTP.
+   */
+  primer?: boolean
+  /** Claude: `false` serves `mako` over HTTP rather than in-process (`ToolGrant.makoServer`). The eval's arm for that comparison. */
+  inProcessMako?: boolean
+}
+
+type LaunchWording = Pick<ProviderStartOptions, "conversationTools" | "primer" | "nativeRouting" | "nativeCalls" | "threadEnvironment">
+
+/**
+ * The layer's instruction blocks for one launch. The `routes` and `policy`
+ * blocks when the primer is on. Only how media is shown when it's off.
+ */
+export function launchBlocks(options: LaunchWording): InstructionBlock[] {
+  if (!options.conversationTools?.makoUrl) return []
+  if (options.primer === false) return [{ id: "show-media", text: SHOW_MEDIA_LINE }]
+  return primerBlocks({
+    role: options.nativeRouting?.().role ?? "thread",
+    noRecipe: (options.threadEnvironment?.recipe ?? options.nativeCalls?.().recipe)?.kind === "none",
+    computer: true,
+  })
+}
+
+/** The blocks as one text, for a harness that takes them in one append slot. */
+export function launchInstructions(options: LaunchWording): string | undefined {
+  const blocks = launchBlocks(options)
+  return blocks.length ? blocks.map((block) => block.text).join("\n\n") : undefined
 }
 
 /** What a driver's own start receives: the owner's options and the account admission launched it on. */
@@ -398,10 +437,11 @@ export type PlanFeedback =
 export interface ProviderLiveDriver extends ProviderCapability {
   launchEnvironment: LaunchEnvironmentCapability
   /**
-   * Where the harness takes Mako's own instructions (`conversationInstructions`)
-   * as its own, never as the person's words: Claude's appended system
-   * prompt, Codex's turn context. Absent, Mako's note before each prompt
-   * (`controlNote`) carries them, which every reader of history strips.
+   * Where the harness takes Mako's instruction blocks as its own, never as
+   * the person's words: Claude's appended system prompt, Codex's turn
+   * context, OpenCode's instructions file. Absent, Mako's note before a
+   * prompt carries them once, and again when they change, and every reader
+   * of history strips that note.
    */
   makoInstructions?: { via: string }
   /** Native principal evidence, separately from configured account selection. */
@@ -442,6 +482,16 @@ export interface ProviderLiveDriver extends ProviderCapability {
   nativeAgents: NativeAgentsCapability
   /** How a lead's native spawns go to Mako instead (`contracts/native-routing.ts`). */
   nativeRouting: NativeRoutingCapability
+  /** How the harness takes the Mako layer (`contracts/mako-layer.ts`): its adapter's capabilities. Every installed harness declares it (`test-harness-definitions.ts`). */
+  layer?: LayerCapabilities
+  /** Which of the person's model connections it runs on, and how (`contracts/model-routes.ts`). */
+  modelRoutes: ModelRouteAdapter
+  /**
+   * Whether its session goes on under another of the person's accounts of it (`contracts/fin-fallback.ts`): a Fin
+   * whose account runs out mid-turn resumes there only where this says so. Every installed harness declares it
+   * (`test-harness-definitions.ts`).
+   */
+  accountContinuation?: AccountContinuation
   contextBreakdown: ContextBreakdownCapability
   compaction: ProviderCompaction
   goals: GoalsCapability
@@ -541,6 +591,10 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   const modeCount = driver.modes?.length ?? 0
   if ((driver.modeSwitching.kind === "native") !== modeCount > 1)
     throw new Error(`${driver.provider}: mode switching is ${driver.modeSwitching.kind} with ${modeCount} mode${modeCount === 1 ? "" : "s"} declared`)
+  if (driver.modelRoutes.kind !== "absent" && !driver.modelRoutes.wires.length)
+    throw new Error(`${driver.provider}: model routes name the wires they take`)
+  if (driver.modelRoutes.kind === "accepts" && !driver.modelRoutes.kinds.length)
+    throw new Error(`${driver.provider}: model routes name the kinds of connection they take`)
   for (const [name, text] of declaredTexts(driver))
     if (!text.trim()) throw new Error(`${driver.provider}: explain its ${name} declaration`)
   for (const mode of driver.modes ?? [])
@@ -563,6 +617,8 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   const reason = background?.kind === "ends-on-stop" ? background.how : background?.kind === "ends-with-turn" ? background.evidence : ""
   if (!reason.trim())
     throw new Error(`${driver.provider}: declare how Stop ends its background work, or the evidence that none outlives its turn`)
+  if (driver.accountContinuation?.kind === "resumes" && !resumes)
+    throw new Error(`${driver.provider}: a session goes on under another account on its native session, which needs native resume`)
   const recovery = driver.turnRecovery
   if (recovery?.kind === "continues") {
     if (!resumes)
@@ -576,14 +632,16 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
 /** The words each capability declaration carries, so none is left empty. */
 function declaredTexts(driver: ProviderLiveDriver): [string, string][] {
   const text = (value: { kind: string; via?: string; reason?: string }) => value.via ?? value.reason ?? ""
-  const { resume, fork, steering, questions, nativeAgents, nativeRouting, contextBreakdown, compaction, goals, sideQuestions, review, modeSwitching } = driver
+  const { resume, fork, steering, questions, nativeAgents, nativeRouting, modelRoutes, contextBreakdown, compaction, goals, sideQuestions, review, modeSwitching } = driver
   const texts: [string, string][] = [
     ["resume", text(resume)], ["fork", text(fork)], ["steering", text(steering)], ["questions", text(questions)],
-    ["subagents", text(nativeAgents)], ["native routing", text(nativeRouting)], ["context breakdown", text(contextBreakdown)],
+    ["subagents", text(nativeAgents)], ["native routing", text(nativeRouting)], ["model routes", text(modelRoutes)], ["context breakdown", text(contextBreakdown)],
     ["compaction", compaction.kind === "supported" ? "started by Mako" : compaction.reason], ["goals", text(goals)],
     ["side questions", text(sideQuestions)], ["review", text(review)], ["mode switching", text(modeSwitching)],
   ]
   if (resume.kind === "native") texts.push(["idle wake", resume.wake])
+  const continuation = driver.accountContinuation
+  if (continuation) texts.push(["account continuation", continuation.kind === "resumes" ? continuation.via : continuation.reason])
   // A routing control is declared only once it was seen to work: on which build, and how.
   if (nativeRouting.kind !== "words") texts.push(["native routing's version", nativeRouting.verified.version], ["native routing's check", nativeRouting.verified.how])
   return texts

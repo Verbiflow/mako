@@ -10,6 +10,9 @@
  * the composer and in the transcript.
  */
 
+export { parseThreadToken, threadReferenceId, threadToken } from "@mako/sessions/thread-references"
+import { parseThreadToken, threadToken } from "@mako/sessions/thread-references"
+
 export type Segment =
   | { kind: "text"; text: string }
   | { kind: "file"; path: string; raw: string }
@@ -129,22 +132,6 @@ export function hasReferences(text: string): boolean {
   return LEADING_SLASH.test(text) || TOKEN.test(text)
 }
 
-/**
- * The id a thread token carries: the provider's dedupe identity when it has
- * one, else the native id. A Cursor session continued by the CLI into
- * `chats/` shares its native id with the original store, so a token minted
- * from the native id alone would name two rows and resolve to neither.
- */
-export function threadReferenceId(ref: { nativeId: string; identity?: string }): string {
-  return ref.identity ?? ref.nativeId
-}
-
-export function threadToken(harness: string, id: string): string {
-  // The full id keeps the token collision-safe. Older drafts containing
-  // shortened ids still resolve when their prefix identifies exactly one thread.
-  return `@thread:${encodeURIComponent(harness)}:${encodeURIComponent(id)}`
-}
-
 export function hasThreadToken(text: string, harness: string, id: string): boolean {
   return tokenize(text).some((segment) => segment.kind === "thread" && segment.harness === harness && segment.id === id)
 }
@@ -176,16 +163,6 @@ export function capabilityToken(
   name: string
 ): string {
   return `${sigil}${kind === "mcp" ? MCP_PREFIX : ""}${name}`
-}
-
-export function parseThreadToken(body: string): { harness: string; id: string } | null {
-  const match = /^thread:([^:]+):(.+)$/.exec(body)
-  if (!match) return null
-  try {
-    return { harness: decodeURIComponent(match[1]!), id: decodeURIComponent(match[2]!) }
-  } catch {
-    return null
-  }
 }
 
 /** The reference being typed at the caret, if any. */

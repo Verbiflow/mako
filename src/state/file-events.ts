@@ -5,14 +5,10 @@ import { createHook, createStore } from "@/state/store"
 export interface FileEventsState {
   /** fseventsd as the host reads it; null until the first answer, or from a host without the reading. */
   service: FileEventsService | null
-  /** The degradation the person said "Not now" to, by when it began: a new one is said again. */
-  dismissed: number | null
-  /** The restart's outcome the person has read. */
-  seenRestart: number | null
   error: string | null
 }
 
-export const fileEventsStore = createStore<FileEventsState>({ service: null, dismissed: null, seenRestart: null, error: null })
+export const fileEventsStore = createStore<FileEventsState>({ service: null, error: null })
 export const useFileEvents = createHook(fileEventsStore)
 
 /** The host's reading, at boot and whenever it changes (`file-events-service`). */
@@ -35,8 +31,12 @@ export const fileEvents = {
       fileEventsStore.set({ error: error instanceof Error ? error.message : String(error) })
     }
   },
-  dismiss(): void {
+  /** "Not now", kept by the host for every window and across restarts: not said again today unless it gets worse. */
+  async dismiss(): Promise<void> {
+    fileEventsStore.set({ error: null })
     const service = fileEventsStore.get().service
-    fileEventsStore.set({ dismissed: service?.degraded?.since ?? null, seenRestart: service?.restart?.at ?? null, error: null })
+    // Gone at once; the host's answer says what stands.
+    if (service) fileEventsStore.set({ service: { ...service, notice: false, ...(service.restart && { restart: { ...service.restart, seen: true } }) } })
+    applyFileEvents(await getMako().fileEventsDismiss())
   },
 }

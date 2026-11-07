@@ -8,6 +8,7 @@ import { z } from "zod"
 import { invokeRuntime, probeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { heldBy, slices } from "./lib/cpu-slices.ts"
+import { readResident, unmeasured, type ResidentMemory } from "./lib/host-load-memory.ts"
 import { claudeSessionPath, makeWorld, TODAY, type WorldScale } from "./lib/host-load-world.ts"
 import { removeScratch } from "./lib/scratch-processes.mjs"
 
@@ -25,13 +26,16 @@ import { removeScratch } from "./lib/scratch-processes.mjs"
  * A shared runner's speed varies by several times between runs, so the limits are calibrated in the same run: a
  * yardstick process beside the host, under the same contention and running none of Mako's code
  * (`host-load-yardstick.mjs`), times its own event loop while the host is probed. It fails (exit 1) only on a clear
- * regression: a health check waiting two seconds (the stalled host held its loop for 3-5 s at a time), one in a hundred
+ * regression: a health check waiting two seconds past the yardstick's worst wait (the stalled host held its loop for
+ * 3-5 s at a time), one in a hundred
  * waiting past `--times` (30) times the yardstick's one in a hundred (at least 150 ms), one read in a hundred past ten
  * times that, or a probe failing. On one CI runner in one job, at this scale, the yardstick waited 14 ms on one tick in
  * a hundred; the host before #358 waited 3.3 s on one health check in a hundred and 20 s on a read, and the host
  * after it 74 ms and 605 ms: each limit is several times from either. Every number goes to the job's summary
  * (`GITHUB_STEP_SUMMARY`) whether it passes or not; `--report-only` judges without failing. `--cpu-prof <dir>` keeps the host's CPU profile and
  * prints the longest slices it held the loop for, named by the host's own functions; `--out <file>` keeps the report;
+ * `--peak-limit-mb` fails on the host's peak resident memory, sampled each second, and on readings too few to say. Memory barely varies between
+ * machines: 629 MB on a Mac and 669 MB on a CI runner at this scale, so `checks.yml` sets 1,500;
  * `--home-from <home>` runs on APFS clones of a real home's harness stores (macOS, read-only to the original).
  *
  *   npm run bench:host-load [-- --scale today|ci] [--seconds 60] [--warmup 20] [--host <mako-host.js>] [--cpu-prof <dir>] [--out <file>] [--keep]
@@ -47,6 +51,7 @@ const { values } = parseArgs({
     "budget-ms": { type: "string", default: "50" },
     times: { type: "string", default: "30" },
     "report-only": { type: "boolean", default: false },
+    "peak-limit-mb": { type: "string", default: "0" },
     windows: { type: "string", default: "3" },
     root: { type: "string" },
     out: { type: "string" },
@@ -65,8 +70,13 @@ const scale: WorldScale = z.enum(["today", "ci", "tiny"]).transform((name) => SC
 const hostScript = resolve(values.host ?? join(import.meta.dirname, "../packages/host/dist/mako-host.js"))
 if (!existsSync(hostScript)) throw new Error(`${hostScript} isn't built: npx tsgo -b packages/host`)
 const budget = Number(values["budget-ms"])
+/** The host's peak resident memory this run may reach; 0 reports it without judging. */
+const peakLimit = Number(values["peak-limit-mb"])
 const times = Number(values.times)
-/** A health check this slow is the loop held for seconds, as the day it stalled: a failure on any runner. */
+/**
+ * A health check this much slower than the yardstick's worst wait is the loop held for seconds, as the day it stalled:
+ * a runner that stops every process at once stops the yardstick as long, so its stall isn't the host's.
+ */
 const HELD_MS = 2_000
 /** One health check in a hundred may wait this long whatever the yardstick says: below it a runner's noise decides. */
 const HEALTH_FLOOR_MS = 150
@@ -108,6 +118,11 @@ try {
     stdio: ["ignore", "ignore", "inherit"],
   })
   const exited = new Promise<number | null>((done) => host!.once("exit", (code) => done(code)))
+  // Its resident memory, the peak from outside: memory doesn't vary with a runner's speed the way a wait does.
+  const memory: ResidentMemory = { peakKb: 0, readings: 0, misses: 0 }
+  const hostPid = String(host.pid)
+  const sampling = performance.now()
+  const footprint = setInterval(() => void readResident(hostPid, memory), 1_000)
   for (const deadline = Date.now() + 60_000; ; await delay(100)) {
     const probe = await probeRuntime(socket, { timeoutMs: 2_000 }).catch(() => undefined)
     if (probe?.state === "ready") break
@@ -173,6 +188,8 @@ try {
     await (await import("@mako/host/transport/connection")).runtimeRequest({ socket, path: "/health", read: (body: string) => JSON.parse(body), timeoutMs: 30_000 }).catch(() => ({})),
   )
   for (const timer of timers) clearInterval(timer)
+  clearInterval(footprint)
+  const sampled = (performance.now() - sampling) / 1_000
   churn.kill("SIGKILL")
   host.kill("SIGTERM")
   const code = await Promise.race([exited, delay(60_000).then(() => "timeout" as const)])
@@ -189,9 +206,11 @@ try {
   const profile = profileDir && readdirSync(profileDir).filter((name) => /\.\d+\.0\.\d+\.cpuprofile$/.test(name)).map((name) => join(profileDir, name)).sort().at(-1)
   const found = profile ? slices(profile, 50) : []
   const answers = { health: summary(probed.health), reads: summary(probed.reads) }
+  const peakMb = Math.round(memory.peakKb / 1024)
+  const unread = unmeasured(memory, sampled)
   const report = {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
-    ...answers, eventLoop: health.eventLoop,
+    ...answers, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
     ...profile && {
       profile,
       slices: { count: found.length, totalMs: found.reduce((sum, slice) => sum + slice.ms, 0), longest: [...found].sort((a, b) => b.ms - a.ms).slice(0, 15) },
@@ -205,26 +224,30 @@ try {
   const measured = z.object({ late: Measured, spawn: Measured, chunk: Measured }).parse(JSON.parse(readFileSync(yardstickOut, "utf8")))
   const healthLimit = Math.max(HEALTH_FLOOR_MS, times * measured.late.p99)
   const readLimit = READ_TIMES * healthLimit
+  const heldLimit = Math.round(HELD_MS + measured.late.max)
   const failures: string[] = []
   for (const name of ["health", "reads"] as const) {
     const result = answers[name]
     if (result.failed) failures.push(`${name}: ${result.failed} of ${result.n} failed or passed the probe's timeout`)
   }
-  if ((answers.health.max ?? Infinity) >= HELD_MS) failures.push(`a health check waited ${answers.health.max} ms: the loop was held for seconds`)
+  if ((answers.health.max ?? Infinity) >= heldLimit) failures.push(`a health check waited ${answers.health.max} ms, ${HELD_MS} ms past the yardstick's worst ${measured.late.max} ms: the loop was held for seconds`)
   if ((answers.health.p99 ?? Infinity) > healthLimit) failures.push(`one health check in a hundred waited ${answers.health.p99} ms, past ${healthLimit} ms (${times} times the yardstick's ${measured.late.p99} ms)`)
   if ((answers.reads.p99 ?? Infinity) > readLimit) failures.push(`one read in a hundred waited ${answers.reads.p99} ms, past ${readLimit} ms`)
+  if (peakLimit && peakMb > peakLimit) failures.push(`the host peaked at ${peakMb} MB, past ${peakLimit} MB`)
+  if (peakLimit && unread) failures.push(`the host's memory can't be judged: ${unread}`)
   const row = (name: string, result: { p50: number | null; p99: number | null; max: number | null }, limit: string) => `| ${name} | ${result.p50} | ${result.p99} | ${result.max} | ${limit} |`
   const table = [
     `### bench:host-load (${values.scale}${values.host ? `, ${values.host}` : ""}): ${failures.length ? "failed" : "passed"}`,
     "",
     "| | p50 ms | p99 ms | max ms | fails at |",
     "|---|---|---|---|---|",
-    row("host health check", answers.health, `p99 > ${healthLimit}, max >= ${HELD_MS}`),
+    row("host health check", answers.health, `p99 > ${healthLimit}, max >= ${heldLimit}`),
     row("host read (`mako:worktrees`)", answers.reads, `p99 > ${readLimit}`),
     row("yardstick's own loop (calibration)", measured.late, "-"),
     row("yardstick's spawn of git", measured.spawn, "-"),
     row("yardstick's 2,000-row JSON round trip", measured.chunk, "-"),
     "",
+    `Host peak resident memory: ${unread ? `unmeasured (${unread})` : `${peakMb} MB`}${peakLimit ? `, fails past ${peakLimit} MB` : ""}.`,
     `Loop held in slices of 50 ms or more: ${report.slices ? `${report.slices.count} slices, ${report.slices.totalMs} ms` : "not profiled"}.`,
     ...failures.map((failure) => `- **${failure}**`),
   ].join("\n")

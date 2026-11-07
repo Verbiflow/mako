@@ -17,16 +17,24 @@ const GOP_BYTES = 8 * 1024 * 1024
 
 type Box = { width: number; height: number }
 
+/** Whose a viewer is: the Thread that watches, by each of its names an ending may know, or the person. */
+export interface ViewerOwner {
+  thread: string
+  session?: string
+  conversation?: string
+}
+
 interface Viewer {
   queue: Uint8Array[]
   bytes: number
-  /** It paints nothing it can decode until a key frame: deltas before one are useless to it. */
+  /** It paints nothing it can decode until a key frame: deltas before one are useless to it, posters aren't. */
   needsKey: boolean
-  /** It was sent the poster, so it has a picture while the key frame comes. */
-  postered: boolean
   box: Box | undefined
   readAt: number
   wake: (() => void) | undefined
+  owner: ViewerOwner | undefined
+  /** Runs out `VIEWER_IDLE_MS` after its last read answered, unless it reads again: a viewer nobody reads has gone. */
+  idle: ReturnType<typeof setTimeout> | undefined
 }
 
 interface Screen {
@@ -58,11 +66,13 @@ export class SimulatorStreams {
   readonly #now: () => number
   readonly #lingerMs: number
   readonly #queueBytes: number
+  readonly #idleMs: number
 
-  constructor(options: { now?: () => number; lingerMs?: number; queueBytes?: number } = {}) {
+  constructor(options: { now?: () => number; lingerMs?: number; queueBytes?: number; idleMs?: number } = {}) {
     this.#now = options.now ?? Date.now
     this.#lingerMs = options.lingerMs ?? SCREEN_LINGER_MS
     this.#queueBytes = options.queueBytes ?? VIEWER_QUEUE_BYTES
+    this.#idleMs = options.idleMs ?? VIEWER_IDLE_MS
   }
 
   /**
@@ -73,14 +83,16 @@ export class SimulatorStreams {
     key: ScreenKey,
     viewer: string,
     start: (sink: SimulatorFrameSink) => Promise<SimulatorFrameSource>,
-    options: { box?: Box; waitMs: number }
+    options: { box?: Box; waitMs: number; decoded?: number; owner?: ViewerOwner }
   ): Promise<{ live: boolean; packets: Uint8Array[] }> {
     this.#sweep(key)
     const screen = this.#screens.get(key) ?? this.#open(key, start)
+    const decoded = options.decoded
+    if (decoded !== undefined) void screen.source.then((source) => source?.decoded?.(decoded))
     let watching = screen.viewers.get(viewer)
     if (!watching) {
       if (screen.viewers.size >= VIEWERS_PER_SCREEN) return { live: false, packets: [] }
-      watching = this.#join(key, screen, viewer, options.box)
+      watching = this.#join(key, screen, viewer, options.box, options.owner)
     } else if (options.box && !sameBox(watching.box, options.box)) {
       watching.box = options.box
       void this.#resize(screen)
@@ -90,6 +102,8 @@ export class SimulatorStreams {
       screen.linger = undefined
     }
     watching.readAt = this.#now()
+    clearTimeout(watching.idle)
+    watching.idle = undefined
     if (!watching.queue.length && screen.live) {
       const current = watching
       await new Promise<void>((resolve) => {
@@ -115,6 +129,18 @@ export class SimulatorStreams {
     watching.bytes -= bytes
     const live = screen.live || watching.queue.length > 0
     if (!live) this.#leave(key, screen, viewer)
+    else if (screen.viewers.get(viewer) === watching) {
+      const current = watching
+      // Reads may overlap: the newest one to answer owns the deadline, and an earlier one's is let go.
+      clearTimeout(current.idle)
+      const idle = setTimeout(() => {
+        if (current.idle !== idle) return
+        current.idle = undefined
+        if (screen.viewers.get(viewer) === current && !current.wake) this.#leave(key, screen, viewer)
+      }, this.#idleMs)
+      idle.unref?.()
+      current.idle = idle
+    }
     return { live, packets }
   }
 
@@ -122,6 +148,12 @@ export class SimulatorStreams {
   leave(key: ScreenKey, viewer: string): void {
     const screen = this.#screens.get(key)
     if (screen) this.#leave(key, screen, viewer)
+  }
+
+  /** Every viewer an ended Thread had, on every screen: theirs stop, everyone else's watch on. */
+  leaveOwned(owned: (owner: ViewerOwner) => boolean): void {
+    for (const [key, screen] of this.#screens)
+      for (const [name, viewer] of screen.viewers) if (viewer.owner && owned(viewer.owner)) this.#leave(key, screen, name)
   }
 
   /** Who watches a screen now, for the panel's "watching" line and for tests. */
@@ -171,10 +203,10 @@ export class SimulatorStreams {
     return screen
   }
 
-  #join(key: ScreenKey, screen: Screen, name: string, box: Box | undefined): Viewer {
-    const viewer: Viewer = { queue: [], bytes: 0, needsKey: true, postered: false, box, readAt: this.#now(), wake: undefined }
+  #join(key: ScreenKey, screen: Screen, name: string, box: Box | undefined, owner: ViewerOwner | undefined): Viewer {
+    const viewer: Viewer = { queue: [], bytes: 0, needsKey: true, box, readAt: this.#now(), wake: undefined, owner, idle: undefined }
     screen.viewers.set(name, viewer)
-    if (screen.poster) this.#push(viewer, screen.poster, true)
+    if (screen.poster) this.#push(viewer, screen.poster)
     if (screen.gop.length) {
       viewer.needsKey = false
       for (const packet of screen.gop) this.#push(viewer, packet)
@@ -188,7 +220,17 @@ export class SimulatorStreams {
     const bytes = encodeControlVideo(packet)
     if (packet.kind === "poster") {
       screen.poster = bytes
-      for (const viewer of screen.viewers.values()) if (viewer.needsKey && !viewer.postered) this.#push(viewer, bytes, true)
+      // A poster starts the source's stream again, or its JPEGs instead: the H.264 before it is done with, so every viewer
+      // waits for a new key and paints posters meanwhile. A screen that sends only JPEGs still moves; the newest replaces
+      // one a viewer hasn't read, so a slow viewer holds one.
+      screen.gop = []
+      screen.gopBytes = 0
+      for (const viewer of screen.viewers.values()) {
+        viewer.needsKey = true
+        viewer.queue = []
+        viewer.bytes = 0
+        this.#push(viewer, bytes)
+      }
       return
     }
     if (packet.kind === "key") {
@@ -219,10 +261,9 @@ export class SimulatorStreams {
     if (behind) void screen.source.then((source) => source?.keyFrame())
   }
 
-  #push(viewer: Viewer, bytes: Uint8Array, poster = false): void {
+  #push(viewer: Viewer, bytes: Uint8Array): void {
     viewer.queue.push(bytes)
     viewer.bytes += bytes.byteLength
-    if (poster) viewer.postered = true
     viewer.wake?.()
   }
 
@@ -247,6 +288,7 @@ export class SimulatorStreams {
     const viewer = screen.viewers.get(name)
     if (!viewer) return
     screen.viewers.delete(name)
+    clearTimeout(viewer.idle)
     viewer.wake?.()
     hostLog("simulators", "stopped watching", { simulator: key, viewer: name, viewers: screen.viewers.size })
     if (screen.viewers.size || !screen.live || screen.linger) return
@@ -261,7 +303,10 @@ export class SimulatorStreams {
     screen.live = false
     if (screen.linger) clearTimeout(screen.linger)
     if (this.#screens.get(key) === screen) this.#screens.delete(key)
-    for (const viewer of screen.viewers.values()) viewer.wake?.()
+    for (const viewer of screen.viewers.values()) {
+      clearTimeout(viewer.idle)
+      viewer.wake?.()
+    }
   }
 
   async #stop(key: ScreenKey, reason: string): Promise<void> {

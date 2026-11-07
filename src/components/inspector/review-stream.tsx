@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { getSingularPatch, parseDiffFromFile, type CodeViewDiffItem, type DiffLineAnnotation, type FileDiffMetadata, type SelectedLineRange } from "@pierre/diffs"
 import { CodeView, type CodeViewHandle, type CodeViewReactOptions } from "@pierre/diffs/react"
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon as PageIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
 import { countedChanges, type TurnChangeLines } from "@mako/host/contracts/turn-changes"
 import type { TurnFileWriters, TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
@@ -13,11 +13,12 @@ import { PickedDiffLines } from "@/components/inspector/diff-line-pick"
 import { useCommentTarget } from "@/components/inspector/comment-target"
 import { isPickEnd, pickEnd, workspacePath } from "@/lib/line-comments"
 import { LineCounts, StatusLetter, UnsureCount } from "@/components/inspector/change-marks"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { Action, IconAction, Toggle } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger } from "@/components/ui/menu"
 import { SearchSelect } from "@/components/ui/search-select"
 import { DIFF_THEME } from "@/lib/diff-theme"
+import { HighlightPool } from "@/lib/highlight-pool"
 import { binarySizes } from "@/lib/git-binary"
 import { anyUnsure, fileRoot, recordedTurnChanges, type Unsure } from "@/lib/turn-changes"
 import { undoneWords } from "@/lib/turn-undone"
@@ -958,85 +959,87 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
         aria-label="Every changed file. J and K move between files; the arrow keys between lines, with Shift for a range, Enter to comment on them."
         className="flex min-h-0 flex-1 flex-col outline-none"
       >
-        <CodeView<undefined>
-          ref={handle}
-          items={items}
-          options={options}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-          onScroll={onScroll}
-          onSelectedLinesChange={onSelectedLinesChange}
-          renderCustomHeader={(item) => {
-            const file = byPath.get(item.id)
-            if (!file) return null
-            const entry = entries.get(item.id)
-            return (
-              <FileHeader
-                file={file}
-                entry={entry}
-                open={isOpen(file, entry)}
-                viewed={viewedFor(file.path, entry)}
-                onToggle={toggle}
-                onViewed={markViewed}
-                queue={queue}
-                root={workspace}
-                load={load}
-                base={base}
-                discardable={scope.kind === "uncommitted"}
-                only={only}
-                unsure={unsure.get(file.path)}
-                away={away}
+        <HighlightPool>
+          <CodeView<undefined>
+            ref={handle}
+            items={items}
+            options={options}
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+            onScroll={onScroll}
+            onSelectedLinesChange={onSelectedLinesChange}
+            renderCustomHeader={(item) => {
+              const file = byPath.get(item.id)
+              if (!file) return null
+              const entry = entries.get(item.id)
+              return (
+                <FileHeader
+                  file={file}
+                  entry={entry}
+                  open={isOpen(file, entry)}
+                  viewed={viewedFor(file.path, entry)}
+                  onToggle={toggle}
+                  onViewed={markViewed}
+                  queue={queue}
+                  root={workspace}
+                  load={load}
+                  base={base}
+                  discardable={scope.kind === "uncommitted"}
+                  only={only}
+                  unsure={unsure.get(file.path)}
+                  away={away}
+                />
+              )
+            }}
+            renderAnnotation={(annotation, item) => {
+              const side = "side" in annotation ? annotation.side : "additions"
+              const line = annotation.lineNumber
+              const found = entries.get(item.id)?.loaded
+              const note = found?.kind === "diff" ? found.writers?.get(noteKey(side, line)) : undefined
+              const comments = allComments.filter((comment) => comment.workspace === workspace && comment.path === item.id)
+              const picks = picked?.id === item.id && isPickEnd(picked.range, { lineNumber: line, side })
+              const noted = picks || comments.some((comment) => comment.line === line && comment.side === side) || (draft?.workspace === workspace && draft.path === item.id && draft.line === line && draft.side === side)
+              const writer = note ? <WriterRow note={note} harness={harness} /> : null
+              if (!noted) return writer
+              const loaded = picked?.id === item.id ? found : undefined
+              return (
+                <>
+                {writer}
+                <Annotation
+                  workspace={workspace}
+                  path={item.id}
+                  line={annotation.lineNumber}
+                  side={side}
+                  comments={comments}
+                  selection={picks && picked ? (
+                    <PickedDiffLines
+                      path={workspacePath(`${workspace}/${item.id}`, target.cwd())}
+                      base={base}
+                      diff={loaded?.kind === "diff" ? loaded.fileDiff : null}
+                      range={picked.range}
+                      onDone={letGo}
+                    />
+                  ) : undefined}
+                />
+                </>
+              )
+            }}
+            renderGutterUtility={(getHoveredLine, item) => (
+              <GutterAdd
+                onClick={() => {
+                  const hovered = getHoveredLine()
+                  const side = hovered && "side" in hovered && (hovered.side === "additions" || hovered.side === "deletions") ? hovered.side : undefined
+                  if (!hovered || !side) return
+                  const loaded = entriesRef.current.get(item.id)?.loaded
+                  const lines = loaded?.kind === "diff" && !loaded.fileDiff.isPartial
+                    ? side === "deletions" ? loaded.fileDiff.deletionLines : loaded.fileDiff.additionLines
+                    : undefined
+                  letGo()
+                  review.start({ workspace, path: item.id, line: hovered.lineNumber, side, code: lines?.[hovered.lineNumber - 1]?.replace(/\r?\n$/, ""), base })
+                }}
               />
-            )
-          }}
-          renderAnnotation={(annotation, item) => {
-            const side = "side" in annotation ? annotation.side : "additions"
-            const line = annotation.lineNumber
-            const found = entries.get(item.id)?.loaded
-            const note = found?.kind === "diff" ? found.writers?.get(noteKey(side, line)) : undefined
-            const comments = allComments.filter((comment) => comment.workspace === workspace && comment.path === item.id)
-            const picks = picked?.id === item.id && isPickEnd(picked.range, { lineNumber: line, side })
-            const noted = picks || comments.some((comment) => comment.line === line && comment.side === side) || (draft?.workspace === workspace && draft.path === item.id && draft.line === line && draft.side === side)
-            const writer = note ? <WriterRow note={note} harness={harness} /> : null
-            if (!noted) return writer
-            const loaded = picked?.id === item.id ? found : undefined
-            return (
-              <>
-              {writer}
-              <Annotation
-                workspace={workspace}
-                path={item.id}
-                line={annotation.lineNumber}
-                side={side}
-                comments={comments}
-                selection={picks && picked ? (
-                  <PickedDiffLines
-                    path={workspacePath(`${workspace}/${item.id}`, target.cwd())}
-                    base={base}
-                    diff={loaded?.kind === "diff" ? loaded.fileDiff : null}
-                    range={picked.range}
-                    onDone={letGo}
-                  />
-                ) : undefined}
-              />
-              </>
-            )
-          }}
-          renderGutterUtility={(getHoveredLine, item) => (
-            <GutterAdd
-              onClick={() => {
-                const hovered = getHoveredLine()
-                const side = hovered && "side" in hovered && (hovered.side === "additions" || hovered.side === "deletions") ? hovered.side : undefined
-                if (!hovered || !side) return
-                const loaded = entriesRef.current.get(item.id)?.loaded
-                const lines = loaded?.kind === "diff" && !loaded.fileDiff.isPartial
-                  ? side === "deletions" ? loaded.fileDiff.deletionLines : loaded.fileDiff.additionLines
-                  : undefined
-                letGo()
-                review.start({ workspace, path: item.id, line: hovered.lineNumber, side, code: lines?.[hovered.lineNumber - 1]?.replace(/\r?\n$/, ""), base })
-              }}
-            />
-          )}
-        />
+            )}
+          />
+        </HighlightPool>
       </div>
     </div>
   )
@@ -1106,7 +1109,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
         className="pressable flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
       >
         <ChevronRightIcon className={cn("size-3 shrink-0 text-faint transition-transform duration-150 ease-[var(--ease-out)] motion-reduce:transition-none", open && "rotate-90")} />
-        <FileTypeIcon path={file.path} className="ml-0.5 size-3.5 shrink-0 text-faint/80" />
+        <FileIcon path={file.path} className="ml-0.5 size-3.5 shrink-0 text-faint/80" />
         <span className="min-w-0 truncate text-ui">
           <span className="text-faint">{folder}</span>
           <span className={file.status === "deleted" ? "text-faint line-through decoration-faint/60" : viewed ? "text-muted-foreground" : "text-foreground"}>{name}</span>
@@ -1119,7 +1122,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
           <StatusLetter status={file.status} />
         </span>
       </button>
-      <label className={cn("pressable ml-1 flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded px-1.5 transition-colors duration-100 hover:bg-fill-hover", viewed ? "text-muted-foreground" : "text-faint hover:text-foreground")}>
+      <label className={cn("pressable ml-1 flex h-6 shrink-0 cursor-pointer items-center gap-1.5 px-1.5 transition-colors duration-100 hover:bg-fill-hover", viewed ? "text-muted-foreground" : "text-faint hover:text-foreground")}>
         <input
           type="checkbox"
           checked={viewed}
@@ -1143,7 +1146,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
         <MenuContent align="end" className="min-w-48">
           {file.status !== "deleted" && !away ? (
             <MenuItem onSelect={() => void viewer.open(`${root}/${file.path}`)}>
-              <FileIcon className="size-3.5 text-faint" />
+              <PageIcon className="size-3.5 text-faint" />
               Open file
             </MenuItem>
           ) : null}

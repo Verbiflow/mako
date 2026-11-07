@@ -127,7 +127,7 @@ async function host(root: string, harness: string, point: Point | "none"): Promi
     if (turn.conversation === state().apex) {
       if (held) return "Linked."
       const sidebar = await turn.world.agents.start(turn.caller, { brief: { objective: "Review the sidebar." }, harness, name: "sidebar", clientKey: "sidebar", cwd: root })
-      await turn.world.agents.start(turn.caller, { brief: { objective: "Review the header." }, harness: next(harness), name: "header", clientKey: "header", cwd: root })
+      await turn.world.agents.start(turn.caller, { brief: { objective: "Review the header." }, harness: next(harness), name: "header", queue: true, clientKey: "header", cwd: root })
       if (!("refused" in sidebar)) await turn.world.agents.send(turn.caller, { to: "sidebar", text: SEND, clientKey: "readme" })
       return "Started both."
     }
@@ -138,6 +138,8 @@ async function host(root: string, harness: string, point: Point | "none"): Promi
   const world: AgentsWorld = new AgentsWorld({
     root,
     script,
+    // Each harness keeps its transcript, as real ones do, so the next host can see whether a cut brief reached it.
+    transcripts: true,
     ...(!held && { budget: { running: 1, started: 100 } }),
     catalog: fileCatalog(root),
     heard: (heard) => {
@@ -242,7 +244,8 @@ function check(root: string, point: Point): void {
     for (const report of edge.reports) {
       const parent = settled.edges.find((each) => each.child === edge.parent)
       const conversations = parent ? parent.conversations : [state.apex]
-      const carrying = digests.filter((line) => conversations.includes(line.conversation) && line.text.includes(`"${edge.name}" (`) && line.text.includes(report.summary.split("\n")[0]!.slice(0, 40)))
+      // By its id in the digest's own record of what it carries, as two Fins' same words aren't one report.
+      const carrying = digests.filter((line) => conversations.includes(line.conversation) && line.text.split("<mako-reports>")[1]?.includes(`"report":${JSON.stringify(report.id)}`))
       assert.equal(carrying.length, 1, `${edge.name}'s report "${report.summary.slice(0, 40)}" reached its Apex once (${carrying.length})`)
     }
   if (HELD_POINTS.has(point)) {

@@ -7,6 +7,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
+    "./amounts": "./dist/amounts.js",
     "./jsonl": "./dist/jsonl.js",
     "./record-files": "./dist/record-files.js",
     "./record-original": "./dist/record-original.js",
@@ -28,6 +29,7 @@
     "./tool-output": "./dist/tool-output.js",
     "./content": "./dist/content.js",
     "./context-wire": "./dist/context-wire.js",
+    "./thread-references": "./dist/thread-references.js",
     "./review": "./dist/review.js",
     "./children": "./dist/children.js",
     "./prompt-attachments": "./dist/prompt-attachments.js",

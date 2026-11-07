@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react"
 import { CheckIcon, CopyIcon, TriangleAlertIcon } from "lucide-react"
 import type { KeptLines, TurnUndoFile, TurnUndoKept, TurnUndoLeft, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "@mako/host/contracts/turn-review"
 import { LineCounts } from "@/components/inspector/change-marks"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action, IconAction } from "@/components/ui/kit"
 import { UNSURE } from "@/lib/turn-changes"
@@ -108,7 +108,7 @@ function doneWords(result: TurnUndoResult, whose: string): string {
 
 function Notice({ tone, children }: { tone: "caution" | "error"; children: ReactNode }) {
   return (
-    <p role={tone === "error" ? "alert" : "status"} className={tone === "error" ? "flex items-start gap-2 rounded-lg bg-negative/10 px-3 py-2 text-ui text-negative" : "flex items-start gap-2 rounded-lg bg-caution/12 px-3 py-2 text-ui text-foreground"}>
+    <p role={tone === "error" ? "alert" : "status"} className={tone === "error" ? "flex items-start gap-2 bg-negative/10 px-3 py-2 text-ui text-negative" : "flex items-start gap-2 bg-caution/12 px-3 py-2 text-ui text-foreground"}>
       <TriangleAlertIcon className={tone === "error" ? "mt-0.5 size-3.5 shrink-0" : "mt-0.5 size-3.5 shrink-0 text-caution"} />
       <span className="min-w-0">{children}</span>
     </p>
@@ -147,7 +147,7 @@ function Group({ title, detail, count, children }: { title: string; detail: stri
         <span className="text-faint">{detail}</span>
         <span className="tabular ml-auto text-faint">{count === 1 ? "1 file" : `${count} ${title === "Can't split" ? "stretches" : "files"}`}</span>
       </h3>
-      <ul className="divide-y divide-hairline overflow-hidden rounded-lg border border-hairline bg-surface">{children}</ul>
+      <ul className="divide-y divide-hairline overflow-hidden border border-hairline bg-surface">{children}</ul>
     </section>
   )
 }
@@ -156,7 +156,7 @@ function Path({ path, suffix }: { path: string; suffix?: string }) {
   const slash = path.lastIndexOf("/")
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2">
-      <FileTypeIcon path={path} className="size-3.5 shrink-0 text-faint/80" />
+      <FileIcon path={path} className="size-3.5 shrink-0 text-faint/80" />
       <span className="min-w-0 truncate text-ui" title={path}>
         <span className="text-faint">{slash > 0 ? path.slice(0, slash + 1) : ""}</span>
         <span className="text-foreground">{path.slice(slash + 1)}</span>
@@ -224,7 +224,7 @@ function LeftRow({ left }: { left: TurnUndoLeft }) {
 function Backup({ name }: { name: string }) {
   const [copied, setCopied] = useState(false)
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-hairline bg-surface px-3 py-2">
+    <div className="flex items-center gap-2 border border-hairline bg-surface px-3 py-2">
       <span className="shrink-0 text-label text-faint">Kept before the undo</span>
       <code className="min-w-0 flex-1 truncate font-mono text-code text-muted-foreground" title={name}>{name}</code>
       <IconAction label={copied ? "Copied" : "Copy the ref"} size="xs" onClick={() => void navigator.clipboard.writeText(name).then(() => setCopied(true))}>

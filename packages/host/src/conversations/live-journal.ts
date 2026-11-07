@@ -3,6 +3,7 @@ import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts
 import { PromptDeliverySchema } from "../contracts/prompt-delivery.js"
 import { NativePromptReferenceSchema } from "../contracts/native-prompt-identity.js"
 import { NativeAgentRosterSchema, providerRoster, sameProviderWork } from "../contracts/native-agents.js"
+import { NoticeSchema } from "../contracts/agents.js"
 import { ConversationGoalSchema } from "../contracts/live-goals.js"
 import { ReviewTargetSchema } from "../contracts/live-reviews.js"
 import {
@@ -16,6 +17,7 @@ import {
   StoredReason,
   NativeTotalsSchema,
   PromptAttachmentSchema,
+  RequestRetrySchema,
 } from "../contracts/conversation-control.js"
 import { existsSync, mkdirSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -43,6 +45,7 @@ import { EntrySchema, type Entry } from "@mako/sessions/entries"
 import { sharedBase } from "./shared-entries.js"
 import { EntryPager, type PagedRows, type PagedTable } from "./paged-entries.js"
 import { atOnce, inSlices, type Steps } from "@mako/sessions/slices"
+import { holdDue, holdOf, sooner, transferDue } from "../contracts/request-hold.js"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),
@@ -113,6 +116,7 @@ function controlRow(control: LiveSnapshot["control"]): LiveSnapshot["control"] {
 
 export const LiveRequestSchema = z.object({
   actor: ActorSchema.optional(),
+  grants: z.array(z.string().max(1024)).max(100).optional(),
   nativeDelivery: PromptDeliverySchema.optional(),
   nativePrompt: NativePromptReferenceSchema.optional(),
   targetBindingId: z.string().optional(),
@@ -121,6 +125,7 @@ export const LiveRequestSchema = z.object({
   undone: TurnUndoneSchema,
   tuning: SessionSettingsSchema.optional(),
   mode: z.string().optional(),
+  ruleLines: z.array(z.string()).optional(),
   inputDigest: z.string().optional(),
   nativeRun: z
     .object({
@@ -132,6 +137,7 @@ export const LiveRequestSchema = z.object({
   id: z.string().uuid(),
   /** When the host admitted it (epoch milliseconds); unset in journals written before it was kept. */
   createdAt: z.number().nonnegative().optional(),
+  dispatchedAt: z.number().optional(),
   text: z.string().max(1_000_000),
   attachments: z.array(PromptAttachmentSchema),
   displayText: z.string().optional(),
@@ -151,8 +157,12 @@ export const LiveRequestSchema = z.object({
   // What it waits for is read again whenever the wait is checked; one this build doesn't know is its current step.
   accountSwitch: z.object({ reason: z.enum(["selection", "credentials"]), waitingFor: z.enum(ACCOUNT_SWITCH_WAITS).catch("operation") }).optional(),
   ownerCheck: z.object({ since: z.number() }).optional(),
+  editing: z.literal(true).optional(),
+  pause: z.literal("stop").optional(),
   signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
+  retry: RequestRetrySchema.optional(),
+  digest: z.object({ notices: z.array(NoticeSchema), lines: z.array(z.string()).optional(), sentAt: z.number().optional(), heard: z.literal(true).optional(), resting: z.literal(true).optional(), nextTry: z.number().optional() }).optional(),
   interruption: z
     .object({
       ...StoredReason,
@@ -191,6 +201,8 @@ export const LiveRequestSchema = z.object({
       requestId: z.string(),
       ...StoredReason,
       auto: z.boolean(),
+      brief: z.string().optional(),
+      since: z.number().optional(),
     })
     .transform(readStoredReason)
     .optional(),
@@ -374,6 +386,37 @@ function itemsIn(message: DecodedEntry): number {
 const RowSchema = z.object({ value: z.string() })
 const BlockRowSchema = z.object({ id: z.number().int(), value: z.string() })
 const RowAtSchema = z.object({ at: z.number().int(), value: z.string() })
+const RowKeysSchema = z.object({ keys: z.string() })
+
+/**
+ * Whether `next` is `previous` with requests added after it and none moved: the rows' insertion order still says the
+ * queue's, so no `request_order` row is needed. A removal keeps the order of the rest.
+ */
+function appendedTo(previous: readonly LiveRequest[] | undefined, next: readonly LiveRequest[]): boolean {
+  if (!previous) return true
+  const known = new Set(previous.map((request) => request.id))
+  let at = 0
+  let added = false
+  for (const request of next) {
+    if (!known.has(request.id)) {
+      added = true
+      continue
+    }
+    if (added) return false
+    while (at < previous.length && previous[at]!.id !== request.id) at++
+    if (at === previous.length) return false
+    at++
+  }
+  return true
+}
+
+/** `requests` sorted in place by `order`; any it doesn't name keep their place after those it does. */
+function inOrder(requests: LiveRequest[], order: readonly string[]): void {
+  const place = new Map(order.map((id, index) => [id, index]))
+  const indexed = requests.map((request, index) => ({ request, key: place.get(request.id) ?? order.length + index }))
+  indexed.sort((left, right) => left.key - right.key)
+  indexed.forEach((item, index) => { requests[index] = item.request })
+}
 const AppendRowSchema = z.object({
   block_id: z.number().int().nonnegative(),
   value: z.string(),
@@ -411,12 +454,12 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
 
 /**
  * Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves; `wakeAt` is
- * read from `requests`, and `promptedAt` from `prompted`, which each commit of the requests keeps. `elsewhere`,
+ * read from `requests`, and `promptedAt` from `prompted`, which each commit of the requests keeps. `elsewhere`, `elsewhereKind`,
  * `waitingOn`, `waitingFor`, `attention`, `threadTitle`, `quietSince`, `cloudContinue`, `movedAt`, `rail` and `copy` are a cloud
  * router's word on a conversation it relays or reads from the account's copy, never a journal's. `parent` is its
  * Thread's edge, read from the Thread store whenever it's listed, and `children` its children's count, read from them.
  */
-type UnstoredMetadata = "parent" | "children" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt"
+type UnstoredMetadata = "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -486,6 +529,7 @@ export function journalSummary(metadata: string) {
       binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []
     ),
     steeredAt: personPromptedAt(undefined, control?.actions),
+    transferWakeAt: transferDue(control),
   }
 }
 
@@ -521,6 +565,8 @@ export class LiveJournal {
   private log?: MakoLogState
   /** Journals written before `options` had its own row keep it in metadata until their next commit. */
   private optionsStored = false
+  /** Whether the requests' order is kept in `request_order`: once one moved from where it came, the rows' order no longer says it. */
+  private ordered = false
   /** The stored base counts messages (`readBase`): the next commit writes it and the metadata again. */
   private messageBase = false
   /**
@@ -566,6 +612,7 @@ export class LiveJournal {
       CREATE TABLE IF NOT EXISTS base_entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS blocks (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS request_order (id INTEGER PRIMARY KEY, keys TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS prompted (id INTEGER PRIMARY KEY, at INTEGER, requests INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS harness_turns (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS block_appends (block_id INTEGER NOT NULL, sequence INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (block_id, sequence));
@@ -579,6 +626,7 @@ export class LiveJournal {
         this.appends.set(row.block_id, row.count)
       }
       this.optionsStored = Boolean(this.db.prepare("SELECT 1 FROM options WHERE id=1").get())
+      this.ordered = Boolean(this.db.prepare("SELECT 1 FROM request_order WHERE id=1").get())
       // Every commit writes the metadata and the base row together: a journal without the one has neither.
       if (!this.db.prepare("SELECT 1 FROM metadata WHERE id=1").get()) this.rowsNamed = false
     } catch (error) {
@@ -634,8 +682,8 @@ export class LiveJournal {
   summary() {
     const metadata = this.metadata()
     if (!metadata) return null
-    const { steeredAt, ...summary } = journalSummary(metadata)
-    const wakeAt = this.wakeAt()
+    const { steeredAt, transferWakeAt, ...summary } = journalSummary(metadata)
+    const wakeAt = sooner(this.wakeAt(), transferWakeAt)
     const promptedAt = laterPrompt(this.requestedAt(), steeredAt)
     const unsettled = this.unsettled()
     return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled } }
@@ -679,12 +727,14 @@ export class LiveJournal {
       })
   }
 
-  /** The soonest a held request here sends itself (`LiveRequest.wake`); only rows that name a wake are parsed. */
+  /** The soonest a held request here sends itself (`LiveRequest.wake`, `LiveRequest.retry`); only rows that name one are parsed. */
   private wakeAt(): number | undefined {
     let soonest: number | undefined
-    for (const row of this.db.prepare("SELECT value FROM requests WHERE value LIKE '%\"wake\"%'").all()) {
+    for (const row of this.db.prepare("SELECT value FROM requests WHERE value LIKE '%\"wake\"%' OR value LIKE '%\"retry\"%'").all()) {
       const request = LiveRequestSchema.safeParse(JSON.parse(RowSchema.parse(row).value)).data
-      if (request?.status === "held" && request.wake && (soonest === undefined || request.wake.at < soonest)) soonest = request.wake.at
+      const hold = request && holdOf(request)
+      const at = hold && holdDue(hold)
+      if (at !== undefined && (soonest === undefined || at < soonest)) soonest = at
     }
     return soonest
   }
@@ -782,6 +832,8 @@ export class LiveJournal {
       if (rows.length < ROWS_PER_STEP) break
       yield
     }
+    const order = this.ordered ? z.array(z.string()).safeParse(JSON.parse(RowKeysSchema.parse(this.db.prepare("SELECT keys FROM request_order WHERE id=1").get()).keys)).data : undefined
+    if (order) inOrder(requests, order)
     const harnessTurns = this.db
       .prepare("SELECT value FROM harness_turns ORDER BY rowid")
       .all()
@@ -930,6 +982,10 @@ export class LiveJournal {
         const kept = new Set(requests.map((request) => request.id))
         if (!previous || previous.requests.some((request) => !kept.has(request.id)))
           this.db.prepare("DELETE FROM requests WHERE id NOT IN (SELECT value FROM json_each(?))").run(JSON.stringify([...kept]))
+        if (this.ordered || !appendedTo(previous?.requests, requests)) {
+          this.db.prepare("INSERT OR REPLACE INTO request_order VALUES (1, ?)").run(JSON.stringify(requests.map((request) => request.id)))
+          this.ordered = true
+        }
         this.db.prepare("INSERT OR REPLACE INTO prompted VALUES (1, ?, ?)").run(personPromptedAt(requests) ?? null, requests.length)
       }
       // Each is kept as it ends and never changes.

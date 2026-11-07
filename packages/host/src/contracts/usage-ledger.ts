@@ -32,6 +32,10 @@ export interface PriceTable {
  */
 export const PRICE_TABLES: readonly PriceTable[] = [
   {
+    id: "2026-11-04",
+    sources: ["docs.claude.com/en/docs/about-claude/pricing", "developers.openai.com/api/docs/pricing", "ai.google.dev/gemini-api/docs/pricing"],
+  },
+  {
     id: "2026-10-06",
     sources: ["docs.claude.com/en/docs/about-claude/pricing", "developers.openai.com/api/docs/pricing"],
   },

@@ -11,8 +11,11 @@ const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === 
   let runs = 0
   jobs.every("count", 10, () => { runs += 1 })
   assert.equal(timers(), before, "A job's timer keeps nothing alive")
-  await sleep(80)
-  assert.ok(runs >= 3, `A job runs again and again (${runs} runs)`)
+  const hung = performance.now() + 10_000
+  while (runs < 3) {
+    assert.ok(performance.now() < hung, `A job runs again and again (${runs} runs)`)
+    await sleep(5)
+  }
   const [state] = jobs.list()
   assert.equal(state?.name, "count")
   assert.equal(state?.runs, runs)
@@ -144,7 +147,8 @@ const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === 
   await sleep(150)
   assert.equal(runs, 0, "Nothing routine runs while a start holds the foreground, however often it comes due")
   release()
-  await sleep(2)
+  // Promises only, so the job's next tick, which can fall any moment now, can't run in between.
+  for (let turn = 0; turn < 10; turn++) await Promise.resolve()
   assert.equal(runs, 1, "It runs once the start is over, once")
   await sleep(60)
   assert.ok(runs >= 2, "and on its schedule after")

@@ -23,6 +23,21 @@ export interface ToolGrant {
   token: string
   computerUrl: string
   makoUrl?: string
+  /**
+   * The same `mako` server built in this process, for an SDK that runs a
+   * server instance beside its agent (Claude's `type: "sdk"`). Each call is
+   * held to the grant as an HTTP call is.
+   */
+  makoServer?: () => Promise<McpServer>
+}
+
+/** `conversationId` for a scope's calls, throwing once its grant no longer holds. */
+function scopeAuthorizer(owner: AgentOwner, scope: Scope): () => string {
+  return () => {
+    if (scope.revoked || scope.expiresAt < Date.now()) throw new Error("This task grant has expired")
+    owner.authorizeAgent(scope.conversationId, scope.bindingId)
+    return scope.conversationId
+  }
 }
 
 interface Scope {
@@ -49,7 +64,7 @@ const MAKO_INSTRUCTIONS = [
   "recipe_*: recipe_guide explains how to set up or repair the recipe; recipe_save saves a draft only this Thread runs, and recipe_publish proves it and publishes it to every Thread. When your change alters how the project installs, starts or is checked, update the recipe in the same turn.",
   "port_holder: who holds a port, before you assume it's free or stop anything.",
   "thread_move: moves this Thread itself to the cloud, as Move to the cloud does, when the person asks to continue it there or keep it going while their Mac is closed. That's this Thread going on elsewhere, not new work for a Fin.",
-  `Mako refuses the shell routes around these tools, \`git worktree add\`, a new branch in the main checkout, \`gh pr create\` and \`gh pr merge\`, a dev server when the project has a recipe, an agent CLI such as \`claude -p\` or \`codex exec\`, and harness browser or screen tools beside mako-computer, and the refusal names the tool to call. ${NATIVE_OVERRIDE} before a command runs it anyway: only when the Mako tool failed or can't do what was asked, not because the command was named.`,
+  `Mako refuses three routes around these tools: \`git worktree add\` and a new branch in the main checkout (use worktree_move, which takes a branch and a base), and \`gh pr merge\` (pull_request_merge). Other native routes, such as \`gh pr create\`, a dev server when the project has a recipe, an agent CLI, or another browser beside mako-computer, still run, with a one-line note naming the better Mako tool; weigh it and choose. ${NATIVE_OVERRIDE} before a refused command runs it anyway, but never a worktree: only when the Mako tool failed or can't do what was asked.`,
   `show: ${SHOW_MEDIA_LINE}`,
   "thread_history: this Thread's earlier turns, every session and harness of it, and the threads its messages referenced, read whole: list, read, search, and any tool output in full. Use it instead of guessing what was said or done before, and when a transcript points to it.",
   ORCHESTRATION_INSTRUCTIONS,
@@ -205,15 +220,25 @@ export async function startConversationMcp(
           scopes.delete(token)
         }
       const token = randomBytes(32).toString("base64url")
-      scopes.set(token, {
+      const scope: Scope = {
         bindingId,
         conversationId,
         expiresAt: Date.now() + 24 * 60 * 60 * 1_000,
         revoked: false,
         controlRequests: new Map(),
-      })
+      }
+      scopes.set(token, scope)
       const grant: ToolGrant = { token, computerUrl }
-      if (makoUrl) grant.makoUrl = makoUrl
+      if (makoUrl) {
+        grant.makoUrl = makoUrl
+        grant.makoServer = async () => {
+          const { McpServer } = await heavy.mcpServer.load("an agent's in-process mako server")
+          const mako = new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
+          const authorized = scopeAuthorizer(owner, scope)
+          for (const register of makoTools) register(mako, authorized)
+          return mako
+        }
+      }
       return grant
     },
     revoke(bindingId: string, conversationId: string): void {

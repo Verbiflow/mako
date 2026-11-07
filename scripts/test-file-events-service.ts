@@ -57,6 +57,16 @@ function world(overrides: Partial<FileEventsServiceDeps> = {}, name = String(Mat
   return made
 }
 
+/** Local midnight after `at`, as "Not now" counts its day. */
+function endOfLocalDay(at: number): number {
+  const day = new Date(at)
+  day.setHours(24, 0, 0, 0)
+  return day.getTime()
+}
+
+/** `count` beats `lag` late. */
+const late = (count: number, lag: number) => Array.from({ length: count }, (_, index) => lag + (index % 3) * 50)
+
 /** Beats every 10 s, as the canary sends them. */
 function beats(made: World, lags: number[]): void {
   for (const lag of lags) {
@@ -79,22 +89,44 @@ try {
   assert.equal(healthy.service.snapshot().state, "healthy", "the median holds through one slow beat")
   assert.equal(healthy.service.snapshot().slowestMs, 3_000)
 
-  // Degraded delivery, as seen: the median beat 2.6 s late. Said within about two minutes, with the numbers.
-  const late = world()
-  await late.service.tick()
-  const lateFrom = late.clock.now
-  beats(late, [2_400, 2_700, 2_600, 2_550])
-  const lateSaid = late.emitted.find((service) => service.state === "degraded")
-  assert.ok(lateSaid, "degraded once four beats' median is past 250 ms")
-  assert.ok(late.clock.now - lateFrom <= 120_000, `within two minutes (${late.clock.now - lateFrom} ms)`)
-  assert.deepEqual(lateSaid.degraded && { lag: lateSaid.degraded.lag, memory: lateSaid.degraded.memory }, { lag: true, memory: false })
-  assert.equal(lateSaid.lagMs, 2_575)
-  assert.ok(late.lines.some((line) => line.message === "fseventsd is degraded" && line.fields.lagMs === 2_575), "and logged")
-  // Past 250 ms, well short of the 5 s that makes watches poll.
-  const mild = world()
-  await mild.service.tick()
-  beats(mild, [300, 320, 310, 290])
-  assert.equal(mild.service.snapshot().state, "degraded", "300 ms at the median is degraded")
+  // The person's Mac: a healthy 11 MB daemon whose canary reads a few hundred milliseconds, all along. Never degraded.
+  const busyish = world()
+  busyish.daemon.residentBytes = Math.round(11.4 * MB)
+  await busyish.service.tick()
+  beats(busyish, late(60, 257))
+  assert.equal(busyish.service.snapshot().state, "healthy", "257 ms for ten minutes is a busy Mac, not a degraded daemon")
+  assert.equal(busyish.emitted.some((service) => service.notice), false, "and nothing is said")
+
+  // Degraded delivery, as seen: the median beat 2.6 s late, for three minutes of beats at least.
+  const slow = world()
+  await slow.service.tick()
+  const slowFrom = slow.clock.now
+  beats(slow, late(17, 2_600))
+  assert.equal(slow.service.snapshot().state, "healthy", "under three minutes of late beats says nothing yet")
+  beats(slow, late(1, 2_600))
+  const slowSaid = slow.emitted.find((service) => service.state === "degraded")
+  assert.ok(slowSaid, "degraded once three minutes of beats are past 1 s at the median")
+  assert.ok(slow.clock.now - slowFrom <= 4 * 60_000, `within four minutes (${slow.clock.now - slowFrom} ms)`)
+  assert.deepEqual(slowSaid.degraded && { lag: slowSaid.degraded.lag, memory: slowSaid.degraded.memory }, { lag: true, memory: false })
+  assert.equal(slowSaid.notice, true, "said on the desk")
+  assert.ok((slowSaid.lagMs ?? 0) >= 2_600)
+  assert.ok(slow.lines.some((line) => line.message === "fseventsd is degraded"), "and logged")
+  // A minute of slow beats among healthy ones is a busy stretch: the median of five minutes holds.
+  const stretch = world()
+  await stretch.service.tick()
+  beats(stretch, [...late(20, 50), ...late(6, 3_000)])
+  assert.equal(stretch.service.snapshot().state, "healthy")
+
+  // On a Mac busy with other work, late beats say nothing about fseventsd; its memory still does.
+  let busy = true
+  const loaded = world({ machineBusy: async () => busy })
+  await loaded.service.tick()
+  beats(loaded, late(30, 2_600))
+  assert.equal(loaded.service.snapshot().state, "healthy", "late while the Mac is busy isn't held against the daemon")
+  assert.equal(loaded.service.snapshot().busy, true)
+  busy = false
+  await loaded.service.tick()
+  assert.equal(loaded.service.snapshot().state, "degraded", "once it's quiet and the beats are still late, it is")
 
   // Degraded memory: two readings a minute apart over 1 GB, as `ps` reads it.
   const swollen = world()
@@ -115,13 +147,17 @@ try {
   await checked.service.restartedSince(0)
   assert.equal(checked.service.snapshot().state, "healthy", "a pid check isn't a second reading")
 
-  // A canary that goes unheard is degraded too.
+  // A canary unheard for three minutes is degraded too; a shorter silence is the watcher's own to answer.
   const silent = world()
   await silent.service.tick()
   silent.service.delivered(false)
   silent.clock.now += 45_000
+  await silent.service.tick()
+  assert.equal(silent.service.snapshot().state, "healthy", "45 s unheard says nothing yet")
+  silent.clock.now += 3 * 60_000
+  await silent.service.tick()
   assert.equal(silent.service.snapshot().state, "degraded")
-  assert.equal(silent.service.snapshot().silentMs, 45_000)
+  assert.equal(silent.service.snapshot().silentMs, 3 * 60_000 + 45_000)
   silent.service.delivered(true)
   assert.equal(silent.service.snapshot().state, "healthy")
 
@@ -168,7 +204,7 @@ try {
   // The restart, cancelled at the password dialog: nothing else happens.
   const cancelled = world()
   await cancelled.service.tick()
-  beats(cancelled, [2_600, 2_600, 2_600, 2_600])
+  beats(cancelled, late(18, 2_600))
   const cancelledOutcome = await cancelled.service.restart()
   assert.equal(cancelled.asked.length, 1, "the password is asked once")
   assert.equal(cancelledOutcome.restart?.outcome, "cancelled")
@@ -269,13 +305,116 @@ try {
   assert.equal(linux.service.snapshot().state, "unknown")
   await assert.rejects(linux.service.restart(), /macOS's/)
 
+  // Just after fseventsd starts over, its lag isn't judged for ten minutes: only its memory is.
+  const settling = world()
+  await settling.service.tick()
+  settling.daemon.pid = 777
+  await settling.service.tick()
+  assert.ok((settling.service.snapshot().settlingUntil ?? 0) > settling.clock.now, "settling after the new pid")
+  beats(settling, late(30, 1_500))
+  await settling.service.tick()
+  assert.equal(settling.service.snapshot().state, "healthy", "late beats while it settles say nothing")
+  settling.daemon.residentBytes = 2 * GB
+  settling.clock.now += 60_000
+  await settling.service.tick()
+  settling.clock.now += 60_000
+  await settling.service.tick()
+  assert.equal(settling.service.snapshot().state, "degraded", "memory is judged while it settles")
+  const settled = world()
+  await settled.service.tick()
+  settled.daemon.pid = 778
+  await settled.service.tick()
+  settled.clock.now += 11 * 60_000
+  beats(settled, late(30, 1_500))
+  assert.equal(settled.service.snapshot().state, "degraded", "after ten minutes, lag is judged again")
+
+  // Not now: gone for the rest of the day, kept across a restart of the host, back only when twice as bad.
+  const snoozing = world({ noticeFile: join(root, "snooze", "notice.json") }, "snooze")
+  snoozing.daemon.residentBytes = Math.round(1.5 * GB)
+  await snoozing.service.tick()
+  snoozing.clock.now += 60_000
+  await snoozing.service.tick()
+  assert.equal(snoozing.service.snapshot().notice, true, "said once degraded")
+  const snoozed = await snoozing.service.dismiss()
+  assert.equal(snoozed.notice, false)
+  assert.equal(snoozed.state, "degraded", "still degraded in Diagnostics")
+  assert.equal(new Date(snoozed.snoozedUntil!).getHours(), 0, "until midnight")
+  for (let minute = 0; minute < 120; minute++) {
+    snoozing.clock.now += 60_000
+    snoozing.daemon.residentBytes += 2 * MB
+    await snoozing.service.tick()
+  }
+  assert.equal(snoozing.emitted.slice(-120).some((service) => service.notice), false, "growing a little for two hours says nothing")
+  const again = world({ noticeFile: join(root, "snooze", "notice.json") }, "snooze-again")
+  again.clock.now = snoozing.clock.now
+  again.daemon.residentBytes = snoozing.daemon.residentBytes
+  await again.service.tick()
+  again.clock.now += 60_000
+  await again.service.tick()
+  assert.equal(again.service.snapshot().state, "degraded")
+  assert.equal(again.service.snapshot().notice, false, "a new host keeps the snooze and the episode")
+  again.daemon.residentBytes = 3 * GB
+  again.clock.now += 60_000
+  await again.service.tick()
+  assert.equal(again.service.snapshot().notice, true, "twice the memory it was dismissed at says it again")
+  // Worse for another reason says it too: memory was the reason, now delivery is late as well.
+  await again.service.dismiss()
+  beats(again, late(30, 2_600))
+  assert.equal(again.service.snapshot().notice, true, "late delivery on top of the memory is a new reason")
+
+  // One notice an episode: degraded, answered, healthy a while, degraded again within half an hour is the same episode.
+  const flapping = world()
+  await flapping.service.tick()
+  beats(flapping, late(30, 2_600))
+  assert.equal(flapping.service.snapshot().notice, true)
+  const since = flapping.service.snapshot().degraded!.since
+  await flapping.service.dismiss()
+  // Degraded all through the night, past the end of the snooze's day.
+  const midnight = endOfLocalDay(flapping.clock.now)
+  while (flapping.clock.now < midnight + 60_000) beats(flapping, late(1, 2_600))
+  beats(flapping, late(30, 50))
+  assert.equal(flapping.service.snapshot().state, "healthy")
+  beats(flapping, late(30, 2_600))
+  assert.equal(flapping.service.snapshot().degraded?.since, since, "back within 30 minutes: the same episode")
+  assert.equal(flapping.service.snapshot().notice, false, "never said twice, even the next day")
+  // Healthy for over half an hour ends it: a new one the next day is said.
+  beats(flapping, late(220, 50))
+  beats(flapping, late(30, 2_600))
+  assert.notEqual(flapping.service.snapshot().degraded?.since, since)
+  assert.equal(flapping.service.snapshot().notice, true, "a new episode, a new day: said")
+  // A restart answers the episode: its outcome is said instead, and the notice stays away unless it gets worse.
+  let answered!: World
+  answered = world({
+    privileged: async (command) => {
+      answered.asked.push(command)
+      answered.daemon.pid = 4_000
+      return { kind: "done", stdout: "/nowhere\n" }
+    },
+    probe: async () => [257, 260, 255, 258, 262],
+  })
+  answered.daemon.residentBytes = 2 * GB
+  await answered.service.tick()
+  answered.clock.now += 60_000
+  await answered.service.tick()
+  answered.daemon.residentBytes = 11 * MB
+  const after = await answered.service.restart()
+  assert.equal(after.state, "healthy", "257 ms right after a restart is settling, not degraded")
+  assert.equal(after.notice, false)
+  assert.equal(after.restart?.after?.lagMs, 258, "the outcome says what the probe measured")
+  beats(answered, late(30, 300))
+  answered.clock.now += 11 * 60_000
+  beats(answered, late(30, 300))
+  assert.equal(answered.service.snapshot().state, "healthy", "and a few hundred milliseconds after settling is still healthy")
+  const closed = await answered.service.dismiss()
+  assert.equal(closed.restart?.seen, true, "the outcome, once closed, stays closed")
+
   // The command and the readers of its output.
   assert.throws(() => restartCommand(-1))
   assert.throws(() => restartCommand(501, "/tmp/$(reboot)"))
   assert.deepEqual(zoneCounts(vmmap), { DefaultMallocZone: 89_967_604, PathStringZone: 34_892_270 })
   assert.deepEqual(clientPids(sample), [46_417, 645])
   assert.equal(existsSync(join(root, "restarted", "fseventsd.jsonl")), true)
-  console.log("file events service: healthy says nothing; a median beat past 250 ms or two memory readings past 1 GB is degraded within two minutes, with the numbers; a silence too; samples every 15 minutes with what Mako did, kept across hosts; a restart by anyone starts every watch over and marks earlier history lost; the restart asks once, captures the evidence before the restart, saves it in diagnostics with who subscribed, and says before and after; a cancel or failure changes nothing")
+  console.log("file events service: healthy and a busy Mac's few hundred milliseconds say nothing; a median beat past 1 s over three to five minutes on a quiet Mac, two memory readings past 1 GB, or three minutes unheard is degraded, with the numbers; just after a restart only memory is judged; Not now holds for the day and across hosts unless twice as bad or for a new reason; one notice an episode; samples every 15 minutes with what Mako did, kept across hosts; a restart by anyone starts every watch over and marks earlier history lost; the restart asks once, captures the evidence before the restart, saves it in diagnostics with who subscribed, and says before and after; a cancel or failure changes nothing")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

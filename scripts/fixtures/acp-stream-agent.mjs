@@ -8,6 +8,8 @@ import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk"
 const sessionId = randomUUID()
 const duration = Number(process.env.MEASURE_STREAM_MS ?? 20_000)
 const interval = Number(process.env.MEASURE_CHUNK_MS ?? 20)
+// A prompt with these words runs until it's cancelled, so a Stop can't lose a race with the turn's end.
+const untilCancelled = process.env.MEASURE_UNTIL_CANCELLED
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const words = "the host reads each update decodes it journals it and sends it to every window watching".split(" ")
 const output = Array.from({ length: 40 }, (_, line) => `line ${line}: ${words.join(" ")}`).join("\n")
@@ -28,11 +30,12 @@ new AgentSideConnection((connection) => {
     async setSessionMode() {
       return {}
     },
-    async prompt() {
+    async prompt({ prompt }) {
       cancelled = false
       const began = Date.now()
+      const held = Boolean(untilCancelled) && prompt.some((block) => block.text?.includes(untilCancelled))
       let step = 0
-      while (!cancelled && Date.now() - began < duration) {
+      while (!cancelled && (held || Date.now() - began < duration)) {
         step++
         const text = Array.from({ length: 4 }, (_, index) => words[(step * 4 + index) % words.length]).join(" ")
         await update({ sessionUpdate: step % 25 === 0 ? "agent_thought_chunk" : "agent_message_chunk", content: { type: "text", text: `${text} ` } })

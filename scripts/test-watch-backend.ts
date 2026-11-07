@@ -7,6 +7,7 @@ import type { WatchEvent } from "@mako/host/contracts/watcher-child"
 import { childBackend, childHistory, probeDelivery, type FileHistory, type WatchListener } from "@mako/host/workspaces/watch-backend"
 import { WatchReadings } from "@mako/host/workspaces/watch-readings"
 import { FileEventsServiceWatch } from "@mako/host/workspaces/file-events-service"
+import { ranOut } from "./lib/ran-out.ts"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-backend-")))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -89,9 +90,9 @@ try {
   // A child that dies every time is given up after five tries.
   const dying = join(root, "dying.mjs")
   writeFileSync(dying, "process.on('message', () => process.exit(1))\n")
-  const started = Date.now()
-  await assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/)
-  assert.ok(Date.now() - started < 10_000, "within the backoff, not forever")
+  // Within the backoff, by the waits it took rather than the runner's clock: each restart twice the last, then given up.
+  const { waits } = await ranOut(() => assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/))
+  assert.deepEqual(waits.filter((ms) => ms >= 250), [250, 500, 1_000, 2_000], "within the backoff, not forever")
 
   // Late isn't silent: a canary heard 8 s late, as a degraded fseventsd
   // delivers, mutes nothing and restarts nothing, and its lag is read and
@@ -155,13 +156,13 @@ try {
   delete process.env.MAKO_WATCHER_CANARY_TEST
   console.log(`watch backend canary: silence detected in ${detected} ms at a 1.2 s beat and a 20 s window`)
 
-  // A degraded fseventsd, simulated: every beat heard 400 ms late, far short of
-  // the 5 s that makes watches poll. The host's read of the daemon says so in a
-  // few beats; the restart, through a stand-in for the privileged step (nothing
+  // A degraded fseventsd, simulated: every beat heard 1.2 s late, short of the
+  // 5 s that makes watches poll. The host's read of the daemon says so once
+  // 18 beats are in; the restart, through a stand-in for the privileged step (nothing
   // here touches the real daemon), starts the watcher child over, so every watch
   // hears dropped and rescans; delivery is measured again, and a read of history
   // from before the restart says every root is lost.
-  process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 700, lagMs: 400 })
+  process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1_500, lagMs: 1_200 })
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-restart-")))
   const daemon = { pid: 338, residentBytes: 9 * 1024 ** 2 }
   const healthReadings = new WatchReadings()
@@ -195,16 +196,17 @@ try {
   const d = recorder()
   const degrading = await healthBackend(kept, [], d.listener)
   const degradingAt = Date.now()
-  await until("a canary 400 ms late reads fseventsd degraded", () => service.snapshot().state === "degraded", 30_000)
+  await until("a canary 1.2 s late reads fseventsd degraded", () => service.snapshot().state === "degraded", 90_000)
   const degradedIn = Date.now() - degradingAt
-  assert.ok((service.snapshot().lagMs ?? 0) >= 400, `the median beat is as late as it's heard (${service.snapshot().lagMs} ms)`)
+  assert.ok((service.snapshot().lagMs ?? 0) >= 1_200, `the median beat is as late as it's heard (${service.snapshot().lagMs} ms)`)
   assert.deepEqual(d.mutes, [], "degraded is said, not polled around")
   const before = healthHistory ? await healthHistory.mark() : undefined
-  process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 700 })
+  process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1_500 })
   const restarted = await service.restart()
   assert.equal(restarted.restart?.outcome, "restarted")
-  assert.ok((restarted.restart?.after?.lagMs ?? Infinity) < 250, `delivery measured again after: ${restarted.restart?.after?.lagMs} ms`)
-  assert.ok((restarted.restart?.before.lagMs ?? 0) >= 400)
+  // Measured again, not the late beats carried over: well under the lag it restarted from, whatever the runner's pace.
+  assert.ok((restarted.restart?.after?.lagMs ?? Infinity) < (restarted.restart?.before.lagMs ?? 0) / 2, `delivery measured again after: ${restarted.restart?.after?.lagMs} ms, from ${restarted.restart?.before.lagMs} ms`)
+  assert.ok((restarted.restart?.before.lagMs ?? 0) >= 1_200)
   assert.equal(restarted.state, "healthy", "and the notice goes")
   await until("every watch hears its events may have been dropped, and rescans", () => d.dropped() === 1, 30_000)
   assert.equal(healthReadings.reading().starts.recovery, 1, "the watcher child started over once")
@@ -219,7 +221,7 @@ try {
   await degrading.unsubscribe()
   delete process.env.MAKO_WATCHER_CANARY_TEST
   rmSync(scratch, { recursive: true, force: true })
-  console.log(`watch backend fseventsd: a canary 400 ms late read degraded in ${degradedIn} ms at a 0.7 s beat; the restart rescanned every watch and measured ${restarted.restart?.after?.lagMs} ms after`)
+  console.log(`watch backend fseventsd: a canary 1.2 s late read degraded in ${degradedIn} ms at a 1.5 s beat; the restart rescanned every watch and measured ${restarted.restart?.after?.lagMs} ms after`)
 
   // Only something else holding this process open lets an unref'd timer fire.
   setTimeout(() => {

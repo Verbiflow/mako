@@ -117,6 +117,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     title: snapshot.session.title,
     threadPath: snapshot.threadPath,
     elsewhere: existing?.elsewhere,
+    elsewhereKind: existing?.elsewhereKind,
     // Read from its copy, its device is still off; a snapshot from the device itself says it's back.
     quietSince: snapshot.copy ? existing?.quietSince : undefined,
     cloudContinue: snapshot.copy ? existing?.cloudContinue : undefined,
@@ -129,6 +130,8 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     threadId: snapshot.threadId ?? existing?.threadId,
     sessionId: snapshot.sessionId ?? existing?.sessionId,
     parent: snapshot.parent ?? existing?.parent,
+    // An Apex listed from another device keeps its row's Fins once opened, until its own roster says them.
+    fins: snapshot.fins ?? existing?.fins,
     createdAt: snapshot.createdAt,
     updatedAt: Date.now(),
     kind: "live",
@@ -595,7 +598,12 @@ export function hydrateLiveSummaries(
 function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void {
   for (const summary of summaries) {
     const previous = acpStore.get().conversations[summary.session.id]
-    if (previous?.hydrated && !reconnect) continue
+    if (previous?.hydrated && !reconnect) {
+      // Opened here, it reads its owner's stream; its Fins still come from the list while this window holds no roster of them.
+      if (previous.kind === "live" && summary.elsewhere !== undefined && previous.fins !== summary.fins)
+        replaceAcpConversation(summary.session.id, { ...previous, fins: summary.fins, children: summary.children ?? previous.children })
+      continue
+    }
     if (reconnect && previous?.kind === "live") {
       replaceAcpConversation(summary.session.id, {
         ...previous,
@@ -604,6 +612,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
         hydrated: false,
         nativePaths: summary.nativePaths,
         elsewhere: summary.elsewhere ?? previous.elsewhere,
+        elsewhereKind: summary.elsewhereKind ?? previous.elsewhereKind,
         waitingOn: summary.waitingOn,
         threadTitle: summary.threadTitle,
         quietSince: summary.quietSince,
@@ -615,6 +624,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
         sessionId: summary.sessionId ?? previous.sessionId,
         parent: summary.parent ?? previous.parent,
         children: summary.children,
+        fins: summary.fins,
         permission: null,
         failureSeen: carriedFailureSeen(previous, summary.session),
       })
@@ -647,6 +657,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
       nativePaths: summary.nativePaths,
       threadPath: summary.threadPath,
       elsewhere: summary.elsewhere,
+      elsewhereKind: summary.elsewhereKind,
       waitingOn: summary.waitingOn,
       threadTitle: summary.threadTitle,
       quietSince: summary.quietSince,
@@ -658,6 +669,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
       sessionId: summary.sessionId,
       parent: summary.parent,
       children: summary.children,
+      fins: summary.fins,
       revision: summary.revision,
       hydrated: false,
       createdAt: summary.createdAt,

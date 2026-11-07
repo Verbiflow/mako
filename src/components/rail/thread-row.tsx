@@ -62,7 +62,7 @@ const Detach = memo(function Detach({ path }: { path: string }) {
         event.stopPropagation()
         void actions.closeTab(tab)
       }}
-      className="pressable flex size-6 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground"
+      className="pressable flex size-6 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground"
     >
       <XIcon className="size-3" />
     </button>
@@ -71,14 +71,16 @@ const Detach = memo(function Detach({ path }: { path: string }) {
 
 /** A rail row's box and paint: hover, an open menu, and the one lit row (`data-active`). */
 export const ROW_SURFACE =
-  "group relative isolate flex h-7 w-full items-center gap-2 rounded-md pr-1 text-left transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised"
+  "group relative isolate flex h-7 w-full items-center gap-2 pr-1 text-left transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised"
 
 /**
  * A row's floating controls, shown while the row (`group`) is hovered or focused, or a menu of theirs is open.
- * `z-[1]` keeps them over the row's status mark, whose translucent parts paint as their own layers.
+ * `z-[1]` keeps them over the row's status mark, whose translucent parts paint as their own layers. Focus inside the
+ * row is an arbitrary variant, not `group-has-[…]`: that compiles to `:is(.group:has(…) *)`, and with a universal last
+ * part any element added anywhere restyles the whole of `main`, a frame lost for each transcript row that mounts.
  */
 export const ROW_ACTIONS =
-  "pointer-events-none absolute inset-y-0 right-0 z-[1] flex items-center rounded-r-md pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
+  "pointer-events-none absolute inset-y-0 right-0 z-[1] flex items-center pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 [.group:has(:focus-visible)_&]:pointer-events-auto [.group:has(:focus-visible)_&]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
 /** An Apex's row is two lines, its crew's pips under its title (`ApexCrewLine`). */
 export const APEX_SURFACE = "h-11 flex-col items-stretch justify-center gap-[3px]"
@@ -96,7 +98,7 @@ export function SessionCount({ count }: { count: number }) {
   return (
     <span
       aria-label={`${count} sessions`}
-      className="tabular flex h-4 min-w-4 shrink-0 items-center justify-center rounded bg-fill-selected px-1 text-label leading-none text-muted-foreground"
+      className="tabular flex h-4 min-w-4 shrink-0 items-center justify-center bg-fill-selected px-1 text-label leading-none text-muted-foreground"
     >
       {count}
     </span>
@@ -297,7 +299,7 @@ export const ThreadRow = memo(function ThreadRow({
               if (event.key === "Escape") setEditing(null)
             }}
             onBlur={() => setEditing(null)}
-            className="min-w-0 flex-1 rounded bg-raised px-1 text-ui text-foreground ring-1 ring-hairline focus:outline-none"
+            className="min-w-0 flex-1 bg-raised px-1 text-ui text-foreground ring-1 ring-hairline focus:outline-none"
           />
         ) : (
           <span
@@ -354,7 +356,7 @@ export const ThreadRow = memo(function ThreadRow({
               event.stopPropagation()
               togglePinned(ref.path)
             }}
-            className="pressable flex size-6 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground"
+            className="pressable flex size-6 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground"
           >
             <PinIcon className={cn("size-3", isPinned && "fill-current")} />
           </button>

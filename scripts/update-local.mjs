@@ -196,8 +196,8 @@ export async function buildLine(label, build) {
  */
 export async function prepareSource({ project, installed, say, ask }) {
   const { Git } = await import("@mako/git")
-  const { readUpdateSource, bringForward } = await import("@mako/host/application/local-update-source")
-  const { updateSourceText, shortRevision } = await import("@mako/host/contracts/update-source-text")
+  const { readUpdateSource, bringForward, forwardable } = await import("@mako/host/application/local-update-source")
+  const { updateSourceText, shortRevision, uncommittedCount } = await import("@mako/host/contracts/update-source-text")
   const git = new Git()
   try {
     const reading = await readUpdateSource(git, project, { fetch: true, installed })
@@ -206,16 +206,27 @@ export async function prepareSource({ project, installed, say, ask }) {
       return true
     }
     const text = updateSourceText(reading)
-    say(`${text.title} (${text.standing}). ${text.detail}`)
+    say(`${text.title} (${text.standing}).`)
     if (text.offline) say(text.offline)
-    if (!text.action) return false
-    if (reading.plan.kind !== "fast-forward") return true
-    if (!(await ask(`${text.action}? [Y/n] `))) {
-      say(`Building ${reading.branch} as it is, at ${shortRevision(reading.head)}.`)
+    const name = reading.branch ?? "HEAD"
+    if (forwardable(reading)) {
+      const target = shortRevision(reading.upstream.commit)
+      if (await ask(`Move ${name} forward to ${reading.upstream.name} ${target} and build it? [Y/n] `)) {
+        const moved = await bringForward(git, project, reading)
+        if (moved) say(`Moved ${moved.branch} forward from ${shortRevision(moved.from)} to ${shortRevision(moved.to)}.`)
+        return true
+      }
+      say(`Building ${name} as it is, at ${shortRevision(reading.head)}.`)
       return true
     }
-    const moved = await bringForward(git, project, reading)
-    if (moved) say(`Moved ${moved.branch} forward from ${shortRevision(moved.from)} to ${shortRevision(moved.to)}.`)
+    if (reading.plan.checkout.installed) {
+      if (reading.plan.upstream && !reading.plan.upstream.installed)
+        say(`Your installed app already runs ${name} at ${shortRevision(reading.head)}, so there's nothing to build here. Settings › Updates builds ${reading.upstream?.name ?? "the upstream"} without touching this checkout.`)
+      return false
+    }
+    // update:local builds in place, so it builds what the checkout holds; Settings builds the upstream clean.
+    const work = reading.uncommitted.count ? ` with ${uncommittedCount(reading.uncommitted.count)}` : ""
+    say(`update:local builds this checkout in place: ${name} at ${shortRevision(reading.head)}${work}.${reading.behind && reading.upstream ? ` It's ${reading.behind} ${reading.behind === 1 ? "commit" : "commits"} behind ${reading.upstream.name}; Settings › Updates builds that clean without touching the checkout.` : ""}`)
     return true
   } finally {
     git.close()

@@ -24,6 +24,7 @@ import { createExchangeBuilder } from "./exchange-builder"
 import { ShieldQuestionIcon } from "lucide-react"
 import { Shimmer } from "@/components/ui/shimmer"
 import { Skeleton } from "@/components/ui/skeleton"
+import { CrewCard } from "./crew-card"
 import { releasedExchanges } from "@/state/transcript-residency"
 
 /**
@@ -127,7 +128,7 @@ function RefreshFailedLine({ opening, error }: { opening: ThreadRef; error: stri
       <button
         type="button"
         onClick={() => void threads.view(opening)}
-        className="pressable rounded-sm text-muted-foreground transition-colors duration-100 hover:text-foreground"
+        className="pressable text-muted-foreground transition-colors duration-100 hover:text-foreground"
       >
         Retry
       </button>
@@ -237,7 +238,8 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
         </p>
       }
       footer={
-        waitingForInput ? (
+        <>
+        {waitingForInput ? (
           <div className="animate-enter flex items-center gap-2 px-0.5 text-ui text-attention">
             <ShieldQuestionIcon className="size-3.5 shrink-0" />
             <span>
@@ -257,7 +259,10 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
                 : `${harnessLabel(thread.ref.harness)} is working…`}
             />
           </div>
-        ) : null
+        ) : null}
+        {/* An Apex's saved transcript, or one its session is starting from, keeps its Fins on screen. */}
+        {thread.ref.threadId ? <CrewCard thread={thread.ref.threadId} /> : null}
+        </>
       }
     />
   )
@@ -280,7 +285,7 @@ function ConversationSkeleton() {
     <div aria-hidden className="skeleton-transcript skeleton-rows mx-auto flex h-full w-full max-w-content flex-col justify-end gap-7 overflow-hidden px-6 py-6">
       {TRANSCRIPT_SKETCH.flatMap((turn, index) => [
         <div key={`prompt-${index}`} className="flex justify-end">
-          <div className="flex flex-col items-end gap-3 rounded-xl rounded-br-md bg-raised px-3.5 py-3.5">
+          <div className="flex flex-col items-end gap-3 bg-raised px-3.5 py-3.5">
             {turn.prompt.map((width) => (
               <Skeleton key={width} className={`h-2 ${width}`} />
             ))}

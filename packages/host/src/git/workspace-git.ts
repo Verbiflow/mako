@@ -147,6 +147,8 @@ export class WorkspaceGit {
   }
 
   get cwd(): string { return this.cwdValue }
+  /** The host's Git, for what reads this folder beside its status (its file index). */
+  get runner(): Git { return this.git }
   get target(): string { return this.selectedRoot ?? this.cwdValue }
 
   setCwd(cwd: string): void {

@@ -12,9 +12,10 @@ import { CommitKeys } from "./model-connections"
 import { WorktreesSection } from "./worktrees-section"
 import { PullRequestsAsMe } from "./pull-requests-as-me"
 import { desktopGitHubTokens } from "@/state/github-token"
+import { desktopGitHubAuthorships } from "@/state/github-authorship"
 import { useGitHub } from "@/state/github"
 
-/** Settings › Git: how Changes looks, what writes commit messages, who cloud pull requests are from, and worktrees. */
+/** Settings › Git: how Changes looks, what writes commit messages, who cloud commits and pull requests are from, and worktrees. */
 export function GitSection() {
   // The repository in view, which a new GitHub token is checked against.
   const repository = useGitHub((state) => state.status?.repo)
@@ -22,7 +23,7 @@ export function GitSection() {
     <div className="flex flex-col gap-8">
       <ChangesView />
       <CommitMessages />
-      <PullRequestsAsMe tokens={desktopGitHubTokens} repository={repository} />
+      <PullRequestsAsMe tokens={desktopGitHubTokens} authorships={desktopGitHubAuthorships} repository={repository} />
       <section className="flex flex-col gap-3">
         <h3 className="text-ui font-medium">Worktrees</h3>
         <WorktreesSection />
@@ -32,7 +33,7 @@ export function GitSection() {
 }
 
 function ChangesView() {
-  const layout = usePrefs((prefs) => prefs.changesLayout)
+  const layout = usePrefs((prefs) => prefs.changesView)
   const diffStyle = usePrefs((prefs) => prefs.diffStyle)
   const wrapDiff = usePrefs((prefs) => prefs.wrapDiff)
   const filesView = usePrefs((prefs) => prefs.filesView)
@@ -43,11 +44,11 @@ function ChangesView() {
         <p className="mt-0.5 text-label text-muted-foreground">How the Changes panel shows your working tree. Both commit, push and open pull requests the same way.</p>
       </div>
       <div role="radiogroup" aria-label="Changes layout" className="grid grid-cols-2 gap-3">
+        <LayoutChoice value="files" chosen={layout} title="Files" description="The changed files, with staging on each. A diff opens as a tab.">
+          <FilesPicture />
+        </LayoutChoice>
         <LayoutChoice value="review" chosen={layout} title="Review" description="Every changed file's diff in one scroll. Commit what you see.">
           <ReviewPicture />
-        </LayoutChoice>
-        <LayoutChoice value="files" chosen={layout} title="Files" description="A tree with staging on each file, and one file's diff.">
-          <FilesPicture />
         </LayoutChoice>
       </div>
       <ListCard>
@@ -76,8 +77,8 @@ function ChangesView() {
 }
 
 function LayoutChoice({ value, chosen, title, description, children }: {
-  value: Prefs["changesLayout"]
-  chosen: Prefs["changesLayout"]
+  value: Prefs["changesView"]
+  chosen: Prefs["changesView"]
   title: string
   description: string
   children: ReactNode
@@ -89,15 +90,15 @@ function LayoutChoice({ value, chosen, title, description, children }: {
       role="radio"
       aria-checked={selected}
       aria-label={title}
-      onClick={() => setPref("changesLayout", value)}
+      onClick={() => setPref("changesView", value)}
       className={cn(
-        "pressable flex flex-col gap-3 rounded-lg p-3 text-left transition-[background-color,box-shadow] duration-150 ease-[var(--ease-out)]",
+        "pressable flex flex-col gap-3 p-3 text-left transition-[background-color,box-shadow] duration-150 ease-[var(--ease-out)]",
         selected
           ? "bg-fill-selected [box-shadow:inset_0_0_0_1px_var(--border)]"
-          : "bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] hover:bg-fill-hover"
+          : "bg-raised hover:bg-fill-hover"
       )}
     >
-      <span aria-hidden className="block h-28 overflow-hidden rounded-md bg-surface [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+      <span aria-hidden className="block h-28 overflow-hidden bg-surface">
         {children}
       </span>
       <span>
@@ -127,7 +128,7 @@ function PictureLines({ lines }: { lines: readonly PictureLine[] }) {
 function ReviewPicture() {
   const file = (lines: readonly PictureLine[]) => (
     <span className="block">
-      <span className="flex h-3 items-center gap-1 border-b border-hairline px-1.5">
+      <span className="flex h-3 items-center gap-1 px-1.5">
         <span className="h-1 w-1 rounded-full bg-caution/70" />
         <span className="h-1 w-12 rounded-full bg-foreground/25" />
         <span className="ml-auto h-1 w-4 rounded-full bg-foreground/15" />
@@ -156,7 +157,7 @@ function FilesPicture() {
           </span>
         ))}
       </span>
-      <span className="mt-auto block border-t border-hairline py-1">
+      <span className="mt-auto block py-1">
         <PictureLines lines={["same", "remove", "add", "same"]} />
       </span>
     </span>
@@ -227,7 +228,7 @@ function CommitMessages() {
             if (draft !== null) setPref("commitPrompt", draft.trim() ? draft : undefined)
             setDraft(null)
           }}
-          className="w-full resize-y rounded-lg bg-raised px-2.5 py-2 font-mono text-ui leading-relaxed ring-1 ring-hairline focus:outline-none focus-visible:ring-border"
+          className="w-full resize-y bg-raised px-2.5 py-2 font-mono text-ui leading-relaxed focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
         />
         <div>
           <Action

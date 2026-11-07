@@ -472,7 +472,7 @@ function ChordRecorder({
             onKeyDown={keyDown}
             onKeyUp={keyUp}
             onBlur={() => held.current.down.clear()}
-            className="pressable flex h-7 min-w-32 items-center justify-center rounded-md bg-raised px-2 ring-1 ring-border"
+            className="pressable flex h-7 min-w-32 items-center justify-center bg-raised px-2 ring-1 ring-border"
           >
             {candidate ? <Keys keys={formatChord(candidate)} /> : <span className="text-label text-faint">Press keys</span>}
           </button>
@@ -486,7 +486,7 @@ function ChordRecorder({
               setAlone(null)
               onRecord()
             }}
-            className="pressable flex h-7 min-w-24 items-center justify-center rounded-md px-2 hover:bg-fill-hover"
+            className="pressable flex h-7 min-w-24 items-center justify-center px-2 hover:bg-fill-hover"
           >
             <Keys keys={formatChord(chord)} />
           </button>
@@ -550,7 +550,7 @@ export function AppshotShortcutReadout() {
           : "Off"
   const watched = [watching.preferences !== "off" && `System Settings’ shortcuts (${watching.preferences})`, watching.activations && "apps coming to the front"].filter(Boolean)
   return (
-    <div className="mt-2 rounded-lg bg-surface px-3 py-2 ring-1 ring-hairline" data-appshot-shortcut-readout>
+    <div className="mt-2 bg-raised px-3 py-2" data-appshot-shortcut-readout>
       <div className="flex items-center justify-between gap-3">
         <p className="text-ui">Appshot shortcut</p>
         <Action tone="ghost" size="xs" onClick={() => void navigator.clipboard.writeText(JSON.stringify(watch, null, 2))}>

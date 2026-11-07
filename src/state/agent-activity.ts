@@ -98,7 +98,7 @@ export function agentActivity({ blocks, waiting, connecting, starting, makingWor
   const tool = blocks.findLast((block) => block.type === "tool" && block.status === "pending")
   if (tool?.type === "tool") {
     const identity = entryToolIdentity(tool, harness)
-    const label = !identity.target ? identity.label : identity.kind === "shell" ? identity.target : `${identity.label} · ${identity.target}`
+    const label = identity.running ?? (!identity.target ? identity.label : identity.kind === "shell" ? identity.target : `${identity.label} · ${identity.target}`)
     return { kind: toolKindActivity(identity.kind), label: quiet ? `${quiet} · ${label}` : label }
   }
   const last = blocks.at(-1)

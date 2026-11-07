@@ -85,7 +85,7 @@ try {
     { type: "user", id: "q1", text: "Also handle comments", steeringFor: "u1" },
     { type: "event", label: "Background command \"npm test\" completed (exit code 0)", detail: undefined, body: undefined, tone: undefined, opensTurn: undefined },
     { type: "text", text: "Done with both." },
-    { type: "event", label: "Context compacted", detail: "Automatic · 155k → 12k tokens · took 1m 12s", body: "Summary:\n1. The user asked for a parser.", tone: undefined, opensTurn: undefined },
+    { type: "event", label: "Context compacted", detail: "Automatic · 155K → 12K tokens · took 1m 12s", body: "Summary:\n1. The user asked for a parser.", tone: undefined, opensTurn: undefined },
     { type: "user", id: "u2", text: "Continue", steeringFor: undefined },
     { type: "event", label: "Rate limited", detail: "You've hit your session limit · resets 5:10am (America/Los_Angeles)", body: undefined, tone: "warning", opensTurn: undefined, limit: {} },
     { type: "event", label: "Authentication failed", detail: "Login expired · Please run /login", body: undefined, tone: "error", opensTurn: undefined },

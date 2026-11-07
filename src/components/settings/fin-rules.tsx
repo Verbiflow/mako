@@ -13,6 +13,7 @@ import type { HarnessProfile } from "@/lib/types"
 import { harnessDefaults } from "@/state/composer-settings"
 import { saveFinPolicy, useFinDefaults } from "@/state/fin-defaults"
 import { SEA_MARK } from "@/lib/sea-mark"
+import { targetLine } from "./agent-reads"
 
 /** What people tend to write first: tapped, it becomes a rule to edit. */
 const STARTERS = ["Anything that isn't frontend", "UI, CSS and visual polish", "Quick lookups and one-line fixes", "Reviews and second opinions"]
@@ -90,7 +91,7 @@ export function FinRules({ order, profiles }: { order: readonly string[]; profil
             onRemove={() => setDraft(undefined)}
           />
         ) : null}
-        <div role="listitem" className="flex items-center gap-3 bg-shell/55 px-3 py-2.5">
+        <div role="listitem" className="flex items-center gap-3 bg-raised px-3 py-2.5">
           <span aria-hidden style={SEA_MARK} className="flex size-5 shrink-0 items-center justify-center text-label font-medium">∗</span>
           <span className="min-w-0 flex-1 text-ui text-muted-foreground">{policy.rules.length ? "When no rule fits" : "Every Fin, until you add a rule"}</span>
           <TargetPicker
@@ -98,7 +99,7 @@ export function FinRules({ order, profiles }: { order: readonly string[]; profil
             profiles={profiles}
             signedIn={signedIn}
             apexOwn
-            onChoose={(target) => save(target ? { ...policy, otherwise: target } : { rules: policy.rules })}
+            onChoose={(target) => save({ ...policy, otherwise: target })}
           />
         </div>
       </div>
@@ -145,13 +146,6 @@ export function FinRules({ order, profiles }: { order: readonly string[]; profil
   )
 }
 
-/** A target as the Apex reads it: the harness, then its model's words or how the person uses it there. */
-function targetLine(target: FinTarget, profiles: Readonly<Record<string, HarnessProfile>>): string {
-  const words = target.settings && finTuningWords(profiles[target.harness]?.models ?? [], target.settings)
-  const label = harnessLabel(target.harness)
-  return words ? `${label} · ${finTuningLine(words)}` : target.settings?.model ? `${label} · ${target.settings.model}` : `${label}, on the model the person uses there`
-}
-
 function RuleRow({ index, rule, last, focus, profiles, signedIn, onChange, onMove, onRemove }: {
   index: number
   rule: FinRule
@@ -184,7 +178,7 @@ function RuleRow({ index, rule, last, focus, profiles, signedIn, onChange, onMov
     }
   }
   return (
-    <div role="listitem" data-fin-rule={index + 1} className="group/rule flex items-start gap-3 bg-shell/55 px-3 py-2.5 transition-colors duration-150 focus-within:bg-fill-hover">
+    <div role="listitem" data-fin-rule={index + 1} className="group/rule flex items-start gap-3 bg-raised px-3 py-2.5 transition-colors duration-150 focus-within:bg-fill-hover">
       <span aria-hidden className="mt-1 flex size-5 shrink-0 items-center justify-center bg-fill-selected text-label font-medium text-foreground/80 tabular">{index + 1}</span>
       <textarea
         aria-label={`Rule ${index + 1}: what work it's for`}

@@ -1,0 +1,36 @@
+{
+ "agent": "5e5510a0-0000-4000-8000-000000000003",
+ "workspace": "/work/project",
+ "runs": [
+  {
+   "run_id": "run-72df0673-edd4-437b-87fb-970821ba07c4",
+   "turn_number": 1,
+   "status": "FINISHED",
+   "model": "claude-opus-5-5",
+   "usage_json": "{\"inputTokens\":4667253,\"outputTokens\":42717,\"cacheReadTokens\":4475512,\"cacheWriteTokens\":191663,\"totalTokens\":4709970}",
+   "created_at": "2026-11-04T00:25:35.864Z",
+   "updated_at": "2026-11-04T00:35:43.067Z",
+   "finished_at": "2026-11-04T00:35:43.067Z"
+  },
+  {
+   "run_id": "run-800fab2f-3352-4467-897f-30a46ea550be",
+   "turn_number": 2,
+   "status": "FINISHED",
+   "model": "claude-opus-5-5",
+   "usage_json": "{\"inputTokens\":6943810,\"outputTokens\":21844,\"cacheReadTokens\":6884121,\"cacheWriteTokens\":59625,\"totalTokens\":6965654}",
+   "created_at": "2026-11-04T00:36:30.792Z",
+   "updated_at": "2026-11-04T00:43:17.245Z",
+   "finished_at": "2026-11-04T00:43:17.245Z"
+  },
+  {
+   "run_id": "run-9f749fff-b785-471c-a2a7-ca4f2c7964ae",
+   "turn_number": 3,
+   "status": "FINISHED",
+   "model": "claude-opus-5-5",
+   "usage_json": "{\"inputTokens\":2648706,\"outputTokens\":17259,\"cacheReadTokens\":2370575,\"cacheWriteTokens\":278109,\"totalTokens\":2665965}",
+   "created_at": "2026-11-04T00:53:01.110Z",
+   "updated_at": "2026-11-04T00:56:16.759Z",
+   "finished_at": "2026-11-04T00:56:16.759Z"
+  }
+ ]
+}

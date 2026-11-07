@@ -64,6 +64,7 @@ const fixture = mainFixture.process
 
 const cocoaStatusFile = join(root, "cocoa-status.json")
 const cocoaBinary = join(root, "mako-cocoa-fixture")
+let pageFixturePid
 let cocoa = null
 const cocoaBuild = (async () => {
   try {
@@ -356,7 +357,7 @@ try {
     keyboard.chord.ms < 200,
     `refused before dispatch (${keyboard.chord.ms} ms)`
   )
-  assert.match(keyboard.chord.reason, /menu key equivalent/)
+  assert.match(keyboard.chord.reason, /Use the menu item: invoke_menu/)
   const afterKeys = await fixtureState()
   const keyboardLanded = afterKeys.input !== proof
   // The driver's verdict on posted keys is a hint, never "not delivered";
@@ -500,6 +501,7 @@ try {
      state.page = launched;
      return launched`
   )
+  pageFixturePid = launched.pid
   assert.ok(launched.pid > 0, JSON.stringify(launched))
   assert.match(
     launched.page_route.browser,
@@ -742,6 +744,7 @@ return {receipt,proof,observation:await tab.observe()};`,
     "kill-page-fixture",
     `return await computer.shell({command: 'kill ${launched.pid}'})`
   )
+  pageFixturePid = undefined
 
   const frontmostAfter = await frontmostPid()
   assert.notEqual(frontmostAfter, target.pid, "Fixture stays in the background")
@@ -783,6 +786,12 @@ return {receipt,proof,observation:await tab.observe()};`,
   }
   throw error
 } finally {
+  // Mako launched it, in a group of its own: nothing else ends it when a step before its kill fails.
+  try {
+    if (pageFixturePid) process.kill(pageFixturePid, "SIGTERM")
+  } catch {
+    /* It has gone by itself. */
+  }
   await exec("end-session", "return await computer.end_session({})").catch(
     () => {}
   )

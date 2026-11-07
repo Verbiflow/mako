@@ -5,18 +5,17 @@
  * `EnterWorktree`, a browser MCP server). One decision for every harness;
  * each driver delivers it as its harness allows (`NativeCallsCapability`).
  *
- * A deny is for a route that leaves the person unable to see or steer the
- * work (a worktree or branch Mako doesn't know, a pull request opened behind
- * the Git sidebar, a server nobody can stop after the turn, an agent CLI
- * that isn't a Fin, a browser outside Mako's control). A warn lets the call
- * run and tells the model the Mako tool once, for reads and habits that do
- * no harm. A route outside the Thread's checkouts, or one the agent marks
+ * A deny is only for a route that's clearly wrong and that Mako's tool does
+ * in full: a worktree Mako doesn't know, a new branch in the checkout others
+ * work in, a merge outside pull_request_merge. Everything else is a warn:
+ * the call runs, and the model reads in one line what the better Mako tool
+ * is and why, and decides. A route outside the Thread's checkouts, or one the agent marks
  * with `MAKO_NATIVE=1` after the Mako tool failed or couldn't do what was
  * asked, goes ahead.
  */
 
 /** The families of work Mako has its own tools for. */
-export type CallFamily = "worktree" | "branch" | "pull-request" | "app" | "port" | "browser" | "agent-cli" | "background" | "polling"
+export type CallFamily = "worktree" | "branch" | "pull-request" | "app" | "port" | "browser" | "agent-cli" | "background" | "polling" | "build"
 
 export type CallRoute =
   | { kind: "allow" }
@@ -34,6 +33,8 @@ export interface CallThread {
   recipe?: { kind: "ready"; processes: string[] } | { kind: "none" }
   /** The launch has Mako's `mako-computer` server. */
   computer?: boolean
+  /** This machine's build slots now (`BuildSlots`): a heavy suite started while every one is in use hears so. */
+  builds?: { slots: number; holders: string[] }
 }
 
 /** How a harness names a Mako tool, for the message: `mcp__mako__worktree_move` on Claude, the bare name elsewhere. */
@@ -42,6 +43,9 @@ export const bareNames: ToolNames = (tool) => tool
 
 /** The prefix that lets a command the policy would deny run anyway. */
 export const NATIVE_OVERRIDE = "MAKO_NATIVE=1"
+
+/** Routes the override doesn't open: Mako's tool does all they do, so a refusal stands. */
+const NO_OVERRIDE = new Set(["git-worktree-add"])
 
 const OVERRIDE_LINE = `Only if that tool failed or can't do what was asked, run the command again starting with ${NATIVE_OVERRIDE}.`
 
@@ -341,14 +345,13 @@ export function routeShellCall(thread: CallThread, call: { command: string; cwd?
   if (line.loop && line.segments.some((segment) => basename(segment.argv[0]!) === "sleep"))
     findings.push({ kind: "warn", family: "polling", rule: "sleep-loop", message: `Don't wait in a loop: it holds the turn and nobody else can use it. A Fin's report wakes you (${n("agents_start")} with mode wait when your next step needs its result), ${n("app_logs")} and ${n("app_status")} read the app, and ${n("pull_request_status")} reads checks; otherwise end your turn and say what you're waiting for.` })
   for (const segment of line.segments) {
-    if (segment.env.MAKO_NATIVE === "1") continue
     const found = segmentFinding(thread, segment, line, n)
-    if (found) findings.push(found)
+    if (found && (segment.env.MAKO_NATIVE !== "1" || NO_OVERRIDE.has(found.rule))) findings.push(found)
   }
   const deny = findings.find((finding) => finding.kind === "deny")
   const chosen = deny ?? findings[0]
   if (!chosen) return { kind: "allow" }
-  return chosen.kind === "deny" ? { ...chosen, message: `${chosen.message} ${OVERRIDE_LINE}` } : chosen
+  return chosen.kind === "deny" && !NO_OVERRIDE.has(chosen.rule) ? { ...chosen, message: `${chosen.message} ${OVERRIDE_LINE}` } : chosen
 }
 
 function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLine, n: ToolNames): Finding | undefined {
@@ -360,7 +363,7 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     const place = placeOf(thread, git.cwd)
     if (place === "elsewhere") return undefined
     if (git.sub === "worktree" && git.args[0] === "add")
-      return { kind: "deny", family: "worktree", rule: "git-worktree-add", message: `Mako doesn't see a worktree made with \`git worktree add\`: its Changes panel, pull request, app and checks follow only this Thread's own checkouts. Call ${n("worktree_move")} to work on this Thread's own branch, or ${n("agents_start")} with a workspace to put parallel work on a branch of its own.` }
+      return { kind: "deny", family: "worktree", rule: "git-worktree-add", message: `Mako doesn't see a worktree made with \`git worktree add\`: its Changes panel, pull request, app and checks follow only this Thread's own checkouts. Call ${n("worktree_move")} to work on this Thread's own branch (it takes the branch's name and a base), or ${n("agents_start")} with a workspace to put parallel work on a branch of its own.` }
     if (git.sub === "worktree" && git.args[0] === "remove")
       return { kind: "warn", family: "worktree", rule: "git-worktree-remove", message: `${n("worktree_remove")} removes this Thread's worktree with its app and data folder; use it for Mako's worktrees.` }
     const creates = (git.sub === "checkout" && git.args.some((word) => word === "-b" || word === "-B")) ||
@@ -370,7 +373,7 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     if (creates)
       return { kind: "warn", family: "branch", rule: "git-new-branch-in-worktree", message: `This worktree's branch is the Thread's: its pull request and Changes panel follow it. Stay on it unless the person asked for another branch; ${n("worktree_status")} says which branch that is.` }
     if (git.sub === "switch" && place === "checkout" && git.args[0] && !git.args[0].startsWith("-"))
-      return { kind: "deny", family: "branch", rule: "git-switch-in-checkout", message: `This switches the branch of a checkout other Threads and the person work in. Call ${n("worktree_move")} to work on a branch of this Thread's own.` }
+      return { kind: "warn", family: "branch", rule: "git-switch-in-checkout", message: `This switches the branch of a checkout other Threads and the person work in. Call ${n("worktree_move")} to work on a branch of this Thread's own.` }
     if ((git.sub === "pull" || git.sub === "rebase" || git.sub === "merge") && git.args.some((word) => /^(origin\/)?(main|master)$/.test(word)))
       return { kind: "warn", family: "branch", rule: "git-update-from-main", message: `${n("worktree_update")} brings main into this Thread's branch and reports conflicts the same way the Git sidebar does.` }
     return undefined
@@ -379,7 +382,7 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     const gh = ghCommand(argv)
     if (!gh || placeOf(thread, segment.cwd) === "elsewhere") return undefined
     if (gh.group === "pr" && gh.command === "create")
-      return { kind: "deny", family: "pull-request", rule: "gh-pr-create", message: `Call ${n("pull_request_open")} instead: it pushes the branch and opens or updates its pull request the way the Git sidebar's button does, so the person sees it in Mako.` }
+      return { kind: "warn", family: "pull-request", rule: "gh-pr-create", message: `Call ${n("pull_request_open")} instead: it pushes the branch and opens or updates its pull request the way the Git sidebar's button does, so the person sees it in Mako.` }
     if (gh.group === "pr" && gh.command === "merge")
       return { kind: "deny", family: "pull-request", rule: "gh-pr-merge", message: `Call ${n("pull_request_merge")} instead, and only when the person asked or you're on full access with merging as the next step of your work: it merges the way the Git sidebar does and cleans up after.` }
     if (gh.group === "pr" && (gh.command === "edit" || gh.command === "ready"))
@@ -393,12 +396,12 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
   }
   const cli = AGENT_CLIS.get(program)
   if (cli?.(argv.slice(1)))
-    return { kind: "deny", family: "agent-cli", rule: `agent-cli-${program}`, message: `An agent started from the shell isn't a Fin: the person can't open, steer or stop it, and nothing wakes you when it ends. Call ${n("agents_start")} with a brief instead (harness: "${program === "cursor-agent" ? "cursor" : program}" for this harness).` }
+    return { kind: "warn", family: "agent-cli", rule: `agent-cli-${program}`, message: `An agent started from the shell isn't a Fin: the person can't open, steer or stop it, and nothing wakes you when it ends. Call ${n("agents_start")} with a brief instead (harness: "${program === "cursor-agent" ? "cursor" : program}" for this harness).` }
   if (serverStart(argv)) {
     if (placeOf(thread, segment.cwd) === "elsewhere") return undefined
     const recipe = thread.recipe
     if (recipe?.kind === "ready")
-      return { kind: "deny", family: "app", rule: "dev-server", message: `This Thread's app runs from the project's recipe: ${n("app_start")}${recipe.processes.length ? ` (${recipe.processes.join(", ")})` : ""} starts it on the Thread's own ports and keeps it running past your turn, and ${n("app_logs")} and ${n("app_probe")} read it.` }
+      return { kind: "warn", family: "app", rule: "dev-server", message: `This Thread's app runs from the project's recipe: ${n("app_start")}${recipe.processes.length ? ` (${recipe.processes.join(", ")})` : ""} starts it on the Thread's own ports and keeps it running past your turn, and ${n("app_logs")} and ${n("app_probe")} read it.` }
     if (recipe?.kind === "none")
       return { kind: "warn", family: "app", rule: "dev-server-no-recipe", message: `A server started here stops being anyone's when your turn ends. The project has no recipe yet: ${n("recipe_guide")} sets one up so ${n("app_start")} runs the app on this Thread's own ports.` }
     if (segment.background) return { kind: "warn", family: "background", rule: "background-server", message: `A server left running past your turn is nobody's to stop. ${n("app_start")} runs the project's app for this Thread.` }
@@ -412,12 +415,14 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     return { kind: "warn", family: "port", rule: "kill-by-pattern", message: `Other Threads' agents share this machine, so stop only processes you started. ${n("port_holder")} says who holds a port, and ${n("app_stop")} stops this Thread's app.` }
   if (thread.computer) {
     if (program === "screencapture" || program === "cliclick")
-      return { kind: "deny", family: "browser", rule: program, message: `Use the js tool on the mako-computer server for screens, clicks and keys: it shares targets and recordings with the person's view of this Thread. To show the person a picture you made, use ${n("show")}.` }
+      return { kind: "warn", family: "browser", rule: program, message: `Use the js tool on the mako-computer server for screens, clicks and keys: it shares targets and recordings with the person's view of this Thread. To show the person a picture you made, use ${n("show")}.` }
     if (program === "osascript" && argv.some((word) => /System Events|keystroke|click/.test(word)))
-      return { kind: "deny", family: "browser", rule: "osascript-ui", message: "Use the js tool on the mako-computer server to drive apps and the browser: it shares targets and recordings with the person's view of this Thread." }
+      return { kind: "warn", family: "browser", rule: "osascript-ui", message: "Use the js tool on the mako-computer server to drive apps and the browser: it shares targets and recordings with the person's view of this Thread." }
     if (program === "open" && (argv.some((word) => /^https?:\/\//.test(word)) || (argv.includes("-a") && argv.some((word) => BROWSERS.test(word)))))
       return { kind: "warn", family: "browser", rule: "open-browser", message: `The js tool on the mako-computer server opens and drives a browser you can read back; to put a page or file in front of the person, use ${n("show")}.` }
   }
+  if (thread.builds && thread.builds.holders.length >= thread.builds.slots && heavySuite(program, argv.slice(1)))
+    return { kind: "warn", family: "build", rule: "build-slots-full", message: `Every build slot on this machine is in use (${thread.builds.holders.join("; ")}), so a suite run now runs beside them and slows every Fin here. ${n("app_check")} waits its turn for one and starts the moment one frees.` }
   if (segment.background && program !== "sleep" && !line.loop)
     return { kind: "warn", family: "background", rule: "background", message: `Work left running past your turn is nobody's to stop or read. ${n("app_start")} runs the project's app, and ${n("agents_start")} runs work the person can open and that reports back.` }
   const seconds = sleepSeconds(argv)
@@ -441,7 +446,7 @@ export function routeNativeTool(thread: CallThread, call: NativeTool, names: Too
   if (call.tool === "EnterWorktree")
     return { kind: "deny", family: "worktree", rule: "native-worktree", message: `Mako doesn't see the harness's own worktrees: its Changes panel, pull request, app and checks follow only this Thread's checkouts. Call ${names("worktree_move")} to work on this Thread's own branch, or ${names("agents_start")} with a workspace for parallel work on a branch of its own.` }
   if (thread.computer && call.server !== undefined && BROWSER_SERVERS.test(call.server))
-    return { kind: "deny", family: "browser", rule: "native-browser", message: `Use the js tool on the mako-computer server for browser and computer use in this Thread: it shares targets, sign-ins and recordings with the person's view of the Thread. If it fails, say so and ask the person before using another browser.` }
+    return { kind: "warn", family: "browser", rule: "native-browser", message: `Use the js tool on the mako-computer server for browser and computer use in this Thread: it shares targets, sign-ins and recordings with the person's view of the Thread. Another browser is fine when it fails.` }
   return { kind: "allow" }
 }
 
@@ -454,3 +459,32 @@ export function routeNativeTool(thread: CallThread, call: NativeTool, names: Too
 export type NativeCallsCapability =
   | { kind: "per-call"; via: string; families: readonly CallFamily[]; verified: { version: string; how: string } }
   | { kind: "words"; reason: string }
+
+/** The per-call policy as one value, for a layer that hands it to each harness's adapter (`CallPolicy`). */
+export interface NativeCallPolicy {
+  shell(thread: CallThread, call: { command: string; cwd?: string }, names?: ToolNames): CallRoute
+  tool(thread: CallThread, call: NativeTool, names?: ToolNames): CallRoute
+}
+
+export const NATIVE_CALL_POLICY: NativeCallPolicy = { shell: routeShellCall, tool: routeNativeTool }
+
+/** Package-manager scripts and tools that build or run a whole suite: what a build slot is for. */
+const HEAVY_SCRIPTS = new Set(["test", "build", "check", "typecheck", "lint", "e2e"])
+const HEAVY_TOOLS = new Set(["vitest", "jest", "mocha", "playwright", "xcodebuild", "gradle", "gradlew", "mvn", "bazel", "tsgo"])
+
+/** Whether a command builds or runs a whole suite (`build-slots-full`): its program, or a package script named like one. */
+function heavySuite(program: string, args: readonly string[]): boolean {
+  if (HEAVY_TOOLS.has(program)) return true
+  // A tool run through a package runner is that tool: `npx vitest`, `pnpm exec tsc -b`, `bunx jest`.
+  const run = program === "npx" || program === "bunx" ? args : (program === "pnpm" || program === "yarn" || program === "npm") && (args[0] === "exec" || args[0] === "dlx") ? args.slice(1) : undefined
+  const tool = run?.find((arg) => !arg.startsWith("-"))
+  if (run && tool) return heavySuite(basename(tool), run.slice(run.indexOf(tool) + 1))
+  if (program === "tsc") return args.some((arg) => arg === "-b" || arg === "--build" || arg === "-p" || arg === "--project")
+  if (program === "cargo" || program === "go" || program === "swift") return ["test", "build", "check"].includes(args[0] ?? "")
+  if (["npm", "pnpm", "yarn", "bun"].includes(program)) {
+    const words = args.filter((arg) => !arg.startsWith("-"))
+    const script = words[0] === "run" || words[0] === "run-script" ? words[1] : words[0]
+    return script !== undefined && HEAVY_SCRIPTS.has(script.split(":")[0]!)
+  }
+  return false
+}

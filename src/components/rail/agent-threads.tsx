@@ -576,7 +576,7 @@ export function AgentThreads() {
                     <button
                       type="button"
                       onClick={() => setShowAllPinned((current) => !current)}
-                      className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+                      className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
                     >
                       {showAllPinned
                         ? "Fewer pinned"
@@ -590,7 +590,7 @@ export function AgentThreads() {
                 <button
                   type="button"
                   onClick={() => setShowAllFolders((current) => !current)}
-                  className="mb-1 flex h-7 w-full items-center rounded-md px-1.5 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+                  className="mb-1 flex h-7 w-full items-center px-1.5 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
                 >
                   {showAllFolders
                     ? "Fewer folders"
@@ -604,7 +604,7 @@ export function AgentThreads() {
                     aria-expanded={showHidden}
                     data-rail-hidden-projects
                     onClick={() => setShowHidden((current) => !current)}
-                    className="group/hidden mb-1 flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+                    className="group/hidden mb-1 flex h-7 w-full items-center gap-1.5 px-1.5 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
                   >
                     <ChevronRightIcon className={cn("size-3.5 transition-transform duration-200 ease-out", showHidden && "rotate-90")} />
                     Hidden
@@ -698,7 +698,7 @@ function RailHeader({
           type="button"
           aria-label="Close search"
           onClick={() => onToggleSearch(false)}
-          className="pressable rounded p-1 text-faint hover:text-foreground"
+          className="pressable p-1 text-faint hover:text-foreground"
         >
           <XIcon className="size-3" />
         </button>
@@ -712,7 +712,7 @@ function RailHeader({
         <h2 data-rail-threads-heading className="text-label font-medium text-faint">Threads</h2>
       ) : (
         // Recent and Archived are the filter menu's choices; the heading names the one showing and leads back.
-        <button type="button" data-rail-threads-heading onClick={() => setPref("railGrouping", "project")} title="Back to threads by project" className="pressable -ml-1.5 flex h-6 items-center gap-1 rounded px-1.5 text-label font-medium text-foreground transition-colors hover:bg-fill-hover">
+        <button type="button" data-rail-threads-heading onClick={() => setPref("railGrouping", "project")} title="Back to threads by project" className="pressable -ml-1.5 flex h-6 items-center gap-1 px-1.5 text-label font-medium text-foreground transition-colors hover:bg-fill-hover">
           {grouping === "archived" ? "Archived" : "Recent"}
           <XIcon aria-hidden className="size-3 text-faint" />
         </button>
@@ -725,7 +725,7 @@ function RailHeader({
           aria-label="Open a folder"
           title="Open a folder"
           onClick={() => void actions.pickWorkspace()}
-          className="pressable rounded-md p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+          className="pressable p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
         >
           <FolderPlusIcon className="size-3.5" />
         </button>
@@ -757,7 +757,7 @@ function HarnessFilter({
   const section = "px-2 pt-2 pb-1 text-label font-medium text-faint/80"
   const row = (active: boolean) =>
     cn(
-      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui transition-colors duration-100",
+      "flex w-full items-center gap-2 px-2 py-1.5 text-left text-ui transition-colors duration-100",
       active
         ? "bg-fill-selected text-foreground"
         : "text-foreground/85 hover:bg-fill-hover"
@@ -770,7 +770,7 @@ function HarnessFilter({
           type="button"
           aria-label="Filter and sort"
           className={cn(
-            "pressable relative rounded-md p-1.5 transition-colors duration-100 hover:bg-fill-hover",
+            "pressable relative p-1.5 transition-colors duration-100 hover:bg-fill-hover",
             on ? "text-foreground" : "text-faint hover:text-foreground"
           )}
         >
@@ -829,7 +829,6 @@ function HarnessFilter({
                 <HarnessIcon
                   harness={harness}
                   className="size-3.5"
-                  tinted={active}
                 />
                 <span className="flex-1">{harnessLabel(harness)}</span>
                 {active ? (
@@ -891,7 +890,7 @@ function HarnessFilter({
               setPref("railGrouping", "project")
               setOpen(false)
             }}
-            className="mt-1 flex w-full items-center justify-center rounded-md px-2 py-1.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+            className="mt-1 flex w-full items-center justify-center px-2 py-1.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
           >
             Reset
           </button>
@@ -908,7 +907,7 @@ function HarnessFilter({
  */
 /** `ROW_ACTIONS` for a folder header, whose group is `group/folder`. */
 const FOLDER_ACTIONS =
-  "pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md pl-4 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/folder:pointer-events-auto group-hover/folder:opacity-100 group-focus-visible/folder:pointer-events-auto group-focus-visible/folder:opacity-100 group-has-[:focus-visible]/folder:pointer-events-auto group-has-[:focus-visible]/folder:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
+  "pointer-events-none absolute inset-y-0 right-0 flex items-center pl-4 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/folder:pointer-events-auto group-hover/folder:opacity-100 group-focus-visible/folder:pointer-events-auto group-focus-visible/folder:opacity-100 [.rail-folder:has(:focus-visible)_&]:pointer-events-auto [.rail-folder:has(:focus-visible)_&]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
 /** A project's own actions, from right-click on its header or its `…`. */
 function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHide }: {
@@ -1021,7 +1020,7 @@ function FolderSection({
   ) : null
 
   const header = (
-    <div data-flip-key={`folder:${folder.key}`} data-folder-hidden={hidden || undefined} className="group/folder relative flex h-7 w-full items-center rounded-md transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover">
+    <div data-flip-key={`folder:${folder.key}`} data-folder-hidden={hidden || undefined} className="rail-folder group/folder relative flex h-7 w-full items-center transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover">
       <button
         type="button"
         title={[folder.cwd ?? folder.name, head ? `On ${checkoutSentence(head)}` : undefined].filter(Boolean).join("\n")}
@@ -1034,13 +1033,13 @@ function FolderSection({
             pointer, so the row carries one leading mark instead of two. */}
         <span className="relative flex size-3.5 shrink-0 items-center justify-center text-faint">
           {closed ? (
-            <FolderIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 group-has-[:focus-visible]/folder:opacity-0" />
+            <FolderIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 [.rail-folder:has(:focus-visible)_&]:opacity-0" />
           ) : (
-            <FolderOpenIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 group-has-[:focus-visible]/folder:opacity-0" />
+            <FolderOpenIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 [.rail-folder:has(:focus-visible)_&]:opacity-0" />
           )}
           <ChevronRightIcon
             className={cn(
-              "absolute size-3.5 opacity-0 transition-[opacity,transform] duration-200 ease-out group-hover/folder:opacity-100 group-focus-visible/folder:opacity-100 group-has-[:focus-visible]/folder:opacity-100",
+              "absolute size-3.5 opacity-0 transition-[opacity,transform] duration-200 ease-out group-hover/folder:opacity-100 group-focus-visible/folder:opacity-100 [.rail-folder:has(:focus-visible)_&]:opacity-100",
               !closed && "rotate-90"
             )}
           />
@@ -1077,7 +1076,7 @@ function FolderSection({
             aria-label={`New thread in ${folder.name}`}
             title={`New thread in ${folder.name}`}
             onClick={onNew}
-            className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+            className="pressable flex size-6 shrink-0 items-center justify-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
           >
             <PlusIcon className="size-3.5" />
           </button>
@@ -1088,7 +1087,7 @@ function FolderSection({
             aria-label={`Show ${folder.name}`}
             title="Show this project in the list again"
             onClick={() => hideProject(project, false)}
-            className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+            className="pressable flex size-6 shrink-0 items-center justify-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
           >
             <EyeIcon className="size-3.5" />
           </button>
@@ -1099,7 +1098,7 @@ function FolderSection({
             title={folder.pinned ? "Unpin folder" : "Pin folder"}
             onClick={onPin}
             className={cn(
-              "pressable flex size-6 shrink-0 items-center justify-center rounded transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
+              "pressable flex size-6 shrink-0 items-center justify-center transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
               folder.pinned ? "text-foreground/70" : "text-faint"
             )}
           >
@@ -1114,7 +1113,7 @@ function FolderSection({
               <button
                 type="button"
                 aria-label={`Actions for ${folder.name}`}
-                className="pressable flex size-6 shrink-0 items-center justify-center rounded text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
+                className="pressable flex size-6 shrink-0 items-center justify-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
               >
                 <MoreHorizontalIcon className="size-3.5" />
               </button>
@@ -1150,7 +1149,7 @@ function FolderSection({
             <button
               type="button"
               onClick={() => onPages(pages + 1)}
-              className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
               More
               <span className="tabular ml-1 text-label text-faint/60">
@@ -1161,7 +1160,7 @@ function FolderSection({
             <button
               type="button"
               onClick={() => onPages(0)}
-              className="flex h-6 w-full items-center rounded-md pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
               Less
             </button>

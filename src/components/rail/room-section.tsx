@@ -101,7 +101,7 @@ export function RoomList({ room, now = room.at }: { room: RoomView; now?: number
             <button
               type="button"
               onClick={() => setSelected([])}
-              className="pressable rounded px-1.5 py-0.5 text-faint hover:bg-fill-hover hover:text-foreground"
+              className="pressable px-1.5 py-0.5 text-faint hover:bg-fill-hover hover:text-foreground"
             >
               Clear
             </button>
@@ -109,7 +109,7 @@ export function RoomList({ room, now = room.at }: { room: RoomView; now?: number
               type="button"
               data-room-stop-selected
               onClick={() => void stop(room.apps.filter((app) => picked.includes(app.app)))}
-              className="pressable rounded px-1.5 py-0.5 text-foreground hover:bg-fill-hover"
+              className="pressable px-1.5 py-0.5 text-foreground hover:bg-fill-hover"
             >
               Stop {picked.length}
             </button>
@@ -149,7 +149,7 @@ export function RoomList({ room, now = room.at }: { room: RoomView; now?: number
                     if (!isStopping) toggle(app.app)
                   }}
                   className={cn(
-                    "group relative isolate flex w-full cursor-default items-start gap-2 rounded-md py-1 pr-1 pl-1.5 text-left transition-colors duration-100 hover:bg-fill-hover data-picked:bg-fill-selected data-picked:hover:bg-fill-selected",
+                    "group relative isolate flex w-full cursor-default items-start gap-2 py-1 pr-1 pl-1.5 text-left transition-colors duration-100 hover:bg-fill-hover data-picked:bg-fill-selected data-picked:hover:bg-fill-selected",
                     isStopping && "opacity-50"
                   )}
                 >
@@ -180,7 +180,7 @@ export function RoomList({ room, now = room.at }: { room: RoomView; now?: number
                     <span
                       data-tip-quiet
                       style={isPicked ? PICKED_ACTIONS : undefined}
-                      className="rail-row-actions pointer-events-none absolute top-0.5 right-0 z-[1] flex items-center rounded-r-md pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100"
+                      className="rail-row-actions pointer-events-none absolute top-0.5 right-0 z-[1] flex items-center pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 [.group:has(:focus-visible)_&]:pointer-events-auto [.group:has(:focus-visible)_&]:opacity-100"
                     >
                       <button
                         type="button"
@@ -190,7 +190,7 @@ export function RoomList({ room, now = room.at }: { room: RoomView; now?: number
                           event.stopPropagation()
                           void stop([app])
                         }}
-                        className="pressable flex size-6 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground"
+                        className="pressable flex size-6 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground"
                       >
                         <SquareIcon className="size-3 fill-current" />
                       </button>

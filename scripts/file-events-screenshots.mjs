@@ -132,6 +132,14 @@ async function shoot() {
     await capture(`fseventsd-diagnostics-restarted.png`, '[data-file-events-readout="healthy"]')
     await closeSettings()
 
+    // Not now: the notice goes, and the host keeps it gone for the day.
+    await load("fseventsd")
+    await until(`document.querySelector('[data-file-events-notice="degraded"]')`, "the degraded notice again")
+    await pressButton('[data-file-events-notice="degraded"]', "Not now")
+    await until(`!document.querySelector('[data-file-events-notice]')`, "the notice gone after Not now")
+    await pause(800)
+    assert.equal(await evaluate(`document.querySelector("[data-file-events-notice]")`), null, "and it stays gone")
+
     // A healthy Mac: nothing above the panes; Diagnostics reads tens of milliseconds and a few megabytes.
     await load(null)
     await pause(800)

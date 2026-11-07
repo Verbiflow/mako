@@ -22,11 +22,13 @@ const RawCodexUsageSchema = z.object({
 })
 type RawCodexUsage = z.infer<typeof RawCodexUsageSchema>
 
-/** What a rollout's later lines read against: its session, folder and model so far, and the thread's last total. */
+/** What a rollout's later lines read against: its session, folder, model and service tier so far, and the thread's last total. */
 const CodexContextSchema = z.object({
   session: z.string(),
   cwd: z.string(),
   model: z.string(),
+  /** Absent from a cursor saved before the tier was read: such a rollout reads as the default tier until its settings say otherwise. */
+  fast: z.boolean().optional(),
   previous: RawCodexUsageSchema.nullable(),
 })
 type CodexContext = z.infer<typeof CodexContextSchema>
@@ -36,7 +38,7 @@ export const codexUsageHistory: ProviderUsageHistory = {
   provider: "codex",
   async scan(scan) {
     const reader: JsonlReader<CodexContext> = {
-      needles: ['"session_meta"', '"turn_context"', '"token_count"'],
+      needles: ['"session_meta"', '"turn_context"', '"thread_settings_applied"', '"token_count"'],
       // A rollout line opens with its time and type, and an event's payload with its own: `{"timestamp":…,"type":"event_msg","payload":{"type":"token_count"`.
       // 350 rollouts (6.2 GB) put every one within 94 bytes; reading only that far skips the images and outputs a line carries after it.
       within: 256,
@@ -68,6 +70,13 @@ function parseCodexRecord(
     context.model = codexModel(payload) ?? context.model
     return null
   }
+  if (type === "event_msg" && stringValue(payload.type) === "thread_settings_applied") {
+    const settings = objectValue(payload.thread_settings)
+    const tier = stringValue(settings?.service_tier)
+    if (tier) context.fast = FAST_TIERS.has(tier)
+    context.model = stringValue(settings?.model) ?? context.model
+    return null
+  }
   if (type !== "event_msg" || stringValue(payload.type) !== "token_count")
     return null
   const info = objectValue(payload.info)
@@ -81,6 +90,7 @@ function parseCodexRecord(
   const model = codexModel(payload) ?? context.model
   return {
     ...usageCounts(codexTokens({ ...delta, reasoning: 0 })),
+    ...context.fast && { fast: true },
     key: `${source}:${timestamp}:${rawCodexTuple(total)}:${rawCodexTuple(last)}`,
     source,
     session: context.session,
@@ -89,6 +99,9 @@ function parseCodexRecord(
     cwd: context.cwd,
   }
 }
+
+/** The service tiers OpenAI prices as Fast: Codex's `fast`, and `priority`, the tier's name before 2026-07-30. */
+const FAST_TIERS = new Set(["fast", "priority"])
 
 function codexDelta(
   total: RawCodexUsage | null,

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { ExternalLinkIcon } from "lucide-react"
-import { Action } from "@/components/ui/kit"
+import { FIELD, Action } from "@/components/ui/kit"
 import { desktop } from "@/state/desktop"
 import {
   providerConnections,
@@ -10,8 +10,7 @@ import { cn } from "@/lib/utils"
 import { connectionStatusText } from "@/lib/provider-connection-text"
 import type { ProviderConnection, ProviderConnectionAction } from "@/lib/types"
 
-const inputClass =
-  "h-8 w-full rounded-md bg-raised px-2.5 font-mono text-code text-foreground ring-1 ring-hairline placeholder:font-sans placeholder:text-ui placeholder:text-faint focus:outline-none focus-visible:ring-border"
+const inputClass = cn(FIELD, "w-full font-mono text-code placeholder:font-sans placeholder:text-ui")
 
 /** Account status in the provider row; sign-in controls and forms in its expanded area. */
 

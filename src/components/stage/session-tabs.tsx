@@ -163,7 +163,7 @@ function SessionTabButton({
         if (event.button === 1) close?.()
       }}
       className={cn(
-        "session-tab group @container/tab relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center overflow-hidden rounded-md",
+        "session-tab group @container/tab relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center overflow-hidden",
         selected
           ? "bg-raised text-foreground"
           : "bg-shell text-faint hover:bg-fill-hover hover:text-muted-foreground"
@@ -205,7 +205,7 @@ function SessionTabButton({
             title={tab.kind === "draft" ? "Close. Unsent text is kept for the next new tab." : "Archive this session. Restore it from Archived."}
             onClick={close}
             className={cn(
-              "pressable -mr-0.5 flex size-5 shrink-0 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground",
+              "pressable -mr-0.5 flex size-5 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground",
               selected
                 ? "opacity-80"
                 : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-80 group-focus-within:pointer-events-auto group-focus-within:opacity-80"

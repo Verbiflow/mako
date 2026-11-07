@@ -6,7 +6,7 @@ export function Group({ title, children, footer }: { title?: string; children: R
   return (
     <section className="flex flex-col gap-2">
       {title ? <h2 className="px-1 text-label font-medium text-faint">{title}</h2> : null}
-      <div className="flex flex-col overflow-hidden rounded-2xl bg-surface ring-1 ring-hairline [&>*+*]:border-t [&>*+*]:border-hairline">{children}</div>
+      <div className="flex flex-col overflow-hidden bg-surface ring-1 ring-hairline [&>*+*]:border-t [&>*+*]:border-hairline">{children}</div>
       {footer ? <p className="px-1 text-label text-faint">{footer}</p> : null}
     </section>
   )
