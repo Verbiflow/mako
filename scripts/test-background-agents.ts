@@ -1193,7 +1193,7 @@ async function activityTellsNoOne(): Promise<void> {
     const started = await w.agents.start(apex.caller, { brief: { objective: "Keep working." }, harness: "claude", name: "busy", clientKey: "k-busy", cwd: w.root })
     assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
     const fin = started.conversation
-    await waitFor(() => began)
+    await waitFor(() => began, "the Fin's turn began")
     // Its turn began: that's a move, which the first look below would tell.
     w.agents.moved(fin)
     const told: string[] = []
