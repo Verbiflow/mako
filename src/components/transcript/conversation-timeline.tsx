@@ -77,11 +77,12 @@ const WINDOWED_ITEMS = 400
 
 /**
  * What each windowed transcript's rows measured, by row key, at the window's width, for the few read last. Opened
- * again, its rows are placed at those sizes in the first frame: the virtualizer's own measurements arrive a frame
- * after it paints, and placed at the estimate the newest turn painted, then jumped as they landed.
+ * again, the virtualizer starts from these as its own measurements (`seedMeasured`), so its rows are placed at those
+ * sizes in the first frame: its measurements arrive a frame after it paints, and placed at the estimate the newest turn
+ * painted, then jumped as they landed. They can't be its estimates: a row measured at its estimate is never stored, so
+ * when the estimate moved (these sizes replaced, a new width) every such row moved with it, and no resize said so.
  */
 type RowSizes = Virtualizer<HTMLDivElement, Element>["itemSizeCache"]
-type Key = RowSizes extends Map<infer Key, number> ? Key : never
 const measuredRows = new Map<string, { width: number; sizes: RowSizes }>()
 const MEASURED_KEPT = 8
 const ESTIMATED_ROW = 360
@@ -100,9 +101,10 @@ function keepMeasured(source: string, sizes: RowSizes): void {
   }
 }
 
-function measuredSize(source: string, key: Key): number {
+function seedMeasured(source: string, sizes: RowSizes): void {
   const kept = measuredRows.get(source)
-  return (kept?.width === innerWidth ? kept.sizes.get(key) : undefined) ?? ESTIMATED_ROW
+  if (kept?.width !== innerWidth || kept.sizes === sizes) return
+  for (const [key, size] of kept.sizes) if (!sizes.has(key)) sizes.set(key, size)
 }
 
 const NO_KEYS: ReadonlyMap<string, string> = new Map()
@@ -632,7 +634,7 @@ export function ConversationTimeline({
     let height = 0
     for (let index = 0; index < exchanges.length; index += 1) {
       const key = rowKey(index)
-      if (!rows.itemSizeCache.has(key)) height += measuredSize(readingSource, key)
+      if (!rows.itemSizeCache.has(key)) height += ESTIMATED_ROW
     }
     return height
   }
@@ -648,7 +650,7 @@ export function ConversationTimeline({
     count: exchanges.length,
     enabled: windowed,
     getScrollElement: () => viewport.current,
-    estimateSize: (index) => measuredSize(readingSource, rowKey(index)),
+    estimateSize: () => ESTIMATED_ROW,
     getItemKey: (index) => rowKey(index),
     overscan: 6,
     gap: ROW_GAP,
@@ -669,6 +671,12 @@ export function ConversationTimeline({
       if (viewport.current) owned(viewport.current)
     },
   })
+  const seeded = useRef<string | undefined>(undefined)
+  if (!windowed) seeded.current = undefined
+  else if (seeded.current !== identity) {
+    seeded.current = identity
+    seedMeasured(readingSource, rows.itemSizeCache)
+  }
   const mountedRows = useRef<() => boolean>(() => false)
   mountedRows.current = () => rowCheck.check({
     rows,

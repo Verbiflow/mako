@@ -63,7 +63,7 @@ const OBSERVER = `(() => {
   }
 })()`
 
-/** Installed once the rows are up, so its observer runs after the virtualizer's, in the frame's last moment before paint. */
+/** Installed once the rows are up, and again after they're opened anew, so its observer runs after the virtualizer's, in the frame's last moment before paint. */
 const WATCH = `(() => {
   const faults = window.__overlaps = []
   let frames = 0
@@ -89,7 +89,14 @@ const WATCH = `(() => {
   const kick = document.createElement('div')
   kick.style.cssText = 'position:fixed;left:0;top:0;height:1px;width:1px;pointer-events:none;opacity:0'
   document.body.append(kick)
-  new ResizeObserver(look).observe(kick)
+  // Observers run in the order they were made, and a panel opened again makes the virtualizer's anew.
+  let last
+  window.__lastObserver = () => {
+    last?.disconnect()
+    last = new ResizeObserver(look)
+    last.observe(kick)
+  }
+  window.__lastObserver()
   const tick = () => {
     kick.style.width = kick.style.width === '1px' ? '2px' : '1px'
     requestAnimationFrame(tick)
@@ -197,6 +204,59 @@ async function check() {
     await turns(3)
     await faults("turns with the observer working")
     assert.deepEqual(corrected, [], `${form}: nothing to correct while the observer hears the rows`)
+
+    if (!mobile) {
+      // Rows come and go in the same frames here: none may read as one the observer missed.
+      guard.at(`${form}: a fast climb, observer working`)
+      const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + 200, y: box.top + 80 } })()")
+      for (let step = 0; step < 90; step += 1) {
+        await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY: step < 60 ? -700 : 700 })
+        await wait(16)
+      }
+      await wait(300)
+      await faults("a fast climb with the observer working")
+      assert.deepEqual(corrected, [], `${form}: nothing to correct as rows come and go`)
+      await evaluate(`import('/src/components/transcript/transcript-end.ts').then(({ TRANSCRIPT_END_EVENT }) => { document.querySelector('[data-transcript-viewport]').dispatchEvent(new Event(TRANSCRIPT_END_EVENT, { bubbles: true })); return true })`)
+      await wait(400)
+    }
+    if (form === "desk") {
+      // Opened again, its rows are measured fresh and the first of them move the window: those that leave it aren't missed.
+      guard.at(`${form}: another Thread and back, observer working`)
+      for (let round = 0; round < 3; round += 1) {
+        await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Refactor the composer')).click(); true")
+        await wait(500)
+        await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
+        await until(`document.querySelectorAll(${JSON.stringify(ROW)}).length > 2`, `${form}: its rows again`)
+        await wait(500)
+      }
+      // Sizes kept from before stand as measured, so nothing moves its rows when they're replaced: a turn, a wheel, a new width.
+      guard.at(`${form}: opened again, then a turn and a wheel`)
+      await evaluate("window.__lastObserver(); window.__overlaps.length = 0; true")
+      await turns(2)
+      await wait(600)
+      await shot(`${form} opened again, hands off`)
+      await faults("opened again, then a turn, hands off")
+      const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + 200, y: box.top + 80 } })()")
+      for (let step = 0; step < 12; step += 1) {
+        await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY: -60 })
+        await wait(30)
+      }
+      await wait(600)
+      await faults("opened again, then a wheel")
+      guard.at(`${form}: opened again, then a new width`)
+      await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: width - 40, height, deviceScaleFactor: 2, mobile })
+      await wait(600)
+      await turns(1)
+      await wait(300)
+      await shot(`${form} opened again at a new width`)
+      await faults("opened again, then a new width")
+      await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile })
+      await wait(400)
+      assert.deepEqual(corrected, [], `${form}: nothing to correct on opening it again`)
+      await evaluate(`import('/src/components/transcript/transcript-end.ts').then(({ TRANSCRIPT_END_EVENT }) => { document.querySelector('[data-transcript-viewport]').dispatchEvent(new Event(TRANSCRIPT_END_EVENT, { bubbles: true })); return true })`)
+      await wait(400)
+      await evaluate("window.__overlaps.length = 0; true")
+    }
 
     guard.at(`${form}: turns, rows taken from the observer`)
     await evaluate("window.__deafen(); true")
