@@ -8,7 +8,8 @@ import { renderToStaticMarkup } from "react-dom/server"
 import type { Grant, SourceAsk } from "@mako/protocol/borrow"
 import { partSummary, rowAction, type SetupView } from "@mako/host/contracts/setup"
 import { PhoneSetup, SetupPage } from "@/components/setup/setup-page"
-import { allAsks, answerAsk, readSetup, setSetupSource, setupStore } from "@/state/setup"
+import { allAsks, answerAsk, readSetup, setSetupSource, setupAskCard, setupStore } from "@/state/setup"
+import { askNotice } from "@/lib/ask-card"
 import { inboxCount, inboxModel } from "@/state/inbox"
 import DeskSettings from "@/web-client/desk-settings"
 import { closeSetup, openSetup, setupOpenStore } from "@/web-client/setup-open"
@@ -94,6 +95,16 @@ for (const action of ["send", "add", "retry", "keep"]) assert.doesNotMatch(desk,
 const pending = { ...page.places[0]!.parts[0]!.rows[0]!, action: "send" as const }
 assert.equal(rowAction(pending, NOW), "send", "on a Mac's own page a row keeps its button")
 assert.equal(rowAction(pending, NOW, true), undefined, "away from it, only Stop stays")
+
+// The ask is the card every surface draws an ask with: the same answers in the composer's notice and the Inbox.
+const [held] = allAsks(setupStore.get())
+const card = setupAskCard("shop", held!.ask, true)
+assert.deepEqual([card.note, card.choices.map((choice) => [choice.answer, Boolean(choice.primary)])], ["Allow it on your Mac", [["decline", false]]], "away, the card says where to allow it and offers only no")
+const notice = askNotice("setup-ask", card)
+assert.deepEqual([notice.tone, notice.actions?.map((action) => action.label)], ["attention", ["Decline"]])
+assert.match(notice.description ?? "", /Allow it on your Mac/)
+const atMac = setupAskCard("shop", held!.ask, false)
+assert.equal(atMac.choices[0]?.primary, true, "on the Mac the narrowest yes is the one to take")
 
 // 3. It says what it is: what the account lends, not that a device has nothing.
 assert.match(phone, /This shows what your account lends\. Open Setup on your Mac for the rest\./)

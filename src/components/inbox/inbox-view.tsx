@@ -1,7 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react"
 import { CheckIcon, ChevronRightIcon, XIcon } from "lucide-react"
 import { childStateOf } from "@mako/host/contracts/children"
-import { askAnswerLabel, askAnswers, SETUP_AWAY_ALLOW } from "@mako/host/contracts/setup"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { LiveMark } from "@/components/ui/live-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -13,7 +12,8 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { acpStore } from "@/state/acp-state"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
-import { answerAsk } from "@/state/setup"
+import type { AskCard } from "@/lib/ask-card"
+import { setupAskCard } from "@/state/setup"
 import {
   answerApproval,
   inboxView,
@@ -163,6 +163,20 @@ function Crumb({ item }: { item: InboxAsk }) {
   )
 }
 
+/** An ask's answers as the Inbox draws every ask (`AskCard`): what can't be given here said first, the one to take filled. */
+function AskChoices({ card, sending, onChoose }: { card: AskCard; sending: boolean; onChoose: () => void }) {
+  return (
+    <>
+      {card.note ? <span className="text-label text-muted-foreground">{card.note}</span> : null}
+      {card.choices.map((choice) => (
+        <button key={choice.answer} type="button" data-inbox-answer={choice.answer} disabled={sending} onClick={() => { onChoose(); choice.choose() }} className={cn(BUTTON, choice.primary ? PRIMARY : QUIET)}>
+          {choice.label}
+        </button>
+      ))}
+    </>
+  )
+}
+
 const BUTTON = "pressable flex h-7 items-center gap-1.5 px-2.5 text-label transition-colors disabled:opacity-50"
 const PRIMARY = "bg-foreground text-background hover:opacity-90"
 const QUIET = "bg-fill-hover text-foreground hover:bg-fill-selected"
@@ -206,14 +220,7 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
         ) : item.kind === "approval" && item.answerable ? (
           <ApprovalAnswers item={item} sending={sending} send={(option) => settle(answerApproval(item, option))} />
         ) : item.kind === "setup" ? (
-          <>
-            {item.away && askAnswers(item.ask).length > 1 ? <span className="text-label text-muted-foreground">{SETUP_AWAY_ALLOW}</span> : null}
-            {askAnswers(item.ask, item.away).map((answer, index) => (
-              <button key={answer} type="button" data-inbox-answer={answer} disabled={sending} onClick={() => { setSending(true); answerAsk(item.folder, item.ask, answer) }} className={cn(BUTTON, index === 0 && !item.away ? PRIMARY : QUIET)}>
-                {askAnswerLabel(item.ask, answer, true)}
-              </button>
-            ))}
-          </>
+          <AskChoices card={setupAskCard(item.folder, item.ask, item.away)} sending={sending} onChoose={() => setSending(true)} />
         ) : null}
         <span className="flex-1" />
         <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">

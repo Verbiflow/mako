@@ -1,0 +1,45 @@
+import type { ReactNode } from "react"
+import type { ComposerNotice } from "@/extend/notices"
+
+/**
+ * An ask waiting on the person, in the one shape every surface draws it: an agent's ask (#461's `agentAskWords`: its
+ * line, the rest of it, why, allow and keep) and a source's ask in Setup alike. Each stays in its own store, the
+ * conversation's control or its broker; what they share is how they're said and answered, so the composer's notice and
+ * the Inbox draw both the same way.
+ */
+export type AskChoice = {
+  label: string
+  /** The one to take first; drawn filled. At most one. */
+  primary?: boolean
+  choose: () => void
+  /** What the choice is, for tests and styling (`data-inbox-answer`). */
+  answer: string
+}
+
+export type AskCard = {
+  /** Who asks and what for, in one line. */
+  title: string
+  /** The rest of that line. */
+  description?: string
+  /** Why, and what answering does: what the line leaves out. */
+  detail?: string
+  /** Said beside the answers when the one the ask wants can't be given here. */
+  note?: string
+  choices: AskChoice[]
+}
+
+/** An ask as a notice above the composer: in the attention hue, ahead of the stack's other notices. */
+export function askNotice(id: string, card: AskCard, extra: { icon?: ReactNode; data?: ComposerNotice["data"] } = {}): ComposerNotice {
+  const description = [card.description, card.note].filter(Boolean).join(". ")
+  return {
+    id,
+    tone: "attention",
+    priority: 0,
+    ...(extra.icon !== undefined && { icon: extra.icon }),
+    title: card.title,
+    ...(description && { description }),
+    ...(card.detail && { detail: card.detail }),
+    actions: card.choices.map((choice) => ({ label: choice.label, ...(choice.primary && { primary: true }), onClick: choice.choose })),
+    ...(extra.data && { data: extra.data }),
+  }
+}

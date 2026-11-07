@@ -1,6 +1,9 @@
 import { toast } from "sonner"
 import {
+  askAnswerLabel,
+  askAnswers,
   askLine,
+  SETUP_AWAY_ALLOW,
   viewAsks,
   type AskAnswer,
   type RowAction,
@@ -12,6 +15,7 @@ import {
   type SetupRow,
   type SetupView,
 } from "@mako/host/contracts/setup"
+import type { AskCard } from "@/lib/ask-card"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
 
@@ -214,6 +218,22 @@ const ADD_REQUESTS = {
 export function addTo(folder: string, part: SetupListPart, place: SetupPlaceView) {
   const root = setupStore.get().byFolder[folder]?.root ?? folder
   void draftInNewThread(root, ADD_REQUESTS[part](place.place.kind === "cloud" ? "cloud machines" : place.title))
+}
+
+/**
+ * A Setup ask in the shape every surface draws an ask (`AskCard`): who asks and what for, why, and its answers, the
+ * narrowest first. Away from its Mac only no can be said here, and the card says where the rest can.
+ */
+export function setupAskCard(folder: string, ask: SetupAsk, away: boolean): AskCard {
+  const line = askLine(ask)
+  const offered = askAnswers(ask)
+  return {
+    title: `${ask.by.title} ${line.verb} ${line.thing}`,
+    ...(line.after && { description: line.after }),
+    detail: `“${ask.why}”. Answering here is the same as in this Thread's Setup and your Inbox; nothing is added until you do.`,
+    ...(away && offered.length > 1 && { note: SETUP_AWAY_ALLOW }),
+    choices: askAnswers(ask, away).map((answer, index) => ({ answer, label: askAnswerLabel(ask, answer, true), primary: index === 0 && !away, choose: () => answerAsk(folder, ask, answer) })),
+  }
 }
 
 /** An ask as one plain line, for a notice or an Inbox row. */
