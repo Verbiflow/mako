@@ -11,7 +11,9 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
  * Settings), in a laptop's browser and on a phone (the web client's Settings, against a stand-in for the gateway's
  * route): As you by default; under As you with no token, one line that Mako's App opens pull requests until one is
  * added, pointing at "Open pull requests as me"; under As Mako, one line that commits name Mako's bot with the person
- * as co-author. Screenshots of each, dark and light, stay in the printed directory.
+ * as co-author. A cloud without the setting says so plainly with no control to press, and one that can't read or save
+ * it says what to do, never a raw error, on every form. Screenshots of each, dark and light, stay in the printed
+ * directory.
  */
 
 if (process.versions.electron) {
@@ -47,6 +49,10 @@ if (process.versions.electron) {
 
 const FALLBACK = "Pull requests are opened by Mako by Verbiflow until you add a token in Open pull requests as me."
 const AS_MAKO = "Commits name Mako's bot, with you as co-author."
+const UNAVAILABLE = "This choice isn't on Mako Cloud yet. It will appear here after Mako Cloud's next update, and there's nothing you need to do."
+const UNREAD = "Mako couldn't read this from Mako Cloud. Check your connection, then try again."
+const UNSAVED = "Mako couldn't save that, so nothing changed. Check your connection, then try again."
+const RAW = /remote method|answered \d{3}|^Error/
 
 async function checkWindow() {
   const { app, BrowserWindow } = await import("electron")
@@ -114,6 +120,14 @@ async function checkWindow() {
     await until(`Boolean(document.querySelector('${section} [aria-label="Commits and pull requests"] button[aria-pressed="true"]:not([disabled])'))`, "the authorship control, read")
     await evaluate(`document.querySelector('${section}').scrollIntoView({ block: 'center' })`)
   }
+  const failing = async (query, theme) => {
+    await window.loadURL(`${base}?mock${query}`)
+    await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: ${JSON.stringify(theme)}}))`)
+    await until(`Boolean(document.querySelector('.composer-input'))`, "the desk")
+    await evaluate(`window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'git#pull-requests' }))`)
+    await until(`Boolean(document.querySelector('${section}'))`, "the section")
+    await evaluate(`document.querySelector('${section}').scrollIntoView({ block: 'center' })`)
+  }
   const pressed = (scope) => evaluate(`document.querySelector(${JSON.stringify(`${scope} [aria-label="Commits and pull requests"] [aria-pressed="true"], ${scope} [aria-label="Commits and pull requests"] [aria-checked="true"]`)})?.textContent.trim()`)
 
   for (const theme of ["dark", "light"]) {
@@ -148,6 +162,28 @@ async function checkWindow() {
     await desktop("&github-token=on&github-authorship=mako", theme)
     assert.equal(await pressed(section), "As Mako")
     assert.ok((await text(section)).includes("Your token is kept, but not used while commits and pull requests are as Mako."))
+    // A cloud without the setting: said plainly, nothing to press, and the token's own row still works.
+    await failing("&github-authorship=missing", theme)
+    await until(has(section, UNAVAILABLE), "the desktop's cloud without the setting")
+    said = await text(section)
+    assert.ok(!RAW.test(said) && !said.includes("Try again"), said)
+    assert.equal(await evaluate(`Boolean(document.querySelector('${section} [aria-label="Commits and pull requests"]'))`), false, "no choice to press")
+    assert.equal(await evaluate(`document.querySelector('${section} [role=switch][aria-label="Open pull requests as me"]').disabled`), false)
+    await capture(`desktop-unavailable-${theme}`, section)
+    // A cloud that can't be read: what to do, and a way to ask again.
+    await failing("&github-authorship=failed", theme)
+    await until(has(section, UNREAD), "the desktop's failure")
+    said = await text(section)
+    assert.ok(!RAW.test(said) && said.includes("Try again"), said)
+    assert.equal(await evaluate(`Boolean(document.querySelector('${section} [aria-label="Commits and pull requests"]'))`), false, "no choice to press")
+    await capture(`desktop-unread-${theme}`, section)
+    // A choice that can't be saved: what to do, and the choice as it was.
+    await desktop("&github-authorship=refused", theme)
+    await click({ css: `${section} [aria-label="Commits and pull requests"] button`, text: "As Mako" })
+    await until(has(section, UNSAVED), "the desktop's refused save")
+    assert.ok(!RAW.test(await text(section)))
+    assert.equal(await pressed(section), "As you", "the choice goes back")
+    await capture(`desktop-unsaved-${theme}`, section)
   }
 
   // The web client: a laptop's browser draws the desktop's group; a phone the touch layout.
@@ -178,13 +214,32 @@ async function checkWindow() {
     await until(has(phoneGroup, "Commits name you, and pull requests open with your GitHub token."), "the phone with a token")
     assert.ok(!(await text(phoneGroup)).includes(FALLBACK))
     await capture(`phone-as-you-token-${theme}`)
+
+    // Each failure, on the laptop's and the phone's forms.
+    const forms = [["web", "desk", { width: 1100, height: 760 }], ["phone", "phone", { width: 390, height: 844 }]]
+    for (const [form, view, size] of forms) {
+      await fixture(`view=${view}&scene=off&authorship=missing${tone}`, size)
+      await until(has("body", UNAVAILABLE), `the ${form}'s cloud without the setting`)
+      const without = await text("body")
+      assert.ok(!RAW.test(without) && !without.includes("Try again") && !without.includes(FALLBACK), without)
+      assert.equal(await evaluate(`Boolean(document.querySelector('[aria-label="Commits and pull requests"]'))`), false, "no choice to press")
+      assert.equal(await evaluate(`document.querySelector('[role=switch][aria-label="Open pull requests as me"]').disabled`), false)
+      await capture(`${form}-unavailable-${theme}`)
+      await fixture(`view=${view}&scene=off&authorship=failed${tone}`, size)
+      await until(has("body", UNREAD), `the ${form}'s failure`)
+      const unread = await text("body")
+      assert.ok(!RAW.test(unread) && unread.includes("Try again"), unread)
+      assert.equal(await evaluate(`Boolean(document.querySelector('[aria-label="Commits and pull requests"]'))`), false, "no choice to press")
+      assert.equal(await evaluate(`document.querySelector('[role=switch][aria-label="Open pull requests as me"]').disabled`), false)
+      await capture(`${form}-unread-${theme}`)
+      await fixture(`view=${view}&scene=off&authorship=refused${tone}`, size)
+      await until(`Boolean(document.querySelector('[aria-label="Commits and pull requests"]'))`, `the ${form}'s choice`)
+      await click({ css: `[aria-label="Commits and pull requests"] ${view === "phone" ? "[role=radio]" : "button"}`, text: "As Mako" })
+      await until(has("body", UNSAVED), `the ${form}'s refused save`)
+      assert.ok(!RAW.test(await text("body")))
+      await capture(`${form}-unsaved-${theme}`)
+    }
   }
-  // The route not answering: said, with a way to ask again, and the token's own row still works.
-  await fixture("view=phone&scene=off&authorship=failed", { width: 390, height: 844 })
-  await until(has(phoneGroup, "Mako Cloud didn't answer"), "the phone's failure")
-  assert.ok((await text(phoneGroup)).includes("Try again"))
-  assert.equal(await evaluate(`document.querySelector('[role=switch][aria-label="Open pull requests as me"]').disabled`), false)
-  await capture("phone-unread-dark")
 
   clearTimeout(watchdog)
   app.exit(0)

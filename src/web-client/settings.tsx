@@ -9,7 +9,7 @@ import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMI
 import type { CommitAuthor } from "@mako/host/contracts/github-authorship"
 import { PullRequestsAsMe } from "@/components/settings/pull-requests-as-me"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
-import { authorshipWords, FALLBACK_WORDS, useGitHubAuthorship, type GitHubAuthorships } from "@/state/github-authorship"
+import { AUTHORSHIP_UNAVAILABLE, AUTHORSHIP_UNREAD, authorshipChoosable, authorshipWords, FALLBACK_WORDS, useGitHubAuthorship, type GitHubAuthorships } from "@/state/github-authorship"
 import { webGitHubTokens } from "./github-tokens"
 import { webGitHubAuthorships } from "./github-authorship"
 import { useForm } from "./route"
@@ -139,23 +139,25 @@ export function TouchPullRequests({ tokens, authorships }: { tokens: GitHubToken
       <div className="flex flex-col gap-2.5 px-4 py-3">
         <div>
           <p className="text-ui">Commits and pull requests</p>
-          <p className="text-label text-faint">{authorship.phase.kind === "ready" ? authorshipWords(as, hasToken) : authorship.phase.kind === "failed" ? authorship.phase.message : "From cloud Threads"}</p>
+          <p className="text-label text-faint">{authorship.phase.kind === "ready" ? authorshipWords(as, hasToken) : authorship.phase.kind === "failed" ? AUTHORSHIP_UNREAD : authorship.phase.kind === "unavailable" ? AUTHORSHIP_UNAVAILABLE : "From cloud Threads"}</p>
         </div>
-        <div role="radiogroup" aria-label="Commits and pull requests" className="grid grid-cols-2 gap-1 bg-raised p-1">
-          {AUTHORS.map((each) => (
-            <button
-              key={each.value}
-              type="button"
-              role="radio"
-              aria-checked={as === each.value}
-              disabled={authorship.phase.kind !== "ready" || authorship.saving}
-              onClick={() => void authorship.choose(each.value)}
-              className={cn("pressable h-9 text-ui disabled:opacity-50", as === each.value ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted-foreground")}
-            >
-              {each.label}
-            </button>
-          ))}
-        </div>
+        {authorshipChoosable(authorship.phase) ? (
+          <div role="radiogroup" aria-label="Commits and pull requests" className="grid grid-cols-2 gap-1 bg-raised p-1">
+            {AUTHORS.map((each) => (
+              <button
+                key={each.value}
+                type="button"
+                role="radio"
+                aria-checked={as === each.value}
+                disabled={authorship.phase.kind !== "ready" || authorship.saving}
+                onClick={() => void authorship.choose(each.value)}
+                className={cn("pressable h-9 text-ui disabled:opacity-50", as === each.value ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted-foreground")}
+              >
+                {each.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         {authorship.error ? <p role="alert" className="text-label text-negative">{authorship.error}</p> : null}
       </div>
       {authorship.phase.kind === "failed" ? (

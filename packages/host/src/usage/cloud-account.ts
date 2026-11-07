@@ -708,10 +708,13 @@ export class CloudAccounts {
     await this.#call("github-token.remove", "DELETE", `${this.#accountPath()}/github-token`)
   }
 
-  /** Who the account's cloud commits and pull requests are authored as (`github-authorship.ts`), and what that means for pull requests now. */
-  async githubAuthorship(): Promise<GitHubAuthorship> {
-    const response = await this.#call("github-authorship.read", "GET", `${this.#accountPath()}/github-authorship`)
-    return GitHubAuthorshipSchema.parse(await response.json())
+  /**
+   * Who the account's cloud commits and pull requests are authored as (`github-authorship.ts`), and what that means for
+   * pull requests now; null from a cloud that doesn't keep it yet.
+   */
+  async githubAuthorship(): Promise<GitHubAuthorship | null> {
+    const response = await this.#call("github-authorship.read", "GET", `${this.#accountPath()}/github-authorship`, undefined, false, [404])
+    return response.status === 404 ? null : GitHubAuthorshipSchema.parse(await response.json())
   }
 
   /** Chooses it for the account; running cloud machines hear it within their minute. */

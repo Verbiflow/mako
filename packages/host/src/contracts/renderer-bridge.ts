@@ -553,7 +553,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     githubTokenSave: (token: string, repository?: string) => invokeTrustedHost<GitHubTokenListing>("mako:github-token-save", token, repository),
     githubTokenRemove: () => invokeTrustedHost<void>("mako:github-token-remove"),
     /* Who cloud commits and pull requests are authored as, and choosing it. */
-    githubAuthorship: () => invokeTrustedHost<GitHubAuthorship>("mako:github-authorship"),
+    githubAuthorship: () => invokeTrustedHost<GitHubAuthorship | null>("mako:github-authorship"),
     githubAuthorshipSave: (as: CommitAuthor) => invokeTrustedHost<GitHubAuthorship>("mako:github-authorship-save", as),
     /* A project's carried files (its recipe's `carry`) in Mako Cloud: what goes, the person's word, a file kept on this Mac. */
     cloudCarriedFiles: (folder: string) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files", folder),

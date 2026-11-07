@@ -4,7 +4,7 @@ import { FIELD, Action, ListCard, ListCardRow, Segmented, SettingRow, Toggle } f
 import { cn } from "@/lib/utils"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
-import { authorshipWords, FALLBACK_WORDS, useGitHubAuthorship, type GitHubAuthorships } from "@/state/github-authorship"
+import { AUTHORSHIP_UNAVAILABLE, AUTHORSHIP_UNREAD, authorshipChoosable, authorshipWords, FALLBACK_WORDS, useGitHubAuthorship, type GitHubAuthorships } from "@/state/github-authorship"
 
 const inputClass = cn(FIELD, "flex-1 font-mono placeholder:font-sans")
 
@@ -119,22 +119,18 @@ function CommitAuthorship({ authorship, hasToken, asking, onAddToken }: {
   const as = phase.kind === "ready" ? phase.authorship.as : "you"
   return (
     <>
-      <SettingRow title="Commits and pull requests" description={phase.kind === "ready" ? authorshipWords(as, hasToken) : undefined}>
-        <Segmented
-          label="Commits and pull requests"
-          value={as}
-          disabled={phase.kind !== "ready" || saving}
-          options={[{ value: "you", label: "As you" }, { value: "mako", label: "As Mako" }]}
-          onChange={(next) => void choose(next)}
-        />
+      <SettingRow title="Commits and pull requests" description={phase.kind === "ready" ? authorshipWords(as, hasToken) : phase.kind === "unavailable" ? AUTHORSHIP_UNAVAILABLE : phase.kind === "failed" ? AUTHORSHIP_UNREAD : undefined}>
+        {phase.kind === "failed" ? <Action size="xs" onClick={read}>Try again</Action> : null}
+        {authorshipChoosable(phase) ? (
+          <Segmented
+            label="Commits and pull requests"
+            value={as}
+            disabled={phase.kind !== "ready" || saving}
+            options={[{ value: "you", label: "As you" }, { value: "mako", label: "As Mako" }]}
+            onChange={(next) => void choose(next)}
+          />
+        ) : null}
       </SettingRow>
-      {phase.kind === "failed" ? (
-        <ListCardRow className="flex items-center gap-2 text-label">
-          <CircleAlertIcon className="size-3.5 shrink-0 text-caution" />
-          <span className="min-w-0 flex-1 text-muted-foreground">{phase.message}</span>
-          <Action size="xs" onClick={read}>Try again</Action>
-        </ListCardRow>
-      ) : null}
       {phase.kind === "ready" && as === "you" && hasToken === false && !asking ? (
         <ListCardRow className="flex items-center gap-2 text-label">
           <InfoIcon className="size-3.5 shrink-0 text-faint" />

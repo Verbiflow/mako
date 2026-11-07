@@ -59,15 +59,18 @@ const tokens: GitHubTokens = {
   remove: async () => void (kept = null),
   openUrl: () => undefined,
 }
-// The gateway's `github-authorship` route as it answers: `?authorship=mako` starts As Mako, `=failed` can't be read.
+// The gateway's `github-authorship` route as it answers: `?authorship=mako` starts As Mako, `=failed` can't be read,
+// `=missing` is a gateway without the route, `=refused` can't be saved.
 let as: CommitAuthor = params.get("authorship") === "mako" ? "mako" : "you"
 const answer = (): GitHubAuthorship => ({ as, pullRequests: as === "mako" ? "mako" : kept ? "you" : "mako-fallback", login: kept?.login ?? null })
 const authorships: GitHubAuthorships = {
   read: async () => {
-    if (params.get("authorship") === "failed") throw new Error("Mako Cloud didn't answer. Check your connection and try again.")
+    if (params.get("authorship") === "failed") throw new Error("Error invoking remote method 'mako:github-authorship': GET answered 500")
+    if (params.get("authorship") === "missing") return null
     return answer()
   },
   save: async (next) => {
+    if (params.get("authorship") === "refused") throw new Error("Error invoking remote method 'mako:github-authorship-save': PUT answered 500")
     as = next
     return answer()
   },

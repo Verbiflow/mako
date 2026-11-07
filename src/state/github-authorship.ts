@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState } from "react"
 import type { CommitAuthor, GitHubAuthorship } from "@mako/host/contracts/github-authorship"
-import { errorMessage } from "@mako/host/contracts/error-message"
 import { MAKO_GITHUB_APP } from "@mako/host/contracts/github-person"
 import { getMako } from "@/lib/bridge"
 
 /**
  * Who cloud Threads' commits and pull requests are authored as, as Settings reads and changes it: the account's, the
- * same on the desktop (through its host) and in a browser (through the gateway).
+ * same on the desktop (through its host) and in a browser (through the gateway). `read` is null from a cloud that doesn't
+ * keep it yet.
  */
 export interface GitHubAuthorships {
-  read(): Promise<GitHubAuthorship>
+  read(): Promise<GitHubAuthorship | null>
   save(as: CommitAuthor): Promise<GitHubAuthorship>
 }
 
@@ -28,23 +28,32 @@ export function authorshipWords(as: CommitAuthor, hasToken: boolean | undefined)
 /** The line under `As you` while no token is saved, pointing at "Open pull requests as me". */
 export const FALLBACK_WORDS = `Pull requests are opened by ${MAKO_GITHUB_APP} until you add a token in Open pull requests as me.`
 
+/** Where the cloud doesn't keep the setting yet: a release's gap, nothing the person did or can fix. */
+export const AUTHORSHIP_UNAVAILABLE = "This choice isn't on Mako Cloud yet. It will appear here after Mako Cloud's next update, and there's nothing you need to do."
+/** Every other failure to read it. */
+export const AUTHORSHIP_UNREAD = "Mako couldn't read this from Mako Cloud. Check your connection, then try again."
+/** A failure to save a choice, which goes back to what the account had. */
+export const AUTHORSHIP_UNSAVED = "Mako couldn't save that, so nothing changed. Check your connection, then try again."
+
 export type GitHubAuthorshipPhase =
   | { kind: "loading" }
   | { kind: "ready"; authorship: GitHubAuthorship }
-  | { kind: "failed"; message: string }
+  | { kind: "unavailable" }
+  | { kind: "failed" }
 
-const said = (message: string) => message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "")
+/** Whether there's a choice to show: while it's read, or read. */
+export const authorshipChoosable = (phase: GitHubAuthorshipPhase) => phase.kind === "ready" || phase.kind === "loading"
 
 /**
  * The setting as the account has it, and choosing it. A choice shows at once and goes back to what the account had
- * when the save is refused; `error` is that refusal in the cloud's words.
+ * when the save fails; `error` says so.
  */
 export function useGitHubAuthorship(authorships: GitHubAuthorships) {
   const [phase, setPhase] = useState<GitHubAuthorshipPhase>({ kind: "loading" })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
-  const settle = useCallback((reading: Promise<GitHubAuthorship>, live: () => boolean = () => true) => {
-    void reading.then((authorship) => live() && setPhase({ kind: "ready", authorship }), (failure: Error) => live() && setPhase({ kind: "failed", message: said(errorMessage({ error: failure })) }))
+  const settle = useCallback((reading: Promise<GitHubAuthorship | null>, live: () => boolean = () => true) => {
+    void reading.then((authorship) => live() && setPhase(authorship ? { kind: "ready", authorship } : { kind: "unavailable" }), () => live() && setPhase({ kind: "failed" }))
   }, [])
   useEffect(() => {
     let live = true
@@ -65,9 +74,9 @@ export function useGitHubAuthorship(authorships: GitHubAuthorships) {
     setError(undefined)
     try {
       setPhase({ kind: "ready", authorship: await authorships.save(as) })
-    } catch (failure) {
+    } catch {
       setPhase({ kind: "ready", authorship: before })
-      setError(said(errorMessage({ error: failure })))
+      setError(AUTHORSHIP_UNSAVED)
     } finally {
       setSaving(false)
     }
