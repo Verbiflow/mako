@@ -29,6 +29,8 @@ import {
   rollup,
   rollupLabel,
   rollupLine,
+  stoodFor,
+  timeWords,
   type ChildGroup,
   type Rollup,
 } from "@mako/host/contracts/children"
@@ -326,18 +328,6 @@ const NeedsRow = memo(function NeedsRow({
   )
 })
 
-/** How long a Fin has run, one unit: "25s", "18m", "1h 4m". Nothing under a second. */
-function took(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000))
-  if (seconds < 1) return ""
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return rest ? `${hours}h ${rest}m` : `${hours}h`
-}
-
 /**
  * The time on a row: how long the Fin has stood as it does (`since`), a working
  * one's current turn and never its age. The shared clock ticks once a second; a
@@ -352,11 +342,12 @@ const CrewElapsed = memo(function CrewElapsed({
   className?: string
 }) {
   const since = agent.since
-  const text = useTickingText(since !== undefined, (now) =>
-    since === undefined ? "" : took(now - since)
+  const stood = useTickingText(since !== undefined, (now) =>
+    since === undefined ? "" : stoodFor(now - since)
   )
-  if (!text) return null
-  return <span className={cn("tabular shrink-0", className)}>{text}</span>
+  const { time, title } = timeWords(childStateOf(agent), stood)
+  if (!time) return null
+  return <span title={title} className={cn("tabular shrink-0", className)}>{time}</span>
 })
 
 /** Working, queued, failed or done: one line, its mark, title, current line and time. */

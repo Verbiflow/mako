@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { childEntry, childState, type ChildJournal, type ChildThread, type Report, type ThreadParent } from "../packages/host/src/contracts/agents"
-import { childLine } from "../packages/host/src/contracts/children"
+import { childLine, childTime, stoodFor } from "../packages/host/src/contracts/children"
 import { SessionIdSchema, ThreadIdSchema } from "../packages/host/src/contracts/thread-identity"
 import { lastStep } from "../packages/host/src/conversations/agent-runs"
 
@@ -68,5 +68,23 @@ assert.equal(line(answered({ answer: "[mako · from your Apex (agent), not the p
 assert.equal(childLine({ kind: "working" }), "At work", "with nothing known, it still says so")
 const justAsked: Parameters<typeof lastStep>[0] = [{ type: "user", text: "Go" }]
 assert.equal(lastStep(justAsked, "claude"), "Thinking", "a turn that's only begun is thinking")
+
+// A time says what it means: where the number alone would read as how long it ran, and in a sentence on every row.
+assert.equal(stoodFor(22 * 60_000), "22m")
+assert.equal(stoodFor(5 * HOUR + 7 * 60_000), "5h 7m")
+assert.equal(stoodFor(80 * HOUR), "3 d", "past a day an hour count is hard to read")
+assert.equal(stoodFor(500), "", "under a second, nothing")
+const word = (state: Parameters<typeof childTime>[0], ms = 3 * HOUR) => childTime(state, ms)
+assert.deepEqual(word({ kind: "working", step: "Reading a.ts" }, 22 * 60_000), { time: "22m", title: "On this turn for 22m" })
+assert.deepEqual(word({ kind: "working", step: "Waiting for its Fin device-fins" }), { time: "3h", title: "Waiting for 3h" })
+assert.deepEqual(word({ kind: "starting", step: "booting" }, 24_000), { time: "24s", title: "Starting for 24s" })
+assert.deepEqual(word({ kind: "queued", reason: "tree-running", ahead: 1 }), { time: "3h", title: "Queued for 3h" })
+assert.deepEqual(word({ kind: "blocked", question: "Which?", on: "person" }, 14 * 60_000), { time: "14m", title: "Asked 14m ago" })
+assert.deepEqual(word({ kind: "idle" }), { time: "3h", title: "Idle for 3h" })
+assert.deepEqual(word({ kind: "idle", waitingOn: [{ kind: "other", text: "the review" }], since: 1 }), { time: "3h", title: "Waiting for 3h" })
+assert.deepEqual(word({ kind: "ended", outcome: "done" }), { time: "3h ago", title: "Finished 3h ago" }, "a finished row's number doesn't read as how long it took")
+assert.deepEqual(word({ kind: "ended", outcome: "failed" }, 80 * HOUR), { time: "3 d ago", title: "Failed 3 d ago" })
+assert.deepEqual(word({ kind: "ended", outcome: "stopped" }), { time: "3h ago", title: "Stopped 3h ago" })
+assert.equal(word({ kind: "idle" }, 200).time, "", "no time to say, no words")
 
 console.log("Fin rows: a turn's time, a state's time, plain answers and a line on every row")

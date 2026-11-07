@@ -1,3 +1,4 @@
+import { childStateOf, childTime } from "@mako/host/contracts/children"
 import { isActiveNativeAgent, type NativeAgent } from "@mako/host/contracts/native-agents"
 import { durationText } from "@mako/sessions/events"
 import { useSecondClock } from "@/components/ui/second-clock"
@@ -10,7 +11,11 @@ export function Elapsed({ agent, className }: { agent: NativeAgent; className?: 
   const now = useSecondClock(active || fin)
   const start = agent.startedAt ?? agent.observedAt
   const end = active ? now : (agent.settledAt ?? agent.observedAt)
-  const ms = fin ? (agent.since === undefined ? 0 : now - agent.since) : agent.usage?.durationMs !== undefined && !active ? agent.usage.durationMs : end - start
+  if (fin) {
+    const { time, title } = childTime(childStateOf(agent), agent.since === undefined ? 0 : now - agent.since)
+    return time ? <span title={title} className={cn("tabular shrink-0", className)}>{time}</span> : null
+  }
+  const ms = agent.usage?.durationMs !== undefined && !active ? agent.usage.durationMs : end - start
   if (ms < 1_000) return null
   return <span className={cn("tabular shrink-0", className)}>{durationText(ms)}</span>
 }

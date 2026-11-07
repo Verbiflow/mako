@@ -364,6 +364,10 @@ async function check() {
   const onTurn = working.find((row) => row.text.includes("Composer chips on iPad"))
   assert.match(onTurn.text, /\b18m$/, `a working row counts its turn: ${onTurn.text}`)
   for (const row of rows12) assert.doesNotMatch(row.text, /\b\d+h\b/, `no row says the Fin's age: ${row.text}`)
+  // Every time says what it means: in a sentence on the row, and a finished row's number never reads as how long it ran.
+  const times = await evaluate("[...document.querySelectorAll('[data-crew-row]')].map((row) => [...row.querySelectorAll('.tabular[title]')].map((time) => ({ time: time.textContent, title: time.title, group: row.dataset.childGroup }))).flat()")
+  assert.ok(times.length >= 7, `the rows' times carry their sentence: ${JSON.stringify(times)}`)
+  assert.ok(times.some((each) => /^On this turn for \d+m$/.test(each.title)), `a working row says so: ${JSON.stringify(times)}`)
   const asking = working.find((row) => row.text.includes("Push token refresh"))
   assert.ok(
     asking?.html.includes("lucide-corner-up-left"),

@@ -568,6 +568,52 @@ export function childLine(state: ChildState, now?: number): string | undefined {
   }
 }
 
+/** How long a Fin has stood as it does, one unit: "25s", "18m", "1h 4m", "3 d". Nothing under a second. */
+export function stoodFor(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  if (seconds < 1) return ""
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours >= 24) return `${Math.floor(hours / 24)} d`
+  const rest = minutes % 60
+  return rest ? `${hours}h ${rest}m` : `${hours}h`
+}
+
+/** A row's time, and the sentence that says what it means. */
+export interface TimeWords {
+  time: string
+  title: string
+}
+
+/**
+ * A row's time and what it means. It's how long the Fin has stood as it does (`childSince`), which on an ended row
+ * would read as how long it ran, so that one says "ago"; the sentence says it whole in every state.
+ */
+export function timeWords(state: ChildState, stood: string): TimeWords {
+  if (!stood) return { time: "", title: "" }
+  switch (state.kind) {
+    case "queued":
+      return { time: stood, title: `Queued for ${stood}` }
+    case "starting":
+      return { time: stood, title: `Starting for ${stood}` }
+    case "working":
+      return { time: stood, title: state.step?.startsWith("Waiting for ") ? `Waiting for ${stood}` : `On this turn for ${stood}` }
+    case "blocked":
+      return { time: stood, title: `Asked ${stood} ago` }
+    case "idle":
+      return { time: stood, title: `${state.waitingOn?.length ? "Waiting" : "Idle"} for ${stood}` }
+    case "ended":
+      return { time: `${stood} ago`, title: `${{ done: "Finished", failed: "Failed", stopped: "Stopped" }[state.outcome]} ${stood} ago` }
+  }
+}
+
+/** `timeWords` for a time in milliseconds. */
+export function childTime(state: ChildState, ms: number): TimeWords {
+  return timeWords(state, stoodFor(ms))
+}
+
 /** A child's state in one word, as its strip and its tip say it. */
 export function childWord(state: ChildState): string {
   switch (state.kind) {
