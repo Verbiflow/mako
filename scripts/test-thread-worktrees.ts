@@ -860,6 +860,44 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   await worktrees.abandon(id).catch(() => undefined)
 }
 
+// A new checkout shares what the main checkout holds rather than writing it: a clone keeps its source's time, which
+// Git's own write can't. What differs is Git's to write, and the checkout is whole and clean either way.
+{
+  const cloned = repository("cloned")
+  mkdirSync(join(cloned, "audits"))
+  writeFileSync(join(cloned, "audits", "same.txt"), "unchanged\n")
+  writeFileSync(join(cloned, "edited.txt"), "committed\n")
+  writeFileSync(join(cloned, "moved-on.txt"), "at the base\n")
+  writeFileSync(join(cloned, "run.sh"), "#!/bin/sh\n", { mode: 0o755 })
+  git(cloned, "add", ".")
+  git(cloned, "commit", "-q", "-m", "files")
+  const base = git(cloned, "rev-parse", "HEAD")
+  writeFileSync(join(cloned, "moved-on.txt"), "since\n")
+  git(cloned, "commit", "-qam", "since")
+  git(cloned, "checkout", "-q", "-b", "elsewhere")
+  git(cloned, "checkout", "-q", "main")
+  writeFileSync(join(cloned, "edited.txt"), "uncommitted\n")
+  writeFileSync(join(cloned, "ignored.log"), "not tracked\n")
+  const long = new Date("2001-02-03T04:05:06Z")
+  utimesSync(join(cloned, "audits", "same.txt"), long, long)
+  const fresh = new Date("2010-01-01T00:00:00Z")
+  for (const file of ["edited.txt", "moved-on.txt"]) utimesSync(join(cloned, file), fresh, fresh)
+  const id = randomUUID()
+  started(id)
+  const made = await worktrees.prepare(id, cloned, "Cloned work", { kind: "from", ref: base })
+  const at = (file: string) => join(made.path, file)
+  assert.equal(git(made.path, "status", "--porcelain"), "", "it's whole and clean, whatever was cloned")
+  assert.equal(readFileSync(at("edited.txt"), "utf8"), "committed\n", "a file changed in the main checkout comes from the commit")
+  assert.equal(readFileSync(at("moved-on.txt"), "utf8"), "at the base\n", "as does one the main checkout moved past")
+  assert.equal(existsSync(at("ignored.log")), false, "and nothing untracked comes along")
+  assert.equal(lstatSync(at("run.sh")).mode & 0o111, 0o111, "a file keeps its mode")
+  if (process.platform === "darwin") assert.equal(lstatSync(at("audits/same.txt")).mtime.getTime(), long.getTime(), "the same file is the main checkout's, cloned")
+  writeFileSync(at("audits/same.txt"), "changed here\n")
+  assert.equal(readFileSync(join(cloned, "audits", "same.txt"), "utf8"), "unchanged\n", "and changing it here changes nothing there")
+  assert.equal(git(made.path, "status", "--porcelain"), "M audits/same.txt", "and Git sees the change")
+  await worktrees.abandon(id).catch(() => undefined)
+}
+
 // Windows ask every half minute: a worktree nothing changes in is read less and less, while one with a conversation
 // at work, a new index or a changed status is read as often as they ask, and one asked of alone is read then.
 {

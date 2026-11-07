@@ -12,6 +12,8 @@ import { discoverRepositories } from "../git/index.js"
 import type { Git } from "@mako/git"
 import { onLinux, onMac } from "../base/platform.js"
 import type { CheckoutBorrowing } from "./checkout-borrowing.js"
+import { errorMessage } from "../base/error-message.js"
+import { hostWarn } from "../base/host-log.js"
 
 const execute = promisify(execFile)
 
@@ -169,6 +171,73 @@ async function cloneTrees(pairs: Array<[string, string]>, background: boolean): 
     results.push(await execute(command, args).then(() => true, () => false))
   }
   return results
+}
+
+/** Clones each pair in a list file, `clonefile` itself: Node's copy reports success on macOS and writes every byte. */
+const CLONE_LISTED = `function run(argv) {
+  ObjC.bindFunction("clonefile", ["int", ["char *", "char *", "unsigned int"]])
+  const paths = ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError(argv[0], $.NSUTF8StringEncoding, null)).split("\\n")
+  for (let i = 0; i + 1 < paths.length; i += 2) $.clonefile(paths[i], paths[i + 1], 1)
+}`
+
+/** Clones single files, each to a place that doesn't exist yet. One that can't be cloned is left out, for Git to write. */
+async function cloneFiles(pairs: readonly (readonly [string, string])[], list: string, background: boolean): Promise<void> {
+  if (!onMac()) {
+    const left = pairs.values()
+    await Promise.all(Array.from({ length: 16 }, async () => {
+      for (const [from, to] of left) await copyFile(from, to, constants.COPYFILE_FICLONE_FORCE).catch(() => {})
+    }))
+    return
+  }
+  await writeFile(list, pairs.flat().join("\n"), { mode: 0o600 })
+  try {
+    const script = ["-l", "JavaScript", "-e", CLONE_LISTED, list]
+    const [command, args] = background ? belowAgents("/usr/bin/osascript", script) : ["/usr/bin/osascript", script]
+    await execute(command, args)
+  } finally {
+    await rm(list, { force: true })
+  }
+}
+
+/** Each tracked file's mode and blob, from `ls-tree -r -z` or `ls-files -s -z`; a file in a conflict is nobody's to clone. */
+function trackedFiles(listing: string): Map<string, string> {
+  const files = new Map<string, string>()
+  for (const line of listing.split("\0")) {
+    const tab = line.indexOf("\t")
+    if (tab < 0) continue
+    const [mode, second, third] = line.slice(0, tab).split(" ")
+    // `ls-tree` says mode, type, blob; `ls-files` says mode, blob, stage.
+    const blob = third && /^[0-9a-f]{40,64}$/.test(third) ? third : second
+    if (third === "0" || third === blob) files.set(line.slice(tab + 1), `${mode} ${blob}`)
+  }
+  return files
+}
+
+/**
+ * A new checkout's tracked files, cloned from the main checkout wherever that holds the same file, so a worktree shares
+ * their blocks rather than writing them: `mako-backend` costs 59 MB of its own this way, and 694 MB written out. Only a
+ * hint for Git, which still decides: the index is read and refreshed here, so each clone is hashed, and the `reset
+ * --hard` that follows writes whatever is missing or came out different. Files changed in the main checkout, symlinks
+ * and submodules are left to it, and on a volume that can't share blocks all of them are.
+ */
+export async function cloneTracked(git: Git, repoRoot: string, checkout: string, commit: string, background = false): Promise<void> {
+  try {
+    if (!await sharesBlocks(repoRoot, checkout)) return
+    const [wanted, held, changed] = await Promise.all([
+      git.readOutput(repoRoot, ["ls-tree", "-r", "-z", commit]),
+      git.readOutput(repoRoot, ["ls-files", "-s", "-z"]),
+      git.readOutput(repoRoot, ["status", "--porcelain", "-z", "--untracked-files=no", "--no-renames"]),
+    ])
+    const here = trackedFiles(held)
+    const differs = new Set(changed.split("\0").map((entry) => entry.slice(3)))
+    const same = [...trackedFiles(wanted)].flatMap(([path, file]) => here.get(path) === file && !differs.has(path) && /^100/.test(file) && !path.includes("\n") ? [path] : [])
+    await Promise.all([...new Set(same.map((path) => dirname(path)))].map((folder) => mkdir(join(checkout, folder), { recursive: true })))
+    await cloneFiles(same.map((path) => [join(repoRoot, path), join(checkout, path)]), `${checkout}.clones`, background)
+    await git.output(checkout, ["read-tree", commit], background)
+    await git.output(checkout, ["update-index", "-q", "--refresh"], background).catch(() => {})
+  } catch (error) {
+    hostWarn("worktrees", "a checkout's files couldn't be cloned, so Git writes them", { checkout, error: errorMessage({ error }) })
+  }
 }
 
 /** Whether this volume shares blocks between copies; Linux only has a per-file answer, so ask with one of Git's files. */
