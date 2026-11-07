@@ -1231,4 +1231,9 @@ export class JournalStore {
     this.statements.clear()
     this.db.close()
   }
+
+  /** Whether `close` has run: work reading it in slices ends at its next step. */
+  get closed(): boolean {
+    return !this.db.isOpen
+  }
 }

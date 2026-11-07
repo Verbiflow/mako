@@ -1,5 +1,5 @@
 import type { Attribution, Certainty, ContentRef, FootprintEntry } from "@mako/protocol"
-import { atOnce, type Steps } from "@mako/sessions/slices"
+import { atOnce, inSlices, StepsStopped, type Steps } from "@mako/sessions/slices"
 import { TURN_CHANGES_VERSION, type TurnChangedFile, type TurnChangeLines, type TurnChanges, type TurnChangeShare } from "../contracts/turn-changes.js"
 import { decodeText } from "./content.js"
 import { wholeChange, type FileState, type JournalStore, type StatRow, type StoredEntry, type StoredRoot } from "./journal-store.js"
@@ -646,6 +646,20 @@ function* countLines(view: JournalView, chain: readonly StoredEntry[], tagOf: (s
  */
 export function turnChanges(view: JournalView, thread: string, turn: string, state: TurnChanges["state"] = "settled", now = Date.now()): TurnChanges {
   return atOnce(countingTurn(view, thread, turn, state, now))
+}
+
+/**
+ * `countingTurn` a slice at a time; undefined when the journal closed under
+ * it (its host stopping, or another host taking it over): not counted, and
+ * nothing went wrong. Its turn is counted when the journal next opens.
+ */
+export async function countTurnInSlices(view: JournalView, thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined> {
+  try {
+    return await inSlices(countingTurn(view, thread, turn, state), undefined, () => view.store.closed)
+  } catch (error) {
+    if (error instanceof StepsStopped) return undefined
+    throw error
+  }
 }
 
 /**
