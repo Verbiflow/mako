@@ -268,6 +268,11 @@ async function stuckPredecessor(root: string) {
     assert.equal(signalled, 0, "A predecessor that isn't the parent is never signalled")
     await refused("A predecessor that isn't the parent", stranger, /isn't this host's parent.*kill -9 \d+/)
 
+    // The same where the lock can't name its holder, as every stuck one on Linux: never signalled, and said, with the check.
+    const silentStranger = await case_("silent", () => ({ signal: counting, parent: () => process.ppid }))
+    assert.equal(signalled, 0, "A silent predecessor that isn't the parent is never signalled")
+    await refused("A silent predecessor that isn't the parent", silentStranger, /isn't this host's parent.*ps -p \d+.*kill -9 \d+/)
+
     // Its parent went between the two signals, so the pid may be anyone's: read again before SIGKILL.
     const sent: string[] = []
     const orphaned = await case_("stuck", (holder) => ({

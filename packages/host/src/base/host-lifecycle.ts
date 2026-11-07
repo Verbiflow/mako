@@ -163,8 +163,7 @@ export async function acquireSuccessorLock(dataRoot: string, predecessor: number
   const answerMs = options.answerMs ?? { SIGTERM: TERM_MS, SIGKILL: KILL_MS }
   const send = options.signal ?? ((target, signal) => void process.kill(target, signal))
   const parent = options.parent ?? (() => process.ppid)
-  // A holder that names nobody may be this one (`acquireHostLock`), so it stands while it's this process's parent.
-  if (lock.holder !== pid && !(lock.holder === null && parent() === pid)) return lock
+  if (lock.holder !== pid && lock.holder !== null) return lock
   const stop = `stop it with \`kill -9 ${pid}\`, then start Mako again`
   const notEnded = async (stuck: string): Promise<SuccessorLock> => {
     // It may have gone by itself as we looked.
@@ -172,6 +171,12 @@ export async function acquireSuccessorLock(dataRoot: string, predecessor: number
     if (last.kind === "held") return last
     options.log("the host before this one is stuck and wasn't ended", { pid, why: stuck })
     return { ...last, stuck }
+  }
+  // A holder that names nobody (`acquireHostLock`) is the predecessor while it's this process's parent, and may be while
+  // its pid still runs: said so, with how to check, and never signalled.
+  if (lock.holder === null && parent() !== pid) {
+    if (!running(pid)) return lock
+    return notEnded(`the data root is still held and the lock can't say by whom; pid ${pid}, the host before this one, still runs and isn't this host's parent, so nothing says it's still that host: if \`ps -p ${pid}\` shows Mako, ${stop}`)
   }
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
     if (parent() !== pid) return notEnded(`pid ${pid} holds the data root past its exit and isn't this host's parent, so nothing says it's still that host: ${stop}`)
@@ -196,4 +201,13 @@ export async function acquireSuccessorLock(dataRoot: string, predecessor: number
     }
   }
   return notEnded(`pid ${pid} still holds the data root after SIGKILL: ${stop}`)
+}
+
+function running(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM"
+  }
 }
