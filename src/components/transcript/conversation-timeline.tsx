@@ -42,6 +42,13 @@ import { CompactPresentationContext } from "./compact-presentation"
 import { wokeAfterRest } from "@/lib/woke-after-rest"
 
 const NEAR_BOTTOM = 96
+/**
+ * How far a reader moves to mean it. Fingers resting on a trackpad send a few pixels each way, which is no leaving the
+ * end; a flick passes this in a few events, a wheel's notch in one. Short of the 60 px a slow move up is kept at.
+ */
+const LEFT_END = 24
+/** What a wheel adds up over: its net, so jitter cancels and only a move in one direction reaches `LEFT_END`. */
+const WHEEL_WINDOW_MS = 500
 /** A reader's input has ended this long after it last moved anything, for what no `scrollend` follows: input that moved nothing, or a browser without it. */
 const INPUT_SETTLE_MS = 160
 const TEXT_BLOCKS = "p,pre,li,td,h1,h2,h3,h4,h5,h6"
@@ -313,6 +320,21 @@ function leftEnd(node: HTMLDivElement, from: number): boolean {
   return Math.min(node.scrollTop, end) < Math.min(from, end) - 0.5
 }
 
+/** `event` added to a wheel's `travel`, what went past `WHEEL_WINDOW_MS` dropped, and its net in pixels. */
+function wheelNet(travel: { at: number; by: number }[], event: ReactWheelEvent, pageHeight: number): number {
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? pageHeight : 1
+  const at = performance.now()
+  travel.push({ at, by: event.deltaY * unit })
+  while (travel[0]!.at < at - WHEEL_WINDOW_MS) travel.shift()
+  return travel.reduce((net, step) => net + step.by, 0)
+}
+
+/** Whether the wheel's last half second came to nothing a reader meant, as fingers at rest do. */
+function wheelResting(travel: readonly { at: number; by: number }[], now: number): boolean {
+  const recent = travel.filter((step) => step.at >= now - WHEEL_WINDOW_MS)
+  return recent.length > 0 && Math.abs(recent.reduce((net, step) => net + step.by, 0)) < LEFT_END
+}
+
 /** Whether a wheel over `target` moves a scroller inside the transcript rather than the transcript. */
 function wheelTakenInside(target: EventTarget, viewport: HTMLElement, deltaY: number): boolean {
   for (let node = target instanceof Element ? target : null; node && node !== viewport; node = node.parentElement) {
@@ -528,6 +550,8 @@ export function ConversationTimeline({
    */
   const seeking = useRef(false)
   const lastScrollTop = useRef(0)
+  /** The wheel's last half second, as when and how far: `wheelNet`. */
+  const wheelTravel = useRef<{ at: number; by: number }[]>([])
   /** The wheel is on a scroller inside the transcript: a gesture stays with the scroller it began on, as the browser's does. */
   const innerWheel = useRef(false)
   /**
@@ -876,8 +900,8 @@ export function ConversationTimeline({
     // Only the reader's movement decides: up leaves the end, down into it follows again. A scroll that ended
     // short of the end after moving up stays where it was left.
     if ((userScrolling.current || scrollMotion.current || touching.current) && !ours) {
-      if (movingUp) pinned.current = false
-      else if (movingDown && atBottom) pinned.current = true
+      if (movingUp && distance >= LEFT_END) pinned.current = false
+      else if (movingDown && atBottom && !wheelResting(wheelTravel.current, performance.now())) pinned.current = true
     }
     // A reader who keeps scrolling while a page is on its way moves the
     // position that page must be placed around.
@@ -933,9 +957,11 @@ export function ConversationTimeline({
       if (!awaitingEarlier.current) restore.current = null
       const node = viewport.current
       // Up leaves the end now: the scroll this wheel makes may come after the end's next write, which would swallow it.
-      // Down into the end follows again, whichever of this event and its scroll comes first.
-      if (event.deltaY < 0) pinned.current = false
-      if (node && event.deltaY > 0 && node.scrollHeight - node.scrollTop - node.clientHeight < NEAR_BOTTOM) pinned.current = true
+      // Down into the end follows again, whichever of this event and its scroll comes first. Either takes a wheel that
+      // means it: fingers resting on a trackpad send a few pixels each way.
+      const net = wheelNet(wheelTravel.current, event, node?.clientHeight ?? 0)
+      if (net <= -LEFT_END) pinned.current = false
+      if (node && net >= LEFT_END && node.scrollHeight - node.scrollTop - node.clientHeight < NEAR_BOTTOM) pinned.current = true
       node?.toggleAttribute("data-reading-anchor", !pinned.current && !!readingAnchor.current?.exchangeId)
       settleInput()
       // A wheel toward earlier turns asks for them even when it moves
@@ -1155,7 +1181,8 @@ export function ConversationTimeline({
     const pin = () => {
       // The reader moved toward earlier turns and its scroll event is still to come (iOS moves the scroller first):
       // they're leaving the end, and following it now would take their move back.
-      if (pinned.current && (userScrolling.current || scrollMotion.current || touching.current) && leftEnd(node, lastScrollTop.current))
+      if (pinned.current && (userScrolling.current || scrollMotion.current || touching.current) && leftEnd(node, lastScrollTop.current) &&
+        node.scrollHeight - node.scrollTop - node.clientHeight >= LEFT_END)
         pinned.current = false
       const column = node.firstElementChild
       const spacer = steadyEnd.current

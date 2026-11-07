@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -50,7 +50,7 @@ async function check() {
   await app.whenReady()
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
   const page = window.webContents
-  const guard = guardElectronCheck({ app, page, name: "The follow UI check", ms: 300_000 })
+  const guard = guardElectronCheck({ app, page, name: "The follow UI check", ms: 420_000 })
   page.debugger.attach("1.3")
   const evaluate = (code) => page.executeJavaScript(code)
   const until = async (code, label = code) => {
@@ -122,6 +122,12 @@ async function check() {
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY })
     await wait(60)
   }
+  const replay = async (at, events) => {
+    for (const [gap, deltaY] of events) {
+      if (gap) await new Promise((done) => setTimeout(done, gap))
+      await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY })
+    }
+  }
   const centre = (selector) => evaluate(`(() => { const box = document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect(); return box ? { x: box.left + box.width / 2, y: box.top + Math.min(box.height / 2, 200) } : null })()`)
 
   for (const [form, path, width, height, mobile] of [
@@ -177,6 +183,25 @@ async function check() {
         for (let step = 0; step < 10; step += 1) await wheel(at.x, at.y, 300)
         await wait(250)
       })
+      // What a hand does: a trackpad at rest lets go of nothing, and a move on purpose lets go at once.
+      const { traces } = JSON.parse(await readFile(resolve("scripts/fixtures/wheel-traces.json"), "utf8"))
+      for (const [name, trace] of Object.entries(traces)) {
+        await open()
+        // Over the transcript itself, clear of the crew card's list, which would take the wheel.
+        const point = await evaluate(`(() => { const box = ${VIEW}.getBoundingClientRect(); return { x: box.left + 200, y: box.top + 60 } })()`)
+        if (trace.expect === "keeps") {
+          await keeps(name, () => replay(point, trace.events))
+        } else {
+          await replay(point, trace.events)
+          await wait(200)
+          const left = await reading()
+          await evaluate("window.__burst(10, 20)")
+          await wait(300)
+          const after = await reading()
+          console.log(`TRIAL ${name.padEnd(50)} away ${left.away} → ${after.away}  ${after.away > left.away + 40 ? "released" : "HELD"}`)
+          assert.ok(after.away > left.away + 40, `${form}: ${name} lets go of the end: ${left.away} → ${after.away}`)
+        }
+      }
       await stale("no scrollend: a wheel, then the layout shifting", async () => { const at = await centre("[data-transcript-viewport]"); await wheel(at.x, at.y, 40) })
       await stale("no scrollend: a click, then the layout shifting", async () => {
         const at = await centre("[data-transcript-viewport]")
