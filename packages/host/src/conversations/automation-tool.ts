@@ -18,6 +18,11 @@ export interface AutomationToolDeps {
 type Change = "run" | "on" | "off"
 
 const AutomationIds = z.array(z.object({ id: z.string() }).loose())
+const FiredSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("completed") }),
+  z.object({ status: z.literal("failed"), error: z.string() }),
+  z.object({ status: z.literal("not-run"), why: z.string() }),
+])
 
 /** An agent's or a shell's look at the person's automations, and Run now and the switch on each, through Settings' calls. */
 export class AutomationTool {
@@ -44,8 +49,14 @@ export class AutomationTool {
 
   /** Run now, or the switch, as Settings › Automations presses them. */
   async run(action: Change, id: string): Promise<AutomationActResult> {
-    if (action === "run") await this.#deps.invoke("mako:run-automation", [id])
-    else await this.#deps.invoke("mako:automation-enabled", [id, action === "on"])
+    if (action !== "run") {
+      await this.#deps.invoke("mako:automation-enabled", [id, action === "on"])
+      return { outcome: "done", action, id }
+    }
+    // A launch that failed, or a run that never began, resolves with how it went.
+    const fired = FiredSchema.safeParse(await this.#deps.invoke("mako:run-automation", [id])).data
+    if (fired?.status === "failed") return { refused: "failed", why: fired.error }
+    if (fired?.status === "not-run") return { refused: "failed", why: fired.why }
     return { outcome: "done", action, id }
   }
 }

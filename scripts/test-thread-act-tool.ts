@@ -263,11 +263,13 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
     },
   })
   let tier: "full" | "auto" = "auto"
+  let runAnswer: JsonValue = { status: "completed" }
   const tool = new AutomationTool({
     conversationOf: (session) => (session === "s-mine" ? "mine" : undefined),
     tier: () => tier,
     invoke: async (channel, args) => {
       calls.push([channel, ...args])
+      if (channel === "mako:run-automation") return runAnswer
       return channel === "mako:automations" ? [{ id: "nightly" }] : []
     },
     gate,
@@ -282,6 +284,13 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
   tier = "full"
   assert.deepEqual(await tool.act(agent("s-mine"), { action: "off", id: "nightly", clientKey: "k" }), { outcome: "done", action: "off", id: "nightly" })
   assert.deepEqual(calls.at(-1), ["mako:automation-enabled", "nightly", false])
+  // A launch that failed, or a run that never began, is said: Run now answers with how it went.
+  runAnswer = { status: "failed", error: "No harness can run it" }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "k" }), { refused: "failed", why: "No harness can run it" })
+  runAnswer = { status: "not-run", why: "It's running already." }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "k" }), { refused: "failed", why: "It's running already." })
+  runAnswer = { status: "completed" }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "k" }), { outcome: "done", action: "run", id: "nightly" })
   assert.equal(await tool.act(agent("s-mine"), { action: "on", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-automation")
   assert.equal(await tool.act(agent("s-mine"), { action: "run", id: "gone", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-automation", "a run of nothing never says done")
   assert.equal(hostCallReplay(AUTOMATION_TOOL.channel), AUTOMATION_TOOL.replay)
