@@ -753,3 +753,83 @@ describe("borrowing: exact cases", () => {
     assert.equal(borrowSealContext("a", "g", "v"), "mako.borrow.v1\0a\0g\0v")
   })
 })
+
+/**
+ * The conformance suite holds brokers to account: an honest adapter over the core passes its device cases, and an
+ * adapter that leaks fails them. Each leaky one is a way a real device route could go wrong.
+ */
+describe("borrowing: the conformance suite fails a broker that leaks to a device", async () => {
+  const { runBorrowConformance } = await import("../dist/borrow-conformance.js")
+  const DEVICE_CASES = ["a device borrows only", "a lease held under a grant that changed"]
+
+  /** A broker over the pure core, serving device borrowers as an adapter would; `leak` names how it goes wrong. */
+  function adapter(leak) {
+    let state = emptyBroker("acct-c")
+    let at = 1
+    let serial = 0
+    const values = new Map()
+    return {
+      async person() {
+        return {
+          account: "acct-c",
+          device: "conformance-person",
+          async grant(given, value) {
+            const grant = { ...given, grantedBy: { kind: "person", account: "acct-c" }, grantedAt: at++ }
+            const result = step(state, { type: "grant", grant, at: at++ })
+            if (result.rejected) return 400
+            state = result.state
+            values.set(`${grant.id}\0${grant.version}`, value)
+            return grant
+          },
+        }
+      },
+      async deviceBorrower(repository, device, listed) {
+        const borrower = { account: "acct-c", repository, thread: listed ? `listed-${device}` : `unlisted-${serial++}`, place: { kind: "device", device } }
+        return {
+          borrower,
+          async borrow(need) {
+            // The listing is checked where the device's credential is served, before the core is asked.
+            if (!listed && leak !== "issues-unlisted") return { refusal: { refused: "out-of-scope" } }
+            const grant = Object.values(state.grants).find((held) => held.grant.resource.ref === need.ref)?.grant
+            const result = step(state, { type: "borrow", need: { ...need, for: borrower }, lease: `l${serial++}`, ask: `a${serial++}`, at: at++, content: { version: sha("v"), size: 1 } })
+            state = result.state
+            if (leak === "hands-back-cached" && "refusal" in result.answer && grant) {
+              const old = Object.values(state.leases).find((held) => held.lease.borrower.thread === borrower.thread)
+              if (old) return { lease: old.lease }
+            }
+            return result.answer
+          },
+          async value(lease) {
+            const held = state.leases[lease]
+            const own = held && held.lease.borrower.thread === borrower.thread && !held.ended
+            // The reviewer's leak: an unlisted Thread is refused a lease, but reads the listed one's value.
+            if (!own && !(leak === "lets-unlisted-read" && !listed)) return 404
+            return held ? values.get(`${held.lease.grant}\0${held.lease.grantVersion}`) ?? 404 : 404
+          },
+        }
+      },
+      async close() {},
+    }
+  }
+
+  async function run(leak) {
+    const cases = []
+    runBorrowConformance(async () => adapter(leak), (name, body) => {
+      if (DEVICE_CASES.some((wanted) => name.includes(wanted))) cases.push({ name, body })
+    })
+    assert.equal(cases.length, 2)
+    const failed = []
+    for (const { name, body } of cases) await body().catch(() => failed.push(name))
+    return failed
+  }
+
+  test("an honest broker passes both device cases", async () => {
+    assert.deepEqual(await run(undefined), [])
+  })
+  const caught = { "lets-unlisted-read": DEVICE_CASES[0], "issues-unlisted": DEVICE_CASES[0], "hands-back-cached": DEVICE_CASES[1] }
+  for (const [leak, by] of Object.entries(caught))
+    test(`a broker that ${leak.replaceAll("-", " ")} fails "${by}"`, async () => {
+      const failed = await run(leak)
+      assert.ok(failed.some((name) => name.includes(by)), `${leak} passed "${by}": ${JSON.stringify(failed)}`)
+    })
+})
