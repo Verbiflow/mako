@@ -8,6 +8,7 @@ import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { z } from "zod"
 import { Git } from "@mako/git"
+import type { CiReading } from "@mako/host/application/local-update-ci"
 import { LocalUpdates } from "@mako/host/application/local-updates"
 import { UPDATE_CHECKS } from "@mako/host/application/local-update-checks"
 import type { LocalBuildState } from "@mako/host/contracts/app-lifecycle"
@@ -250,6 +251,67 @@ try {
     assert.equal(machine.failure?.what, "Compiling failed: the Mac ran out of open files.")
     assert.equal(machine.failure?.next, "This is the Mac, not the code. Wait for agents and builds to finish, then build again.")
   }
+  assert.deepEqual(snapshot(person), before)
+
+  // What CI vouches for. Each build is a new updater's, as an identical one is handed back without building.
+  let builds = 0
+  const buildWith = async (reading: CiReading, from?: "upstream" | "checkout", checkout = person) => {
+    const asked: string[] = []
+    const fresh = new LocalUpdates(git, join(root, `ci-${(builds += 1)}`), "A".repeat(40), () => {}, installed, { ...roomy, candidate, writers, ciPassed: async (commit) => {
+      asked.push(commit)
+      return reading
+    } })
+    await fresh.load()
+    await fresh.select(checkout)
+    await rm(log, { force: true })
+    fresh.start(from)
+    return { state: await settled(fresh), asked, ran: (await checksRun()).map((check) => check.script).sort() }
+  }
+  const passed = { passed: true, run: "https://example.invalid/run" } as const
+  const everything = [UPDATE_CHECKS.compile, ...UPDATE_CHECKS.checks, UPDATE_CHECKS.performance].sort()
+
+  // A commit from before the machine checks has nothing lighter to run, whatever CI says: CI isn't even asked.
+  const beforeThem = await buildWith(passed, "upstream")
+  assert.equal(beforeThem.state.kind, "ready")
+  assert.deepEqual(beforeThem.asked, [])
+  assert.deepEqual(beforeThem.ran, everything, "a commit from before the machine checks runs every check")
+
+  await writeFile(join(writer, "package.json"), scripts({
+    [UPDATE_CHECKS.performance]: `node performance.cjs ${UPDATE_CHECKS.performance}`,
+    [UPDATE_CHECKS.machine]: `node record.cjs ${UPDATE_CHECKS.machine}`,
+  }))
+  run(writer, "commit", "-qam", "The machine checks")
+  run(writer, "push", "-q", "origin", "main")
+  const vouchable = run(writer, "rev-parse", "HEAD")
+
+  const green = await buildWith(passed, "upstream")
+  assert.equal(green.state.kind, "ready")
+  assert.deepEqual(green.asked, [vouchable], "CI is asked of the very commit it builds")
+  assert.deepEqual(green.ran, [UPDATE_CHECKS.compile, UPDATE_CHECKS.machine].sort(), "a commit CI passed compiles and runs what only this Mac can tell")
+
+  const unvouched = await buildWith({ passed: false, why: "no green run" }, "upstream")
+  assert.equal(unvouched.state.kind, "ready")
+  assert.deepEqual(unvouched.ran, everything, "a commit CI hasn't passed runs every check")
+
+  // The working tree, as it is: CI passed nothing of it, so it isn't asked, whatever it would say. A checkout with the
+  // machine checks, on the very commit CI passed, so its local changes are all that stands in the way.
+  const local = join(root, "local")
+  run(root, "clone", "-q", remote, local)
+  await writeFile(join(local, "app.txt"), "a local edit\n")
+  const dirty = await buildWith(passed, "checkout", local)
+  assert.deepEqual(dirty.asked, [], "a build with local changes never asks CI")
+  assert.deepEqual(dirty.ran, everything, "and runs every check")
+  run(local, "checkout", "--", "app.txt")
+  const clean = await buildWith(passed, "checkout", local)
+  assert.deepEqual(clean.asked, [], "nor does the checkout as it is with none: only an upstream build is CI's commit, clean")
+  assert.deepEqual(clean.ran, everything)
+
+  // A machine check failing a commit CI passed: it blocks the update, and says where to look without claiming whose it is.
+  await writeFile(join(root, "emfile"), UPDATE_CHECKS.machine)
+  const mine = await buildWith(passed, "upstream")
+  await rm(join(root, "emfile"))
+  assert.equal(mine.state.kind, "error")
+  if (mine.state.kind === "error") assert.match(mine.state.failure?.next ?? "", /what's different on this one/)
   assert.deepEqual(snapshot(person), before)
 
   console.log("Behind and dirty: the update says what it builds (upstream commit, how far behind, each uncommitted file and who changed it), builds the upstream clean in its own copy by default with the person's checkout byte-for-byte untouched, runs UPDATE_CHECKS in order with the verdict variable seen by the performance check alone, and says plainly when the checkout's own code fails (build the upstream instead) or the Mac does")

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { openHostSecrets } from "@mako/host/base/host-secrets"
 import type { Keychain, KeychainItem, KeychainRead } from "@mako/host/base/keychain"
-import { securityValue } from "@mako/host/base/keychain"
+import { passwordRead, securityValue } from "@mako/host/base/keychain"
 import { chromiumSafeStorage, KeychainUnavailable, safeStorageItem } from "@mako/host/base/secure-storage"
 
 /**
@@ -148,3 +148,8 @@ async function electronKey(userRoot: string, login: Keychain): Promise<Buffer> {
   assert.ok(key)
   return key
 }
+
+// The addon reads no item as null, not undefined: nothing found, never a found value that isn't one.
+assert.deepEqual(passwordRead(null), { kind: "missing" })
+assert.deepEqual(passwordRead(undefined), { kind: "missing" })
+assert.deepEqual(passwordRead("secret"), { kind: "found", value: "secret" })

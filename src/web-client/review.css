@@ -7,10 +7,20 @@
   .rv-layer {
     @apply absolute inset-0 z-40 flex flex-col bg-surface;
   }
-  /* A laptop's desk: the desktop's own review, a pane beside the transcript, edge to edge, as its Changes panel sits. */
+  /* A laptop's desk: the desktop's own review, the right rail beside the transcript past the shell's gutter, as its Changes panel sits. */
   .rv-layer[data-form="desk"] {
-    @apply relative inset-auto z-auto min-w-0 border-l border-hairline;
-    flex: 0 1 clamp(440px, 50%, 820px);
+    @apply relative inset-auto z-auto ml-1.5 bg-shell;
+    flex: 0 1 420px;
+    min-width: 340px;
+  }
+  /* The stage's terms: the chat keeps its 450 and the rail gives way down to its 340, the desktop's numbers. */
+  @media (min-width: 1100px) {
+    main:has(+ .rv-layer[data-form="desk"]) {
+      min-width: 450px;
+    }
+  }
+  .rv-layer[data-form="desk"] .rv-screen {
+    @apply bg-shell;
   }
   .rv-screen {
     @apply relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface;
@@ -402,7 +412,7 @@
 
   /* The comments going with the next message, over the composer. */
   .rv-tray {
-    @apply mx-auto flex w-full max-w-content items-center gap-1.5 px-3 pb-1.5;
+    @apply mx-auto flex w-full max-w-content items-center gap-1.5 px-2 pb-1.5;
   }
   .rv-tray-chip {
     @apply inline-flex h-8 max-w-[260px] shrink-0 items-center gap-1.5 bg-fill-hover pr-0.5 pl-2 text-label text-muted-foreground;

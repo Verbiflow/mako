@@ -6,6 +6,7 @@ import { answersId, prefetchProcess, readAlongside, runPrefetch, type StartPrefe
 import { LiveDrivers } from "@mako/host/harnesses/live-drivers"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { ranOut } from "./lib/ran-out.ts"
 
 // A start run ahead: its files read whole by several readers, and its process taken through its exchange, each step
 // written once the one before is answered, then stopped. Nothing throws and nothing is left running.
@@ -51,9 +52,9 @@ setInterval(() => {}, 1000)`)
   const exits = await fixture("exits", "process.exit(3)")
   assert.equal(await prefetchProcess({ ...exits, exchange }, root, "test"), false, "an exit before the answer is no answer")
   const silent = await fixture("silent", "setInterval(() => {}, 1000)")
-  const began = performance.now()
-  assert.equal(await prefetchProcess({ ...silent, exchange }, root, "test", undefined, 200), false, "silence until its time is no answer")
-  assert.ok(performance.now() - began < 2_000)
+  const { result: silentAnswer, waits } = await ranOut(() => prefetchProcess({ ...silent, exchange }, root, "test", undefined, 200))
+  assert.equal(silentAnswer, false, "silence until its time is no answer")
+  assert.ok(waits.includes(200) && waits.every((ms) => ms <= 200), `its own 200 ms ran out, and nothing longer: ${waits.join(", ")}`)
   assert.equal(await prefetchProcess({ command: join(root, "missing"), args: [], env: process.env }, root, "test"), false, "a missing executable is no answer, not a throw")
   assert.equal(await prefetchProcess({ ...server, exchange }, join(root, "gone"), "test"), false, "nor is a missing folder")
   assert.equal(await prefetchProcess(undefined, root, "test"), false, "nor a harness that isn't installed")

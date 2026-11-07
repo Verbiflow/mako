@@ -12,6 +12,7 @@ import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudCarriedFile } from "../contracts/cloud-carried-files.js"
+import type { CommitAuthor } from "../contracts/github-authorship.js"
 import type { CloudAccount as CloudAccountView } from "../contracts/cloud-account.js"
 import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
@@ -130,8 +131,8 @@ export interface CloudAccount {
   unwaitMessage?(session: string, id: string): Promise<WaitingMessage[]>
   /** This Mac's claim on a message that waited for one of its Sessions, before it runs it here (`CloudAccount.claimWaiting`). */
   claimWaiting?(session: string, id: string): Promise<WaitingClaim>
-  /** The account's devices, by ID and name, and which is this one. */
-  devices?(): Promise<{ devices: Array<{ id: string; name: string }>; current: string }>
+  /** The account's devices, by ID, name and kind, and which is this one. */
+  devices?(): Promise<{ devices: Array<{ id: string; name: string; kind?: string }>; current: string }>
   /** The harness versions the cloud's machines run, or null from a cloud that doesn't say (`CloudAccounts.cloudHarnesses`). */
   cloudHarnesses?(): Promise<CloudHarnesses | null>
   /** The person's access choices as the account keeps them, or null from a cloud that doesn't keep them yet. */
@@ -342,6 +343,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   methods.handle("mako:github-token", () => cloud.githubToken())
   methods.handle("mako:github-token-save", (token: string, repository?: string) => cloud.saveGitHubToken(token, repository))
   methods.handle("mako:github-token-remove", () => cloud.removeGitHubToken())
+  // Who cloud commits and pull requests are authored as: the person or Mako's bot, kept by the account.
+  methods.handle("mako:github-authorship", () => cloud.githubAuthorship())
+  methods.handle("mako:github-authorship-save", (as: CommitAuthor) => cloud.saveGitHubAuthorship(as))
 
   sync?.start()
   const unsharable = () => Promise.reject(new Error("This Mac can't share sign-ins with Mako Cloud."))

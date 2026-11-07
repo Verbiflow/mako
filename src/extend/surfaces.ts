@@ -24,6 +24,13 @@ export interface SurfaceDefinition {
    * the rest, so a wide monitor grows the conversation, not the sidebar.
    */
   minWidth?: number
+  /**
+   * A quiet reading at the end of the surface's row in the right rail: how much changed, who needs the person. It
+   * selects what it shows itself, so a change elsewhere repaints neither the rail nor the panel.
+   */
+  reading?: ComponentType<NoProps>
+  /** Whether the right rail offers this surface now, a hook; left out, always. The open surface keeps its row. */
+  useOffered?: () => boolean
 }
 
 export const surfaces = new Registry<SurfaceDefinition>()

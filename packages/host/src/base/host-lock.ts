@@ -49,8 +49,9 @@ export async function acquireHostLock(dataRoot: string, options: HostLockOptions
   const until = Date.now() + (options.waitMs ?? 30_000)
   for (;;) {
     const lock = await attempt()
-    if (lock.kind === "held" || options.predecessor === undefined || lock.holder !== options.predecessor || Date.now() >= until)
-      return lock
+    if (lock.kind === "held" || options.predecessor === undefined || Date.now() >= until) return lock
+    // Linux's lock answers from the holder's main thread, so a holder stuck in its exit names nobody.
+    if (lock.holder !== options.predecessor && !(lock.holder === null && running(options.predecessor))) return lock
     await new Promise((done) => setTimeout(done, 50))
   }
 }

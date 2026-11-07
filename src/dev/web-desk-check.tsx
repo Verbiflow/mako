@@ -10,10 +10,13 @@ import { getMako } from "@/lib/bridge"
 import { applyLiveBatch, applyLiveSnapshot } from "@/state/live-recovery"
 import { store } from "@/state/session"
 import { threadsStore } from "@/state/thread-store"
+import { setSetupSource } from "@/state/setup"
+import { openSetup } from "@/web-client/setup-open"
 import { accountListStore } from "@/web-client/account-list"
 import { WebClient, WebClientContext } from "@/web-client/client"
 import Desk from "@/web-client/desk"
 import type { WebRoute } from "@/web-client/route"
+import { webSetup } from "@/web-client/setup-source"
 import { applyTheme } from "@/web-client/theme"
 import type { WebSession } from "@/web-client/threads"
 import { fixtureHarnesses } from "./harness-fixtures"
@@ -27,8 +30,9 @@ import "../web-client/style.css"
  * The web app in a laptop's browser (`Desk`) through its production pieces, on the mock bridge: the account's list
  * holds the threads the desktop's `?mock&app=busy` desk lists (the same titles, agents and folders, run on one Mac),
  * and opening one draws its conversation from the same fixtures. `test-web-desk-ui.mjs` drives it beside the desktop.
- * `?thread=busy` opens the busy Thread, `?thread=apex` the mock Apex (`&turns=260` for a long one); `?theme=light`
- * draws it light.
+ * `?thread=busy` opens the busy Thread, `?thread=apex` the mock Apex (`&turns=260` for a long one), `?settings` the
+ * Settings pane, and `?setup=<project>` that project's Setup in it, on an account broker with nothing to list;
+ * `?theme=light` draws it light; `?machine` runs the Threads on a Linux machine of the person's own.
  */
 
 const search = new URLSearchParams(location.search)
@@ -124,7 +128,8 @@ store.set({ messages: [], stream: null })
 accountListStore.set({
   phase: "live",
   rows: [...busy, apex, ...native],
-  devices: new Map([[STUDIO, { id: STUDIO, kind: "desktop", name: "Studio", platform: "darwin" }]]),
+  // `?machine`: the Threads run on a machine of the person's own, so the rail, the strip and the chip wear its server.
+  devices: new Map([[STUDIO, search.has("machine") ? { id: STUDIO, kind: "runtime", name: "build-box", platform: "Linux x64 · Ubuntu 24.04" } : { id: STUDIO, kind: "desktop", name: "Studio", platform: "darwin" }]]),
 })
 
 /** What another Session's owner answers when it's opened: its record, a short exchange. */
@@ -152,8 +157,8 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   account: { id: "account-check", name: "You", email: "you@example.com", image: null, entitlements: [] },
   deviceId: "browser-check",
   options: { origin: location.origin, base: "/", build: "fixture" },
-  gateway: { wake: () => undefined, rest: async () => Promise.reject(new Error("The fixture has no gateway")) },
-  push: { seen: async () => undefined },
+  gateway: { wake: () => undefined, rest: async (_method: string, path: string) => ((search.get("setup") || search.get("side") === "setup") && path.startsWith("/v1/borrow/") ? { grants: [], leases: [], events: [], asks: [] } : Promise.reject(new Error("The fixture has no gateway"))) },
+  push: { seen: async () => undefined, standing: async () => ({ standing: "unsupported", quietHours: null, timeZone: "UTC" }) },
   conversations: async () => ({
     open: (session: WebSession) => {
       const snapshot = opened(session)
@@ -179,9 +184,16 @@ Reflect.set(window, "webDeskCheck", {
   },
 })
 
+// `&side=setup` opens Setup in the right rail over the Thread on screen.
+if (search.get("side") === "setup") openSetup()
+// The mock bridge would answer the page's first read; a real browser has only the account broker's source.
+if (search.get("setup")) setSetupSource(webSetup(client.gateway, "acct", () => []))
+
 function initialRoute(): WebRoute {
   if (search.get("thread") === "busy") return { kind: "thread", thread: BUSY_THREAD, session: BUSY_SESSIONS[0].session }
   if (search.get("thread") === "apex") return { kind: "thread", thread: APEX_THREAD, session: APEX_SESSION }
+  if (search.get("setup")) return { kind: "setup", project: search.get("setup")! }
+  if (search.get("settings") !== null) return { kind: "settings" }
   return { kind: "list" }
 }
 

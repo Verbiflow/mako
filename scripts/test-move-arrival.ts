@@ -123,12 +123,17 @@ try {
     arrivedMove(move)
     const { deps, order } = arriving({}, {})
     let release: () => void = () => undefined
-    deps.refreshCarried = () => {
+    const placed = new Promise<void>((resolve) => { release = resolve })
+    deps.refreshCarried = async () => {
       order.push("carried asked")
-      return new Promise<void>((resolve) => { release = () => { order.push("carried placed"); resolve() } })
+      await placed
+      order.push("carried placed")
     }
     const arriving_ = arriveMove(deps, input(move))
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    // Asked once the checkout reads as it should, which takes a Git process, so no fixed wait reaches it on a slow machine.
+    for (const began = Date.now(); !order.includes("carried asked") || !order.includes("receive"); await new Promise((resolve) => setTimeout(resolve, 5))) {
+      assert.ok(Date.now() - began < 60_000, `the carried files and the records are both under way: ${order.join(", ")}`)
+    }
     assert.ok(!order.includes("open codex"), "no session opens before the files are placed")
     release()
     const arrival = await arriving_

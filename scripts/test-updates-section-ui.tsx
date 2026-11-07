@@ -1,8 +1,8 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { renderToStaticMarkup } from "react-dom/server"
 import { Git } from "@mako/git"
@@ -231,7 +231,7 @@ assert.match(installed, /aria-label="Changes in this build"/)
 // The installed app's own metadata, end to end: Settings reads a checkout's uncommitted files as it takes its copy,
 // hands them to packaging, package-mac.mjs stamps them into the bundle's makoBuild, and the installed app's host reads
 // its bundle and Settings lists them under the installed revision.
-const scratch = await mkdtemp(join(tmpdir(), "mako-updates-metadata-"))
+const scratch = testScratch("mako-updates-metadata-")
 const git = new Git()
 try {
   const repo = join(scratch, "checkout")

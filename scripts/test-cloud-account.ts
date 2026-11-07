@@ -18,6 +18,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, test } from "node:test"
 import diagnosticsChannel from "node:diagnostics_channel"
+import { setTimeout as delay } from "node:timers/promises"
 import { Pool, fetch as undiciFetch } from "undici"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
 import { z } from "zod"
@@ -57,8 +58,10 @@ import type { Machine } from "@mako/host/base/machine"
 import type { CloudSignInsState } from "@mako/host/contracts/cloud-sign-ins"
 import type { CloudAccount, CloudAccountState, CloudBrowserSession, CloudDevice } from "@mako/host/contracts/cloud-account"
 import type { DiagnosticEvents } from "@mako/host/contracts/telemetry"
+import type { CommitAuthor } from "@mako/host/contracts/github-authorship"
 import { aesSealer, fileSecrets, wrappedKey, type Secrets } from "@mako/host/base/secrets"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
+import { ranOut } from "./lib/ran-out.ts"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-cloud-account-"))
 after(() => rm(scratch, { recursive: true, force: true }))
@@ -103,6 +106,9 @@ async function fakeCloud() {
     encodeGatewayClientFrame({ type: "event", event: { v: PROTOCOL_VERSION, stream: `account:${account.id}`, seq: event.seq, at: event.at, event: Payload.encoded(event.text) } })
   /** The credential each refresh came with, in order. */
   const refreshedWith: string[] = []
+  let authorship: CommitAuthor = "you"
+  let authorshipAnswers: number | undefined
+  let authorshipUnreadable = false
   const account = { id: "u1", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: ["cloud"] }
   /** The gateway a runtime's link reaches: the protocol's fake, which answers renewals with the same check. */
   const gateway = createFakeGateway({ renew: (value) => (verify(value) ? Math.floor(Date.now() / 1000) + options.tokenSeconds : undefined) })
@@ -197,6 +203,17 @@ async function fakeCloud() {
       return send(204, "")
     }
     if (request.method === "GET" && url.pathname === `/v1/accounts/${account.id}/sign-ins`) return send(200, JSON.stringify({ signIns: [], kept: [] }))
+    // Who the account's cloud commits are authored as, answered as the gateway answers it, with no token saved.
+    if (url.pathname === `/v1/accounts/${account.id}/github-authorship`) {
+      if (authorshipAnswers !== undefined) return send(authorshipAnswers, JSON.stringify({ title: "No such route" }))
+      if (request.method === "PUT") {
+        const checked = z.object({ as: z.enum(["you", "mako"]) }).strict().safeParse(await json(request))
+        if (!checked.success) return send(400, JSON.stringify({ title: "The request body isn't valid" }))
+        authorship = checked.data.as
+        if (authorshipUnreadable) return send(200, "not the answer")
+      }
+      return send(200, JSON.stringify({ as: authorship, pullRequests: authorship === "mako" ? "mako" : "mako-fallback", login: null }))
+    }
     if (request.method === "POST" && url.pathname === "/v1/bases") {
       const { repositories } = z.object({ repositories: z.array(z.object({ url: z.string(), branch: z.string().optional() })) }).parse(await json(request))
       bases.push(...repositories)
@@ -340,6 +357,8 @@ async function fakeCloud() {
     server.close()
   })
   return {
+    answerAuthorship: (status: number) => { authorshipAnswers = status },
+    loseAuthorshipAnswers: (lost: boolean) => { authorshipUnreadable = lost },
     url,
     moves,
     browsers,
@@ -498,11 +517,14 @@ test("after a sleep, a call to the cloud never waits on a pooled connection the 
   const stalled = mac.accounts.signIns().then(() => "answered", () => "dropped")
   assert.equal(await Promise.race([stalled, new Promise((resolve) => setTimeout(() => resolve("waiting"), 1_500))]), "waiting", "on the dropped connection, a call waits")
   const woke = performance.now()
-  mac.accounts.wake()
-  await mac.accounts.signIns()
+  // What the call waited for rather than the runner's clock: one sent on the stalled connection waits out a probe.
+  const { waits: wokeWaits } = await ranOut(async () => {
+    mac.accounts.wake()
+    await mac.accounts.signIns()
+  })
   const ms = performance.now() - woke
   console.log(`  a call to the cloud right after waking: ${ms.toFixed(0)} ms`)
-  assert.ok(ms < 1_000, `answered on a new connection in ${ms.toFixed(0)} ms`)
+  assert.ok(wokeWaits.every((wait) => wait < 1_000), `answered on a new connection in ${ms.toFixed(0)} ms; ran out: ${wokeWaits.join(", ")}`)
   assert.equal(await stalled, "dropped", "the call stranded before the wake ends rather than hanging")
   // Its log line says how far it got, which the cloud can't: it went out, on a connection kept from earlier calls, and
   // nothing came back.
@@ -513,7 +535,9 @@ test("after a sleep, a call to the cloud never waits on a pooled connection the 
 test("a call that fails says whether it ever left this Mac, and on which connection", async () => {
   // A server that takes connections and never answers, behind a pool of one connection: the first call goes out on a
   // new connection and hears nothing; the second never goes out at all.
-  const silent = createTcpServer((socket) => socket.on("data", () => undefined))
+  let heard = (): void => undefined
+  const wentOut = new Promise<void>((resolve) => { heard = resolve })
+  const silent = createTcpServer((socket) => socket.on("data", () => heard()))
   silent.listen(0, "127.0.0.1")
   await once(silent, "listening")
   const sockets = new Set<Socket>()
@@ -527,10 +551,10 @@ test("a call that fails says whether it ever left this Mac, and on which connect
   const pool = new Pool(new URL(url).origin, { connections: 1 })
   after(() => pool.destroy())
   const traces = new RequestTraces("x-test-correlation")
-  const call = async (id: string) => {
+  const call = async (id: string, signal: AbortSignal) => {
     const trace = traces.follow(id)
     try {
-      await undiciFetch(url, { method: "HEAD", headers: { "x-test-correlation": id }, dispatcher: pool, signal: AbortSignal.timeout(400) })
+      await undiciFetch(url, { method: "HEAD", headers: { "x-test-correlation": id }, dispatcher: pool, signal })
       return "answered"
     } catch {
       return trace.describe()
@@ -538,9 +562,18 @@ test("a call that fails says whether it ever left this Mac, and on which connect
       trace.end()
     }
   }
-  const [first, second] = await Promise.all([call(randomUUID()), call(randomUUID())])
-  assert.match(first, /^went out after \d+ ms on a new connection; no answer in \d+ ms$/)
-  assert.match(second, /^waited \d+ ms and never went out: no connection took it$/)
+  // Each stops in turn, not on a timer of its own: the first's abort frees the connection, and a second still waiting
+  // goes out on a new one.
+  const [stopFirst, stopSecond] = [new AbortController(), new AbortController()]
+  const first = call(randomUUID(), stopFirst.signal)
+  const second = call(randomUUID(), stopSecond.signal)
+  await Promise.race([wentOut, first])
+  // Long enough for the second to have gone, had a connection been free.
+  await delay(50)
+  stopSecond.abort()
+  assert.match(await second, /^waited \d+ ms and never went out: no connection took it$/)
+  stopFirst.abort()
+  assert.match(await first, /^went out after \d+ ms on a new connection; no answer in \d+ ms$/)
   // A call no trace follows is left alone, and nothing listens once none is on its way.
   assert.equal(diagnosticsChannel.channel("undici:request:create").hasSubscribers, false)
 })
@@ -653,11 +686,13 @@ test("a dropped connection comes back by itself; an expired token reconnects at 
   await mac.until(connected, "reconnected after a drop")
 
   const refreshes = cloud.calls.filter((call) => call === "POST /v1/devices/token").length
-  const started = Date.now()
   const before = cloud.sockets()[0]
-  cloud.closeAll(4001)
-  while (cloud.sockets().length !== 1 || cloud.sockets()[0] === before) await sleep(10)
-  assert.ok(Date.now() - started < 500, "no backoff for an expired token")
+  const { waits: expiredWaits } = await ranOut(async () => {
+    cloud.closeAll(4001)
+    while (cloud.sockets().length !== 1 || cloud.sockets()[0] === before) await sleep(10)
+  })
+  // A backoff's step is a second or more; the test's own look every 10 ms is the rest.
+  assert.ok(expiredWaits.every((ms) => ms < 1_000), `no backoff for an expired token: ${expiredWaits.join(", ")}`)
   assert.ok(connected(mac.accounts.account().state), "and no flicker to offline while it reconnects")
   assert.equal(cloud.calls.filter((call) => call === "POST /v1/devices/token").length, refreshes + 1, "after exactly one refresh")
 })
@@ -903,6 +938,34 @@ test("the browsers signed in to the account are listed, and signed out one at a 
   assert.equal(mac.accounts.account().state.status, "signed-in", "this Mac stays signed in")
 })
 
+test("who cloud commits are authored as is read and chosen through the account, As you until chosen otherwise", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/authorship" })
+  assert.deepEqual(await mac.accounts.githubAuthorship(), { as: "you", pullRequests: "mako-fallback", login: null }, "As you by default; without a token the App opens pull requests")
+  assert.deepEqual(await mac.accounts.saveGitHubAuthorship("mako"), { as: "mako", pullRequests: "mako", login: null })
+  assert.deepEqual(await mac.accounts.githubAuthorship(), { as: "mako", pullRequests: "mako", login: null }, "kept by the account")
+  assert.deepEqual(await mac.accounts.saveGitHubAuthorship("you"), { as: "you", pullRequests: "mako-fallback", login: null })
+  assert.deepEqual(cloud.calls.filter((call) => call.endsWith("/github-authorship")), ["GET", "PUT", "GET", "PUT"].map((method) => `${method} /v1/accounts/u1/github-authorship`))
+})
+
+test("a save that landed with its answer lost fails, and reading the account says it landed", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/authorship-unanswered" })
+  cloud.loseAuthorshipAnswers(true)
+  await assert.rejects(mac.accounts.saveGitHubAuthorship("mako"))
+  cloud.loseAuthorshipAnswers(false)
+  assert.deepEqual(await mac.accounts.githubAuthorship(), { as: "mako", pullRequests: "mako", login: null })
+})
+
+test("a cloud without who commits are authored as says so with no error, and any other failure stays one", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/authorship-missing" })
+  cloud.answerAuthorship(404)
+  assert.equal(await mac.accounts.githubAuthorship(), null, "a gateway before the route")
+  cloud.answerAuthorship(500)
+  await assert.rejects(mac.accounts.githubAuthorship(), "a gateway that has it and failed isn't one without it")
+})
+
 test("a move handed over goes as JSON carries its handoff, and its refusal within what the cloud keeps, so neither is lost", async () => {
   const cloud = await fakeCloud()
   const mac = await signedIn(cloud, { secretName: "cloud/moves" })
@@ -1107,9 +1170,12 @@ test("a runtime link silent while it sends what another device watches is asked 
   z.object({ _socket: z.instanceof(Socket) }).loose().parse(socket)._socket.pause()
   const stalled = Date.now()
   await sleep(SILENT_WHILE_WORKING_MS + 100)
-  mac.accounts.liveSent()
-  await waitFor(() => cloud.enrolments.length === 2, "replaced by a new link")
-  assert.ok(Date.now() - stalled < SILENT_WHILE_WORKING_MS + PROBE_ANSWER_MS + 1_500, `found in ${Date.now() - stalled} ms`)
+  const { waits: stallWaits } = await ranOut(async () => {
+    mac.accounts.liveSent()
+    await waitFor(() => cloud.enrolments.length === 2, "replaced by a new link")
+  })
+  // Found by its probe going unanswered (1.5 s), and by no longer wait: what ran out, not the runner's clock.
+  assert.deepEqual(stallWaits.filter((ms) => ms >= 1_000), [1_500], `found in ${Date.now() - stalled} ms, by its probe`)
 })
 
 test("a device removed while its runtime is connected signs out, and its runtime stops", async () => {

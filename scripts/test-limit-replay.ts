@@ -131,7 +131,7 @@ async function somewhereToGo(harness: string): Promise<void> {
     await until(`${harness}: the notice`, () => world.agents.personAsk(apex.conversation) !== undefined)
     const notices = world.agents.roster(apex.conversation).filter((agent) => agent.child?.limitNotice)
     assert.equal(notices.length, 1, `${harness}: the person is told once`)
-    assert.match(notices[0]!.child!.limitNotice!.line, /ran out until .*This Thread moved to /, `${harness}: and what happened: ${notices[0]!.child!.limitNotice!.line}`)
+    assert.match(notices[0]!.child!.limitNotice!.line, /ran out until .*This Thread and [23] Fins moved to /, `${harness}: and what happened: ${notices[0]!.child!.limitNotice!.line}`)
     assert.equal(world.store.finTurn(world.store.journalPlacement(apex.conversation)!.thread), undefined, `${harness}: a turn that finished leaves nowhere closed to the next one, so the harness that ran out can have it back`)
   } finally {
     await world.close()
@@ -230,6 +230,7 @@ async function personFirst(harness: string): Promise<void> {
     accounts[harness]![0]!.spentUntil = reset
     const next = await world.agents.nextPlace(alone.conversation)
     assert.ok(next, `${harness}: its card says where it would go`)
+    assert.notEqual(next.harness, harness, `${harness}: and names the harness it would go on, for its mark`)
     assert.equal(await world.agents.continueNext(alone.conversation, randomUUID()), true, `${harness}: and one press takes it there`)
     await until(`${harness}: their message there`, () => rows(world, alone.conversation).find((request) => request.id === words)?.status === "completed")
     assert.notEqual(heardBy(world, alone.conversation).at(-1)!.harness, harness)
