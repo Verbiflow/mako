@@ -18,6 +18,7 @@ import { runtimeLocation } from "@mako/host/transport/service"
 import { assertOwnHarnessStores } from "./lib/proof-host.ts"
 import { assertScratchEnvironment, seedScratchHome } from "./scratch-harness-home.ts"
 import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
+import { allowed, containerExec, localExec, markerOn, rejected, type Searched } from "./lib/placed-proof-evidence.ts"
 
 /**
  * A Fin placed on another device, live against a deployed cloud: two hosts of this checkout's build (`mako-host`, as a
@@ -186,8 +187,8 @@ interface ProofDevice {
   heard: string[]
   call(channel: string, args: JsonValue[]): Promise<RuntimeValue>
   log(): Promise<string[]>
-  /** What a file of that name holds anywhere under the device's data, read on the device; undefined when there's none. */
-  wrote(name: string): Promise<string | undefined>
+  /** A search of the device's data for a file of that name, on the device: found with what it holds, absent, or failed with why. */
+  searched(name: string): Promise<Searched>
   stop(): Promise<void>
 }
 
@@ -199,8 +200,8 @@ interface ContainerDevice {
   /** A command inside the container, as its user: what it printed. */
   inside(command: string): Promise<string>
   log(): Promise<string[]>
-  /** What a file of that name holds anywhere under the device's data, read on the device; undefined when there's none. */
-  wrote(name: string): Promise<string | undefined>
+  /** A search of the device's data for a file of that name, on the device: found with what it holds, absent, or failed with why. */
+  searched(name: string): Promise<Searched>
   stop(): Promise<void>
 }
 
@@ -265,11 +266,8 @@ async function makeContainer(name: string, of: string): Promise<ContainerDevice>
     heard,
     inside,
     log: async () => (await inside("cat /data/logs/host.log 2>/dev/null").catch(() => "")).split("\n").filter(Boolean),
-    // Read on the device itself: a marker the command wrote is there or it isn't, whatever any model said.
-    wrote: async (name) => {
-      const found = (await inside(`find /data -name '${name}' -type f 2>/dev/null | head -1`).catch(() => "")).trim()
-      return found ? (await inside(`cat '${found}'`)).trim() : undefined
-    },
+    // Read on the device itself, by `find`'s own exit status: found, absent, or a search that couldn't look, which proves nothing.
+    searched: (name) => markerOn(containerExec(container), "/data", name),
     stop: async () => {
       await keepLogs()
       await inside("mako-host leave").catch(() => undefined)
@@ -371,10 +369,7 @@ async function makeDevice(key: string, name: string, reach: string): Promise<Pro
     heard,
     call,
     log: async () => (await readFile(logFile, "utf8").catch(() => "")).split("\n").filter(Boolean),
-    wrote: async (name) => {
-      const found = (await run("find", [dataRoot, "-name", name, "-type", "f"]).catch(() => ({ stdout: "" }))).stdout.split("\n").find(Boolean)
-      return found ? (await readFile(found, "utf8")).trim() : undefined
-    },
+    searched: (name) => markerOn(localExec, dataRoot, name),
     stop: async () => {
       await run(process.execPath, [mako, "leave"], { env }).catch(() => undefined)
       const exited = host.exitCode === null && host.signalCode === null ? new Promise((done) => host.once("exit", done)) : Promise.resolve()
@@ -611,11 +606,16 @@ try {
     say("ASK", { device: names.place, thread: asker.child, name: asker.name, title, decision: "allow", ...(asker.state.question && { question: asker.state.question }), apex: { thread: apexThread.thread, title: `Placed Fins proof ${tag}`, offSince: apexOffAt.at } })
     // Ten minutes for whoever answers it: there's no window on that device to answer it in. What ends the wait is the
     // marker the command wrote, read on the device: the model resuming with its word is never the evidence.
-    const ran = await until("the command's marker on the device", () => place.wrote(marker(WORDS.asks)), 10 * 60_000)
-    if (ran !== WORDS.asks) throw new Error(`the marker on the device holds ${JSON.stringify(ran)}, not the command's word`)
+    const ran = await until("the command's marker on the device", async () => {
+      const searched = await place.searched(marker(WORDS.asks))
+      if (searched.kind === "failed") throw new Error(`the device couldn't be searched: ${searched.why}`)
+      return searched.kind === "found" ? searched : undefined
+    }, 10 * 60_000)
+    const proven = allowed(ran, WORDS.asks)
+    if (!proven.ok) throw new Error(proven.why)
     const permission = await permissionLines()
     if (!answered(permission, askedAt).length) throw new Error(`the device's host logged no answer to the permission since the ask: ${JSON.stringify(permission)}`)
-    return { msToAnswer: Date.now() - askedAt, marker: { name: marker(WORDS.asks), holds: ran }, heardOnPlace: [...place.heard], permission }
+    return { msToAnswer: Date.now() - askedAt, marker: { name: marker(WORDS.asks), holds: ran.holds }, heardOnPlace: [...place.heard], permission }
   })
   if (apex.heard.includes(WORDS.asks)) throw new Error("the asking Fin's turn ran on the wrong device")
   await step("the first device is back, and the Fin's result wakes the Apex", async () => {
@@ -640,7 +640,10 @@ try {
     })
     return { child, name: answer.name, state: strip.state }
   })
-  if (await place.wrote(marker(WORDS.deny)) !== undefined) throw new Error("the command ran with nobody asked")
+  {
+    const before = rejected(await place.searched(marker(WORDS.deny)))
+    if (!before.ok) throw new Error(`before anyone answered: ${before.why}`)
+  }
   const rejectAskedAt = Date.now()
   await step("the person rejects it in the Fin's own Thread, and the command never runs on the device", async () => {
     say("ASK", { device: names.place, thread: denier.child, name: denier.name, title: `Rejection proof ${tag}`, decision: "reject", ...(denier.state.question && { question: denier.state.question }), apex: { thread: apexThread.thread, title: `Placed Fins proof ${tag}` } })
@@ -649,8 +652,9 @@ try {
       const found = await stripOf(denier.child)
       return found && found.state.kind !== "blocked" && found.state.kind !== "working" ? found : undefined
     }, 10 * 60_000)
-    const wrote = await place.wrote(marker(WORDS.deny))
-    if (wrote !== undefined) throw new Error(`the command ran though the person rejected it: the marker holds ${JSON.stringify(wrote)}`)
+    // A rejection is proven by a search that completed and found nothing: one that couldn't look fails the step.
+    const proven = rejected(await place.searched(marker(WORDS.deny)))
+    if (!proven.ok) throw new Error(proven.why)
     // The device took an answer to the permission since the ask, and nothing ran: the model's word after its failed call counts for nothing.
     const permission = await permissionLines()
     if (!answered(permission, rejectAskedAt).length) throw new Error(`the device's host logged no answer to the permission since the ask: ${JSON.stringify(permission)}`)
