@@ -33,10 +33,12 @@ export const PROTOCOL_VERSION = 1
  * it returns. 17 lets a `sessions` row say the Session it was forked from (`forkOf`). 18 lets a `sessions` row say
  * what one of its Session's Fins asks the person (`asking`), which the row waits on, and where the Session stands
  * under it. 19 lets a `sessions` row say its Session's Fins (`fins`): every device shows an Apex's tree as its owner
- * does. 20 lets a row's Fins say all their selectors read of them (`FIN_STATES_VERSION`). Every envelope stays at
+ * does. 20 lets a row's Fins say all their selectors read of them (`FIN_STATES_VERSION`). 21 lets a `sessions` row say
+ * its Session's place among its Thread's Sessions as its owner keeps them (`order`, `SESSION_ORDER_VERSION`), so a
+ * device showing a Thread it doesn't hold ranks that Thread's rows as the owner does. Every envelope stays at
  * `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 20
+export const LINK_VERSION = 21
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -122,6 +124,13 @@ export const FINS_VERSION = 19
  * of them, so it hears each Fin as 19 knew it.
  */
 export const FIN_STATES_VERSION = 20
+
+/**
+ * The first link version whose `sessions` rows may say their Session's place in its Thread (`order`). A gateway that
+ * agreed 20 refuses a row saying it, so such a gateway hears the row without, and a device showing that Thread ranks
+ * its rows as it did before: the first listed first.
+ */
+export const SESSION_ORDER_VERSION = 21
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

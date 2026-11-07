@@ -41,7 +41,7 @@ function row(fields: Partial<ListedSession> & Pick<ListedSession, "session" | "t
 const finOfApex: ListedFin = { thread: FIN_THREAD, name: "asker", harness: "opencode", title: "Approval proof", state: { kind: "blocked", question: "Approve: echo HOTEL", on: "approval" }, startedAt: at(0) }
 const apexRow = row({ session: APEX_SESSION, thread: APEX_THREAD, conversation: "c-apex", threadTitle: "Placed Fins proof", title: "Placed Fins proof", state: "working", fins: [finOfApex] })
 /** The Fin's own row, as Loft writes it: waiting on an approval there. */
-const finRow = row({ session: FIN_SESSION, thread: FIN_THREAD, conversation: "c-fin", harness: "opencode", title: "Approval proof", state: "waiting", waitingOn: "Approve: echo HOTEL", waitingFor: "approval", folder: "/data/worktrees/hello-world/approval-proof", runsOn: { kind: "device", deviceId: LOFT }, activityAt: at(3) })
+const finRow = row({ session: FIN_SESSION, thread: FIN_THREAD, conversation: "c-fin", harness: "opencode", title: "Approval proof", state: "waiting", waitingOn: "Approve: echo HOTEL", waitingFor: "approval", folder: "/data/worktrees/hello-world/approval-proof", runsOn: { kind: "device", deviceId: LOFT }, activityAt: at(3), order: 1 })
 /** Another Session nobody's row names: a Thread of its own. */
 const loneRow = row({ session: uuid(3), thread: uuid(300), conversation: "c-lone", title: "Release notes", runsOn: { kind: "device", deviceId: LOFT } })
 
@@ -134,9 +134,9 @@ test("C1: a placed Fin's row opens its own conversation on its device, and opens
 
 /** An older Session of the same placed Fin on Loft, idle: listed too, and never the one that opens. */
 const OLD_FIN_SESSION = uuid(4)
-const oldFinRow = row({ session: OLD_FIN_SESSION, thread: FIN_THREAD, conversation: "c-fin-old", harness: "opencode", title: "Approval proof", state: "idle", folder: "/data/worktrees/hello-world/approval-proof", runsOn: { kind: "device", deviceId: LOFT }, createdAt: at(-60), activityAt: at(-50) })
+const oldFinRow = row({ session: OLD_FIN_SESSION, thread: FIN_THREAD, conversation: "c-fin-old", harness: "opencode", title: "Approval proof", state: "idle", folder: "/data/worktrees/hello-world/approval-proof", runsOn: { kind: "device", deviceId: LOFT }, createdAt: at(-60), activityAt: at(-50), order: 0 })
 
-// The Fin's Thread is Loft's: this window holds no group of it, so its rows' own creation times, which Loft wrote, order them.
+// The Fin's Thread is Loft's: this window holds no group of it, so each row's place in it, which Loft wrote (`order`), ranks them.
 test("a placed Fin with two Sessions on its device: its newest is the one its row opens and stands by, whichever is listed first", () => {
   const apex = { thread: APEX_THREAD, session: APEX_SESSION }
   assert.equal(acpStore.get().threadSessions?.[FIN_THREAD], undefined, "the Fin's Thread's group is its own device's, not held here")
@@ -152,5 +152,33 @@ test("a placed Fin with two Sessions on its device: its newest is the one its ro
       assert.deepEqual(finOpening(acpStore.get(), children[0]!), { kind: "conversation", key: "c-fin" }, `${order}: from under the Apex it opens the approval`)
       assert.deepEqual(finOpening(acpStore.get(), placedChild()), { kind: "conversation", key: "c-fin" }, `${order}: and so does the Apex's own roster entry`)
     }
+  }
+})
+
+// An open ask always surfaces: an older Session asking outranks a newer one idle, whichever is listed first.
+test("a placed Fin whose older Session asks while its newer one is idle: the ask is what opens and stands, whichever is listed first", () => {
+  const apex = { thread: APEX_THREAD, session: APEX_SESSION }
+  const asking = row({ ...oldFinRow, state: "waiting", waitingOn: "Approve: echo HOTEL", waitingFor: "approval" })
+  const idle = row({ ...finRow, state: "idle", waitingOn: undefined, waitingFor: undefined })
+  for (const [order, rows] of [["older first", [asking, idle]], ["newest first", [idle, asking]]] as const) {
+    acpStore.set({ activeKey: null, conversations: {}, threadSessions: {} })
+    listLive([listedSummary(apexRow, "MacBook", undefined), ...rows.map((each) => listedSummary(each, "Loft", undefined, undefined, apex))])
+    const children = threadChildren(acpStore.get(), APEX_THREAD)
+    assert.equal(children[0]?.child?.conversation, "c-fin-old", `${order}: the asking Session's conversation`)
+    assert.deepEqual(childStateOf(children[0]!), { kind: "blocked", question: "Approve: echo HOTEL", on: "approval" }, `${order}: standing on its ask`)
+    assert.deepEqual(finOpening(acpStore.get(), children[0]!), { kind: "conversation", key: "c-fin-old" }, `${order}: from under the Apex`)
+    assert.deepEqual(finOpening(acpStore.get(), placedChild()), { kind: "conversation", key: "c-fin-old" }, `${order}: and from the Apex's own roster entry`)
+  }
+})
+
+// A host before link version 21 writes no `order`: its rows rank where they arrive, as every device did before.
+test("rows from a host that says no order rank as they arrive: the first listed stands, whichever it is", () => {
+  const apex = { thread: APEX_THREAD, session: APEX_SESSION }
+  // Neither row asks anything, so nothing but arrival ranks them.
+  const without = (each: ListedSession): ListedSession => ({ ...each, order: undefined, state: "idle", waitingOn: undefined, waitingFor: undefined })
+  for (const [order, rows, expected] of [["older first", [oldFinRow, finRow], "c-fin-old"], ["newest first", [finRow, oldFinRow], "c-fin"]] as const) {
+    acpStore.set({ activeKey: null, conversations: {}, threadSessions: {} })
+    listLive([listedSummary(apexRow, "MacBook", undefined), ...rows.map((each) => listedSummary(without(each), "Loft", undefined, undefined, apex))])
+    assert.equal(threadChildren(acpStore.get(), APEX_THREAD)[0]?.child?.conversation, expected, `${order}: the first listed`)
   }
 })

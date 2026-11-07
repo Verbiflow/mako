@@ -48,6 +48,7 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
     movedAt: Date.parse(row.activityAt),
   }
   if (deviceKind && row.runsOn.kind === "device") summary.elsewhereKind = deviceKind
+  if (row.order !== undefined) summary.order = row.order
   const promptedAt = listedPromptedAt(row)
   if (promptedAt !== undefined) summary.promptedAt = promptedAt
   if (row.title) summary.session.title = row.title
