@@ -58,6 +58,7 @@ import type { Machine } from "@mako/host/base/machine"
 import type { CloudSignInsState } from "@mako/host/contracts/cloud-sign-ins"
 import type { CloudAccount, CloudAccountState, CloudBrowserSession, CloudDevice } from "@mako/host/contracts/cloud-account"
 import type { DiagnosticEvents } from "@mako/host/contracts/telemetry"
+import type { CommitAuthor } from "@mako/host/contracts/github-authorship"
 import { aesSealer, fileSecrets, wrappedKey, type Secrets } from "@mako/host/base/secrets"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
 
@@ -104,6 +105,9 @@ async function fakeCloud() {
     encodeGatewayClientFrame({ type: "event", event: { v: PROTOCOL_VERSION, stream: `account:${account.id}`, seq: event.seq, at: event.at, event: Payload.encoded(event.text) } })
   /** The credential each refresh came with, in order. */
   const refreshedWith: string[] = []
+  let authorship: CommitAuthor = "you"
+  let authorshipAnswers: number | undefined
+  let authorshipUnreadable = false
   const account = { id: "u1", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: ["cloud"] }
   /** The gateway a runtime's link reaches: the protocol's fake, which answers renewals with the same check. */
   const gateway = createFakeGateway({ renew: (value) => (verify(value) ? Math.floor(Date.now() / 1000) + options.tokenSeconds : undefined) })
@@ -198,6 +202,17 @@ async function fakeCloud() {
       return send(204, "")
     }
     if (request.method === "GET" && url.pathname === `/v1/accounts/${account.id}/sign-ins`) return send(200, JSON.stringify({ signIns: [], kept: [] }))
+    // Who the account's cloud commits are authored as, answered as the gateway answers it, with no token saved.
+    if (url.pathname === `/v1/accounts/${account.id}/github-authorship`) {
+      if (authorshipAnswers !== undefined) return send(authorshipAnswers, JSON.stringify({ title: "No such route" }))
+      if (request.method === "PUT") {
+        const checked = z.object({ as: z.enum(["you", "mako"]) }).strict().safeParse(await json(request))
+        if (!checked.success) return send(400, JSON.stringify({ title: "The request body isn't valid" }))
+        authorship = checked.data.as
+        if (authorshipUnreadable) return send(200, "not the answer")
+      }
+      return send(200, JSON.stringify({ as: authorship, pullRequests: authorship === "mako" ? "mako" : "mako-fallback", login: null }))
+    }
     if (request.method === "POST" && url.pathname === "/v1/bases") {
       const { repositories } = z.object({ repositories: z.array(z.object({ url: z.string(), branch: z.string().optional() })) }).parse(await json(request))
       bases.push(...repositories)
@@ -341,6 +356,8 @@ async function fakeCloud() {
     server.close()
   })
   return {
+    answerAuthorship: (status: number) => { authorshipAnswers = status },
+    loseAuthorshipAnswers: (lost: boolean) => { authorshipUnreadable = lost },
     url,
     moves,
     browsers,
@@ -913,6 +930,34 @@ test("the browsers signed in to the account are listed, and signed out one at a 
   assert.equal(await mac.accounts.endBrowserSessions(), 2)
   assert.deepEqual(await mac.accounts.browserSessions(), [])
   assert.equal(mac.accounts.account().state.status, "signed-in", "this Mac stays signed in")
+})
+
+test("who cloud commits are authored as is read and chosen through the account, As you until chosen otherwise", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/authorship" })
+  assert.deepEqual(await mac.accounts.githubAuthorship(), { as: "you", pullRequests: "mako-fallback", login: null }, "As you by default; without a token the App opens pull requests")
+  assert.deepEqual(await mac.accounts.saveGitHubAuthorship("mako"), { as: "mako", pullRequests: "mako", login: null })
+  assert.deepEqual(await mac.accounts.githubAuthorship(), { as: "mako", pullRequests: "mako", login: null }, "kept by the account")
+  assert.deepEqual(await mac.accounts.saveGitHubAuthorship("you"), { as: "you", pullRequests: "mako-fallback", login: null })
+  assert.deepEqual(cloud.calls.filter((call) => call.endsWith("/github-authorship")), ["GET", "PUT", "GET", "PUT"].map((method) => `${method} /v1/accounts/u1/github-authorship`))
+})
+
+test("a save that landed with its answer lost fails, and reading the account says it landed", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/authorship-unanswered" })
+  cloud.loseAuthorshipAnswers(true)
+  await assert.rejects(mac.accounts.saveGitHubAuthorship("mako"))
+  cloud.loseAuthorshipAnswers(false)
+  assert.deepEqual(await mac.accounts.githubAuthorship(), { as: "mako", pullRequests: "mako", login: null })
+})
+
+test("a cloud without who commits are authored as says so with no error, and any other failure stays one", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/authorship-missing" })
+  cloud.answerAuthorship(404)
+  assert.equal(await mac.accounts.githubAuthorship(), null, "a gateway before the route")
+  cloud.answerAuthorship(500)
+  await assert.rejects(mac.accounts.githubAuthorship(), "a gateway that has it and failed isn't one without it")
 })
 
 test("a move handed over goes as JSON carries its handoff, and its refusal within what the cloud keeps, so neither is lost", async () => {

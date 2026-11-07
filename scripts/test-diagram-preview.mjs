@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (process.versions.electron) {
   void check().then(async () => {
@@ -17,13 +17,12 @@ if (process.versions.electron) {
 } else {
   const url = process.argv[2]
   assert.ok(url && ["127.0.0.1", "localhost"].includes(new URL(url).hostname), "Pass the local dev URL")
-  const root = await mkdtemp(join(tmpdir(), "mako-diagram-check-"))
+  const root = testScratch("mako-diagram-check-")
   await writeFile(join(root, "package.json"), JSON.stringify({ main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_DIAGRAM_TEST_ROOT: root, MAKO_DIAGRAM_TEST_URL: url }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(resolve("node_modules/.bin/electron"), [root], { env, stdio: "inherit" })
   process.exitCode = await new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", (code) => resolve(code ?? 1)) })
-  console.log(`Diagram evidence: ${root}`)
 }
 
 async function check() {

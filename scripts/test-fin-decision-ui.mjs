@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // Done · needs you, on the production components and the mock bridge's Apex scene with two Fins that finished with a
 // decision (`?mock&app=apex&fins=decisions`): Thread list swipe leaves the person "Merge #371 into main?", Pull to
@@ -19,7 +19,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-fin-decision-ui-"))
+  const root = testScratch("mako-fin-decision-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-fin-decision-ui", main: fileURLToPath(import.meta.url) }))
   const { createServer } = await import("vite")
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
@@ -35,7 +35,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Fin decision UI evidence: ${process.env.MAKO_DECISION_UI_SHOTS ?? join(root, "shots")}`)
 }
 
 const QUESTION = "Merge #371 into main?"

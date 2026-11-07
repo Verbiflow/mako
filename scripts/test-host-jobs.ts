@@ -11,8 +11,11 @@ const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === 
   let runs = 0
   jobs.every("count", 10, () => { runs += 1 })
   assert.equal(timers(), before, "A job's timer keeps nothing alive")
-  await sleep(80)
-  assert.ok(runs >= 3, `A job runs again and again (${runs} runs)`)
+  const hung = performance.now() + 10_000
+  while (runs < 3) {
+    assert.ok(performance.now() < hung, `A job runs again and again (${runs} runs)`)
+    await sleep(5)
+  }
   const [state] = jobs.list()
   assert.equal(state?.name, "count")
   assert.equal(state?.runs, runs)

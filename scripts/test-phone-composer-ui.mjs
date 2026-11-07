@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * The phone's live Session through its production pieces (`LiveSession`, the dock, the composer) on the mock bridge
@@ -35,7 +35,7 @@ if (process.versions.electron) {
   const args = process.argv.slice(2)
   const portAt = args.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(args.splice(portAt, 2)[1])
-  const root = await mkdtemp(join(tmpdir(), "mako-phone-composer-ui-"))
+  const root = testScratch("mako-phone-composer-ui-")
   const evidence = args[0] ? resolve(args[0]) : root
   await mkdir(evidence, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: port !== 0, hmr: false } })
@@ -52,7 +52,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Phone composer UI evidence: ${evidence}`)
 }
 
 async function checkPhone() {

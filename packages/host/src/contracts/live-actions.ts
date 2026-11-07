@@ -33,6 +33,8 @@ export const LiveActionSchema = z.object({
   digest: z.string(),
   bindingId: z.string().uuid(),
   createdAt: z.number(),
+  /** Who sent it, as the host knows it. Absent in receipts kept before it was. */
+  sender: z.enum(["person", "native"]).optional(),
   /** Host-owned queue state restored only after an authoritative refusal. */
   queueStatus: z.enum(["queued", "held"]).optional(),
   state: z.discriminatedUnion("kind", [

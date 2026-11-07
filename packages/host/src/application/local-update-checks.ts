@@ -17,6 +17,12 @@ import { BUILD_UNCOMMITTED_VARIABLE } from "./local-update-source.js"
  * through `LocalUpdates` itself), because an update once failed on a test
  * that broke only under the variable the updater sets for its performance
  * check, and nothing else ever set it.
+ *
+ * So a commit whose `update-checks` passed on the default branch has passed
+ * all of this already (`readCi`), the performance check on a quiet runner
+ * rather than a Mac at load 26. An update of one, clean from its upstream,
+ * runs `machine` alone: what only this Mac can tell. A build with local
+ * changes, or a commit CI hasn't vouched for, runs everything.
  */
 export const UPDATE_CHECKS = {
   /** Alone first: everything after reads its output. */
@@ -25,6 +31,8 @@ export const UPDATE_CHECKS = {
   checks: ["test:application", "test:renderer-assets"],
   /** Alone, last: a timing that shares the Mac with the other checks measures them too. */
   performance: "test:update-performance",
+  /** What an update of a commit CI passed still runs: a real host and this Mac's Electron, all of it among `checks`. */
+  machine: "test:update-machine",
 } as const
 
 /** What a checkout from before `test:update-performance` checks its performance with. */
@@ -81,8 +89,12 @@ export async function writeChanged(folder: string, paths: string[]): Promise<str
 
 const scripts = z.object({ scripts: z.record(z.string(), z.string()) })
 
-/** The performance script the checkout carries: its own `test:update-performance`, else what it had before. */
-export async function checkScripts(checkout: string): Promise<{ performance: string }> {
+/**
+ * What the checkout carries: its performance script, its own
+ * `test:update-performance` else what it had before, and its machine checks,
+ * which a commit from before them hasn't got: it runs everything.
+ */
+export async function checkScripts(checkout: string): Promise<{ performance: string; machine: boolean }> {
   const listed = scripts.parse(JSON.parse(await readFile(join(checkout, "package.json"), "utf8"))).scripts
-  return { performance: UPDATE_CHECKS.performance in listed ? UPDATE_CHECKS.performance : LEGACY_PERFORMANCE }
+  return { performance: UPDATE_CHECKS.performance in listed ? UPDATE_CHECKS.performance : LEGACY_PERFORMANCE, machine: UPDATE_CHECKS.machine in listed }
 }

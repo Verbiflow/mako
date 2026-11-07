@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * An opened Fin through everything that can happen to it, on the desk, in a laptop's browser and on a phone. From each
@@ -22,7 +22,7 @@ if (process.versions.electron) {
   })
 } else {
   const given = process.argv.indexOf("--url")
-  const root = await mkdtemp(join(tmpdir(), "mako-fin-transitions-ui-"))
+  const root = testScratch("mako-fin-transitions-ui-")
   let server
   let base = given > 0 ? process.argv[given + 1] : undefined
   if (!base) {
@@ -43,7 +43,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`UI evidence: ${root}`)
 }
 
 const FIN = "Sheet motion on iPad"
