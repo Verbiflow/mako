@@ -1219,6 +1219,59 @@ async function activityTellsNoOne(): Promise<void> {
   }
 }
 
+/** A list reads what the listing and the store hold, never a journal: one Fin's search once read 74 back at once. */
+async function listsReadNoJournal(): Promise<void> {
+  const rows: ThreadRef[] = []
+  let lists = 0
+  const w = new AgentsWorld({
+    root: join(root, "lists"),
+    script: (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : "Started them."),
+    references: { list: () => (lists += 1, rows), transcriptArtifact: async () => null },
+  })
+  try {
+    const apex = await w.apex("codex")
+    const fins: string[] = []
+    for (const name of ["one", "two", "three"]) {
+      const started = await w.agents.start(apex.caller, { brief: { objective: "Finish." }, harness: "claude", name, clientKey: `k-${name}`, cwd: w.root })
+      assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+      fins.push(started.conversation)
+    }
+    await w.settle()
+    const records = w.live["records"]
+    const loaded = () => w.live.residency().memory.loads.reduce((sum, load) => sum + load.count, 0)
+    const quiet = async <Answer>(what: string, list: () => Promise<Answer>): Promise<Answer> => {
+      for (const fin of fins.slice(1)) records.release(fin)
+      const before = loaded()
+      const answer = await list()
+      assert.equal(loaded(), before, `${what} reads no journal`)
+      return answer
+    }
+    const asFin = w.caller(fins[0]!)
+    for (const scope of [undefined, "tree", "apexes", "threads"] as const) await quiet(`an Apex's ${scope ?? "children"} list`, () => w.agents.list(apex.caller, { ...(scope && { scope }) }))
+    for (const scope of [undefined, "tree", "apexes", "crew", "threads"] as const) await quiet(`a Fin's ${scope ?? "children"} list`, () => w.agents.list(asFin, { ...(scope && { scope }) }))
+    await quiet("a Fin's search of Threads", () => w.agents.list(asFin, { scope: "threads", query: "anything" }))
+
+    // What a Fin may reach is exactly what it could: its tree's Sessions, unloaded or not, and nothing outside it.
+    const nativeOf = (conversation: string) => w.live.nativeIds(conversation)[0]
+    const sibling = nativeOf(fins[1]!)
+    assert.ok(sibling, "a released Fin's harness Session is still listed")
+    assert.equal(w.live.held(fins[1]!), undefined, "with nothing of it in memory")
+    assert.deepEqual([...w.live.nativeIds(fins[1]!)], w.live.snapshot(fins[1]!)?.control?.bindings.flatMap((binding) => (binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : [])), "and the listing says what the journal does")
+    records.release(fins[1]!)
+    const row = (harness: string, nativeId: string): ThreadRef => ({ harness, nativeId, path: `/rail/${nativeId}.jsonl`, title: `Thread ${nativeId}`, updatedAt: new Date(NOW).toISOString() })
+    rows.push(row(sibling.provider, sibling.nativeId), row("codex", "somebody-elses"))
+    for (let at = 0; at < 2_000; at += 1) rows.push(row("codex", `other-${at}`))
+    lists = 0
+    const found = await quiet("a Fin's search over 2,000 rows", () => w.agents.list(asFin, { scope: "threads" }))
+    assert.ok(found && "threads" in found, JSON.stringify(found))
+    assert.deepEqual(found.threads.map((thread) => thread.ref).filter((ref) => ref.includes(sibling.nativeId)).length, 1, "a Fin of its tree is in reach")
+    assert.equal(found.threads.some((thread) => thread.ref.includes("somebody-elses")), false, "a Thread outside it isn't")
+    assert.ok(lists <= 3, `the rows are read once a search, not once a row (${lists})`)
+  } finally {
+    await w.close()
+  }
+}
+
 async function stoppedApexHolds(): Promise<void> {
   let working = 0
   const w = new AgentsWorld({
@@ -1883,6 +1936,7 @@ try {
   await startedFinsOldQueueRow()
   await finsAtWorkByBinding()
   await stoppedApexHolds()
+  await listsReadNoJournal()
   await activityTellsNoOne()
   await followsShellRuns()
   await relinkedRuns()
