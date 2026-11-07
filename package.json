@@ -302,7 +302,7 @@
     "test:delivery-retry": "tsx scripts/test-limit-reset.ts && tsx scripts/test-delivery-retry.ts",
     "test:handoff": "tsx scripts/test-handoff.ts",
     "test:request-holds": "tsx scripts/test-request-holds.ts",
-    "test:wake-queue": "tsx scripts/test-wake-queue.ts",
+    "test:wake-queue": "tsx scripts/test-wake-queue.ts && tsx scripts/test-question-reaches-apex.ts",
     "test:orch-comms": "tsx scripts/test-orch-comms.ts",
     "test:orch-deliver": "tsx scripts/test-orch-deliver.ts",
     "test:steer-landing": "tsx --tsconfig tsconfig.app.json scripts/test-steer-landing.ts",
