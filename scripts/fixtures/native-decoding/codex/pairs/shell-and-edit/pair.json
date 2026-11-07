@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.166.0"
+    "version": "0.167.0"
   },
   "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/30/rollout-2026-10-30T12-57-11-01a18ce2-bb1f-7653-b8eb-f360d3959e88.jsonl",
+      "path": ".codex/sessions/2026/11/06/rollout-2026-11-06T14-19-54-01a1b13a-fa69-7000-94e6-28e2edba833f.jsonl",
       "known": []
     }
   ]
