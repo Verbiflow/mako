@@ -351,6 +351,7 @@ const PlacementSchema = z.object({ thread: ThreadIdSchema, session: SessionIdSch
 const CountSchema = z.object({ count: z.number() })
 const FirstJournalSchema = z.object({ count: z.number(), first: z.number().nullable() })
 const VersionSchema = z.object({ data_version: z.number() })
+const TotalChangesSchema = z.object({ count: z.number() })
 const PlacementChangeRowSchema = z.object({ seq: z.number(), session_id: z.string() })
 const ExecutionRowSchema = z.object({
   owner_kind: z.enum(["device", "cloud"]).nullable(),
@@ -392,6 +393,7 @@ const MoveBeganSchema = z.object({ move: MoveIdSchema, thread: ThreadIdSchema, s
 const MovedSchema = z.object({ move: MoveIdSchema })
 const JournalRowSchema = z.object({ conversation_id: z.string() })
 const NativeRowSchema = z.object({ harness: z.string(), native_id: z.string() })
+const ChildNativeRowSchema = NativeRowSchema.extend({ thread_id: z.string() })
 
 /**
  * Migration 2 (track A2): who may execute each Session, and every move of a
@@ -713,6 +715,8 @@ export class ThreadStore {
   readonly self: ExecutionOwner
   private db: DatabaseSync
   private reader: ReadOnlyConnection | undefined
+  /** How many times `reader` opened on a newer file. */
+  private reopened = 0
   /**
    * The store's own numbers. In a newer Mako's format this build reads
    * Threads and Sessions and changes nothing (`write` declines), whether the
@@ -1267,20 +1271,38 @@ export class ThreadStore {
       })
   }
 
-  /** The harness Sessions of the children of `session`'s Thread, oldest child first. */
-  childSessions(session: string): { harness: string; nativeId: string }[] {
-    const parent = this.sessionPlacement(SessionIdSchema.parse(session))?.thread
-    const children = parent ? this.edges().children(parent) : []
-    if (!children.length) return []
-    const native = this.sql(`SELECT c.harness, c.native_id FROM native_claims c JOIN memberships m ON m.session_id = c.session_id
-      WHERE c.device_id = ? AND m.thread_id = ?
-      UNION SELECT s.harness, s.key AS native_id FROM sources s JOIN memberships m ON m.session_id = s.session_id
-      WHERE s.device_id = ? AND m.thread_id = ?`)
-    return children.flatMap((edge) => {
-      const claimed = native.all(this.deviceId, edge.child, this.deviceId, edge.child).map((row) => NativeRowSchema.parse(row)).map((row) => ({ harness: row.harness, nativeId: row.native_id }))
-      if (claimed.length) return claimed
-      return edge.run?.nativeId ? [{ harness: edge.run.harness, nativeId: edge.run.nativeId }] : []
-    })
+  /** Moves with every write to this store, this host's or another's, without reading a table. */
+  version(): string {
+    this.syncVersion()
+    // Connection's own counters: a snapshot reopened on a newer file starts them again, so the reopening has to count.
+    return `${this.reopened}:${this.dataVersion}:${TotalChangesSchema.parse(this.sql("SELECT total_changes() AS count").get()).count}`
+  }
+
+  /**
+   * The harness Sessions of every Thread's children, by the parent's Thread, oldest child first: one read, for whatever
+   * walks many Sessions. One Apex's 54 children read once per child and per Session of its Thread held the host 175 ms.
+   */
+  childSessions(): ReadonlyMap<string, { harness: string; nativeId: string }[]> {
+    const native = new Map<string, { harness: string; nativeId: string }[]>()
+    const rows = this.sql(`SELECT m.thread_id, c.harness, c.native_id FROM native_claims c JOIN memberships m ON m.session_id = c.session_id
+      WHERE c.device_id = ? AND m.thread_id IN (SELECT child_thread FROM thread_parents)
+      UNION SELECT m.thread_id, s.harness, s.key AS native_id FROM sources s JOIN memberships m ON m.session_id = s.session_id
+      WHERE s.device_id = ? AND m.thread_id IN (SELECT child_thread FROM thread_parents)`).all(this.deviceId, this.deviceId)
+    for (const row of rows) {
+      const { thread_id: thread, harness, native_id: nativeId } = ChildNativeRowSchema.parse(row)
+      const held = native.get(thread)
+      if (held) held.push({ harness, nativeId })
+      else native.set(thread, [{ harness, nativeId }])
+    }
+    const children = new Map<string, { harness: string; nativeId: string }[]>()
+    for (const edge of this.edges().all) {
+      const claimed = native.get(edge.child) ?? (edge.run?.nativeId ? [{ harness: edge.run.harness, nativeId: edge.run.nativeId }] : [])
+      if (!claimed.length) continue
+      const held = children.get(edge.parent)
+      if (held) held.push(...claimed)
+      else children.set(edge.parent, [...claimed])
+    }
+    return children
   }
 
   /** Each child's newest report, by its Thread. */
@@ -3069,6 +3091,7 @@ export class ThreadStore {
       this.db = this.reader.database
       this.statements.clear()
       this.dataVersion = -1
+      this.reopened += 1
     }
     const version = VersionSchema.parse(this.sql("PRAGMA data_version").get()).data_version
     if (version === this.dataVersion) return

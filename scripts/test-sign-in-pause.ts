@@ -274,6 +274,8 @@ try {
       const beforeB = sends
       assert.equal(await live.resumeSignIn(b), "resumed")
       await until(() => signInPause(live.snapshot(b)!.requests) === undefined && live.snapshot(b)?.session.status === "ready", `${label}: the later session continues`)
+      // Its send can follow its status: a session reads ready as it goes back on the queue.
+      await until(() => sends > beforeB, `${label}: the later session's message goes`)
       await delay(30)
       assert.equal(sends, beforeB + 1, `${label}: resuming one session sends nothing for another`)
       assert.deepEqual(signInPause(live.snapshot(a)!.requests)?.hold, firstOutage, `${label}: the earlier session stays paused`)

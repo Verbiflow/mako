@@ -1,10 +1,10 @@
 import { build } from "esbuild"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
+import { testScratch } from "./lib/test-scratch.mjs"
 
-const root = await mkdtemp(join(tmpdir(), "mako-application-runtime-"))
+const root = testScratch("mako-application-runtime-")
 await mkdir(join(root, "profile"))
 await symlink(resolve("node_modules"), join(root, "node_modules"))
 await writeFile(

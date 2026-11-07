@@ -2,9 +2,8 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
-import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { extractFile, listPackage } from "@electron/asar"
 import { preview } from "vite"
@@ -12,9 +11,10 @@ import { webHostProxy } from "../electron/web-dev-proxy.mjs"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { invokeRuntime, probeRuntime } from "@mako/host/transport/connection"
 import { spawnHost } from "./lib/host-launch.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const app = resolve(process.argv[2])
-const root = await mkdtemp(join(tmpdir(), "mako-packaged-web-"))
+const root = testScratch("mako-packaged-web-")
 const dataRoot = join(root, "profile")
 const workspace = join(root, "workspace")
 const location = runtimeLocation(dataRoot)
@@ -123,5 +123,4 @@ app.whenReady().then(async()=>{
     clearTimeout(force)
   }
   if (gateway) await gateway.close()
-  console.log(`Packaged browser evidence: ${root}`)
 }

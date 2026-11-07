@@ -9,6 +9,7 @@ import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { apexViewStore, finOpening, openFinInApex, threadChildren } from "../src/state/apex-fins"
 import { acpStore } from "../src/state/acp-state"
 import { listLive } from "../src/state/live-recovery"
+import { applyThreadGroupChange } from "../src/state/thread-groups"
 import { foldThreads, placedUnder, threadById } from "../src/web-client/threads"
 import { waitingThreads, webInboxCount } from "../src/web-client/inbox"
 
@@ -130,4 +131,29 @@ test("C1: a placed Fin's row opens its own conversation on its device, and opens
   assert.equal(children.length, 0, "a listed Fin's conversation is no Apex's roster by itself")
   const opening = finOpening(acpStore.get(), child)
   assert.deepEqual(opening, { kind: "conversation", key: "c-fin" }, "the Fin's own conversation, listed from Loft, is what opens")
+})
+
+/** An older Session of the same placed Fin on Loft, idle: listed too, and never the one that opens. */
+const OLD_FIN_SESSION = uuid(4)
+const oldFinRow = row({ session: OLD_FIN_SESSION, thread: FIN_THREAD, conversation: "c-fin-old", harness: "opencode", title: "Approval proof", state: "idle", folder: "/data/worktrees/hello-world/approval-proof", runsOn: { kind: "device", deviceId: LOFT }, createdAt: at(-60), activityAt: at(-50) })
+
+test("a placed Fin with two Sessions on its device: its newest is the one its row opens and stands by, whichever is listed first", () => {
+  const apex = { thread: APEX_THREAD, session: APEX_SESSION }
+  const finThread = ThreadIdSchema.parse(FIN_THREAD)
+  applyThreadGroupChange({ thread: finThread, group: { id: finThread, sessions: [OLD_FIN_SESSION, FIN_SESSION].map((id) => ({ id: SessionIdSchema.parse(id), origin: "started", started: true })) } })
+  try {
+    for (const order of ["older first", "newest first"] as const) {
+      acpStore.set({ activeKey: null, conversations: {} })
+      const rows = order === "older first" ? [oldFinRow, finRow] : [finRow, oldFinRow]
+      listLive([listedSummary(apexRow, "MacBook", undefined), ...rows.map((each) => listedSummary(each, "Loft", undefined, apex))])
+      const children = threadChildren(acpStore.get(), APEX_THREAD)
+      assert.equal(children.length, 1, order)
+      assert.equal(children[0]?.child?.conversation, "c-fin", `${order}: the roster's entry is the newest Session's conversation`)
+      assert.deepEqual(childStateOf(children[0]!), { kind: "blocked", question: "Approve: echo HOTEL", on: "approval" }, `${order}: and stands as it does there, waiting on the approval`)
+      assert.deepEqual(finOpening(acpStore.get(), children[0]!), { kind: "conversation", key: "c-fin" }, `${order}: from under the Apex it opens the approval`)
+      assert.deepEqual(finOpening(acpStore.get(), placedChild()), { kind: "conversation", key: "c-fin" }, `${order}: and so does the Apex's own roster entry`)
+    }
+  } finally {
+    applyThreadGroupChange({ thread: finThread, group: null })
+  }
 })
