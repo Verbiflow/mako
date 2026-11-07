@@ -7,19 +7,31 @@ import { join } from "node:path"
  * a test that's a UI test or launches Electron takes its folder from `testScratch` (`scripts/lib/test-scratch.mjs`),
  * which removes it however the test ends.
  */
-const MADE_UNDER_TEMP = /mkdtemp(?:Sync)?\(\s*(?:path\.)?(?:join\(\s*(?:os\.)?tmpdir\(\)|`\$\{(?:os\.)?tmpdir\(\)\}|(?:os\.)?tmpdir\(\)\s*\+)/
 const LAUNCHES = /\.bin\/electron|from ["']electron["']|require\(["']electron["']\)|electronPath/
+
+/** Where each `mkdtemp` call under the temporary folder starts, however it's spread over lines. */
+function underTemp(source) {
+  const lines = []
+  for (const call of source.matchAll(/\bmkdtemp(?:Sync)?\s*\(/g)) {
+    let depth = 1
+    let at = call.index + call[0].length
+    for (; at < source.length && depth; at++) {
+      if (source[at] === "(") depth++
+      if (source[at] === ")") depth--
+    }
+    if (/\btmpdir\s*\(|\bTMPDIR\b/.test(source.slice(call.index, at))) lines.push(source.slice(0, call.index).split("\n").length)
+  }
+  return lines
+}
 
 export function scratchProblems(root = "scripts") {
   const problems = []
   for (const name of readdirSync(root)) {
-    if (!/^test-.*\.(?:mjs|ts)$/.test(name) || name === "test-test-scratch.mjs") continue
+    if (!/^test-.*\.(?:mjs|tsx?)$/.test(name) || name === "test-test-scratch.mjs") continue
     const path = join(root, name)
     const source = readFileSync(path, "utf8")
     if (!/ui/.test(name) && !LAUNCHES.test(source)) continue
-    source.split("\n").forEach((line, index) => {
-      if (MADE_UNDER_TEMP.test(line)) problems.push(`${path}:${index + 1}: use testScratch from scripts/lib/test-scratch.mjs, which removes it however the test ends`)
-    })
+    for (const line of underTemp(source)) problems.push(`${path}:${line}: use testScratch from scripts/lib/test-scratch.mjs, which removes it however the test ends`)
   }
   return problems
 }

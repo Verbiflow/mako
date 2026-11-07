@@ -5,9 +5,9 @@ import { basename, join } from "node:path"
 
 /**
  * A test's scratch folder, gone when the test ends however it ends. A UI test's Chromium profile and Vite cache come to
- * about 200 MB a run, and left behind they filled a Mac's disk. On success it all goes. On a failure or a signal the
- * evidence is copied to the kept folder first, without the profile and the cache, and what's kept is bounded. SIGKILL
- * runs nothing, so each folder is noted with its owner's pid, and the next test to start removes those whose owner is gone.
+ * about 200 MB a run, and left behind they filled a Mac's disk. On success it all goes. On a failure or a signal its
+ * pictures and video are copied to the kept folder first, and what's kept is bounded. SIGKILL runs nothing, so each
+ * folder is noted with its owner's pid, and the next test to start removes those whose owner is gone.
  *
  * `MAKO_KEEP_TEST_SCRATCH=1` keeps it all, for a person reading a run. A folder the caller names (`given`) is the
  * caller's: it's used as it is and left, as CI's upload is.
@@ -19,8 +19,14 @@ export const KEPT_RUN_BYTES = 25 * 1024 * 1024
 export const KEPT_BYTES = 200 * 1024 * 1024
 /** How long a stopped test's children have to end on SIGTERM. */
 const CHILD_GRACE_MS = 3_000
-/** A browser's profile and a bundler's cache: all of a run's bytes and none of its evidence. */
-const NOT_EVIDENCE = /^(?:profile|cache|.*user-data.*|node_modules)$/
+/**
+ * What outlives a failed run: pictures and video, named here rather than everything but a list of exclusions. A scratch
+ * folder can hold a copied credential, and this runs before the disposer of a home made after it, so a file nothing
+ * here names goes with its folder.
+ */
+const EVIDENCE = /\.(?:png|jpe?g|gif|webp|webm|mp4)$/i
+/** Never looked in: a home and anything hidden, however it's named inside, and what's all bytes and no evidence. */
+const NOT_SEARCHED = /^(?:\..*|home|profile|cache|node_modules|.*user-data.*|.*keychain.*)$/i
 
 const folders = new Set()
 const given = new Set()
@@ -36,30 +42,40 @@ function ownerGone(pid) {
   }
 }
 
+/** Tests start together, so another may have got there first: cleanup never fails a test. */
+function ifStillThere(work) {
+  try {
+    return work()
+  } catch {
+    return undefined
+  }
+}
+
 /** Removes what tests that can't clean up (SIGKILL, a power cut) left. */
 function sweepLeft() {
   for (const name of readdirSync(OWNED)) {
-    const note = join(OWNED, name)
-    const pid = Number(readFileSync(note, "utf8"))
-    if (!Number.isInteger(pid) || pid <= 0 || !ownerGone(pid)) continue
-    rmSync(join(tmpdir(), name), { recursive: true, force: true })
-    rmSync(note, { force: true })
+    ifStillThere(() => {
+      const note = join(OWNED, name)
+      const pid = Number(readFileSync(note, "utf8"))
+      if (!Number.isInteger(pid) || pid <= 0 || !ownerGone(pid)) return
+      rmSync(join(tmpdir(), name), { recursive: true, force: true })
+      rmSync(note, { force: true })
+    })
   }
 }
 
 function sizeOf(path) {
   const info = lstatSync(path)
   if (!info.isDirectory()) return info.size
-  return readdirSync(path).reduce((sum, name) => sum + sizeOf(join(path, name)), 0)
+  return readdirSync(path).reduce((sum, name) => sum + (ifStillThere(() => sizeOf(join(path, name))) ?? 0), 0)
 }
 
-/** Evidence under `folder`, smallest files first so the most of them fit `room`. */
+/** Pictures and video under `folder`. */
 function evidenceIn(folder, found = []) {
   for (const entry of readdirSync(folder, { withFileTypes: true })) {
-    if (NOT_EVIDENCE.test(entry.name)) continue
-    const path = join(folder, entry.name)
-    if (entry.isDirectory()) evidenceIn(path, found)
-    else if (entry.isFile()) found.push({ path, size: statSync(path).size })
+    if (entry.isDirectory()) {
+      if (!NOT_SEARCHED.test(entry.name)) evidenceIn(join(folder, entry.name), found)
+    } else if (entry.isFile() && EVIDENCE.test(entry.name)) found.push({ path: join(folder, entry.name), size: statSync(join(folder, entry.name)).size })
   }
   return found
 }
@@ -74,10 +90,10 @@ function keepEvidence(folder) {
   }
   if (!existsSync(into)) return
   let held = 0
-  const runs = readdirSync(KEPT).map((name) => ({ path: join(KEPT, name), at: statSync(join(KEPT, name)).mtimeMs }))
+  const runs = readdirSync(KEPT).flatMap((name) => ifStillThere(() => [{ path: join(KEPT, name), at: statSync(join(KEPT, name)).mtimeMs }]) ?? [])
   for (const { path } of runs.sort((left, right) => right.at - left.at)) {
-    held += sizeOf(path)
-    if (held > KEPT_BYTES) rmSync(path, { recursive: true, force: true })
+    held += ifStillThere(() => sizeOf(path)) ?? 0
+    if (held > KEPT_BYTES) ifStillThere(() => rmSync(path, { recursive: true, force: true }))
   }
   console.error(`Kept from this failed run: ${into}`)
 }
@@ -88,7 +104,7 @@ function finish(failed) {
     if (process.env.MAKO_KEEP_TEST_SCRATCH === "1") console.log(`Test scratch kept: ${folder}`)
     else {
       try {
-        if (failed) keepEvidence(folder)
+        if (failed) ifStillThere(() => keepEvidence(folder))
       } finally {
         rmSync(folder, { recursive: true, force: true, maxRetries: 3 })
       }
