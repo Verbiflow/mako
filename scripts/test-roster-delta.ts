@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { mock } from "node:test"
 import { promisify } from "node:util"
 import { COMPACT_LIVE_FORM, ROSTER_LIVE_FORM, WHOLE_LIVE_FORM, saidLiveForm, saidWindowForm } from "@mako/protocol/live-form"
 import { z } from "zod"
@@ -180,22 +179,33 @@ async function recorded(folder: string): Promise<void> {
     // Two still asks: a stream ends with something waiting, as a real one does.
     await until(() => w.live.held(three)?.session.status === "ready" && w.live.held(one)?.session.status === "ready")
     await new Promise((resolve) => setTimeout(resolve, 300))
-    // What a window reads whole is what the last batch told it, and says as of when.
-    const last = lines.flatMap((line) => {
+    // A window that can't read a change asks: the roster goes whole in a batch of its own, in its place in the stream,
+    // to every window; several asking before it goes share it.
+    const batchesOf = (id: string, from: number) => lines.slice(from).flatMap((line) => {
       const packet = ReplayPacketSchema.parse(JSON.parse(line))
-      const event = packet.conversation === apex.conversation && packet.payload ? decodeRuntimeEvent<HostEvent>(packet.payload) : undefined
-      return event?.type === "live-batch" ? [event.batch] : []
+      const event = packet.conversation === id && packet.payload ? decodeRuntimeEvent<HostEvent>(packet.payload) : undefined
+      return event?.type === "live-batch" ? [{ batch: event.batch, rostered: packet.rostered }] : []
     })
-    const told = await w.live.roster(apex.conversation)
-    assert.equal(told?.revision, last.at(-1)?.revision, "the roster's as of the last batch")
-    assert.deepEqual(told?.roster, last.findLast((batch) => batch.nativeAgents)?.nativeAgents, "and is what the batches said")
-    assert.equal(told?.epoch, last.at(-1)?.epoch, "of this host")
-    assert.equal(await w.live.roster("no-such-conversation"), null, "there's none of a conversation that isn't one")
-    // One swept from memory since its last change is still read: its windows may yet need that change.
-    const revision = w.live.held(three)!.revision
-    const swept = mock.method(w.live["records"], "get", () => undefined)
-    assert.equal((await w.live.roster(three))?.revision, revision, "and is read back")
-    swept.mock.restore()
+    const roster = w.live.held(apex.conversation)?.nativeAgents
+    assert.ok(roster?.agents.length, "the Apex has its Fins")
+    let from = lines.length
+    assert.equal(w.live.sendRosterWhole(apex.conversation), true)
+    assert.equal(w.live.sendRosterWhole(apex.conversation), true)
+    await until(() => batchesOf(apex.conversation, from).length > 0)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const sent = batchesOf(apex.conversation, from)
+    assert.equal(sent.length, 1, "two asks, one batch")
+    assert.deepEqual(sent[0]!.batch.nativeAgents, roster, "with the roster whole")
+    assert.equal(sent[0]!.rostered, undefined, "to every window alike, a host's own included")
+    assert.equal(w.live.sendRosterWhole("no-such-conversation"), false, "there's none of a conversation that isn't one")
+    // One let go of since its last change is read back in to say it: its windows may yet need that change.
+    await w.live.close(three)
+    from = lines.length
+    assert.ok(w.live["records"].release(three), "the finished Fin, closed, goes from memory")
+    assert.equal(w.live.held(three), undefined)
+    assert.equal(w.live.sendRosterWhole(three), true, "and is read back")
+    await until(() => batchesOf(three, from).length > 0)
+    assert.ok(batchesOf(three, from)[0]!.batch.nativeAgents, "its roster goes whole, an empty one where it has none")
   } finally {
     await w.close()
   }
@@ -235,20 +245,19 @@ try {
   const silent = batches.find((batch, at) => !batch.roster && own.filter((move) => move.seq > batch.seq).length > 1 && own.some((move) => move.seq === batches[at + 1]?.seq))
   // Its read goes out with the first change after it and answers as of before the next, which lands while it's on its way.
   const [firstAfter, nextAfter] = own.filter((move) => move.seq > (silent?.seq ?? 0))
-  let attachReads = 0
   const windows: [string, ReplayPlan, (end: End) => void][] = [
-    ["a window with nothing open", {}, (end) => assert.equal(end.rosterReads, 0, "with every change heard, none is read whole")],
+    ["a window with nothing open", {}, (end) => assert.equal(end.rosterReads, 0, "with every change heard, it asks for none whole")],
     ["a window going from conversation to conversation", { opens: places }, () => {}],
-    ["a window attaching mid-stream", { attach: middle }, (end) => { attachReads = end.rosterReads; assert.ok(end.rosterReads > 0, "attaching reads the roster whole") }],
-    ["a window that misses batches", { gap: { conversation: busiest, from: middle, to: later } }, (end) => assert.ok(end.rosterReads > 0, "a gap reads the roster whole")],
-    ["a window holding another roster", { drift: { conversation: busiest, at: middle } }, (end) => assert.ok(end.rosterReads > 0, "the seal reads the roster whole")],
-    ["a window holding one from before a restart", { restart: { conversation: busiest, at: middle } }, (end) => assert.equal(end.rosterReads, 1, "reads it once, not at every change")],
-    // What landed around an answer that's read right needs no second read, however long it took.
-    ["a window whose read of a roster is slow", { attach: middle, lag: slow }, (end) => assert.equal(end.rosterReads, attachReads, "changes on both sides of its answer take no second read")],
+    ["a window attaching mid-stream", { attach: middle }, (end) => assert.ok(end.rosterReads > 0, "attaching asks for the roster whole")],
+    ["a window that misses batches", { gap: { conversation: busiest, from: middle, to: later } }, (end) => assert.ok(end.rosterReads > 0, "a gap asks for the roster whole")],
+    ["a window holding another roster", { drift: { conversation: busiest, at: middle } }, (end) => assert.ok(end.rosterReads > 0, "the seal asks for the roster whole")],
+    ["a window holding one from before a restart", { restart: { conversation: busiest, at: middle } }, (end) => assert.ok(end.rosterReads > 0, "another start's asks for it whole")],
+    // Changes that land while the ask is on its way can't be read either, and the roster that goes whole mends them all.
+    ["a window whose ask for a roster is slow", { attach: middle, lag: slow }, () => {}],
     ["one of two windows", { opens: places.filter((at) => opens[at]!.id === first) }, () => {}],
     ["the other of two windows", { opens: places.filter((at) => opens[at]!.id !== first) }, () => {}],
   ]
-  if (silent) windows.push(["a window that misses a batch saying nothing of its roster", { gap: { conversation: busiest, from: silent.seq, to: silent.seq + 1 }, lag: Math.max(1, 2 * (nextAfter!.seq - firstAfter!.seq) - 1) }, (end) => assert.ok(end.rosterReads > 0, "it can't know that, so it reads")])
+  if (silent) windows.push(["a window that misses a batch saying nothing of its roster", { gap: { conversation: busiest, from: silent.seq, to: silent.seq + 1 }, lag: Math.max(1, nextAfter!.seq - firstAfter!.seq) }, (end) => assert.ok(end.rosterReads > 0, "it can't know that, so it asks")])
   for (const [label, plan, check] of windows) {
     const end = await sameDrawn(folder, plan, label)
     check(end)
@@ -258,7 +267,7 @@ try {
       assert.ok(end.full.notifications.length > 0, `${label}: a notification was raised`)
       assert.ok(end.full.children.some(([, children]) => children.length), `${label}: a Thread's Fins are drawn`)
     }
-    console.log(`${label}: every store the same; ${end.rostered} of ${end.fullRosters} rosters as what changed, ${end.rosterReads} read whole, ${(end.wholeBytes / 1048576).toFixed(1)} MB to ${(end.rosteredBytes / 1048576).toFixed(1)} MB`)
+    console.log(`${label}: every store the same; ${end.rostered} of ${end.fullRosters} rosters as what changed, ${end.rosterReads} asked for whole, ${(end.wholeBytes / 1048576).toFixed(1)} MB to ${(end.rosteredBytes / 1048576).toFixed(1)} MB`)
   }
   console.log("Roster delta: a window draws the same from what changed as from whole rosters, opening conversations, attaching mid-stream, missing batches and holding another roster")
 } finally {

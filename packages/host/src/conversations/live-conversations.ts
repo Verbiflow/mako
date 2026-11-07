@@ -27,7 +27,6 @@ import {
   type LiveBatch,
   type LiveDriverEvent,
   type LiveRequest,
-  type LiveRoster,
   type LiveSnapshot,
   type LiveStartOptions,
   type LiveSummary,
@@ -657,11 +656,18 @@ export class LiveConversations {
     return this.stamp(resident.snapshot)
   }
 
-  /** What a batch last told `id`'s windows of its roster: as of its last batch, not what's waiting to go in the next. */
-  async roster(id: string): Promise<LiveRoster | null> {
-    const resident = this.records.get(id)
-    const told = resident ? resident.journalSnapshot ?? resident.snapshot : await this.refreshedSnapshot(id)
-    return told && { ...(told.nativeAgents && { roster: told.nativeAgents }), revision: told.revision, epoch: this.epoch }
+  /**
+   * A window couldn't read a batch's change to `id`'s roster (it attached after the roster last went whole, missed a
+   * batch, or holds another): the roster goes whole now, in a batch of its own, to every window, in its place in the
+   * stream, so nothing a window heard before or hears after can cross it. Windows asking before it goes share it.
+   * False when the conversation isn't here.
+   */
+  sendRosterWhole(id: string): boolean {
+    const resident = this.records.load(id)
+    if (!resident) return false
+    resident.rosterWhole = true
+    this.schedule(resident)
+    return true
   }
 
   refreshedSnapshot(id: string): Promise<LiveSnapshot | null> {
@@ -1920,9 +1926,12 @@ export class LiveConversations {
     const latched = latchedByStop(resident.snapshot.requests)
     if (latched !== resident.snapshot.requests) resident.snapshot = { ...resident.snapshot, requests: latched }
     const previous = resident.journalSnapshot ?? resident.snapshot
+    const rosterWhole = resident.rosterWhole
+    resident.rosterWhole = undefined
     if (
       !resident.updates.length &&
-      resident.journalSnapshot === resident.snapshot
+      resident.journalSnapshot === resident.snapshot &&
+      !rosterWhole
     )
       return
     const delivered = resident.snapshot.blocks
@@ -1957,8 +1966,10 @@ export class LiveConversations {
         updates,
         changedFrom: changedEntryStart(previous.blocks, snapshot.blocks),
         blockCount: snapshot.blocks.length,
-        nativeAgents:
-          previous.nativeAgents !== snapshot.nativeAgents
+        // Whole when a window asked, an empty one where there's none: a window holding one hears there isn't.
+        nativeAgents: rosterWhole
+          ? (snapshot.nativeAgents ?? { agents: [], limited: false })
+          : previous.nativeAgents !== snapshot.nativeAgents
             ? snapshot.nativeAgents
             : undefined,
         goal: previous.goal !== snapshot.goal ? (snapshot.goal ?? null) : undefined,
@@ -1995,7 +2006,7 @@ export class LiveConversations {
     }
     // Readers hold `previous`; its updates were reduced against the blocks it held only when nothing replaced them since.
     const compact = compactLiveBatch(batch, { blocks: previous.blocks === delivered ? delivered : [], requests: previous.requests, ...(previous.control && { control: previous.control }) })
-    const rostered = rosteredLiveBatch(compact, previous.nativeAgents)
+    const rostered = rosterWhole ? undefined : rosteredLiveBatch(compact, previous.nativeAgents)
     this.dependencies.emit({ type: "live-batch", batch, compact, ...(rostered && { rostered }) })
     this.relocations.changed(resident)
     // A turn that ended, as it ended, failed included: what its record holds is all it will.

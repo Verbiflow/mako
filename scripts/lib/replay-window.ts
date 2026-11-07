@@ -5,7 +5,8 @@ import { mock } from "node:test"
 import { createInterface } from "node:readline"
 import { setImmediate as turn } from "node:timers/promises"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { isCompactBatch, rosteredLiveBatch, type HeardLiveBatch, type LiveRoster, type LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import { compactLiveBatch, isCompactBatch, rosteredLiveBatch, type HeardLiveBatch, type LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { NativeAgentRoster } from "@mako/host/contracts/native-agents"
 import { decodeRuntimeEvent } from "@mako/host/contracts/runtime-value"
 import { LiveHistoryReader } from "@mako/host/conversations/live-history-reader"
 import type { LiveHistoryRead } from "@mako/host/contracts/live-history"
@@ -23,11 +24,12 @@ import { ReplayOpenSchema, ReplayPacketSchema, ReplayPlanSchema } from "./replay
  * - `gap`: the events it misses of `conversation`;
  * - `drift`: the event from which it holds another roster of `conversation` than the host wrote against;
  * - `restart`: the event from which it holds `conversation` as of a host that has since restarted;
- * - `lag`: how many events a read of the whole roster takes, three unless it says. It answers as of halfway through, so
- *   changes land on both sides of the answer, as with a host that goes on sending while the answer's on its way.
+ * - `lag`: how many events an ask for a roster whole takes to reach the host, three unless it says: the conversation's
+ *   next batch from then carries it whole, as the host's next batch would, so changes land on both sides of the ask.
  * In `rostered` it hears a batch as a host's own window does, its roster as what changed. The state of every store a
  * surface draws from goes out as a digest every `every` events, and in full at the end; `reading` marks a digest taken
- * while a roster's read was on its way.
+ * while an ask for a roster was on its way. The stream ends with one more batch of every conversation with a roster,
+ * saying it as it stands, in both forms, as the next change would.
  */
 const [capture, mode, planned = "{}", every = "200"] = process.argv.slice(2)
 const EVERY = Number(every)
@@ -83,23 +85,18 @@ mock.method(bridge, "liveRead", async (id: string, input: LiveHistoryRead) => {
   return reader.read(id, input, async () => held.snapshot)
 })
 
-/** What the host has told its windows so far, as it answers `mako:live-roster`. */
-const told = new Map<string, LiveRoster>()
-const rosterAnswers: { id: string; asOf: number; told?: LiveRoster; at: number; go: (told: LiveRoster | null) => void }[] = []
+/** What the host has told its windows so far of each roster, and as of which batch. */
+const told = new Map<string, { roster?: NativeAgentRoster; revision: number; epoch?: string }>()
+/** Asks for a roster whole on their way: the conversation's first batch from `at` carries it whole, as the host's next would. */
+const rosterAsks = new Map<string, number>()
 const lag = plan.lag ?? 3
 let rosterReads = 0
 let seq = 0
-mock.method(bridge, "liveRoster", (id: string) => {
+mock.method(bridge, "liveRoster", async (id: string) => {
   rosterReads += 1
-  return new Promise<LiveRoster | null>((go) => rosterAnswers.push({ id, asOf: seq + Math.floor(lag / 2), at: seq + lag, go }))
+  if (!rosterAsks.has(id)) rosterAsks.set(id, seq + lag)
+  return true
 })
-const settleRosters = async (all = false) => {
-  for (const answer of rosterAnswers.filter((each) => all || each.at <= seq)) {
-    rosterAnswers.splice(rosterAnswers.indexOf(answer), 1)
-    answer.go(answer.told ?? told.get(answer.id) ?? null)
-    for (let wait = 0; wait < 3; wait += 1) await turn()
-  }
-}
 
 /** What a window opened: compared from when its read answered, as any window waits for that. */
 const opening = new Set<string>()
@@ -126,7 +123,7 @@ function surfaces() {
 }
 const digest = (at: number) => {
   const all = surfaces()
-  process.stdout.write(`${JSON.stringify({ at, reading: rosterAnswers.length > 0, ...Object.fromEntries(Object.entries(all).map(([name, value]) => [name, createHash("sha1").update(JSON.stringify(value) ?? "").digest("hex").slice(0, 12)])) })}\n`)
+  process.stdout.write(`${JSON.stringify({ at, reading: rosterAsks.size > 0, ...Object.fromEntries(Object.entries(all).map(([name, value]) => [name, createHash("sha1").update(JSON.stringify(value) ?? "").digest("hex").slice(0, 12)])) })}\n`)
 }
 
 await actions.boot()
@@ -184,9 +181,17 @@ for await (const text of createInterface({ input: createReadStream(join(capture,
     const before = told.get(batch.id)
     // A recorded stream says how its host wrote it; a capture of an older host, how this one would.
     const rewritten = !packet.rostered && isCompactBatch(batch) && before?.roster ? rosteredLiveBatch(batch, before.roster) : undefined
-    const roster = packet.rostered ?? (rewritten && JSON.stringify({ type: "live-batch", batch: rewritten }))
-    told.set(batch.id, { roster: batch.nativeAgents ?? before?.roster, revision: batch.revision, ...(batch.epoch && { epoch: batch.epoch }) })
-    for (const answer of rosterAnswers) if (answer.asOf <= seq) answer.told ??= told.get(answer.id)
+    const now = batch.nativeAgents ?? before?.roster
+    told.set(batch.id, { ...(now && { roster: now }), revision: batch.revision, ...(batch.epoch && { epoch: batch.epoch }) })
+    // The host has an ask for this roster: this batch says it whole, to this window as to every other.
+    const asked = rosterAsks.get(batch.id)
+    const missed = plan.gap?.conversation === batch.id && seq >= plan.gap.from && seq < plan.gap.to
+    // One this window misses answers nothing: as with a host's, it asks again at the next change it can't read.
+    const answering = mode === "rostered" && !missed && asked !== undefined && asked <= seq
+    if (answering) rosterAsks.delete(batch.id)
+    const roster = answering
+      ? JSON.stringify({ type: "live-batch", batch: { ...batch, nativeAgents: now ?? { agents: [], limited: false } } })
+      : packet.rostered ?? (rewritten && JSON.stringify({ type: "live-batch", batch: rewritten }))
     wholeBytes += packet.payload.length
     if (batch.nativeAgents) fullRosters += 1
     if (mode === "rostered" && roster) {
@@ -197,18 +202,29 @@ for await (const text of createInterface({ input: createReadStream(join(capture,
       whole += 1
       rosteredBytes += packet.payload.length
     }
-    if (plan.gap?.conversation === batch.id && seq >= plan.gap.from && seq < plan.gap.to) continue
+    if (missed) continue
   }
   if (seq < attach) continue
   listener?.(event)
-  await settleRosters()
+  for (let wait = 0; wait < 3; wait += 1) await turn()
   if (seq % EVERY === 0) {
     await turn()
     asked ||= Object.values(acpStore.get().conversations).some((held) => held.kind === "live" && held.permission)
     digest(seq)
   }
 }
-await settleRosters(true)
+// The next change of every roster, as it stands: whole to a window that asked and hasn't heard it since, what changed to
+// the rest, and whole to a reader of the whole form.
+for (const [id, said] of told) {
+  if (!said.roster) continue
+  seq += 1
+  const batch = compactLiveBatch({ id, revision: said.revision + 1, ...(said.epoch && { epoch: said.epoch }), updates: [], nativeAgents: said.roster }, { blocks: [], requests: [] })
+  const rewritten = mode === "rostered" && !rosterAsks.has(id) ? rosteredLiveBatch(batch, said.roster) : undefined
+  rosterAsks.delete(id)
+  // As the stream carries it: a compact batch is a live batch's line in another form.
+  listener?.(decodeRuntimeEvent<HostEvent>(JSON.stringify({ type: "live-batch", batch: rewritten ?? batch })))
+  for (let wait = 0; wait < 3; wait += 1) await turn()
+}
 for (let wait = 0; wait < 10; wait += 1) await turn()
 digest(seq)
 // A pipe takes what it can at once; leaving now would cut this line off.

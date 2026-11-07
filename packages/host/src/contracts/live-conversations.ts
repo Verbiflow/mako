@@ -1009,7 +1009,7 @@ function rosterPatch(held: NativeAgentRoster, next: NativeAgentRoster): RosterPa
 /**
  * `batch` as a host's own windows hear it, where its roster goes as what changed of `held`, the one they hold at the
  * revision before; undefined where it has no roster to say so or a whole one says it better. A window that can't read it
- * reads the whole roster (`mako:live-roster`).
+ * asks for the roster whole (`mako:live-roster`), which its next batch carries, in its place in the stream.
  */
 export function rosteredLiveBatch(batch: CompactLiveBatch, held: NativeAgentRoster | undefined): CompactLiveBatch | undefined {
   const { nativeAgents, ...rest } = batch
@@ -1017,9 +1017,6 @@ export function rosteredLiveBatch(batch: CompactLiveBatch, held: NativeAgentRost
   const patch = rosterPatch(held, nativeAgents)
   return patch && { ...rest, rosterPatch: patch }
 }
-
-/** The roster its windows have been told, as of `revision`, for one that couldn't read a batch's change to it. */
-export type LiveRoster = { roster?: NativeAgentRoster; revision: number; epoch?: string }
 
 /** A batch as a reader hears it: whole, or in the compact form where it said it reads that. */
 export type HeardLiveBatch = LiveBatch | CompactLiveBatch
