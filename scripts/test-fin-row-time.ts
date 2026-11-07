@@ -66,8 +66,7 @@ assert.equal(line(answered({ answer: "[mako · from your Apex (agent), not the p
 
 // A row always says what it's doing.
 assert.equal(childLine({ kind: "working" }), "At work", "with nothing known, it still says so")
-// SAFETY: a user entry with the one field `lastStep` reads of it, its type.
-const justAsked = [{ type: "user" }] as Parameters<typeof lastStep>[0]
+const justAsked: Parameters<typeof lastStep>[0] = [{ type: "user", text: "Go" }]
 assert.equal(lastStep(justAsked, "claude"), "Thinking", "a turn that's only begun is thinking")
 
 console.log("Fin rows: a turn's time, a state's time, plain answers and a line on every row")
