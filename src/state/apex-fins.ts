@@ -23,23 +23,23 @@ const finByThread = new WeakMap<AcpState["conversations"], { order: AcpState["th
 
 /**
  * What a conversation says of a Thread's Fins: which Thread, from which of its Sessions (none for a word from outside
- * it), when that Session was made (its row's `createdAt`, written by the device that owns it), and how fully.
+ * it), that Session's place in its Thread as its owner's row says it (`order`, from a row listed from elsewhere), how
+ * fully, and whether it asks the person something that's open (an approval or a question), which no other saying of
+ * the Thread may hide.
  */
-type Saying<Value> = { thread: string; session: string | undefined; createdAt: number | undefined; value: Value; fullness: number }
+type Saying<Value> = { thread: string; session: string | undefined; order: number | undefined; value: Value; fullness: number; asks?: boolean }
 
-/** How a saying ranks against the one held for its Thread: by `place` in the Thread's group, then creation, then fullness. */
-type Standing = { place: number; createdAt: number; fullness: number }
+/** A saying's standing for its Thread: an open ask above all, then the Session's place, then fullness (`outranks`). */
+type Standing = { asks: boolean; place: number; fullness: number }
 
 /**
- * Whether `next` outranks `held` for one Thread. A Session's place in its Thread's group decides where this window
- * holds the group (`AcpState.threadSessions`); for a Thread it doesn't hold (another device's, whose group only that
- * device has), the Sessions' creation times decide, as their owner wrote them on their rows, so the newest Session's
- * row wins whichever order the rows arrived in, and a word from outside the Thread (no Session, no time) ranks below
- * any of its rows. Of one Session, the fullest saying.
+ * Whether `next` outranks `held`: an open ask always surfaces (the rule #524 writes on the host's `askingConversation`,
+ * here on the rows a placed Fin's device writes), then the Session's place in its Thread, newest highest, then of one
+ * Session the fullest saying.
  */
 function outranks(next: Standing, held: Standing): boolean {
+  if (next.asks !== held.asks) return next.asks
   if (next.place !== held.place) return next.place > held.place
-  if (next.place < 0 && next.createdAt !== held.createdAt) return next.createdAt > held.createdAt
   return next.fullness > held.fullness
 }
 
@@ -51,8 +51,9 @@ function outranks(next: Standing, held: Standing): boolean {
  * window holds or a row the account lists alike. A Thread with no group has one Session. A conversation may say of
  * several Threads' Fins (an Apex's roster says of each Fin; a Fin's own row on another device says of itself), so each
  * saying names its Thread and the Session it comes from, and a word from outside that Thread ranks below any Session of
- * it. A Thread whose group this window doesn't hold (another device's) orders its Sessions by when they were made, as
- * their owner's rows say (`outranks`).
+ * it. A Thread whose group this window doesn't hold (another device's, whose group only that device has) ranks its
+ * Sessions by the place each row says its owner keeps it at (`order`), as the group would; a row from a host before
+ * that field ranks where it arrived.
  */
 function newestSaid<Value>(state: AcpState, said: (conversation: Extract<AcpConversation, { kind: "live" }>) => readonly Saying<Value>[]): Map<string, Value> {
   const index = new Map<string, Value>()
@@ -61,7 +62,8 @@ function newestSaid<Value>(state: AcpState, said: (conversation: Extract<AcpConv
     if (conversation.kind !== "live" || !conversation.threadId) continue
     for (const saying of said(conversation)) {
       const sessions = state.threadSessions?.[saying.thread]
-      const standing: Standing = { place: sessions && saying.session ? sessions.indexOf(saying.session) : -1, createdAt: saying.createdAt ?? 0, fullness: saying.fullness }
+      const inGroup = sessions && saying.session ? sessions.indexOf(saying.session) : -1
+      const standing: Standing = { asks: saying.asks ?? false, place: inGroup >= 0 ? inGroup : (saying.order ?? -1), fullness: saying.fullness }
       const held = rank.get(saying.thread)
       if (held && !outranks(standing, held)) continue
       index.set(saying.thread, saying.value)
@@ -77,19 +79,21 @@ type FinSource = { kind: "apex" } | { kind: "device"; listed: LiveAcpConversatio
 /**
  * Where each Fin placed on another device stands from, by the one ranking (`newestSaid`) over every source that says
  * of it: its Apex's word, a word from outside the Fin's Thread, and the rows that Fin's own device writes, each from
- * one of the Fin's Sessions there. So the newest Session on its device wins, whichever its rows were listed in, and an
- * older idle Session never hides a newer one's approval; a quiet device's row still names what opens, while its
+ * one of the Fin's Sessions there, at the place that device keeps it (`order`). A row with an open ask surfaces above
+ * the rest (the rule #524 puts on the host; here until the two fold into one ranking), then the newest Session on its
+ * device wins, whichever order its rows were listed in; a quiet device's row still names what opens, while its
  * standing is its Apex's word (`placedEntry`).
  */
 function finSources(state: AcpState): Map<string, FinSource> {
   let held = finByThread.get(state.conversations)
   if (!held || held.order !== state.threadSessions) {
     const index = newestSaid<FinSource>(state, (conversation) => {
-      if (conversation.elsewhere !== undefined) return [{ thread: conversation.threadId!, session: conversation.sessionId, createdAt: conversation.createdAt, value: { kind: "device", listed: conversation }, fullness: 1 }]
+      // A row with an open ask, an approval or a question the person hasn't answered, surfaces above the Fin's other rows.
+      if (conversation.elsewhere !== undefined) return [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: { kind: "device", listed: conversation }, fullness: 1, asks: conversation.waitingFor === "approval" || conversation.waitingFor === "question" }]
       const children = rosterChildren(conversation.nativeAgents)
       return (children.length ? children : conversation.fins ? finsAsChildren(conversation.fins) : [])
         .filter((agent) => agent.child?.thread && !agent.child.conversation)
-        .map((agent) => ({ thread: agent.child!.thread, session: undefined, createdAt: undefined, value: { kind: "apex" }, fullness: 0 }))
+        .map((agent) => ({ thread: agent.child!.thread, session: undefined, order: undefined, value: { kind: "apex" }, fullness: 0 }))
     })
     held = { order: state.threadSessions, index }
     finByThread.set(state.conversations, held)
@@ -109,8 +113,8 @@ export function threadChildren(state: AcpState, thread: string | undefined): rea
   if (!held || held.order !== state.threadSessions) {
     const index = newestSaid(state, (conversation) => {
       const children = rosterChildren(conversation.nativeAgents)
-      if (children.length) return [{ thread: conversation.threadId!, session: conversation.sessionId, createdAt: conversation.createdAt, value: children, fullness: 1 }]
-      return conversation.fins ? [{ thread: conversation.threadId!, session: conversation.sessionId, createdAt: conversation.createdAt, value: finsAsChildren(conversation.fins), fullness: 0 }] : []
+      if (children.length) return [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: children, fullness: 1 }]
+      return conversation.fins ? [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: finsAsChildren(conversation.fins), fullness: 0 }] : []
     })
     const sources = finSources(state)
     for (const [apex, children] of index) index.set(apex, fromSources(children, sources))
@@ -180,7 +184,7 @@ export function useFinOpenable(child: NativeAgent): boolean {
 function listedRollup(state: AcpState, thread: string): Rollup | undefined {
   let held = listedByThread.get(state.conversations)
   if (!held || held.order !== state.threadSessions) {
-    held = { order: state.threadSessions, index: newestSaid(state, (conversation) => (conversation.children ? [{ thread: conversation.threadId!, session: conversation.sessionId, createdAt: conversation.createdAt, value: conversation.children, fullness: 0 }] : [])) }
+    held = { order: state.threadSessions, index: newestSaid(state, (conversation) => (conversation.children ? [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: conversation.children, fullness: 0 }] : [])) }
     listedByThread.set(state.conversations, held)
   }
   return held.index.get(thread)

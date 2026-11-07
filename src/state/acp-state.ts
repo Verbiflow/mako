@@ -47,6 +47,8 @@ interface AcpConversationBase {
   elsewhere?: string
   /** `LiveSummary.elsewhereKind`: the kind of device `elsewhere` names, for its mark. */
   elsewhereKind?: string
+  /** `LiveSummary.order`: its Session's place in its Thread as its owner keeps it, which ranks a Thread's rows this window holds no group of. */
+  order?: number
   /** What a conversation listed from another device waits on there, while it waits on a person ("Approve: npm test"). */
   waitingOn?: string
   /** What it waits on the person for, as its owner says it (`LiveSummary.waitingFor`): an approval, a question, or anything else. */

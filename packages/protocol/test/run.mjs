@@ -14,7 +14,7 @@ import { AccountEventSchema } from "../dist/account-events.js"
 import { AccessChoicesAnswerSchema, AccessChoosingSchema, applyAccessChoosing, sameAccessChoices } from "../dist/access-choices.js"
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
 import { ATTENTION_SUMMARY_FROM, ATTENTION_WORDS, AttentionKindSchema, asks, attentionFact, attentionHeadline, attentionKey, attentionLine, attentionSummary, foldedBody, needsYouWaiting, questionWaiting, requestWaiting, rowWaitingFor, factStands, noticeTag, readNotice } from "../dist/attention.js"
-import { ASKING_VERSION, CONTINUE_VERSION, FIN_STATES_VERSION, FINS_VERSION, FORKS_VERSION } from "../dist/version.js"
+import { ASKING_VERSION, CONTINUE_VERSION, FIN_STATES_VERSION, FINS_VERSION, FORKS_VERSION, SESSION_ORDER_VERSION } from "../dist/version.js"
 import { ContinueOfferSchema, ContinueStateSchema, cloudRuntimeOf, continueCloudThread, continueHandOver, continueRefusal, continueRefusalText, namedUuid as continueUuid } from "../dist/continues.js"
 import { ArchivedThreadSchema, LISTED_FINS, ListedSessionSchema, QuietDeviceSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
@@ -111,7 +111,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 20)
+    assert.equal(SUPPORTED_VERSIONS.max, 21)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -2080,6 +2080,12 @@ describe("an account's list of Threads, one row per Session", () => {
     assert.throws(() => ReportedSessionSchema.parse({ ...going, move: { ...going.move, to: "phone" } }), "a move goes to a device or the cloud")
     assert.throws(() => ReportedSessionSchema.parse({ ...going, move: { ...going.move, step: "Packing it up" } }), "a step is the owner's word, not a sentence")
     assert.deepEqual(rowsForLink([going], MOVES_VERSION)[0].move, going.move)
+    const placed = { ...session, order: 1 }
+    assert.deepEqual(ReportedSessionSchema.parse(placed), placed, "a row says its Session's place in its Thread")
+    assert.throws(() => ReportedSessionSchema.parse({ ...session, order: -1 }), "a place is never negative")
+    assert.equal(rowsForLink([placed], SESSION_ORDER_VERSION)[0].order, 1)
+    assert.equal(rowsForLink([placed], SESSION_ORDER_VERSION - 1)[0].order, undefined, "a gateway before 21 refuses it, so it goes without")
+    assert.deepEqual(rowsForLink([placed], SESSION_ORDER_VERSION - 1)[0].fins, placed.fins, "and the rest as 20 had it")
     assert.equal(rowsForLink([going], MOVES_VERSION - 1)[0].move, undefined, "a gateway before 11 refuses it, so it goes without")
     assert.equal(rowsForLink([going], MOVES_VERSION - 1)[0].waitingFor, undefined)
     assert.equal(rowsForLink([{ ...going, ...asking, move: going.move }], WAITING_FOR_VERSION)[0].waitingFor, "approval", "and at 10 keeps what 10 knows")
@@ -2344,7 +2350,8 @@ describe("a Session continued in the cloud while its device is off", () => {
   test("an Apex's row says its Fins from link 19, names and states only; an older link goes without; a reader passes over Fins it can't read, never the row", () => {
     assert.equal(FINS_VERSION, 19)
     assert.equal(FIN_STATES_VERSION, 20)
-    assert.equal(LINK_VERSION, FIN_STATES_VERSION)
+    assert.equal(SESSION_ORDER_VERSION, 21)
+    assert.equal(LINK_VERSION, SESSION_ORDER_VERSION)
     const { runsOn: _runsOn, listedAt: _listedAt, ...reported } = row
     const fin = (name, state) => ({ thread: "2b3c4d5e-6f70-4182-9a3b-4c5d6e7f8091", name, harness: "cursor", state, startedAt: "2026-11-04T21:46:08.000Z" })
     const apex = { ...reported, fins: [fin("li-openoutreach", { kind: "queued", reason: "place-full", ahead: 2 }), fin("li-protocol", { kind: "working", step: "Reading README.md" }), fin("li-flage", { kind: "ended", outcome: "done" })] }

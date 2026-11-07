@@ -23,7 +23,7 @@ import { ReportedSessionSchema, type ListedSession } from "@mako/protocol/thread
 import { listedFins } from "@mako/host/contracts/children"
 import { listedApexOf, listedSummary } from "@mako/host/contracts/listed-conversations"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
-import { conversationShown } from "@mako/host/conversations/session-report"
+import { conversationShown, sessionOrderIn } from "@mako/host/conversations/session-report"
 import { acpStore } from "../src/state/acp-state.ts"
 import { finOpening, threadChildren } from "../src/state/apex-fins.ts"
 import { childStateOf } from "@mako/host/contracts/children"
@@ -871,13 +871,15 @@ async function aPlacedFinsNewestSessionOnItsDevice(): Promise<void> {
     await mac.world.settle(40)
     const child = ThreadIdSchema.parse(fin.child!)
     const thread = studio.world.store.thread(child)!
-    const older = studio.world.store.conversationsOf(thread.sessions[0]!).at(-1)!
     // A second Session of the Fin's Thread on its own device, as the person's `+` makes one: a conversation of its own, newer.
     const placement = studio.world.store.createSession({ operationId: randomUUID(), thread: child, actor: studio.world.store.person() })
     const newer = randomUUID()
     await studio.world.live.start("codex", studio.world.root, { conversationId: newer, session: placement.session, title: "a second Session" })
     assert.equal(studio.world.store.thread(child)?.sessions.length, 2, "the Fin's device holds its Thread's two Sessions")
     assert.equal(mac.world.store.group(child), undefined, "the Apex's device holds no group of the Fin's Thread: its device does")
+    // And the person goes on in the older Session there: a conversation newer than any, in the Session that isn't.
+    const continued = randomUUID()
+    await studio.world.live.start("codex", studio.world.root, { conversationId: continued, session: thread.sessions[0]!, title: "the older Session, continued" })
     // The rows as each device writes them: the Apex's from the Mac, the Fin's two from Studio, each with the creation
     // time its owner's live engine gave the conversation.
     const mock = { deviceId: "6f1d2c3b-4a59-4e68-8a7b-9c0d1e2f3a4b" }
@@ -885,25 +887,45 @@ async function aPlacedFinsNewestSessionOnItsDevice(): Promise<void> {
     const rowOf = (session: string, conversation: string, snapshotOf: AgentsWorld, shown: Parameters<typeof conversationShown>[0], extra: Partial<ListedSession> = {}): ListedSession => {
       const snapshot = snapshotOf.live.snapshot(conversation)
       assert.ok(snapshot, `${conversation} is held live on its device`)
-      const row = ReportedSessionSchema.parse({ session, thread: snapshot.threadId ?? child, conversation, harness: snapshot.session.harness, ...conversationShown(shown), createdAt: iso(snapshot.createdAt), activityAt: iso(Date.now()), generation: 1 })
+      // Its Session's place in its Thread, as the owner's store keeps it: what the owner's row says as `order`.
+      const order = sessionOrderIn(studio.world.store.thread(child)?.sessions, session)
+      const row = ReportedSessionSchema.parse({ session, thread: snapshot.threadId ?? child, conversation, harness: snapshot.session.harness, ...conversationShown(shown), createdAt: iso(snapshot.createdAt), activityAt: iso(Date.now()), generation: 1, ...(snapshotOf === studio.world && order !== undefined && { order }) })
       return { ...row, runsOn: { kind: "device", deviceId: mock.deviceId }, listedAt: iso(Date.now()), ...extra }
     }
     const apexSession = mac.world.store.journalPlacement(apex.conversation)!.session
     const apexRow = rowOf(apexSession, apex.conversation, mac.world, { session: { ...mac.world.live.snapshot(apex.conversation)!.session, title: "Placed Fins" }, working: undefined, waitingOn: () => undefined, fins: () => listedFins(mac.world.agents.roster(apex.conversation)) })
-    const olderRow = rowOf(thread.sessions[0]!, older, studio.world, { session: { ...studio.world.live.snapshot(older)!.session, title: "probe" }, working: undefined, waitingOn: () => undefined })
+    // The older Session's row is its newest conversation's, the one the person continued in: made after the newer Session's.
+    const olderRow = rowOf(thread.sessions[0]!, continued, studio.world, { session: { ...studio.world.live.snapshot(continued)!.session, title: "probe" }, working: undefined, waitingOn: () => undefined })
     const newerRow = rowOf(placement.session, newer, studio.world, { session: { ...studio.world.live.snapshot(newer)!.session, title: "probe" }, working: "waiting", waitingOn: () => ({ line: "Approve: echo HOTEL", for: "approval" }) })
-    assert.ok(Date.parse(newerRow.createdAt) > Date.parse(olderRow.createdAt), "the newer Session's row says it was made later")
-    for (const order of ["older first", "newest first"] as const) {
+    assert.ok(Date.parse(olderRow.createdAt) > Date.parse(newerRow.createdAt), "the older Session's row is the newer conversation's: creation time says nothing of Session order")
+    assert.deepEqual([olderRow.order, newerRow.order], [0, 1], "each row says its Session's place as Studio's store keeps it")
+    const listedOn = (rows: ListedSession[]) => {
       acpStore.set({ activeKey: null, conversations: {}, threadSessions: {} })
-      const rows = order === "older first" ? [olderRow, newerRow] : [newerRow, olderRow]
       listLive([listedSummary(apexRow, "MacBook", undefined), ...rows.map((row) => listedSummary(row, "Studio", undefined, undefined, listedApexOf(row, [apexRow, olderRow, newerRow])))])
-      const children = threadChildren(acpStore.get(), apexRow.thread)
+      return threadChildren(acpStore.get(), apexRow.thread)
+    }
+    for (const order of ["older first", "newest first"] as const) {
+      const children = listedOn(order === "older first" ? [olderRow, newerRow] : [newerRow, olderRow])
       assert.equal(children.length, 1, `${order}: the Apex's one Fin`)
       assert.equal(children[0]?.child?.conversation, newer, `${order}: the roster's entry opens the newer Session's conversation`)
       assert.deepEqual(childStateOf(children[0]!), { kind: "blocked", question: "Approve: echo HOTEL", on: "approval" }, `${order}: and stands as it does there`)
       assert.deepEqual(finOpening(acpStore.get(), children[0]!), { kind: "conversation", key: newer }, `${order}: from under the Apex it opens the approval`)
     }
-    console.log("two sessions: a placed Fin's newer Session on its device, its rows written by that device in either order, is the one a window on the Apex's device opens and stands by, with no group of that Thread held there")
+    // An open ask always surfaces: the older Session asking while the newer sits idle, in either order, is what opens.
+    const askingOlder = rowOf(thread.sessions[0]!, continued, studio.world, { session: { ...studio.world.live.snapshot(continued)!.session, title: "probe" }, working: "waiting", waitingOn: () => ({ line: "Approve: echo INDIA", for: "approval" }) })
+    const idleNewer = rowOf(placement.session, newer, studio.world, { session: { ...studio.world.live.snapshot(newer)!.session, title: "probe" }, working: undefined, waitingOn: () => undefined })
+    for (const order of ["older first", "newest first"] as const) {
+      const children = listedOn(order === "older first" ? [askingOlder, idleNewer] : [idleNewer, askingOlder])
+      assert.equal(children[0]?.child?.conversation, continued, `${order}: the asking Session's conversation, though older`)
+      assert.deepEqual(childStateOf(children[0]!), { kind: "blocked", question: "Approve: echo INDIA", on: "approval" }, `${order}: standing on its ask`)
+      assert.deepEqual(finOpening(acpStore.get(), children[0]!), { kind: "conversation", key: continued }, `${order}: from under the Apex it opens the ask`)
+    }
+    // Rows from a host before link version 21 say no order: they rank as they arrive, as every device did before.
+    // Neither row asks anything, so nothing but arrival ranks them.
+    const without = (row: ListedSession): ListedSession => ({ ...row, order: undefined, state: "idle", waitingOn: undefined, waitingFor: undefined })
+    assert.equal(listedOn([without(olderRow), without(newerRow)])[0]?.child?.conversation, continued, "without the field, the first listed stands")
+    assert.equal(listedOn([without(newerRow), without(olderRow)])[0]?.child?.conversation, newer, "whichever it is")
+    console.log("two sessions: a placed Fin's newer Session on its device, its rows written by that device in either order and the older Session continued after it, is the one a window on the Apex's device opens and stands by, with no group of that Thread held there; rows from a host before the field rank as they arrive")
   } finally {
     await mac.close()
     await studio.close()

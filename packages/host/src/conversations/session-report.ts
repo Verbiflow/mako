@@ -50,6 +50,8 @@ export type ReportSources = {
   /** When a conversation last moved (its journal's last write), if known; read again only once its revision moved. */
   lastMoved(conversationId: string, revision: number): number | undefined
   placement(conversationId: string): ThreadPlacement | undefined
+  /** The Session's place among its Thread's Sessions as this host's store keeps them (`ReportedSession.order`); undefined where unknown. */
+  sessionOrder?(placement: ThreadPlacement): number | undefined
   /** Whether a Thread is a child's whose Apex is here (`listedUnderApex`): it goes up inside its parent's Thread, never as a row. */
   childThread?(thread: ThreadId): boolean
   /**
@@ -293,6 +295,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     if (session.nativeId) row.nativeId = session.nativeId
     const forkOf = forks?.get(placed.session)
     if (forkOf) row.forkOf = forkOf
+    const order = sources.sessionOrder?.(placed)
+    if (order !== undefined) row.order = order
     Object.assign(row, rail(session.cwd || undefined, undefined, (summary.nativeIds ?? []).map((id) => id.provider), session.harness))
     // A harness or ID the protocol can't carry is left out, never the rest.
     const parsed = ReportedSessionSchema.safeParse(row)
@@ -356,6 +360,12 @@ export function syncOrder(left: ReportedSession, right: ReportedSession, threads
   return byThread || right.activityAt.localeCompare(left.activityAt)
 }
 
+/** A Session's place among its Thread's Sessions, as the store that owns the Thread keeps them: what its row says as `order`. */
+export function sessionOrderIn(sessions: readonly string[] | undefined, session: string): number | undefined {
+  const at = sessions?.indexOf(session) ?? -1
+  return at >= 0 ? at : undefined
+}
+
 /** Whether two rows show the same but for when they last moved. */
 function sameShown(left: ReportedSession, right: ReportedSession): boolean {
   return left.session === right.session && left.thread === right.thread && left.threadTitle === right.threadTitle && left.conversation === right.conversation &&
@@ -364,7 +374,7 @@ function sameShown(left: ReportedSession, right: ReportedSession): boolean {
     left.nativeId === right.nativeId && left.capture?.path === right.capture?.path && left.background === right.background &&
     left.project?.folder === right.project?.folder && sameHead(left.project?.head, right.project?.head) &&
     left.worktree?.branch === right.worktree?.branch && (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0") &&
-    left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere && left.forkOf === right.forkOf &&
+    left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere && left.forkOf === right.forkOf && left.order === right.order &&
     JSON.stringify(left.asking) === JSON.stringify(right.asking) && JSON.stringify(left.fins) === JSON.stringify(right.fins)
 }
 

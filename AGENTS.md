@@ -657,7 +657,14 @@ is a row of its own that opens on its device (`placedWaiting`). The Fin's
 row carries what it asks whatever its Apex's device is doing: a window's
 roster of the Apex takes the Fin's own conversation and standing from it
 (`placedOver`), the Apex's word standing only while the Fin's device is
-quiet. So the person answers a placed Fin's approvals in its own Thread, on
+quiet. A placed Fin's Thread may hold several Sessions on its device (the
+person continued it there), and the Apex's device holds no group of that
+Thread, only its device does: so every row a device lists says its Session's
+place in its Thread as the owner's store keeps it (`ReportedSession.order`,
+link version 21 on, `sessionOrderIn`), and `newestSaid` ranks a Thread it
+holds no group of by it, as it ranks one it holds by the group; a row from a
+host before the field ranks where it arrived, as every device did before.
+So the person answers a placed Fin's approvals in its own Thread, on
 that device, on the web or from another device, with the Apex's device off
 too. Its Apex never grants them: it calls at no more than the device's
 ceiling (`PLACED_CEILING`, `auto`: the person's decision of 2026-11-06,
