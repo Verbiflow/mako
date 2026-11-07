@@ -1249,7 +1249,11 @@ fails on a host that keeps it whole, or on any of those (or the sweep's
 measure of a copy) holding the event loop past 50ms. A pass over a whole
 history (a merge, a journal's read, that measure) is written once as `Steps`
 (`@mako/sessions/slices`) and run `inSlices` wherever the host, or the sync
-daemon, can wait; a turn starts once the history's rows are written ahead
+daemon, can wait. One that outlives its host's stop takes a `stopping` check
+and ends at its next step (`StepsStopped`, thrown into the steps so a read
+transaction rolls back): a resume read cut by a stop resumes nothing and is
+the next host's, and a count or pass the journal's close cuts ends quietly
+(`test:resume-holds`, `test:attribution-holds`); a turn starts once the history's rows are written ahead
 (`LiveJournal.writtenAhead`), so its first commit writes none of them. `MAKO_PAGING_CHECK=1` pages every field
 of every entry as soon as a commit writes it, the turn running included; run
 the live, transcript and conversation-control suites with it after changing

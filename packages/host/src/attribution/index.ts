@@ -1,7 +1,6 @@
 import { locate, type Git } from "@mako/git"
 import type { ContentRef, ExactBounds, MakoWrite, MakoWriting, PathMap, ThreadFileHistory } from "@mako/protocol"
 import type { ChildSource } from "@mako/sessions"
-import { inSlices } from "@mako/sessions/slices"
 import type { ToolEffects } from "@mako/sessions/tool-effects"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs"
@@ -32,7 +31,7 @@ import { ChildCalls } from "./child-calls.js"
 import { LiveActivity, reportedEffect } from "./live-activity.js"
 import { within } from "./paths.js"
 import { gitRepository, nodeFileSystem, watcherEvents, type SystemHistory, type TreeWatcher } from "./ports.js"
-import { changes, countingTurn, hunks, partition, restorable, shares, storedView, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
+import { changes, countTurnInSlices, hunks, partition, restorable, shares, storedView, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
 import { lostVersions, restoreVersion } from "./recovery.js"
 import { threadTrees, type ThreadTree } from "./thread-tree.js"
 import { runningIn, turnOnlyPair, turnWriters, undoPlan, type ShownPair, type UndoPlan } from "./turn-lines.js"
@@ -842,7 +841,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     },
     countTurn: async (thread, turn, state) => {
       if (!local && !reader) return undefined
-      return inSlices(countingTurn(view(), thread, turn, state))
+      return countTurnInSlices(view(), thread, turn, state)
     },
     settledThrough: (at) => !view().store.unsettledThrough(at + TRAIL_MS),
     counted: (summary, session) => journal.writes.counted(summary, session),
