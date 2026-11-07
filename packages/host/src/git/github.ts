@@ -422,6 +422,11 @@ export async function listPulls(
 /** Runs `gh` with arguments in a folder and returns what it printed; a test hands in its own. */
 export type GitHubRunner = (cwd: string, args: string[]) => Promise<string>
 
+/** `gh api`, for what this file has no reading of its own. */
+export function githubApi(cwd: string, path: string): Promise<string> {
+  return gh(cwd, ["api", path])
+}
+
 /** A pull request a Fin waits on, as the watch asks for it: by repository and number, or by number in the Fin's folder. */
 export interface PullTarget {
   repository?: string

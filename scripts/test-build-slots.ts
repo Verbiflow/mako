@@ -1,8 +1,7 @@
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { routeShellCall } from "@mako/host/contracts/native-calls"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
@@ -16,6 +15,7 @@ import { environmentTools } from "@mako/host/workspaces/environment-tools"
 import { portListening } from "@mako/host/workspaces/thread-environment"
 import { runKey, ThreadProcesses } from "@mako/host/workspaces/thread-processes"
 import { RecipeSchema } from "@mako/host/workspaces/thread-recipe"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Build slots (`npm run test:build-slots`): every check run holds one while it runs and the rest wait their turn,
@@ -104,7 +104,7 @@ const release = (folder: string, file = "go") => writeFileSync(join(folder, file
 }
 
 // ── Real checks of two apps on one slot: the second waits, starts the moment the first ends, and its result comes.
-const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-build-slots-")))
+const root = realpathSync(testScratch("mako-build-slots-"))
 try {
   const processes = new ThreadProcesses({ root: join(root, "records"), listening: portListening })
   const exited = new Map<string, number>()
@@ -168,7 +168,7 @@ try {
 
 /** Two apps' checks under one slot, in a fresh records folder: `host()` is a new host's tools over the same records and slots. */
 function bench(name: string, slotsOf: () => BuildSlots, stopGraceMs?: number) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), `mako-build-slots-${name}-`)))
+  const root = realpathSync(testScratch(`mako-build-slots-${name}-`))
   const records = join(root, "records")
   const apps = ["one", "two"].map((app, at) => {
     const folder = join(root, app)

@@ -2,8 +2,7 @@
 import { app, BrowserWindow } from "electron"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
@@ -13,10 +12,11 @@ import { deskPageForWindow } from "../dist-electron/desk-browser-window.js"
 import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 import { ControlPreviews, previewThumbnail } from "@mako/host/control/previews"
 import { BrowserCommandSchema } from "../packages/control-runtime/dist/contracts/browser-control.js"
+import { testScratch } from "./lib/test-scratch.mjs"
 const clips = process.env.CAPTURE_CLIPS !== "0"
 const fps = Number(process.env.CAPTURE_FPS ?? 60)
 assert.ok(Number.isInteger(fps) && fps >= 1 && fps <= 60)
-const root = mkdtempSync(join(tmpdir(), "mako-preview-proof-"))
+const root = testScratch("mako-preview-proof-")
 const output = process.argv[2] ? resolve(process.argv[2]) : root
 mkdirSync(output, { recursive: true })
 app.setPath("userData", join(root, "profile"))

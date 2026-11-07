@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { cpSync, mkdtempSync, rmSync } from "node:fs"
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -385,14 +385,15 @@ class Schedule {
   }
 
   /**
-   * SIGKILL at this moment: the journals as they stand are what the next host reads. Every write here is synchronous,
-   * so a copy taken between two steps is what a killed process leaves, at a tenth of the cost of a child per crash.
+   * SIGKILL at this moment: the journals as they stand are what the next host reads, so a copy taken between two steps
+   * is what a killed process leaves, at a tenth of the cost of a child per crash. A transcript is written off the event
+   * loop, its folder renamed from under a copy: `copyAsFound`, which `cpSync` isn't.
    */
   private async crash(): Promise<void> {
     this.take()
     const dead = this.world
     this.root = `${this.root}-c`
-    cpSync(dead.root, this.root, { recursive: true })
+    copyAsFound(dead.root, this.root)
     this.exiting = true
     for (const gate of this.gates.open.splice(0)) gate.reject(new Error("the host stopped"))
     for (const gate of this.gates.close.splice(0)) gate.resolve()
@@ -510,6 +511,19 @@ class Schedule {
     this.exiting = true
     for (const gate of [...this.gates.open.splice(0), ...this.gates.close.splice(0)]) gate.resolve()
     await this.world.close()
+  }
+}
+
+/** A folder as it stands: what a write moves away during the copy is what a killed process wouldn't have left there. */
+function copyAsFound(from: string, to: string): void {
+  mkdirSync(to, { recursive: true })
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    try {
+      if (entry.isDirectory()) copyAsFound(join(from, entry.name), join(to, entry.name))
+      else copyFileSync(join(from, entry.name), join(to, entry.name))
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error
+    }
   }
 }
 

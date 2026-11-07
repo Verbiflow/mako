@@ -3,13 +3,12 @@ import { errorMessage } from "../base/error-message.js"
 import { APEX_WORD, decisionWords, reportAsk, reportPhase, waitingWords, type Notice, type Report } from "../contracts/agents.js"
 import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
+import { WAKE_COALESCE_MS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
 
-export { DIGEST_WAITS, FROM_AGENTS, fromAgent, WAKES_PER_MINUTE } from "../contracts/children.js"
+export { DIGEST_WAITS, FROM_AGENTS, fromAgent, WAKE_COALESCE_MS, WAKES_PER_MINUTE } from "../contracts/children.js"
 
-/** An idle Apex waits this long after a notice for the others of its burst, then wakes once for all of them. */
-export const WAKE_COALESCE_MS = 2_000
 /** A result the Apex waited for goes after this: the Apex asked for it, so only what settles with it joins it. */
 export const RESULT_COALESCE_MS = 250
 /** The most of a waited-for result its wake carries; `agents_read` gives the rest. */

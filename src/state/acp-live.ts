@@ -114,7 +114,8 @@ function noteLiveOutcome(
   const asked = askedPermissions.get(conversation.key)
   const agentAsk = agentAskOf(conversation)
   // Its agent's ask through Mako's tools says so once, on the conversation that asked, as an approval does.
-  if (agentAsk && !permission) {
+  // A Fin's is said on its Apex once it's the person's (`noteFinAsks`), as its approvals are.
+  if (agentAsk && !permission && !conversation.parent) {
     if (asked !== agentAsk.id) {
       askedPermissions.set(conversation.key, agentAsk.id)
       noteOutcome({ kind: "needs-you", subject, marker: agentAsk.id, detail: agentAskLine(agentAsk.want), quiet })

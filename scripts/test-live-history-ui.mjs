@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
+import { testScratch } from "./lib/test-scratch.mjs"
 
 async function check() {
 app.setPath('userData', join(process.env.MAKO_HISTORY_ROOT, 'browser'))
@@ -14,7 +14,7 @@ const until = async code => {
   const end = Date.now() + 20000
   while (!await evaluate(code)) { assert.ok(Date.now() < end, code); await new Promise(resolve => setTimeout(resolve, 40)) }
 }
-const evidence = await mkdtemp(join(tmpdir(), 'mako-live-history-ui-'))
+const evidence = testScratch('mako-live-history-ui-')
 const capture = async name => {
   window.showInactive()
   await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))')
@@ -106,7 +106,6 @@ try {
   await until("window.copiedHistory?.includes('Finding 299')")
   assert.equal(await evaluate("document.querySelectorAll('[data-sonner-toast]').length"), 0)
   console.log('PASS: production UI opens >32 MiB history through browser/forwarded owner, scrolls to earlier content, reads complete tool output, copies answer, no restart/error notice')
-  console.log('Visual evidence: ' + evidence)
 } catch (error) {
   console.error(error)
   await capture('failure.png')

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /*
  * Every surface that counts an Apex's Fins, drawn from one roster, says the same numbers in the same words: the
@@ -21,7 +21,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-fin-counts-ui-"))
+  const root = testScratch("mako-fin-counts-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-fin-counts-ui", main: fileURLToPath(import.meta.url) }))
   const given = process.argv.slice(2).find((arg) => /^https?:/.test(arg))
   let server
@@ -172,6 +172,5 @@ async function check() {
   agrees("the phone's row", await evaluate("document.querySelector('[data-fin-pips]').getAttribute('aria-label')"), numbers(desktop))
 
   console.log(`Fin counts agree on every surface: ${label}; on the phone, ${desktop}`)
-  console.log(`Evidence: ${join(root, "shots")}`)
   app.exit(0)
 }

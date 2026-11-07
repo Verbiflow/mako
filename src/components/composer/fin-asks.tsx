@@ -88,7 +88,7 @@ export function FinAsks() {
   if (card !== null) return <FinsNeedYou thread={thread} />
   if (!key || !asks.length) return null
   return (
-    <div data-fin-asks={asks.length} className="flex shrink-0 flex-col gap-2.5 bg-surface/60 px-4 py-2.5">
+    <div data-fin-asks={asks.length} className="mx-3 flex shrink-0 flex-col gap-2.5 bg-surface/60 py-2.5">
       {asks.map((ask) => (
         <FinAskRow key={`${ask.fin}:${ask.ask.id}`} apex={key} ask={ask} />
       ))}

@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client"
-import { Notice, Phone, phoneView } from "./github-person-fixtures"
+import { Desk, Notice, Phone } from "./github-person-fixtures"
 
-createRoot(document.getElementById("root")!).render(phoneView ? <Phone /> : <Notice />)
+const view = new URLSearchParams(location.search).get("view")
+createRoot(document.getElementById("root")!).render(view === "phone" ? <Phone /> : view === "desk" ? <Desk /> : <Notice />)

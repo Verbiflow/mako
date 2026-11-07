@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Scrolling a transcript while its answer streams, by trusted touch at an iPhone's size on the phone's live Session
@@ -35,7 +35,7 @@ if (process.versions.electron) {
   const args = process.argv.slice(2)
   const portAt = args.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(args.splice(portAt, 2)[1])
-  const root = await mkdtemp(join(tmpdir(), "mako-phone-scroll-ui-"))
+  const root = testScratch("mako-phone-scroll-ui-")
   const evidence = args[0] ? resolve(args[0]) : root
   await mkdir(evidence, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: port !== 0, hmr: false } })
@@ -52,7 +52,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Phone scroll UI evidence: ${evidence}`)
 }
 
 /**
@@ -161,7 +160,7 @@ async function checkScroll() {
   const flick = (px, speed) => send("Input.synthesizeScrollGesture", { x: centre.x, y: centre.y, yDistance: px, speed, gestureSourceType: "touch", preventFling: false })
   const phone = async (theme) => {
     await window.loadURL(`${new URL("scripts/phone-scroll.html", process.env.MAKO_SCROLL_URL).href}?theme=${theme}`)
-    await until(`document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length >= 10`, "the phone's transcript")
+    await until(`document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length >= 2`, "the phone's transcript")
     await evaluate("document.fonts.ready.then(() => true)")
     await evaluate(INSTRUMENT)
     await rest()
@@ -313,7 +312,7 @@ async function checkScroll() {
 
     // 7. An earlier page arriving under a resting finger: the line under it stays.
     await window.loadURL(`${new URL("scripts/transcript-scroll-browser.html", process.env.MAKO_SCROLL_URL).href}?turns=90&paged=12`)
-    await until(`document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length >= 10`, "the paged transcript")
+    await until(`document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length >= 2`, "the paged transcript")
     await rest()
     // Drags up until a page lands during one (the source answers 300 ms after it's asked, and its turns are placed as
     // the reader scrolls). Past the touch slop the transcript follows the finger 1:1, so whatever the line under it
@@ -343,7 +342,7 @@ async function checkScroll() {
     // 8. A laptop's wheel leaves the end of a streaming answer, in a short transcript and a windowed one.
     await send("Emulation.setTouchEmulationEnabled", { enabled: false })
     await send("Emulation.setDeviceMetricsOverride", { width: 1100, height: 900, deviceScaleFactor: 1, mobile: false })
-    for (const turns of [90, 250]) {
+    for (const turns of [20, 250]) {
       await window.loadURL(`${new URL("scripts/transcript-scroll-browser.html", process.env.MAKO_SCROLL_URL).href}?turns=${turns}`)
       // A windowed transcript mounts only the rows around what's shown.
       await until(`document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length >= 2`, "the laptop's transcript")
@@ -352,7 +351,7 @@ async function checkScroll() {
       await evaluate("window.probe.startTurn(), window.__streaming = setInterval(() => window.probe.appendToTurn('The answer keeps arriving, a few words a frame. '), 50), true")
       await wait(800)
       const windowed = await evaluate(`${scroller}.hasAttribute('data-virtualized')`)
-      assert.equal(windowed, turns > 200, `${turns} turns ${windowed ? "are" : "aren't"} windowed`)
+      assert.equal(windowed, turns > 40, `${turns} turns ${windowed ? "are" : "aren't"} windowed`)
       const start = await fromEnd()
       since = await now()
       for (let notch = 0; notch < 30; notch += 1) {
