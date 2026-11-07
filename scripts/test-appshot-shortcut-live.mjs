@@ -18,8 +18,7 @@
 // automation endpoint 20028.
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { promisify } from "node:util"
 import { createRequire } from "node:module"
@@ -28,11 +27,12 @@ import { frontmostPid } from "@mako/host/control/appshots"
 import { CuaEmbedded } from "@mako/host/control/cua-embedded"
 import { resolveExecutable } from "@mako/host/base/executable"
 import { connectMcpComputerDriver } from "@mako/control-runtime/host"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const run = promisify(execFile)
 const VITE_PORT = 20027
 const AUTOMATION_PORT = 20028
-const root = await mkdtemp(join(tmpdir(), "mako-appshot-shortcut-"))
+const root = testScratch("mako-appshot-shortcut-")
 const evidence = resolve(process.argv[2] ?? join(root, "evidence"))
 await mkdir(evidence, { recursive: true })
 const home = join(root, "home")

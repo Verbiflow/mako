@@ -2832,12 +2832,20 @@ export class Agents implements AgentOperations, ConversationChildren {
     clearTimeout(this.noticeEnds.get(root))
     this.noticeEnds.delete(root)
     const notice = this.standingNotice(root)
-    if (notice?.until === undefined) return
+    if (notice?.until !== undefined) this.waitOutNotice(root, notice, notice.until)
+  }
+
+  /**
+   * Until `notice`'s reset. A timer can fire a moment early, so one that finds the notice standing waits on for this
+   * notice: read for the tree instead, it could already be past, and that read would end the wait with nothing told.
+   */
+  private waitOutNotice(root: string, notice: LimitNotice, until: number): void {
     const timer = setTimeout(() => {
       this.noticeEnds.delete(root)
-      if (this.standingNotice(root)?.id !== notice.id) this.noticeChanged(this.store()?.edges().of(notice.fin))
+      if (this.standingNotice(root)?.id === notice.id) return this.waitOutNotice(root, notice, until)
+      this.noticeChanged(this.store()?.edges().of(notice.fin))
       this.endNotice(root)
-    }, Math.min(notice.until - this.now(), LONGEST_TIMER_MS))
+    }, Math.min(Math.max(until - this.now(), 1), LONGEST_TIMER_MS))
     timer.unref()
     this.noticeEnds.set(root, timer)
   }

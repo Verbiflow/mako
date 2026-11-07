@@ -98,7 +98,9 @@ async function until(what: string, done: () => boolean, timeoutMs = 15_000): Pro
 }
 const NOW = Date.UTC(2026, 10, 4, 20)
 const began = performance.now()
-const clock = () => NOW + Math.round(performance.now() - began)
+// What the next reads of the clock say, ahead of the time itself.
+const clockSays: number[] = []
+const clock = () => clockSays.shift() ?? NOW + Math.round(performance.now() - began)
 const RESET = NOW + 3 * 3_600_000
 const LIMIT = "You've hit your usage limit"
 /** Every harness signed in: its catalog lists a model. */
@@ -465,10 +467,64 @@ try {
     assert.ok(!("refused" in r))
     held.claude[0]!.spentUntil = reset
     spent()
-    // A quiet Thread may be unloaded by then, with no roster at all: which says no notice as well as an empty one does.
-    const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length ?? 0
+    // No roster isn't no notice: it doesn't count as cleared, and neither does anything before the reset. This failed
+    // in CI without saying if a notice stood or the roster had gone: a failure now prints which.
+    const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length
     await until("the notice on the Apex's snapshot", () => shown() === 1, 6_000)
-    await until("its reset, with nobody reading", () => shown() === 0, 12_000)
+    const fresh = () => r.world.agents.roster(r.apex.conversation).filter((agent) => agent.child?.limitNotice).length
+    assert.equal(fresh(), 1, "a fresh read of the roster has it too")
+    await until("its reset, with nobody reading", () => shown() === 0, 12_000).catch((error) => {
+      const entries = r.world.agents.roster(r.apex.conversation).map((agent) => [agent.child?.state?.kind, Boolean(agent.child?.limitNotice)])
+      console.error("At its reset:", JSON.stringify({ reset, now: clock(), shown: shown() ?? "no roster", entries, session: r.world.live.session(r.apex.conversation)?.status, notices: r.world.store.limitNotices() }))
+      throw error
+    })
+    assert.ok(clock() >= reset, `the notice held until its reset, not ${reset - clock()} ms short of it`)
+    assert.equal(fresh(), 0, "and a fresh read of the roster agrees")
+    await r.world.close()
+  }
+  // A timer can fire a moment early, and the clock can cross the reset between the two reads that follow. Linux runners
+  // left a notice on the Apex's snapshot this way, past its reset, while a fresh roster was clean.
+  {
+    const reset = clock() + 7_000
+    const held = { claude: named("personal"), codex: named("default") }
+    let spent!: () => void
+    const out = new Promise<void>((resolve) => (spent = resolve))
+    const r = await run("notice-early-timer", {
+      accounts: held,
+      selected: { claude: "personal" },
+      start: { harness: "claude" },
+      fin: async (turn, end) => {
+        if (turn > 1) return "Done."
+        await out
+        end({ limit: { resetsAt: reset }, fail: LIMIT })
+        return "Partial labels."
+      },
+    })
+    assert.ok(!("refused" in r))
+    held.claude[0]!.spentUntil = reset
+    const realTimeout = globalThis.setTimeout
+    let early = 0
+    // SAFETY: called as setTimeout is, with the timer it returns; only the reset's own timer is touched.
+    globalThis.setTimeout = ((work: () => void, ms?: number) => {
+      const forReset = ms !== undefined && ms > 1_000 && Math.abs(clock() + ms - reset) < 5
+      return realTimeout(() => {
+        if (forReset && !early) {
+          early += 1
+          clockSays.push(reset - 1, reset)
+        }
+        work()
+      }, ms)
+    }) as typeof setTimeout
+    try {
+      spent()
+      const shown = () => r.world.live.snapshot(r.apex.conversation)?.nativeAgents?.agents.filter((agent) => agent.child?.limitNotice).length
+      await until("the notice on the Apex's snapshot", () => shown() === 1, 6_000)
+      await until("its reset, on a timer that fired early", () => shown() === 0, 12_000)
+      assert.equal(early, 1, "the reset's timer is the one that fired early")
+      assert.ok(clock() >= reset - 1, "and the notice held until its reset")
+    } finally {
+      globalThis.setTimeout = realTimeout
+    }
     await r.world.close()
   }
   // Past its reset a notice is off the entry that carries it, whatever the cache held; and a host that comes back to

@@ -38,7 +38,7 @@ const SUITES = [
   "test:owner-check", "test:plugins", "test:proposed-plans", "test:provider-launch-options", "test:provider-ui",
   "test:queued-steering", "test:rail-list", "test:recovery-admission", "test:scripted-model", "test:secrets-keychain", "test:side-rail-ui", "test:fin-transitions-ui",
   "test:composer-edges-ui", "test:simulators-remote", "test:skills", "test:telemetry", "test:terminal", "test:terminal-ui",
-  "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees", "test:transfer-scheduling",
+  "test:test-scratch", "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees", "test:transfer-scheduling",
   "test:tree-watcher", "test:update-local", "test:usage-worker", "test:web-delivery", "test:window-boot",
 ]
 /** Past this a suite has hung: the slowest here takes about 4 minutes on a Mac at load 15. */
