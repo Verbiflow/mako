@@ -268,7 +268,7 @@ async function check() {
   assert.ok(released !== null && released <= 40, `a button held through a wheel lets go of memory as it's released: ${released}`)
 
   // Crossing into a window under a reader who's up: they stay where they are, and what's mounted falls.
-  await load("/?mock&app=apex&turns=88", 1440, 900)
+  await load("/?mock&app=apex&turns=12", 1440, 900)
   await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the Apex just short of a window's rail")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
   await until(`Boolean(${VIEW}) && Boolean(document.querySelector('[data-crew]'))`, "the Apex just short of a window")
@@ -282,7 +282,7 @@ async function check() {
   await wait(700)
   const crossed = await evaluate(`(() => { const row = document.querySelector('[data-exchange="' + ${JSON.stringify(crossing.id)} + '"]'); return { top: row ? row.getBoundingClientRect().top : null, windowed: ${VIEW}.hasAttribute('data-virtualized'), rows: ${VIEW}.querySelectorAll('[data-exchange]').length } })()`)
   console.log("CROSSING", JSON.stringify({ before: crossing.top, ...crossed }))
-  assert.equal(crossed.windowed, true, "past 400 items the transcript is windowed")
+  assert.equal(crossed.windowed, true, "past 120 items the transcript is windowed")
   assert.ok(crossed.top !== null && Math.abs(crossed.top - crossing.top) <= 2, `crossing into a window moves nothing under the reader: ${crossing.top} → ${crossed.top}`)
   assert.ok(crossed.rows <= 40, `and what's mounted falls: ${crossed.rows}`)
 
