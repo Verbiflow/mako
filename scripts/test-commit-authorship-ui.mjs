@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Who cloud commits and pull requests are authored as, in Settings › Git on the desktop (the fixture desk's own
@@ -24,9 +24,9 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
-  const root = process.env.MAKO_UI_EVIDENCE_DIR ?? await mkdtemp(join(tmpdir(), "mako-commit-authorship-ui-"))
+  const root = testScratch("mako-commit-authorship-ui-", { given: process.env.MAKO_UI_EVIDENCE_DIR })
   const server = await createServer({
-    cacheDir: join(await mkdtemp(join(tmpdir(), "mako-commit-authorship-cache-")), "cache"),
+    cacheDir: join(testScratch("mako-commit-authorship-cache-"), "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],
     server: { host: "127.0.0.1", port: 0 },
