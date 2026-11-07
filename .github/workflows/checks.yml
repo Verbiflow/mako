@@ -394,6 +394,8 @@ jobs:
         env:
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:transcript-rows-ui
+        env:
+          MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:highlight-pool-ui
       # A limit's one notice, in the Inbox, on the phone and in the laptop's browser, and a move on every list.
       - run: npm run test:limit-notice-ui

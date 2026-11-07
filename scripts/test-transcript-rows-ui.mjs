@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
@@ -186,6 +186,7 @@ const FORMS = [
 async function check() {
   const { app, BrowserWindow, contentTracing, nativeImage } = await import("electron")
   const root = process.env.MAKO_UI_TEST_ROOT
+  const evidence = process.env.MAKO_SEND_SHOTS ?? root
   const base = process.env.MAKO_UI_TEST_URL.replace(/\/$/, "")
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
@@ -430,21 +431,26 @@ async function check() {
     // A runner paints at its own rate: what matters is frames on both sides of it, not how many.
     const before = around.filter((frame) => frame.at < crossedAt).length, after = around.length - before
     assert.ok(before >= 2 && after >= 2, `the screencast saw both sides of the crossing: ${before} frames before it, ${after} after`)
-    let last, worst = { changed: 0 }
-    for (const frame of around) {
-      const pixels = nativeImage.createFromBuffer(Buffer.from(frame.data, "base64")).crop(crop).toBitmap()
-      if (last) {
-        let changed = 0
-        for (let at = 0; at < pixels.length; at += 4)
-          if (Math.abs(pixels[at] - last[at]) + Math.abs(pixels[at + 1] - last[at + 1]) + Math.abs(pixels[at + 2] - last[at + 2]) > 48) changed += 1
-        const share = 100 * changed / (pixels.length / 4)
-        if (share > worst.changed) worst = { changed: share, at: Math.round(frame.at - crossedAt), frame }
-      }
-      last = pixels
+    // Wrong for a frame is unlike both what was there and what settled: code without its colours, a turn over another. A
+    // reader's text settling a fraction of a pixel over is unlike one of them only, and stays.
+    const pixels = around.map((frame) => nativeImage.createFromBuffer(Buffer.from(frame.data, "base64")).crop(crop).toBitmap())
+    const unlike = (one, other) => {
+      let changed = 0
+      for (let at = 0; at < one.length; at += 4)
+        if (Math.abs(one[at] - other[at]) + Math.abs(one[at + 1] - other[at + 1]) + Math.abs(one[at + 2] - other[at + 2]) > 48) changed += 1
+      return 100 * changed / (one.length / 4)
     }
-    console.log(`a narrow window, ${up} px up: ${around.length} painted frames around the crossing, the most any changed ${worst.changed.toFixed(2)}%${worst.frame ? ` ${worst.at} ms from it` : ""}`)
-    if (worst.changed > 1) await writeFile(join(root, `crossing ${up} px up.png`), Buffer.from(worst.frame.data, "base64"))
-    assert.ok(worst.changed <= 1, `a narrow window, ${up} px up: the crossing paints a frame ${worst.changed.toFixed(2)}% unlike the one before it, ${worst.at} ms from it`)
+    const was = pixels[0], settled = pixels.at(-1)
+    const stayed = unlike(was, settled)
+    const flash = around.map((frame, index) => ({ frame, by: Math.min(unlike(pixels[index], was), unlike(pixels[index], settled)), at: Math.round(frame.at - crossedAt) })).reduce((most, each) => each.by > most.by ? each : most)
+    console.log(`a narrow window, ${up} px up: ${around.length} painted frames around the crossing, ${before} before it; the most any frame was unlike both sides ${flash.by.toFixed(2)}% ${flash.at} ms from it; what stayed changed ${stayed.toFixed(2)}%`)
+    if (flash.by > 1 || stayed > 10) {
+      await mkdir(evidence, { recursive: true })
+      for (const [name, frame] of [["before", around[0]], ["flash", flash.frame], ["settled", around.at(-1)]])
+        await writeFile(join(evidence, `crossing ${up} px up ${name}.png`), Buffer.from(frame.data, "base64"))
+    }
+    assert.ok(flash.by <= 1, `a narrow window, ${up} px up: the crossing paints a frame ${flash.by.toFixed(2)}% unlike both what was there and what settled, ${flash.at} ms from it`)
+    assert.ok(stayed <= 10, `a narrow window, ${up} px up: the crossing leaves the screen ${stayed.toFixed(2)}% changed`)
   }
 
   // A finger, or a fling, in a tall turn as the crossing comes: what's read goes with the gesture, and never leaps. Turns
