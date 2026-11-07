@@ -72,8 +72,8 @@ const MORE_TURNS = 30
  * Past either, only the turns near the viewport mount. A session of few prompts can hold thousands of tool calls,
  * so the turn count alone would mount every one of them.
  */
-const WINDOWED_TURNS = 200
-const WINDOWED_ITEMS = 400
+const WINDOWED_TURNS = 40
+const WINDOWED_ITEMS = 120
 
 /**
  * What each windowed transcript's rows measured, by row key, at the window's width, for the few read last. Opened

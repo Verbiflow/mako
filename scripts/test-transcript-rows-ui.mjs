@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { writeFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
@@ -148,7 +148,7 @@ const FORMS = [
 ]
 
 async function check() {
-  const { app, BrowserWindow } = await import("electron")
+  const { app, BrowserWindow, contentTracing } = await import("electron")
   const root = process.env.MAKO_UI_TEST_ROOT
   const base = process.env.MAKO_UI_TEST_URL.replace(/\/$/, "")
   app.setPath("userData", join(root, "profile"))
@@ -253,6 +253,27 @@ async function check() {
       await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile })
       await wait(400)
       assert.deepEqual(corrected, [], `${form}: nothing to correct on opening it again`)
+      await evaluate(`import('/src/components/transcript/transcript-end.ts').then(({ TRANSCRIPT_END_EVENT }) => { document.querySelector('[data-transcript-viewport]').dispatchEvent(new Event(TRANSCRIPT_END_EVENT, { bubbles: true })); return true })`)
+      await wait(400)
+      await evaluate("window.__overlaps.length = 0; true")
+    }
+
+    if (form === "desk") {
+      // A row coming in restyles itself, never the page around it: a rule that makes it do so costs every row a frame at
+      // speed. Elements counted, not milliseconds, so no runner's load decides it.
+      guard.at(`${form}: what a row coming in restyles`)
+      const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + 200, y: box.top + 80 } })()")
+      await contentTracing.startRecording({ included_categories: ["devtools.timeline"], excluded_categories: ["*"] })
+      for (let step = 0; step < 60; step += 1) {
+        await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY: step < 40 ? -300 : 300 })
+        await wait(20)
+      }
+      const trace = JSON.parse(await readFile(await contentTracing.stopRecording(join(root, "style.trace.json")), "utf8"))
+      const elements = await evaluate("document.getElementsByTagName('*').length")
+      const restyled = trace.traceEvents.filter((event) => event.name === "UpdateLayoutTree").map((event) => event.args?.elementCount ?? 0)
+      console.log(`${form}: restyles while rows came in: ${restyled.length}, the most ${Math.max(0, ...restyled)} of the page's ${elements} elements`)
+      assert.ok(restyled.length > 10, `${form}: the trace saw the rows come in`)
+      assert.ok(Math.max(...restyled) < elements / 2, `${form}: a row coming in restyles ${Math.max(...restyled)} of ${elements} elements`)
       await evaluate(`import('/src/components/transcript/transcript-end.ts').then(({ TRANSCRIPT_END_EVENT }) => { document.querySelector('[data-transcript-viewport]').dispatchEvent(new Event(TRANSCRIPT_END_EVENT, { bubbles: true })); return true })`)
       await wait(400)
       await evaluate("window.__overlaps.length = 0; true")

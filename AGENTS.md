@@ -1526,10 +1526,13 @@ Three rules hold this together, and each has a specific failure it prevents:
   turn in the session.
 - **Long lists are virtualized, long content uses `content-visibility`.** The
   rail is windowed with `@tanstack/react-virtual`; transcript turns and
-  surface-panel rows carry `.contain-turn`. Timelines above 200 turns or 400
+  surface-panel rows carry `.contain-turn`. Timelines above 40 turns or 120
   messages and calls (a few prompts can hold thousands of calls), and
   navigators above 100 prompts, additionally window measured rows; a timeline
-  stays windowed while it's shown. Its mounted rows are also held against the
+  stays windowed while it's shown. A row coming in restyles itself, never the
+  page: no `group-has-[…]`, whose universal last part restyles all of `main` for
+  any element added, so write `[.group:has(…)_&]:…`
+  (`test-transcript-rows-ui.mjs` counts it). Its mounted rows are also held against the
   virtualizer before each paint (`row-check.ts`), so an observer that goes quiet
   never shows, and a correction it didn't report is logged with what was found
   (`Transcript row corrected` in the host's log). A conversation keeps at most 24 MB of
