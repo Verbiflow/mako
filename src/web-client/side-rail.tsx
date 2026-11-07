@@ -10,6 +10,7 @@ import { useAgentsOffered } from "@/state/agents-offered"
 import { shallowEqual } from "@/state/store"
 import { openAgents, useDeskFin } from "./agents-open"
 import { openFiles } from "./files-open"
+import { SetupRailRow } from "./setup-rail-row"
 import { deskReviewCode, openReview } from "./review-open"
 import { changedRequests } from "./review-model"
 
@@ -24,10 +25,10 @@ function ChangesReading({ conversation }: { conversation: string }) {
 }
 
 /**
- * The right rail in a laptop's browser, the desktop's twin: a row for Changes, Files and Agents with their readings,
- * the one open lit, and what it opened under them. The three take turns, so a row is all it takes to go between them.
+ * The right rail in a laptop's browser, the desktop's twin: a row for Changes, Files, Agents and Setup with their
+ * readings, the one open lit, and what it opened under them. They take turns, so a row is all it takes to go between them.
  */
-export function WebSideRail({ active, conversation }: { active: "changes" | "files" | "agents"; conversation: string }) {
+export function WebSideRail({ active, conversation }: { active: "changes" | "files" | "agents" | "setup"; conversation: string }) {
   const apex = useDeskFin((state) => state.fin?.apex)
   const offered = useAgentsOffered(apex)
   return (
@@ -73,6 +74,8 @@ export function WebSideRail({ active, conversation }: { active: "changes" | "fil
           onClick={() => active !== "agents" && openAgents()}
         />
       ) : null}
+      <SetupRailRow open={active === "setup"} conversation={conversation} />
     </nav>
   )
 }
+

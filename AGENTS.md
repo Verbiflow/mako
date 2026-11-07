@@ -534,8 +534,11 @@ only, `never` for none unless it waited; a question its Apex doesn't hear is
 the person's, never dropped. A Fin's turn an exit or an update cut short
 always continues in the next host (`LeftTurn.always`), and its messages the
 exit paused go on. So does an Apex's own turn while it has open Fins
-(`inTree`, `continueCrashed`), under the same loop guard. A crash's cut reads
-as `uncertain`. A Fin's cut turn that nothing picks up within
+(`inTree`, `continueCrashed`), under the same loop guard. The next host reads
+every journal that resume looks at in first, one at a time and a slice at a
+time (`Agents.resumeInSlices`, `LiveConversations.readIn`): read whole, a
+day's Fins held its loop 4.8 s as it started (`test:resume-holds`). A crash's
+cut reads as `uncertain`. A Fin's cut turn that nothing picks up within
 `STRANDED_AFTER_MS` (`strandedTurn`) becomes a question for its Apex
 (`reportCut`). That covers the loop guard being spent, a sign-out, a reason
 Mako doesn't continue, and a continuation that was dropped. The question says
@@ -1562,7 +1565,15 @@ Three rules hold this together, and each has a specific failure it prevents:
   own measurements land a frame after it paints and jumped the newest turn
   48 px; `test-phone-open-ui.mjs` holds both. A Thread's transcript whose
   code is here draws without a Suspense boundary (`chunks.ts`): React holds
-  a fallback it showed for 300 ms, and every cold open waited that long.
+  a fallback it showed for 300 ms, and every cold open waited that long. One
+  opened with nothing of it on the page (its first open, or after a reload)
+  shows the transcript's loader (`TranscriptLoading`; in a laptop's browser the
+  desktop's own `ConversationSkeleton`, in the transcript's column) over its still-empty
+  transcript until its turns arrive, never an empty column under the bar: the
+  transcript stays mounted under it, so the turns land at its end as a held
+  one's do (mounted only once they'd arrived, a 260-turn one jumped 48 px).
+  `test-phone-open-ui.mjs` reads every frame for it, a Thread and an Apex,
+  cold and warm, on a Mac and on a machine.
 - **Streamed prose is throttled, not debounced.** `useThrottled` in
   `markdown.tsx` paints through `StreamFrames` (`src/lib/stream-frames.ts`):
   the first token of a burst at once, then at most every 50 ms, up to 90 ms
@@ -1869,6 +1880,66 @@ overrides it; Retry mints a new move only after the owner's refusal. A turn a
 refused move paused goes on here in words that say it stayed
 (`SavedContinuation.stayed`), so no transcript draws "Moved to the cloud" over
 it.
+
+The account's devices are one component on a Mac and in a browser
+(`src/components/settings/devices.tsx`, `Devices`): Settings › Devices on the
+desk (`devices-section.tsx`, fed by the host's `mako:cloud-devices`) and the
+web app's Settings (`web-client/devices.tsx`, fed by the account's list and
+the gateway). It reads nothing itself; `form` picks a window's sizes or a
+finger's. Every rule it shows is in `contracts/account-devices.ts`, so both
+say the same of a device: its family (`deviceFamily`: a `runtime` device is a
+machine of the person's own), its health (`deviceHealth`: the account's
+`device-quiet` where the list hears it; then `heard`, a device that lists
+work the account doesn't call quiet, which is there whatever its record says;
+else `lastSeenAt`, which is only as new as the record's last read and which
+the cloud writes as a device joins, so one that never moved past that never
+connected. A row is evidence of when it was heard, never of now, so the
+list's word, quiet or there, counts only while the list is current: in a
+browser, followed live and said something within `HEARD_FRESH_MS`
+(`deviceReadings`; each event and each re-read of the devices while Settings
+shows makes it so), never a list painted from the cache or one being
+followed again; on a Mac, while its own link to the account is up
+(`deviceEvidence` in `lib/device-places.ts`, over the conversations its host
+lists). Otherwise the counts stay and each record speaks for itself),
+whether its Mako is behind (`needsMakoUpdate` against `DEVICE_MAKO_NEEDED`; a
+checkout's 0.0.1 is never judged), and the lines Add a machine shows
+(`joinCommand`, `containerCommand`), which are `docs/linux-device.md`'s and
+change with it. Every line runs as it's written: where a window can't name
+the cloud the container's line passes the shell's own `MAKO_CLOUD_URL` on,
+never a placeholder a shell would read as a redirection. A Mac names the
+cloud it's signed in to; a browser names the one its gateway says of itself
+with its connection (`WebConnection.cloud`), since the app's own host passes
+on only the app's routes and a machine can't join there. A row's facts say each thing once (`deviceFacts`: a Linux
+machine's system leaves out the Linux its kind said), each kept whole when the
+line breaks. What runs on a device is its Threads, counted from what the
+window already holds: a browser folds the list's rows by Thread, a Mac its
+conversations by the place they name; which rows are Fins the list doesn't
+say. Add a machine waits on the account's `device-joined`
+(`cloudAccountStore.joined`, `accountListStore.joined`) and turns into what
+joined; while it's open the join's toast is left out (`addingMachine`). The
+account never says a join failed, so the sheet stops claiming a wait once a
+code's life is past (`JOIN_WAIT_MS`, by the list's clock, which is read again
+when the window comes to the front; copying a line starts the wait again) and
+says how to get a new code (the join line again; in a container
+`CONTAINER_START_COMMAND`, since a container whose code ran out has stopped
+and keeps its name, so its run line can't run twice); a machine that joins
+after still turns it. On a phone a row's facts break between facts and its
+lines wrap, so nothing runs into Remove or is cut; the web UI test measures
+that at 393 and 320 wide. A
+removal pressed in the sheet fails in the sheet (`failure.device`), never
+behind it. Where a Thread runs is one glyph
+(`ui/place-mark.tsx`, `runPlace`): a cloud, a server for a machine of the
+person's own, a laptop for a Mac. The device's kind travels with the row
+(`LiveSummary.elsewhereKind`, from the account's devices in
+`CloudConversations` and `sessionOf`), and a conversation's place stays what
+its listing said through its live batches (`summaryOf`), so a window that
+lists after one still names the machine. `scripts/test-account-devices.ts`
+holds the rules, `npm run test:account-devices-ui` both windows at a
+desk's, a laptop browser's, a tablet's and a phone's form
+(`?mock&cloud=signed-in` and `scripts/web-devices.html` hold every state; the
+fixtures' `makoMockAccount` and `webDevicesCheck` have a machine join, a
+code run out and a removal fail, and `web-desk.html?machine` and
+`phone-apex.html?machine` run the Threads on a machine).
 
 ## MCP
 
@@ -2431,7 +2502,7 @@ Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Elect
 
 A move into a Thread's worktree takes only the Thread's own uncommitted changes (`workspaces/worktree-move.ts`), never a stash of the whole checkout. The attribution journal (`attribution/`, `partition`) names each changed line's last writer: the worktree gets the base plus the Thread's lines and the files it created, deleted or renamed; the main checkout keeps everyone else's. Lines that might be the Thread's (`window`, `ambiguous`, and a `window` found only after lost events, `entrySide`) and changes nobody can be named for (there before tracking, `unattributed`) stay unless the person chooses Bring these, on the move card before or on the toast after. A hunk that can't be split by line goes whole to whoever wrote most of it and is named. Without the journal nothing is attributed, so nothing moves unless brought. The move is all-or-nothing: it reads each file, checks it is what the journal holds and that the two sides add back up to it line for line, stores every version in the repository's objects, keeps the main checkout's whole state (files and index) as a commit under `refs/mako/moves/<id>` for 14 days, saves its plan (`<worktrees>/moves/<id>.json`, the receipt's `moving`), writes each file by a rename after checking it is still what it read, then reads both sides back. Anything off rolls back. A host that dies mid-move finishes it on the next start (`tidy`) when every file is as it was or as planned, and otherwise rolls back around whatever changed since. Each step is logged under `worktree-move`. `worktree_status` reports whose the main checkout's changes are; the move's result and the agent's message in the worktree say what came and what stayed. `npm run test:attribution` ends with `test-worktree-attribution-moves.ts`: three writers in one file, renames, deletes, binary and untracked files, staging, two repositories, and a process killed at each step.
 
-What a turn changed has one source: the attribution journal, keyed by the request the turn answers (`LiveRequest.id` is the `turn` on every activity mark and entry; the harness's own run id rides along as `run`, metadata only). When a request's turn ends, `LiveTurnChanges` marks it `pending`, counts it from the journal once every change heard is in (`settling`), and again once the journal settles them (`settled`), into `LiveRequest.changes` (`contracts/turn-changes.ts`, `queries.ts` `turnChanges`: per file, first entry's before to last entry's after, each line counted for its last writer, the Thread's own apart from what only might be its). The same record is kept beside the entries (`turn_changes`). The line under an answer, its file links' "Changed in this answer" and "Changes made by the thread" (the sum of those records) all read it, so they agree, and a reopened conversation reads the stored record instead of counting again. A turn from before the record falls back to its checkpoints. The work summary counts steps ("made 2 edits"), never files. What Git put back (a checkout, pull, rebase, reset or stash no call named the file for) is journaled with `git` set, or not at all when a file holds exactly the new commit's content; no turn, "changes made", others' count, rewind writer, move or `worktree_status` share counts it, and a version Git puts back keeps the writers it had (a whole file's, too: `lastEntry`). A change a rescan finds after lost events is placed by its file's modification time: content older than the gap names nobody, and a file the journal holds as created though HEAD has it as it is (a commit took it before the journal read it) is settled as clean on the next start or rescan (`settleCommitted`). A Fin's roster entry on its Apex is no background work of the Apex's: the Fin is a Thread of its own, and its Sessions mark their own work. A call's exact bounds from a harness's hooks (`harnesses/call-bounds.ts`) go through `LiveActivity.bounds`, under the same request-keyed turn as the call's marks, so the journal has one record of each call.
+What a turn changed has one source: the attribution journal, keyed by the request the turn answers (`LiveRequest.id` is the `turn` on every activity mark and entry; the harness's own run id rides along as `run`, metadata only). When a request's turn ends, `LiveTurnChanges` marks it `pending`, counts it from the journal once every change heard is in (`settling`), and again once the journal settles them (`settled`), into `LiveRequest.changes` (`contracts/turn-changes.ts`, `queries.ts` `turnChanges`: per file, first entry's before to last entry's after, each line counted for its last writer, the Thread's own apart from what only might be its). A count reads the journal a step at a time (`countingTurn`, run in slices, one count at a time), through the newest entry when it began, and letting go of idle roots reads it the same way (`JournalStore.recency`): each read at once held the host's loop over a second (`test:attribution-holds`). The same record is kept beside the entries (`turn_changes`). The line under an answer, its file links' "Changed in this answer" and "Changes made by the thread" (the sum of those records) all read it, so they agree, and a reopened conversation reads the stored record instead of counting again. A turn from before the record falls back to its checkpoints. The work summary counts steps ("made 2 edits"), never files. What Git put back (a checkout, pull, rebase, reset or stash no call named the file for) is journaled with `git` set, or not at all when a file holds exactly the new commit's content; no turn, "changes made", others' count, rewind writer, move or `worktree_status` share counts it, and a version Git puts back keeps the writers it had (a whole file's, too: `lastEntry`). A change a rescan finds after lost events is placed by its file's modification time: content older than the gap names nobody, and a file the journal holds as created though HEAD has it as it is (a commit took it before the journal read it) is settled as clean on the next start or rescan (`settleCommitted`). A Fin's roster entry on its Apex is no background work of the Apex's: the Fin is a Thread of its own, and its Sessions mark their own work. A call's exact bounds from a harness's hooks (`harnesses/call-bounds.ts`) go through `LiveActivity.bounds`, under the same request-keyed turn as the call's marks, so the journal has one record of each call.
 
 Changes › Turn reviews any turn of the open conversation, live or reopened (`conversations/live-turn-review.ts`). Its files are the request's record; each diff is the turn's checkpoints when both were saved, else the journal's versions either side of the turn's entries, so Review on the turn line works without checkpoints, and a conversation nobody has open is read from its journal without loading it (`storedRequest`). Who wrote each changed line comes from the same walk the record counts with (`attribution/line-walk.ts`, `turn-lines.ts`), as runs per side (`mako:live-turn-writers`), drawn in the diff's annotation slot only where another writer shares a change block; "Only this thread's lines" redraws each diff with every other writer's change on both sides. "Undo this turn" (and "undo this thread") takes the scope's own lines back out of the files as they are now and puts back the lines it removed, keeping everyone else's; a stretch someone edited on top of since, or where a writer put back a line the scope removed, is left whole and named; what Git or Mako wrote is nobody's and stays. It's refused while a turn or background work runs in the checkout (the journal's open activity, on any host, and this host's own runs), and when the files changed after the preview (`token`). It writes with the move's writer (`rewriteInPlace` in `worktree-move.ts`): every version stored, the checkout kept under `refs/mako/moves/<id>` for 14 days, the plan saved in `<conversations>/undos`, each file checked and renamed into place, then read back; a failure puts every file back, and a host that dies mid-write finishes or undoes it on the next start (`resumeMove`). The index is left as it is. Rewind stays the whole-workspace restore. `scripts/test-turn-review.ts` covers it, and `scripts/turn-review-screenshots.mjs` draws it.
 
@@ -2879,6 +2950,28 @@ routing row gives way in a fixed order as the pane narrows (the centre can be
 chip second, and what still overflows scrolls behind a faded edge instead of
 being cut off silently. The model and its reasoning are what people read
 there and are never shortened.
+
+Setup is what each place a project's Threads run in has for the project:
+Settings › Apps › a project › Setup, a Setup tab in a Thread's side panel
+showing that Thread's own place, and the phone's Settings › Setup. A
+segmented control picks the place (this Mac, each device, Cloud); six parts
+follow in a fixed order (Needs you, Code, Files, Accounts and secrets, Tools,
+Services), and every row ends in one dot and a few words against its source
+(`syncWords`: "Synced 2 d ago", "Mac's is newer" with Send, "Copy · 3 h old",
+"Waiting on you", "Not here" with Add, "Didn't copy: couldn't be read" with Retry,
+"Stays here"), never colour alone. Every row is a borrowing grant or lease
+(`@mako/protocol/borrow`), an agent's ask, or a place's own reading (the
+recipe's carry, prepare and processes, sign-ins and saved keys by name), and
+`setupView` in `@mako/protocol/setup` (re-exported by
+`@mako/host/contracts/setup`) derives them all, with `SetupViewSchema` for the
+page, so the host (`workspaces/setup-view.ts`), the mock bridge and the
+account's broker answer one page by one function. The host reads this device's own brokers (the worktrees' checkouts, the
+saved secrets) and the account's (`/v1/borrow/*`), and sends each answer and
+Stop back to the broker that holds the ask or the grant. Agents propose; only the person's tap adds: an ask is in Needs you, in
+the Inbox and above its Thread's composer, and Keep, Add to setup and the Add
+menu draft the recipe change in a new Thread for the person to send. No value
+is ever shown. `packages/protocol/test/setup.mjs` (in `test:protocol`) covers the
+rows and words; `npm run test:setup` the host's readings and brokers.
 
 ## Notifications
 
@@ -4026,7 +4119,10 @@ heading names the one showing and leads back. The phone's list
 (`src/web-client/list.tsx`) has the Inbox as a chip, then Needs you (each Fin
 asking as a row of its own, "Mobile polish ·" before its question), Working
 and Recent, and `/inbox` is its Inbox screen (`inbox-screen.tsx`, the same Fin
-asks answered through `answerFin`). The rail and the list carry no lines:
+asks answered through `answerFin`). Where a Thread runs and its project are said
+in one order on every screen, the device then the project ("build-box · mako"),
+from one function (`placeLine` in `src/web-client/threads.ts`): the list's row
+leaves the device out while the account has one. The rail and the list carry no lines:
 spacing and type part them. Never gate provider names or the rail on model discovery.
 Position in the rail never carries status. `stableThreadRanks` in
 `src/lib/thread-folders.ts` gives a busy thread its rank when it starts, keeps
