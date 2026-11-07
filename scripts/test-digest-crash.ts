@@ -16,13 +16,22 @@ import { AgentsWorld, HARNESSES, type Heard } from "./lib/agents-world.ts"
  * - `steer-sent`: a steer carrying the question is written as under way, on a harness that takes one at a step, and
  *   the host dies before the harness has it.
  * - `steer-heard`: that harness has the steer, and the host dies before its receipt.
+ * - `digest-sent-lookalike`: as `digest-sent`, with a line of the digest already in the transcript: only the digest's
+ *   own message id proves it arrived, never its words.
+ * - `digest-sent-limit`: as `digest-sent`, and the next host's harness refuses it at a usage limit past the retries: it
+ *   rests as a digest, tries every hour, and goes when it can, with what its Fin said since behind it.
  * In every case the Apex hears the question once: from the first host, or from the next, which reads the harness's
  * transcript to see whether it's needed.
  */
-const POINTS = ["digest-sent", "digest-heard", "steer-sent", "steer-heard"] as const
+const POINTS = ["digest-sent", "digest-heard", "steer-sent", "steer-heard", "digest-sent-lookalike", "digest-sent-limit"] as const
 type Point = (typeof POINTS)[number]
 const STEERS = ["claude", "opencode"]
 const QUESTION = "Rerun once more, or hold?"
+/** A line of a digest as a person might have pasted one, or as a question might hold. */
+const LOOKALIKE = `{"version":1}`
+const LIMIT = "You have reached your usage limit. Try again later."
+const NEWS = "Fixed it myself."
+const realNow = Date.now.bind(Date)
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 async function until(what: string, done: () => boolean, ms = 20_000): Promise<void> {
   const deadline = performance.now() + ms
@@ -42,7 +51,7 @@ async function host(root: string, harness: string, point: Point): Promise<void> 
     const [snapshot] = args
     const handed = snapshot.requests.some((request) => request.digest && request.text.includes(QUESTION) && request.nativeDelivery?.evidence.kind === "submitted")
     const steer = snapshot.control?.actions?.some((action) => action.input.kind === "steer" && action.input.text.includes(QUESTION))
-    if ((point === "digest-sent" && handed) || (point === "steer-sent" && steer)) process.kill(process.pid, "SIGKILL")
+    if ((point.startsWith("digest-sent") && handed) || (point === "steer-sent" && steer)) process.kill(process.pid, "SIGKILL")
   })
   let asked!: () => void
   const asking = new Promise<void>((resolve) => { asked = resolve })
@@ -56,8 +65,9 @@ async function host(root: string, harness: string, point: Point): Promise<void> 
     script: async (turn) => {
       if (turn.text.includes("Keep busy.")) return turn.world.hold(turn.conversation).then(() => "Done.")
       if (turn.text.includes("You're fin:")) {
+        writeFileSync(join(root, "fin"), turn.conversation)
         await asking
-        await turn.world.agents.report(turn.caller, { status: "blocked", summary: "Main is red.", question: QUESTION, options: [{ label: "Rerun" }, { label: "Hold" }], clientKey: "question" })
+        await turn.world.agents.report(turn.caller, { status: "blocked", summary: "Main is red.", question: point === "digest-sent-lookalike" ? `${QUESTION}\n${LOOKALIKE}` : QUESTION, options: [{ label: "Rerun" }, { label: "Hold" }], clientKey: "question" })
       }
       return "ok"
     },
@@ -67,6 +77,11 @@ async function host(root: string, harness: string, point: Point): Promise<void> 
   const started = await world.agents.start(apex.caller, { brief: { objective: "Land it" }, harness: "codex", name: "worker", clientKey: "worker", cwd: world.root })
   assert.ok(!("refused" in started), JSON.stringify(started))
   await until("the Fin's turn", () => world.prompts.some((prompt) => prompt.conversation !== apex.conversation))
+  if (point === "digest-sent-lookalike") {
+    world.say(apex.conversation, `Earlier unrelated schema:\n${LOOKALIKE}`)
+    await until("that turn", () => world.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes(LOOKALIKE)))
+    await until("its end", () => world.live.session(apex.conversation)?.status === "ready")
+  }
   if (steering) {
     world.say(apex.conversation, "Keep busy.")
     await until("the Apex's turn", () => world.live.session(apex.conversation)?.status === "running")
@@ -82,16 +97,58 @@ async function next(root: string, point: Point): Promise<void> {
   const apex = readFileSync(join(root, "apex"), "utf8")
   // SAFETY: this file holds only what `heard` wrote here, each line a `Heard`.
   const lines = (): Heard[] => (existsSync(join(root, "heard.ndjson")) ? readFileSync(join(root, "heard.ndjson"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Heard) : [])
-  const world = new AgentsWorld({ root, transcripts: true, script: async () => "ok", heard: (line) => appendFileSync(join(root, "heard.ndjson"), `${JSON.stringify(line)}\n`) })
+  let refusing = point === "digest-sent-limit"
+  let refusals = 0
+  let now = realNow()
+  const clock = point === "digest-sent-limit" ? mock.method(Date, "now", () => now) : undefined
+  const world = new AgentsWorld({
+    root,
+    transcripts: true,
+    script: async () => "ok",
+    heard: (line) => appendFileSync(join(root, "heard.ndjson"), `${JSON.stringify(line)}\n`),
+    refusePrompt: (id) => {
+      if (id !== apex || !refusing) return undefined
+      refusals += 1
+      return LIMIT
+    },
+  })
   try {
     const told = () => lines().filter((line) => line.conversation === apex && line.text.includes(QUESTION))
+    if (point === "digest-sent-limit") {
+      const replay = () => world.live.snapshot(apex)?.requests.find((request) => request.continues?.brief && request.digest)
+      await until(`${label}: the replay, a digest, to be refused`, () => replay()?.retry !== undefined)
+      const retry = replay()!.retry!
+      assert.equal(told().length, 0, `${label}: nothing has reached it`)
+      // Its retries run out, and it rests.
+      now = retry.since + 6 * 3_600_000 + 1
+      world.live.wakeDue(now)
+      await until(`${label}: the digest to rest`, () => world.live.snapshot(apex)?.requests.some((request) => request.digest?.resting === true && request.status === "held") === true)
+      // Each hour it tries by itself.
+      const before = refusals
+      now += 3_600_000 + 1
+      world.live.wakeDue(now)
+      await until(`${label}: its hourly try`, () => refusals > before)
+      refusing = false
+      await until(`${label}: the digest at rest to be waiting again`, () => world.live.snapshot(apex)?.requests.some((request) => request.digest?.resting === true && request.status === "held") === true)
+      await world.agents.report(world.caller(readFileSync(join(root, "fin"), "utf8")), { status: "done", summary: NEWS, clientKey: "news" })
+      await pause(500)
+      now += 3_600_000 + 1
+      world.live.wakeDue(now)
+      await until(`${label}: the Apex to hear the question`, () => told().length > 0)
+      await pause(500)
+      now += 3_600_000 + 1
+      world.live.wakeDue(now)
+      await until(`${label}: the Apex to hear what came after`, () => lines().some((line) => line.conversation === apex && line.text.includes(NEWS)))
+    }
     await until(`${label}: the Apex to hear the question`, () => told().length > 0)
-    await world.settle(400, 20_000, "ignore")
+    if (point !== "digest-sent-limit") await world.settle(400, 20_000, "ignore")
+    else await pause(300)
     assert.equal(world.store.undeliveredReports().length, 0, `${label}: every report is heard`)
     assert.equal(told().length, 1, `${label}: once, a transcript that shows it saying so`)
-    if (point === "digest-sent") assert.ok(told()[0]!.text.includes(DIGEST_AGAIN), `${label}: framed as maybe repeated`)
+    if (point.startsWith("digest-sent")) assert.ok(told()[0]!.text.includes(DIGEST_AGAIN), `${label}: framed as maybe repeated`)
   } finally {
     await world.close()
+    clock?.mock.restore()
   }
 }
 

@@ -611,9 +611,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     })
     this.wakes = new AgentWakes({
       ready: (conversation) => this.ready(conversation),
-      // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against.
+      // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against. A digest
+      // sent again says what the one it repeats said, so later news goes on its own.
       unsent: (conversation) => (deps.live.snapshot(conversation)?.requests ?? []).flatMap((request) =>
-        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
+        request.digest && !request.continues?.brief && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
       carried: (conversation, notice) => Boolean(deps.live.snapshot(conversation)?.requests.some((request) =>
         request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
       admit: (conversation, request, text, notices, actor, hold, lines) => {
