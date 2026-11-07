@@ -19,6 +19,17 @@ const NO_CHILDREN: readonly NativeAgent[] = []
 const byThread = new WeakMap<AcpState["conversations"], Map<string, readonly NativeAgent[]>>()
 const listedByThread = new WeakMap<AcpState["conversations"], Map<string, Rollup>>()
 
+const movedAt = new WeakMap<readonly NativeAgent[], number>()
+
+/** When the latest of a roster's Fins last moved, kept by the roster's array of them, which a roster keeps while none moves. */
+function lastMoved(children: readonly NativeAgent[]): number {
+  const held = movedAt.get(children)
+  if (held !== undefined) return held
+  const moved = children.reduce((latest, agent) => Math.max(latest, agent.observedAt), 0)
+  movedAt.set(children, moved)
+  return moved
+}
+
 /**
  * A Thread's Fins, as its conversations' rosters carry them (`childEntry`, never a harness's roster), in
  * `orderedChildren`' order. Every Session of an Apex carries the same Fins, so the first that holds any says them;
@@ -29,10 +40,17 @@ export function threadChildren(state: AcpState, thread: string | undefined): rea
   let index = byThread.get(state.conversations)
   if (!index) {
     index = new Map()
+    // Of a Thread's conversations, the one whose Fins moved last: a Fin's progress alone goes to its newest Session and
+    // the ones running, not to every one it ever had (`progressReaders`).
+    const newest = new Map<string, number>()
     for (const conversation of Object.values(state.conversations)) {
-      if (conversation.kind !== "live" || !conversation.threadId || index.has(conversation.threadId)) continue
+      if (conversation.kind !== "live" || !conversation.threadId) continue
       const children = rosterChildren(conversation.nativeAgents)
-      if (children.length) index.set(conversation.threadId, children)
+      if (!children.length) continue
+      const moved = lastMoved(children)
+      if (index.has(conversation.threadId) && moved <= newest.get(conversation.threadId)!) continue
+      index.set(conversation.threadId, children)
+      newest.set(conversation.threadId, moved)
     }
     // An Apex this window holds no roster of (another device's, or one asleep): its row's Fins, as its owner said them.
     for (const conversation of Object.values(state.conversations)) {

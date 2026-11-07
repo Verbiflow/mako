@@ -135,6 +135,20 @@ try {
   const listed = windowOf(browser).conversations[apex.conversation]
   assert.ok(listed?.kind === "live" && listed.fins !== undefined, "the browser holds the moved Apex's Fins")
   await w.agents.stop(apex.caller, { child: "all" })
+  // An Apex's older Session hears a Fin's progress no more (`progressReaders`): the Fins drawn are from the roster that
+  // moved last, whichever of its Thread's conversations a window happens to hold first. A step is stamped as it's seen.
+  const behind = owner().filter((entry) => entry.child)
+  assert.ok(behind.length > 1, "an Apex with Fins")
+  const latest = Math.max(...behind.map((entry) => entry.observedAt))
+  const fresh = behind.map((entry, at) => (at === behind.length - 1 ? { ...entry, observedAt: latest + 1_000, child: { ...entry.child!, state: { kind: "working" as const, step: "a newer step" } } } : entry))
+  const sessionHolding = (key: string, agents: typeof behind) =>
+    // SAFETY: the fields `threadChildren` reads of a live conversation: its Thread and its roster.
+    ({ kind: "live", key, threadId: placed.thread, nativeAgents: { agents, limited: false } }) as never
+  const steps = (state: AcpState) => threadChildren(state, placed.thread).map((entry) => (entry.child?.state?.kind === "working" ? entry.child.state.step : undefined))
+  const wanted = steps({ activeKey: null, conversations: { newest: sessionHolding("newest", fresh) } })
+  assert.ok(wanted.includes("a newer step"))
+  for (const [first, second] of [[behind, fresh], [fresh, behind]] as const)
+    assert.deepEqual(steps({ activeKey: null, conversations: { a: sessionHolding("a", first), b: sessionHolding("b", second) } }), wanted, "the roster that moved last, held first or not")
   console.log("fin tree sync: an Apex's Fins, held starts included, read the same on its owner, another Mac and a browser; live, asleep with its age, and moved to the cloud under the one-owner rule")
 } finally {
   await w.close()
