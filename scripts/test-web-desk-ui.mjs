@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * The web app in a laptop's browser (`src/dev/web-desk-check.tsx`: `Desk` through its production pieces, on the mock
@@ -34,7 +34,7 @@ if (process.versions.electron) {
   const args = process.argv.slice(2)
   const portAt = args.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(args.splice(portAt, 2)[1])
-  const root = await mkdtemp(join(tmpdir(), "mako-web-desk-ui-"))
+  const root = testScratch("mako-web-desk-ui-")
   const evidence = args[0] ? resolve(args[0]) : root
   await mkdir(evidence, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: port !== 0, hmr: false } })
@@ -51,7 +51,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Web desk UI evidence: ${evidence}`)
 }
 
 async function checkDesk() {
@@ -145,7 +144,7 @@ async function checkDesk() {
     const third = await evaluate("document.querySelectorAll('[data-session-tab]')[2].getAttribute('data-session-tab')")
     await click(`[data-session-tab="${third}"]`)
     await until(`document.querySelector('[data-session-tab="${third}"]').getAttribute('aria-selected') === 'true'`, "the third tab selected")
-    await until("document.querySelector('main textarea')?.placeholder.includes('Codex')", "the Codex Session's composer")
+    await until("document.querySelector('[data-composer]')?.innerText.includes('To Codex')", "the Codex Session's composer")
     const thread = await evaluate("document.querySelector('[data-thread-screen]').getAttribute('data-thread-screen')")
     const other = await evaluate("[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Ship the billing webhooks')).getAttribute('data-conversation-id')")
     await click(`[data-conversation-id="${other}"]`)

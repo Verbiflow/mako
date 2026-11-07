@@ -21,7 +21,7 @@ assert.equal(readers.protected("chat"), undefined, "A second unmeasured pane can
 second.report({ ...left, visible: ["new"], anchor: { turn: "new", offset: -12 } })
 assert.deepEqual(readers.protected("chat"), new Set(["old", "before", "after", "new"]))
 first.report({ ...left, interacting: true })
-assert.equal(readers.protected("chat"), undefined, "Selection/focus postpones structural eviction")
+assert.equal(readers.protected("chat"), undefined, "A selection postpones structural eviction")
 first.report({ ...left, moving: true })
 assert.equal(readers.protected("chat"), undefined, "Momentum/drag postpones structural eviction")
 first.report(left)

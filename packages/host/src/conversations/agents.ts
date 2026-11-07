@@ -17,6 +17,7 @@ import { ACCESS_TIER_NAMES, accessModeId, sessionAccessTier, type AccessTier } f
 import {
   childAccess,
   childEntry,
+  sameChildEntry,
   reportAsk,
   ruleWords,
   childMode,
@@ -62,7 +63,9 @@ import {
   type Report,
   type ThreadParent,
   type TreeBudget,
+  turnFailedAt,
 } from "../contracts/agents.js"
+import type { LiveAction } from "../contracts/live-actions.js"
 import {
   afterStart,
   APEX_DIGEST_FINS,
@@ -151,6 +154,15 @@ const SWITCH_WAIT_MS = WAIT_LIMIT_MS / 2
 /** Who a pull request's outcome reaches its Fin as: Mako, never the person. */
 const PULL_WATCH_ACTOR: Actor = { kind: "service", name: "pull-watch" }
 /** Whether a message is Mako's note of a pull request's outcome. */
+/** What a turn took: the request that began it and those steered into it, unless they were refused. */
+function inputsOf(request: string, actions: readonly LiveAction[] | undefined): string[] {
+  const steered = (actions ?? []).flatMap(({ input, state }) => {
+    if (input.kind === "compact" || input.requestId !== request || state.kind === "failed" || state.kind === "not-accepted") return []
+    return [input.kind === "steer-queued" ? input.queuedRequestId : input.id]
+  })
+  return [request, ...steered]
+}
+
 function isPullNote(request: Pick<LiveRequest, "actor">): boolean {
   return request.actor?.kind === "service" && request.actor.name === "pull-watch"
 }
@@ -160,6 +172,21 @@ const ROOM_EVERY_MS = 10_000
 export const ROOM_WATCH_JOB = "read this device's capacity"
 /** How long an ask its Apex may answer waits on the Apex alone before the person is asked too. */
 export const APEX_ANSWER_MS = 60_000
+
+/**
+ * The rows of a harness each exact id can mean: a Fin's reach looks up every row it lists, so a walk of all of them for
+ * each would be a walk of their square. An id with no row of its own may be a short one, which only that walk can tell.
+ */
+function referenceIndex(rows: readonly ThreadRef[]): Map<string, ThreadRef[]> {
+  const byId = new Map<string, ThreadRef[]>()
+  for (const row of rows)
+    for (const id of new Set([row.nativeId, threadReferenceId(row)])) {
+      const held = byId.get(id)
+      if (held) held.push(row)
+      else byId.set(id, [row])
+    }
+  return byId
+}
 
 /** What a message into a Fin's Thread attaches: what `reachOf` passed, or with `passedOn` what the person's own message granted. */
 interface Attaching {
@@ -217,11 +244,12 @@ const READ_CHARS = 8_000
 
 /**
  * The Fin's brief a cut turn still has to carry: the brief cut short, or the brief sent again and cut short too, unless
- * its harness said it had it. Whether it goes as itself or as a Continue is decided as it's sent, by the harness's
- * transcript (`LiveDispatch`): a bare Continue would leave a Fin that never had it with nothing to do.
+ * its harness said it had it. A digest cut at its hand-off is the same: its reports read as heard, so nothing else would
+ * send them. Whether it goes as itself or as a Continue is decided as it's sent, by the harness's transcript
+ * (`LiveDispatch`): a bare Continue would leave a Fin that never had it with nothing to do.
  */
 function cutBrief(op: string | undefined, cut: LiveRequest): string | undefined {
-  const root = cut.continues?.brief ?? (op !== undefined && cut.id === namedUuid(`${op}\nbrief`) ? cut.id : undefined)
+  const root = cut.continues?.brief ?? (cut.digest || (op !== undefined && cut.id === namedUuid(`${op}\nbrief`)) ? cut.id : undefined)
   return cut.nativeDelivery?.evidence.kind !== "accepted" ? root : undefined
 }
 
@@ -232,7 +260,7 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching"
+  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching"
 >
 
 export interface AgentsDeps {
@@ -332,6 +360,12 @@ interface Ruled {
   target: FinTarget
   who: string
   rule: { n?: number; when: string }
+}
+
+/** Whether a harness took a request: `prepared` and `uncertain` say it may not have, and a refusal that it didn't. */
+function handedOver(request: LiveRequest): boolean {
+  const evidence = request.nativeDelivery?.evidence.kind
+  return request.status === "completed" || evidence === "submitted" || evidence === "accepted"
 }
 
 /** A request waiting out a limit, which a move can take over: a Stop's latch leaves it where it is. */
@@ -603,9 +637,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     })
     this.wakes = new AgentWakes({
       ready: (conversation) => this.ready(conversation),
-      // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against.
+      // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against. A digest
+      // sent again says what the one it repeats said, so later news goes on its own.
       unsent: (conversation) => (deps.live.snapshot(conversation)?.requests ?? []).flatMap((request) =>
-        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
+        request.digest && !request.continues?.brief && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
       carried: (conversation, notice) => Boolean(deps.live.snapshot(conversation)?.requests.some((request) =>
         request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
       admit: (conversation, request, text, notices, actor, hold, lines) => {
@@ -1644,11 +1679,25 @@ export class Agents implements AgentOperations, ConversationChildren {
       this.answersHeld.set(edge.child, { ...held, delivered })
       return this.childMoved(edge, false)
     }
-    const claim = store.claimAnswer({ ask, child: ThreadIdSchema.parse(edge.child), op: request, by: actor?.kind === "agent" ? "lead" : "person", answer: text.slice(0, 400), request, text, ...(actor?.kind === "agent" && { actor }), at: this.now() })
+    // An Apex's message answers only what reached it: one that crossed the question is just a message, and the question goes on.
+    if (actor?.kind === "agent" && !this.reachedApex(edge, latest)) return hostLog("agents", "a message crossed a question its Apex hasn't heard", { op: edge.op, ask, request })
+    const claim = store.claimAnswer({ ask, child: ThreadIdSchema.parse(edge.child), op: request, by: actor?.kind === "agent" ? "lead" : "person", answer: (agentWords(text)?.body ?? text).slice(0, 400), request, text, ...(actor?.kind === "agent" && { actor }), at: this.now() })
     if (!claim.claimed) return
     store.markAnswerDelivered(ask, delivered)
     this.answersHeld.set(edge.child, { ...claim.answer, delivered })
     this.childMoved(edge, false)
+  }
+
+  /**
+   * Whether a Fin's report has reached its Apex. A digest carrying it reached it once it was handed over: being sent
+   * isn't being heard. One no digest carries took another way, so the store's receipt says, unless a steer still has it.
+   */
+  private reachedApex(edge: ThreadParent, report: Report): boolean {
+    const apex = this.frontOf(edge.parent, edge.parentSession)
+    const id = `notice:${edge.child}:${report.id}`
+    if (apex && this.wakes.steered(id)) return false
+    const carriers = (apex ? this.deps.live.snapshot(apex)?.requests ?? [] : []).filter((request) => request.status !== "canceled" && request.digest?.notices.some((notice) => notice.id === id))
+    return carriers.length ? carriers.some(handedOver) : !this.store()!.undeliveredReports().some((waiting) => waiting.report.id === report.id)
   }
 
   private async answerOnce(by: Answerer, edge: ThreadParent, op: string, input: Pick<AgentsAnswerInput, "answer" | "allow" | "person">): Promise<AgentsAnswered | AgentRefused> {
@@ -2800,12 +2849,20 @@ export class Agents implements AgentOperations, ConversationChildren {
     clearTimeout(this.noticeEnds.get(root))
     this.noticeEnds.delete(root)
     const notice = this.standingNotice(root)
-    if (notice?.until === undefined) return
+    if (notice?.until !== undefined) this.waitOutNotice(root, notice, notice.until)
+  }
+
+  /**
+   * Until `notice`'s reset. A timer can fire a moment early, so one that finds the notice standing waits on for this
+   * notice: read for the tree instead, it could already be past, and that read would end the wait with nothing told.
+   */
+  private waitOutNotice(root: string, notice: LimitNotice, until: number): void {
     const timer = setTimeout(() => {
       this.noticeEnds.delete(root)
-      if (this.standingNotice(root)?.id !== notice.id) this.noticeChanged(this.store()?.edges().of(notice.fin))
+      if (this.standingNotice(root)?.id === notice.id) return this.waitOutNotice(root, notice, until)
+      this.noticeChanged(this.store()?.edges().of(notice.fin))
       this.endNotice(root)
-    }, Math.min(notice.until - this.now(), LONGEST_TIMER_MS))
+    }, Math.min(Math.max(until - this.now(), 1), LONGEST_TIMER_MS))
     timer.unref()
     this.noticeEnds.set(root, timer)
   }
@@ -3206,6 +3263,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A turn that ended on its own Fins' work or its move is still at work, on that.
     const waits = !busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined
     const working = busy || waits !== undefined
+    const workSince = waits ? held?.activityAt : last && (last.dispatchedAt ?? last.createdAt)
     const thread = this.store()?.thread(edge.child)
     const title = thread?.title ?? session.title
     // A reading is taken of every Fin there is, on every look: it holds to what memory has, and never reads a journal in.
@@ -3225,9 +3283,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(runsOn && { runsOn }),
       ...((session.status === "starting" || this.starting.has(edge.op)) && { starting: "launching" as const }),
       ...(working && { working }),
+      ...(working && workSince !== undefined && { workSince }),
+      ...(working && last && { workInputs: inputsOf(last.id, held?.control?.actions) }),
       ...(waits ? { step: `Waiting for ${waits}`, awaiting: waits } : working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
       ...(waiting && { waiting: this.waitingOf(edge, waiting.line, live.pendingAsk(conversation)) }),
-      ...(!working && last?.status === "failed" && { ended: { outcome: "failed" as const, ...(last.error && { reason: last.error }), at: last.createdAt ?? edge.createdAt } }),
+      ...(!working && last?.status === "failed" && { ended: { outcome: "failed" as const, ...(last.error && { reason: last.error }), at: turnFailedAt(last, held?.activityAt, edge.createdAt) } }),
       ...(!working && last?.status === "interrupted" && last.interruption?.reason === "stopped" && { ended: { outcome: "stopped" as const, at: last.interruption.at } }),
       startedAt: edge.createdAt,
       ...(held?.activityAt && { updatedAt: held.activityAt }),
@@ -3275,7 +3335,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   private journalOf(child: string): ChildJournal {
     const latest = this.latest.get(child)
     const kept = this.answersHeld.get(child)
-    return { ...(latest && { latest }), ...(kept && { answered: { by: kept.by, answer: kept.answer, ask: kept.ask, at: kept.at, ...(kept.delivered && { delivered: true as const }) } }) }
+    return { ...(latest && { latest }), ...(kept && { answered: { by: kept.by, answer: kept.answer, ask: kept.ask, request: kept.request, at: kept.at, ...(kept.op === kept.request && { routine: true as const }), ...(kept.delivered && { delivered: true as const }) } }) }
   }
 
   private entryOf(edge: ThreadParent): NativeAgent {
@@ -3304,15 +3364,16 @@ export class Agents implements AgentOperations, ConversationChildren {
     const before = this.entries.get(edge.child)
     this.entries.delete(edge.child)
     const entry = this.entryOf(edge)
-    if (before && JSON.stringify(before) === JSON.stringify(entry)) {
+    if (before && sameChildEntry(before, entry)) {
       this.entries.set(edge.child, before)
       if (released) void this.drain()
       return
     }
     this.rosters.delete(edge.parent)
     const kindChanged = !before || before.state.kind !== entry.state.kind || before.stoppable !== entry.stoppable
-    for (const conversation of this.conversationsOfThread(edge.parent)) {
-      this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
+    const quiet = progressOnly && !kindChanged
+    for (const conversation of quiet ? this.progressReaders(edge.parent) : this.conversationsOfThread(edge.parent)) {
+      this.deps.live.childrenChanged(conversation, quiet)
       if (kindChanged) this.wakes.refresh(conversation)
     }
     this.askApex(edge)
@@ -3590,10 +3651,21 @@ export class Agents implements AgentOperations, ConversationChildren {
   private reachOf(apex: Apex): (ref: string) => boolean {
     const store = this.store()!
     if (!store.edges().of(apex.thread)) return () => true
+    // Each harness's rows, once: a list is capped after it's filtered, so one of everything can hide all of a harness.
+    const listed = new Map<string, { rows: ThreadRef[]; byId: Map<string, ThreadRef[]> }>()
+    const listOf = (harness: string) => {
+      const held = listed.get(harness)
+      if (held) return held
+      const rows = this.deps.references?.list({ harness }) ?? []
+      const list = { rows, byId: referenceIndex(rows) }
+      listed.set(harness, list)
+      return list
+    }
     const keysOf = (ref: string): string[] => {
       const token = parseThreadToken(ref)
       if (!token) return []
-      const row = this.deps.references && findThreadReference(this.deps.references.list({ harness: token.harness }), token.harness, token.id)
+      const { rows, byId } = listOf(token.harness)
+      const row = findThreadReference(byId.get(token.id) ?? rows, token.harness, token.id)
       return [token.id, ...(row ? [row.nativeId, threadReferenceId(row)] : [])].map((id) => `${token.harness}\0${id}`)
     }
     const tree = treeEdges(store.edges(), apex.thread)
@@ -3625,11 +3697,13 @@ export class Agents implements AgentOperations, ConversationChildren {
     return this.nativesOf(thread).map((native) => threadToken(native.harness, native.nativeId).slice(1))
   }
 
-  /** The native sessions a Thread ran in, oldest first. */
+  /**
+   * The native sessions a Thread ran in, oldest first, from what's listed: a Fin's reach walks every Thread of its
+   * tree, and reading each conversation in for this read 74 journals back at once.
+   */
   private nativesOf(thread: ThreadId): { harness: string; nativeId: string }[] {
     const conversation = this.conversationOf(thread)
-    const snapshot = conversation ? this.deps.live.snapshot(conversation) : undefined
-    const bindings = (snapshot?.control?.bindings ?? []).flatMap((binding) => (binding.nativeId ? [{ harness: binding.provider, nativeId: binding.nativeId }] : []))
+    const bindings = conversation ? this.deps.live.nativeIds(conversation).map(({ provider, nativeId }) => ({ harness: provider, nativeId })) : []
     if (bindings.length) return bindings
     const store = this.store()!
     return (store.thread(thread)?.sessions ?? []).flatMap((session) => store.sessionContents(session).natives.flatMap(({ path }) => {
@@ -4056,7 +4130,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (entries === "[]") this.queueHeard.delete(thread)
       else this.queueHeard.set(thread, entries)
       this.forget(thread)
-      for (const conversation of this.conversationsOfThread(thread)) this.deps.live.childrenChanged(conversation, progressOnly)
+      for (const conversation of progressOnly ? this.progressReaders(thread) : this.conversationsOfThread(thread)) this.deps.live.childrenChanged(conversation, progressOnly)
     }
   }
 
@@ -4530,6 +4604,19 @@ export class Agents implements AgentOperations, ConversationChildren {
       return conversation
     }
     return undefined
+  }
+
+  /**
+   * The conversations a Fin's progress alone goes to: its Thread's newest Session's, by the store's order of its
+   * Sessions. Every step went to every Session, and one let go of was read back from its journal for it and held: on
+   * 2026-11-06 an Apex of 14 Sessions, 13 of them closed, took each of 74 steps in five minutes 14 times, 202 MB to each
+   * window. A window draws a Thread's Fins from its newest Session by the same order (`threadChildren`); a start, an end
+   * or a change of how a Fin stands still goes to every one, and one read in takes its Fins as they are.
+   */
+  private progressReaders(thread: string): string[] {
+    const store = this.store()
+    const sessions = store?.thread(ThreadIdSchema.parse(thread))?.sessions ?? []
+    return sessions.length ? (store?.conversationsOf(sessions[sessions.length - 1]!) ?? []) : []
   }
 
   private conversationsOfThread(thread: string): string[] {

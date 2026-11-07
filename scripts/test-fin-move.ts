@@ -985,15 +985,32 @@ async function grantsAndQuestions(): Promise<void> {
     await f.world.close()
   }
   {
-    // A steer the harness took is delivered too; what Mako sends by itself isn't anyone answering.
+    // A steer the harness took is delivered too, so with the question heard, it answers it; what Mako sends by itself
+    // isn't anyone answering.
     const f = await fixture("claude", { hold: true, apex: "codex" })
     await until("its turn", () => f.world.live.session(f.fin().conversation)?.status === "running")
     const { conversation } = f.fin()
     await f.world.agents.report(f.world.caller(conversation), { status: "needs-input", summary: "Choose", question: "Which one?", options: [{ label: "steered-late" }], clientKey: "ask" })
+    await until("the question to reach its Apex", () => f.world.prompts.some((prompt) => prompt.conversation === f.apex.conversation && prompt.text.includes("Which one?")))
     assert.ok(!("refused" in await f.world.agents.send(f.apex.caller, { to: "labels", text: "steered-words", deliver: "steer", clientKey: "steer" })))
     await until("the steer", () => f.world.steers.some((steer) => steer.text.includes("steered-words")))
     const late = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "steered-late", clientKey: "late" })
     assert.ok("refused" in late && late.refused === "conflict", JSON.stringify(late))
+    f.world.release(conversation)
+    await f.world.settle(40, 20_000, "ignore")
+    await f.world.close()
+  }
+  {
+    // An Apex's steer that crosses a question it hasn't heard answers nothing: it stays open to answer (rule 13).
+    const f = await fixture("claude", { hold: true, apex: "codex" })
+    await until("its turn", () => f.world.live.session(f.fin().conversation)?.status === "running")
+    const { conversation } = f.fin()
+    await f.world.agents.report(f.world.caller(conversation), { status: "needs-input", summary: "Choose", question: "Which one?", options: [{ label: "still-unheard" }], clientKey: "ask" })
+    assert.ok(!("refused" in await f.world.agents.send(f.apex.caller, { to: "labels", text: "crossing-words", deliver: "steer", clientKey: "steer" })))
+    await until("the steer", () => f.world.steers.some((steer) => steer.text.includes("crossing-words")))
+    assert.ok(!f.world.prompts.some((prompt) => prompt.conversation === f.apex.conversation && prompt.text.includes("Which one?")), "its Apex hasn't heard the question yet")
+    const answer = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "still-unheard", clientKey: "open" })
+    assert.ok(!("refused" in answer), JSON.stringify(answer))
     f.world.release(conversation)
     await f.world.settle(40, 20_000, "ignore")
     await f.world.close()

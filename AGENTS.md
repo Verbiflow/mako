@@ -1526,17 +1526,32 @@ Three rules hold this together, and each has a specific failure it prevents:
   turn in the session.
 - **Long lists are virtualized, long content uses `content-visibility`.** The
   rail is windowed with `@tanstack/react-virtual`; transcript turns and
-  surface-panel rows carry `.contain-turn`. Timelines above 200 turns or 400
+  surface-panel rows carry `.contain-turn`. Timelines above 40 turns or 120
   messages and calls (a few prompts can hold thousands of calls), and
   navigators above 100 prompts, additionally window measured rows; a timeline
-  stays windowed while it's shown. A conversation keeps at most 24 MB of
+  stays windowed while it's shown. A row coming in restyles itself, never the
+  page: no `group-has-[…]`, whose universal last part restyles all of `main` for
+  any element added, so write `[.group:has(…)_&]:…`
+  (`test-transcript-rows-ui.mjs` counts it). Its mounted rows are also held against the
+  virtualizer before each paint (`row-check.ts`), so an observer that goes quiet
+  never shows, and a correction it didn't report is logged with what was found
+  (`Transcript row corrected` in the host's log). A conversation keeps at most 24 MB of
   finished turns (`CONVERSATION_MEMORY` in `live-residency.ts`), the one being
   read included: what's on screen, near it, read in the last minute or still
   at work stays, and the rest come back as the reader nears them. Preserve
   prompt identity, prepend anchors and complete answer-copy data. Only actual
   user scrolling may release follow mode; virtualizer size adjustments must not.
   Follow changes only as the reader moves: up leaves the end, down into it
-  follows again, and a scroll's end decides nothing. Under a finger the end
+  follows again, and a scroll's end decides nothing. A move counts from 24 px
+  (`LEFT_END`), a wheel's as its net travel over 500 ms, so a trackpad's rest
+  jitter never lets go while a flick up does at once. A wheel taken by a
+  scroller inside the transcript (the crew card's list, a code block) stays
+  with it until it settles, as the browser's own gesture does. Input ends when
+  it settles (`INPUT_SETTLE_MS`), for input that moved nothing and a browser
+  with no `scrollend`: left standing, the next layout shift would read as the
+  reader's. Focus resting in a turn keeps that turn, and only a selection or
+  moving input postpones what's released; `test-follow-ui.mjs` holds all of it
+  through bursts of reports on every form. Under a finger the end
   waits for it to lift, and a `scrollend` there (the browser sends one for the
   page's own writes too) doesn't end the gesture;
   `test-phone-scroll-ui.mjs` holds both by touch and by wheel. A Thread
@@ -1640,12 +1655,12 @@ registered through them, so nothing built-in is privileged:
 registerCommand({ id, title, section, keys: "mod+j", run }) // palette + keyboard
 registerSlot("my-badge", "composer.controls", Component) // UI seams
 registerToolView("bash", { summary, body, icon }) // transcript rows
-registerSurface({ id, label, icon, render, minWidth }) // stage companions
+registerSurface({ id, label, icon, render, minWidth, reading, useOffered }) // stage companions
 ```
 
 The stage's surfaces — Changes, Files, Terminal, Control, Agents —
 are all registered through `registerSurface` on exactly the same footing as
-anything a plugin would add. One reading surface opens as the right sidebar at
+anything a plugin would add. One reading surface opens in the right rail at
 a fixed, draggable width; the independent Terminal dock can remain open below it
 at a fixed, draggable height. Neither uses percentage splits. The central workbench
 stays mounted under a covering sidebar so transcripts and file tabs keep their state.
@@ -2428,6 +2443,10 @@ The agent's Git tools work in a project folder of several repositories, whose Th
 
 `git.openRepository(cwd)` returns one `Repository` per working tree (an LRU of 64 that never evicts a watched one). It keeps status in memory. `packages/host/src/git/workspace-git.ts` calls `watch()` when the repository is at or under the watched workspace and passes changed paths to `changed()`. The next `status()` then reads only those paths (`status -- :(literal)<path>`) and merges them in. Git's object store, locks, `FETCH_HEAD` and the package's own index copies are noise. Any other `.git` path, `.gitignore`, `.gitattributes`, `.gitmodules` or more than 500 paths means a full read, and so does a failed partial read. An unwatched repository (a linked worktree, or one above the workspace) is read in full every time. Entries come in Git's order: changes, then untracked files, each in byte order. Status runs with `--no-renames`: a rename reads as a deletion and an addition. Writes run one at a time per repository; `settled()` waits for them. Each repository keeps one `cat-file --batch-command` reader, closed after 30 idle seconds. Previews are cached per repository within one 64 MB budget per `Git`, least recently used first; worktree previews are cached only while watched. Commit drafting reuses piece summaries only from the `DraftSummaries` a caller passes; the host keeps one in `GitDrafting`.
 
+A spare belongs to a project, whatever a start comes from: a Fin started from its Apex's worktree takes one of the real project's (`homeOf`), at the commit it asked for, and its start asks for more there. Keyed by the folder asked from, 27 of 30 starts with no spare on 2026-11-06 were these, looking for spares of a worktree, which has none.
+
+A spare's tracked files are cloned from the main checkout wherever it holds the same file (`cloneTracked`), so a worktree shares their blocks rather than writing them: 59 MB of its own for `mako-backend` where a checkout wrote 694 MB, with a stale main checkout too, since only what differs is written. It's a hint for Git: the index is refreshed, which hashes every clone, and `reset --hard` writes what's missing or came out different. That costs time, 7.3 s against 3.3 s for `mako-backend` on a busy Mac, so only a spare's fill does it, in the background: a start with no spare ready writes its checkout as Git does. Node's `COPYFILE_FICLONE` copies on macOS, reporting success, and `FICLONE_FORCE` is `ENOSYS` there, so this calls `clonefile` itself.
+
 Every spawn holds the host's thread for a moment, so what windows poll reads what a repository shares once, not once per worktree. `summaries` (every window's rail, every half minute and on focus) runs one pass at a time, shared by everyone who asked while the last ran; each pass reads a repository's branch tips with one `for-each-ref`, its start point once, and each worktree's `status` at most every 15 s, a wait that doubles to 5 minutes while nothing changes there unless a conversation is at work in it or its index changed (a spawn on Linux forks the whole host and held its thread for 300-450 ms, and 180 worktrees read every pass took 5 cores on this Mac), and keeps landing, ahead and behind by the commits they were read at. Before, each worktree spawned about seventeen processes outside the read slots: 1,800 a pass at 104 worktrees.
 
 Debug Git through host.log: with `MAKO_GIT_TRACE=1` (`HostConfig.gitTrace`) every Git process is logged under `git` with its arguments, folder, queued and running time, exit code and bytes. Without it, only processes slower than two seconds or stopped for time are logged. A failed probe alone isn't logged, since probes such as `rev-parse --verify` fail by design.
@@ -2601,6 +2620,23 @@ deliberate action and never rides along with a commit.
   at square corners. Only what means a dot (status dots, the unread sphere,
   a switch's knob, a sheet's grab handle) is round, through `rounded-full`;
   a device frame drawn to its hardware keeps the hardware's corners.
+- **Two rails and the conversation between them; a tab is opened on purpose.**
+  The right rail is the left's twin, on the shell with its row (`RailRow`):
+  `SideRail` draws a row a surface in a fixed order, each with its `reading`
+  at the end (lines changed, who needs the person in the attention hue), and
+  `useOffered` keeps a row away while nothing stands behind it. A reading
+  selects its own fact, so a token repaints no row. Changes is a list and a
+  diff opens as a tab (`changesView` keeps Review, every diff in one scroll,
+  in Settings). No Fin has a tab for starting: the crew card and the rail hold
+  them, and `OpenFinTab` is the one tab of the Fin opened in place, whose close
+  is the Apex again. The phone has a count in the bar (`PhoneFinCount`) and the
+  crew card, whose rows open a Fin through `RoutedOpenContext` on the web, as
+  `openFinInApex` does on the desk; a laptop's browser draws the same rail
+  (`WebSideRail`: Changes, Files and Agents, at the desktop's width) and one Fin tab. Open Fins hold no state that can
+  outlive them: `openFinInApex` is the one way in, routed by `windowRoutes.fin` where a Thread's page holds the Fin; the
+  browser's `DeskFin` keeps its Apex inside the Fin, Agents keeps only that it's open and reads whose roster from what's
+  on screen, and `watchApexView` ends the desk's view once anything else shows. `npm run test:side-rail-ui` holds the
+  rail, and `test:fin-transitions-ui` each way in through closing, another Thread, a reload and the rail on every form.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
   composer's chip, the crew card, the rail's pips, the Agents panel, the stop
   card, the phone's row) counts from the Thread's one roster
@@ -2614,6 +2650,18 @@ deliberate action and never rides along with a commit.
   home path. "Waiting on 4 agents" beside "3 Fins working" is what happens
   without this; `npm run test:fin-counts-ui` draws every surface from one
   roster and requires the same numbers, and `test:fin-words` holds the words.
+- **A Fin's row says how long it has stood as it does, never how old it is.** `childSince` is the one rule, carried
+  as the entry's `since`: a working Fin's current turn, from when its request was dispatched (`dispatchedAt`), since a
+  message can wait long after it's admitted; one waiting on its own Fins from when its turn ended; each other state
+  from when it got there. A working Fin with no known turn says no time. Its line always says something (`At work`
+  with nothing else known), and "answered" only for an answer to this turn, in plain words: a plain message from its
+  Apex may close a question (rule 13), and it's still the next job and not an answer. `npm run test:fin-row-time` holds the rule, and
+  `test:orch-deliver` and `test:crew-card-ui` the real turn and every form.
+- **The notice above the composer speaks for what the person did.** A steer Mako sent by itself (a Fin's digest, an
+  Apex's message) raises nothing, whatever became of it, and hides nothing of theirs: what the harness didn't take goes
+  as the next turn, which is Mako's to handle. `actionNotice` picks the person's newest, and `sentByMako` tells them
+  apart by Mako's header, so a row already kept stops raising it. What stands over the composer keeps to its edges, on
+  every form: `npm run test:steer-notices` and `test:composer-edges-ui` hold both.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, at its last line; an agent's
   fin, still, with its harness as the badge, on its reply's byline; and a
@@ -4772,7 +4820,8 @@ one goes over and compares the row with that old commit. Devin's saved open
 crossed at a person's update that way, +69% over its baseline's commit, from
 two changes neither over budget: a subagent analysis on every read, and the
 media `_meta` parses below. `npm run update:local` runs no performance check;
-Settings › Updates runs `test:update-performance` (`test-update-performance.ts`):
+Settings › Updates runs `test:update-performance` (`test-update-performance.ts`),
+unless CI passed the commit (below):
 only `perf:decoders` and the budgets, never the harness's unit tests or the
 rest of `test:performance`, alone after `test:application` and
 `test:renderer-assets` so it doesn't time them, at a gross 1.5× line
@@ -4855,7 +4904,21 @@ the environment `updateEnvironment` builds from the few variables
 `scripts/ci-update-checks.ts`) runs that same function in that same
 environment: an update once failed three times on a test that broke only
 under the updater's verdict variable, which nothing at review set. Add a
-variable the updater sets there, never in a check alone. A failed build says
+variable the updater sets there, never in a check alone. So a commit whose push
+to the default branch passed whole, `update-checks` among it, has passed all of
+this already, and an update of it (`from` upstream, clean by construction) runs
+the compile and `test:update-machine` alone (`application/local-update-ci.ts`):
+a real host and this Mac's Electron, every step of it among `checks`, about 10 s
+against 4 to 9 minutes. The performance check took 80 to 88% of `checking`, at
+load 26 once. It found two real problems: drift over a baseline (Devin's saved
+open), which `update-checks` now trips at the commit that causes it, on a quiet
+runner; and a hotspot (`startsWith` over resent output) behind a failure that
+hung on process-to-process timing, so a reading that was partly luck. The newest
+run of the commit's push decides, and GitHub says which branch is the default,
+as a local `origin/HEAD` can be stale. No answer runs every check: a run still
+going, a reading that disagrees with itself, no `gh`, a remote that isn't GitHub,
+a commit from before `test:update-machine`. A build of the checkout never asks.
+`test:settings-build -- --ci-passed` rehearses a commit CI passed. A failed build says
 whose it is (`local-update-failures.ts`: the code, the Mac, or the checkout),
 what to do next, and the failing command's last lines apart; each step's time
 is logged (`build ready`, `build failed`) and carried on the ready build. Public

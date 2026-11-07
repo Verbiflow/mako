@@ -57,7 +57,7 @@ import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
 import { FinCapacity, FinCostModel, FinCostSampler, MacCapacity, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
-import { declareGitMethods, hostGit } from "./git/index.js"
+import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
 import type { TerminalClients } from "./terminals/index.js"
 import { declareApplicationMethods, Updates, type Application } from "./application/index.js"
@@ -392,7 +392,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const makoProcesses = () => readMakoProcesses([environment.dataRoot, ...threads.memory?.hostDataRoots() ?? []])
   const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, userRoot: environment.userRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs, subscribed: shell.subscribed, makoProcesses })
   const tools = openTools(harnesses.tools, environment.dataRoot, () => shell.foreground.idle())
-  const conversationsIn = (path: string, status: (value: string) => boolean) => (late.conversations?.live.summaries() ?? [])
+  const conversationsIn = (path: string, status: (value: string) => boolean) => (late.conversations?.live.listed() ?? [])
     .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
     .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
   // A terminal daemon outlives the host, so a folder's shells are asked of it even before a window opens a terminal.
@@ -485,6 +485,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   let windowRows: ThreadRef[] | undefined
   /** The rows by native session, read again with them: where the uploads read each Session. */
   let windowPaths: Map<string, string> | undefined
+  /** Moves with everything the catalog says, so what reads its paths knows they may have. */
+  let catalogMoves = 0
   // The Threads moving to the cloud from here, said on their rows from the move's first step.
   const movesUnderWay = new MovesUnderWay()
   // What each project on the list has checked out, as the rail shows it beside the project: read once a project is
@@ -564,6 +566,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     work: shell.work,
   })
   catalog.subscribe((event) => {
+    catalogMoves += 1
     if (event.type === "thread-ref") {
       const at = windowRows?.findIndex((row) => row.path === event.ref.path) ?? -1
       if (windowRows && at >= 0) windowRows[at] = event.ref
@@ -617,7 +620,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     uploads = new SessionUploads({
       rows: () => sessions.listed(),
       path: (harness, nativeId) => (windowPaths ??= new Map((windowRows ??= catalog.recent(windowStart(Date.now()))).map((ref) => [`${ref.harness}\n${ref.nativeId}`, ref.path]))).get(`${harness}\n${nativeId}`),
-      agents: (session) => threads.store?.childSessions(session) ?? [],
+      agents: () => threads.store?.childSessions() ?? new Map(),
+      scopeVersion: () => (threads.store ? `${threads.store.version()}:${catalogMoves}` : undefined),
       links: async () => {
         const cloud = late.cloud
         const blocked = cloud?.cloudBlocked ? await cloud.cloudBlocked() : "signed-out"
@@ -1207,6 +1211,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     checkWaitMs: (harness) => harnesses.tools.mcpSources.get(harness)?.callWaitMs,
     jobs: shell.jobs,
     person: shell.machineGitHubPerson,
+    pullRequestsAs: config.machineAgentFd === undefined ? undefined : () => machinePullRequestsAs(),
     emit,
     warn: (message, facts) => hostWarn("workspace", message, facts),
   })

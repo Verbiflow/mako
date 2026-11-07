@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react"
 import type { TreeRow } from "@/lib/file-tree"
 import { cn } from "@/lib/utils"
 
-const ROW_HEIGHT = 24
+/** The rail's rows' height, these being the right rail's. */
+const ROW_HEIGHT = 28
 const OVERSCAN = 8
 
 export function ChangeList({
@@ -57,7 +58,7 @@ export function ChangeList({
       onScroll={measure}
       className={cn(
         // The right gutter is the overlay scroller's: it takes clicks along the edge while shown.
-        "min-h-0 overflow-y-auto overscroll-contain py-1 pr-3 pl-1",
+        "min-h-0 overflow-y-auto overscroll-contain px-2 py-1",
         compact ? "max-h-[34%] shrink-0" : fitContent ? "shrink" : "flex-1"
       )}
       style={fitContent ? { flexBasis: rows.length * ROW_HEIGHT + 8 } : undefined}

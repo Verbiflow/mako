@@ -26,7 +26,7 @@ import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 import { installCrashReporting } from "@mako/host/base/crash"
 import { electronNativeCrashes } from "./crash-electron.js"
-import { hostLog, installHostLog, logsRoot } from "@mako/host/base/host-log"
+import { hostLog, hostWarn, installHostLog, logsRoot } from "@mako/host/base/host-log"
 import { watchRendererHealth } from "./renderer-health.js"
 import { buildMetadataAt } from "@mako/host/base/build-identity"
 import { userRootFor } from "@mako/host/base/host-environment"
@@ -307,6 +307,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
     message: DISCONNECTED_MESSAGE,
     announce: (event) => { if (!closed && !window.isDestroyed()) sendEvent(window.webContents, event) },
     probe: (timeoutMs) => askHost(timeoutMs),
+    log: (message, fields) => hostWarn("stream", message, { window: id, ...fields }),
   })
   const client = { id, link, dispose() { closed = true; clearTimeout(timer); subscription?.(); link.dispose() } }
   const rendererId = window.webContents.id
@@ -329,8 +330,8 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
         if (type !== undefined) crashes.breadcrumb(`window=${window.id} event ${type}`)
         window.webContents.send(packet.channel === "event" ? "mako:event" : "mako:terminal-event", packet.payload)
       }
-    }, () => {
-      stream.ended()
+    }, (end) => {
+      stream.ended(end)
       // The agent views app never starts a host; its link ends with this one and it leaves.
       if (closed || window.isDestroyed() || role === "agent-views") return
       const retry = () => {

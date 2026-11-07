@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // A limit's one notice on the production components and the mock bridge's Apex scene as an account ran out
 // (`?mock&app=apex&fins=limit`), on the desk, the phone and the laptop's browser. Screenshots of each surface, dark and
@@ -15,7 +15,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-limit-notice-ui-"))
+  const root = testScratch("mako-limit-notice-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-limit-notice-ui", main: fileURLToPath(import.meta.url) }))
   const { createServer } = await import("vite")
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, fs: { strict: false }, watch: { ignored: ["**"] } } })
@@ -31,7 +31,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Limit notice UI evidence: ${process.env.MAKO_LIMIT_UI_SHOTS ?? join(root, "shots")}`)
 }
 
 async function check() {
@@ -205,6 +204,8 @@ async function check() {
   await until("document.querySelectorAll('[data-fin-row]').length > 0", "the phone's rows")
   await evaluate("[...document.querySelectorAll('button, a')].find((each) => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
   await until("Boolean(document.querySelector('[data-apex-count]'))", "the phone's Thread")
+  // The notice stands in the crew card, which mounts after the bar does: the card is what a read of it waits for.
+  await until("Boolean(document.querySelector('[data-crew]'))", "the phone's crew card")
   await settle()
   assert.equal(await evaluate("document.querySelectorAll('[data-limit-notice]').length"), 1, "a phone's Thread says the notice once")
   assert.ok(await evaluate("Boolean(document.querySelector('[data-limit-notice] [data-limit-seen]'))"), "and Got it is there")

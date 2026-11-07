@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
-import { BRIEF_AGAIN } from "../contracts/children.js"
+import { BRIEF_AGAIN, DIGEST_AGAIN } from "../contracts/children.js"
 import { transientCause, unheardDigest, waitsAgain, carriedDigest } from "../contracts/delivery-retry.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
@@ -14,7 +14,7 @@ import { promptFingerprint } from "./live-assets.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { activeBinding, type LiveAccess, type Resident } from "./live-runtime.js"
 
-type AutoContinueAccess = Pick<LiveAccess, "dependencies" | "admission" | "resident" | "flush" | "pending" | "admit" | "transfer">
+type AutoContinueAccess = Pick<LiveAccess, "dependencies" | "admission" | "resident" | "flush" | "pending" | "admit" | "transfer" | "reopens" | "wake">
 
 /**
  * A turn that just ended on the provider's dropped connection or exited
@@ -144,7 +144,8 @@ export class LiveAutoContinue {
       actor: input.actor,
       id: input.requestId,
       createdAt: Date.now(),
-      text: brief ? `${BRIEF_AGAIN}\n\n${brief.text}` : continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
+      text: brief ? `${brief.digest ? DIGEST_AGAIN : BRIEF_AGAIN}\n\n${brief.text}` : continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
+      ...(brief && brief.digest && { displayText: "", digest: carriedDigest(brief.digest) }),
       attachments: [],
       tuning,
       status: "queued",
@@ -152,10 +153,13 @@ export class LiveAutoContinue {
     })
     request.inputDigest = promptFingerprint(request.text, request.attachments, request.tuning)
     this.access.admission.assert()
-    const reconnect = this.reconnectBinding(resident)
+    // A digest stays a digest: its row waits in the queue, and its session wakes for it, as for one sent to a sleeping Apex.
+    const wakes = !resident.driver && request.digest !== undefined && this.access.reopens(resident)
+    const reconnect = wakes ? undefined : this.reconnectBinding(resident)
     if (reconnect)
       this.access.transfer(id, { id: request.id, provider: reconnect.provider, text: request.text, attachments: [], tuning }, input.actor, continues)
     else this.access.admit(resident, request)
+    if (wakes) void this.access.wake(resident)
     hostLog("live", "continued a turn cut short", { conversation: id, harness: resident.snapshot.session.harness, request: request.id, continues: input.continues, reason: input.reason, reconnect: Boolean(reconnect) })
   }
 

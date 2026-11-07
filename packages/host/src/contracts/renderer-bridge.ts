@@ -81,6 +81,7 @@ import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, Simulat
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { GitHubTokenListing } from "./github-person.js"
+import type { CommitAuthor, GitHubAuthorship } from "./github-authorship.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadContinueOffer, ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { ContinueReading } from "./cloud-continues.js"
@@ -552,6 +553,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     githubToken: () => invokeTrustedHost<GitHubTokenListing | null>("mako:github-token"),
     githubTokenSave: (token: string, repository?: string) => invokeTrustedHost<GitHubTokenListing>("mako:github-token-save", token, repository),
     githubTokenRemove: () => invokeTrustedHost<void>("mako:github-token-remove"),
+    /* Who cloud commits and pull requests are authored as, and choosing it. */
+    githubAuthorship: () => invokeTrustedHost<GitHubAuthorship | null>("mako:github-authorship"),
+    githubAuthorshipSave: (as: CommitAuthor) => invokeTrustedHost<GitHubAuthorship>("mako:github-authorship-save", as),
     /* A project's carried files (its recipe's `carry`) in Mako Cloud: what goes, the person's word, a file kept on this Mac. */
     cloudCarriedFiles: (folder: string) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files", folder),
     cloudCarriedFilesDecide: (folder: string, allowed: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-decide", folder, allowed),
