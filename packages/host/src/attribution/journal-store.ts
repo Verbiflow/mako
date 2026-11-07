@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
+import type { Steps } from "@mako/sessions/slices"
 import { z } from "zod"
 import {
   AttributionSchema,
@@ -193,6 +194,48 @@ const ChangeSeqRow = z.object({ change_seq: z.number() })
 const ThreadWriteRow = z.object({ seq: z.number(), root: z.string(), path: z.string(), at: z.number(), kind: z.string(), certainty: z.string() })
 const TurnChangesRow = z.object({ summary: z.string() })
 const TurnSeqRow = z.object({ turn: z.string(), seq: z.number() })
+const SeqRow = z.object({ seq: z.number() })
+const RootAtRow = z.object({ root: z.string(), at: z.number() })
+const WorkedRow = z.object({ checkout: z.string().nullable(), cwd: z.string().nullable(), at: z.number() })
+const WorkedKeyRow = WorkedRow.extend({ session: z.string(), kind: z.string(), id: z.string() })
+const ThreadRow = z.object({ thread: z.string() })
+
+/** Entries `JournalStore.recency` reads a step: a window of the journal's numbering. */
+const RECENT_ENTRIES = 4_096
+/** Calls `JournalStore.recency` reads a step. */
+const RECENT_CALLS = 2_048
+
+/** A page of a turn's entries (`JournalStore.entriesOfTurnPage`), and where the next starts; none after the last. */
+export interface TurnEntriesPage {
+  entries: StoredEntry[]
+  next?: number
+}
+
+/** When each root last changed and each folder was last worked in, by its root's ID or its path (`JournalStore.recency`). */
+export interface Recency {
+  changed: ReadonlyMap<string, number>
+  /** Read only when `recency`'s caller wants it; empty otherwise. */
+  worked: ReadonlyMap<string, number>
+  /** Where it read through, for `recencySince`. */
+  mark: RecencyMark
+}
+
+/** How far a `Recency` read: the newest entry, and the change clock as its reading of work began (none without change tracking). */
+export interface RecencyMark {
+  seq: number
+  clock?: number
+}
+
+/** `at` into `into` under `key`, when it's later than what's there. */
+function later(into: Map<string, number>, key: string, at: number): void {
+  if (at > (into.get(key) ?? Number.NEGATIVE_INFINITY)) into.set(key, at)
+}
+
+/** A call's folders, as checkout and as working folder, into `worked`. */
+function workedIn(worked: Map<string, number>, row: z.infer<typeof WorkedRow>): void {
+  if (row.checkout) later(worked, row.checkout, row.at)
+  if (row.cwd) later(worked, row.cwd, row.at)
+}
 const ChoiceRow = z.object({ spelling: z.string(), path: z.string(), at: z.number() })
 const CarriedRow = z.object({ journal: z.string(), device: z.string(), through: z.number(), at: z.number(), received: z.number(), roots: z.string() })
 const CarriedActivityRow = z.object({
@@ -589,9 +632,9 @@ export class JournalStore {
       .all(after, limit).map((row) => this.entryOf(row))
   }
 
-  /** A file's entries after `after`, oldest first, with their line maps; a rename away from it counts. */
-  chain(root: string, path: string, after = 0): StoredEntry[] {
-    return this.statement("SELECT * FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 ORDER BY seq").all(root, path, after).map((row) => this.entryOf(row))
+  /** A file's entries after `after` through `upTo`, oldest first, with their line maps; a rename away from it counts. */
+  chain(root: string, path: string, after = 0, upTo = Number.MAX_SAFE_INTEGER): StoredEntry[] {
+    return this.statement("SELECT * FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 AND seq <= ?4 ORDER BY seq").all(root, path, after, upTo).map((row) => this.entryOf(row))
   }
 
   /** A file's entries after `after` that changed it after `since`, oldest first, without line maps; a rename away from it counts. */
@@ -641,11 +684,37 @@ export class JournalStore {
       .all(thread, turn).map((row) => this.entryOf(row))
   }
 
+  /**
+   * `entriesOfTurn` a page at a time: up to `limit` of them after `after`
+   * through `upTo`, and where the next page starts, until the last.
+   */
+  entriesOfTurnPage(thread: string, turn: string, after: number, upTo: number, limit: number): TurnEntriesPage {
+    const seqs = this.statement(`SELECT seq FROM (SELECT seq FROM entries WHERE thread=?1 AND turn=?2 AND seq > ?3 AND seq <= ?4 ORDER BY seq LIMIT ?5)
+      UNION SELECT seq FROM (SELECT seq FROM entry_candidates WHERE thread=?1 AND turn=?2 AND seq > ?3 AND seq <= ?4 ORDER BY seq LIMIT ?5) ORDER BY seq LIMIT ?5`)
+      .all(thread, turn, after, upTo, limit).map((row) => SeqRow.parse(row).seq)
+    if (!seqs.length) return { entries: [] }
+    const entries = this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map
+      FROM entries WHERE seq IN (SELECT value FROM json_each(?)) AND git IS NULL ORDER BY seq`).all(JSON.stringify(seqs)).map((row) => this.entryOf(row))
+    return { entries, ...(seqs.length === limit && { next: seqs.at(-1)! }) }
+  }
+
   /** The Thread's turns with an entry after `after` (as `entriesOfTurn` reads them), each with its newest: a summary counted before then is behind. */
   turnsChangedAfter(thread: string, after: number): Map<string, number> {
     const rows = this.statement(`SELECT turn, max(seq) AS seq FROM (SELECT turn, seq FROM entries WHERE thread=?1 AND turn IS NOT NULL AND seq > ?2 AND git IS NULL
       UNION ALL SELECT c.turn, c.seq FROM entry_candidates c JOIN entries e ON e.seq = c.seq WHERE c.thread=?1 AND c.turn IS NOT NULL AND c.seq > ?2 AND e.git IS NULL) GROUP BY turn`).all(thread, after)
     return new Map(rows.map((row) => TurnSeqRow.parse(row)).map((row) => [row.turn, row.seq]))
+  }
+
+  /** The first entry journaled at `at` or after; undefined when none was. */
+  firstSeqFrom(at: number): number | undefined {
+    // Through the times' index: by the numbering, SQLite walked every entry older than `at` first.
+    return SeqRow.extend({ seq: z.number().nullable() }).parse(this.statement("SELECT min(seq) AS seq FROM entries INDEXED BY entries_at WHERE at >= ?").get(at)).seq ?? undefined
+  }
+
+  /** `entriesBetween` over a window of the journal's numbering, `after` to `upTo`: up to `limit` of them. */
+  entriesBetweenIn(from: number, to: number, after: number, upTo: number, limit: number): StoredEntry[] {
+    return this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map FROM entries WHERE seq > ? AND seq <= ? AND at >= ? AND at <= ? ORDER BY seq LIMIT ?")
+      .all(after, upTo, from, to, limit).map((row) => this.entryOf(row))
   }
 
   /** Entries journaled between two instants, without line maps, oldest first. */
@@ -762,8 +831,9 @@ export class JournalStore {
 
   /** A Thread's turn, by its id. */
   turn(thread: string, turn: string): StoredActivity | undefined {
-    const row = this.statement("SELECT * FROM activity WHERE thread=? AND kind='turn' AND id=? ORDER BY started_at DESC LIMIT 1").get(thread, turn)
-    return row ? this.activityOf(row) : undefined
+    // Found by the Thread's index alone, then read: read whole as it went, a Thread of 85,000 calls took 140 ms.
+    const key = this.statement("SELECT session FROM activity WHERE thread=? AND kind='turn' AND id=? ORDER BY started_at DESC LIMIT 1").get(thread, turn)
+    return key ? this.activity(z.object({ session: z.string() }).parse(key).session, "turn", turn) : undefined
   }
 
   /** Activity that overlaps `[from, to]`. */
@@ -818,22 +888,86 @@ export class JournalStore {
     return this.statement("SELECT seq, root, path, at, kind, certainty FROM entries WHERE thread=? AND seq>? ORDER BY seq LIMIT ?").all(thread, seq, limit).map((row) => ThreadWriteRow.parse(row))
   }
 
-  /** When each root's newest entry was journaled. */
-  lastChanged(): Map<string, number> {
-    const rows = this.statement("SELECT root, MAX(at) AS at FROM entries GROUP BY root").all()
-    return new Map(rows.map((row) => {
-      const { root, at } = z.object({ root: z.string(), at: z.number() }).parse(row)
-      return [root, at]
-    }))
+  /**
+   * When each root's newest entry was journaled and, when `wanted` says so
+   * of those, each folder Threads worked in (as checkout and as working
+   * folder) when they last did, work still open counting as `now`. Read a
+   * window of entries or a page of calls a step: read at once, a journal of
+   * 100,000 entries and 137,000 calls held the host's loop for 1.6 s. Its
+   * last step takes in what was journaled and what work changed while it
+   * read, so it returns the journal as it stands then. An entry never moves
+   * to another root or time; a call read before it changed may still count
+   * where it was, which only keeps a root longer.
+   */
+  *recency(now: number, wanted: (changed: ReadonlyMap<string, number>) => boolean): Steps<Recency> {
+    const changed = new Map<string, number>()
+    const worked = new Map<string, number>()
+    let read = 0
+    const readEntries = (upTo: number) => {
+      this.changedIn(changed, read, upTo)
+      read = upTo
+    }
+    for (let last = this.lastSeq(); read < last; ) {
+      readEntries(Math.min(read + RECENT_ENTRIES, last))
+      yield
+    }
+    const clock = this.changesTracked() ? this.changeClock() : undefined
+    if (!wanted(changed)) {
+      readEntries(this.lastSeq())
+      return { changed, worked, mark: { seq: read, ...(clock !== undefined && { clock }) } }
+    }
+    if (clock !== undefined) {
+      for (let key = { session: "", kind: "", id: "" }; ;) {
+        const rows = this.statement("SELECT session, kind, id, checkout, cwd, coalesce(ended_at, ?) AS at FROM activity WHERE (session, kind, id) > (?, ?, ?) ORDER BY session, kind, id LIMIT ?")
+          .all(now, key.session, key.kind, key.id, RECENT_CALLS).map((row) => WorkedKeyRow.parse(row))
+        for (const row of rows) workedIn(worked, row)
+        if (rows.length < RECENT_CALLS) break
+        key = rows.at(-1)!
+        yield
+      }
+    }
+    // The last step: no stop from here to the return.
+    readEntries(this.lastSeq())
+    this.workedSince(worked, clock, now)
+    return { changed, worked, mark: { seq: read, ...(clock !== undefined && { clock }) } }
   }
 
-  /** Each folder Threads worked in, as checkout and as working folder, with when they last did; work still open counts as `now`. */
-  lastWorked(now: number): { folder: string; at: number }[] {
-    const rows = this.statement("SELECT checkout, cwd, MAX(coalesce(ended_at, ?)) AS at FROM activity GROUP BY checkout, cwd").all(now)
-    return rows.flatMap((row) => {
-      const { checkout, cwd, at } = z.object({ checkout: z.string().nullable(), cwd: z.string().nullable(), at: z.number() }).parse(row)
-      return [checkout, cwd].flatMap((folder) => (folder ? [{ folder, at }] : []))
-    })
+  /**
+   * What a `recency` reading through `mark` lacks: each root's newest entry
+   * journaled since, and the folders of work changed since. Without change
+   * tracking, all work, read at once.
+   */
+  recencySince(mark: RecencyMark, now: number): Recency {
+    const changed = new Map<string, number>()
+    const worked = new Map<string, number>()
+    const seq = this.lastSeq()
+    const clock = this.changesTracked() ? this.changeClock() : undefined
+    this.changedIn(changed, mark.seq, seq)
+    this.workedSince(worked, mark.clock, now)
+    return { changed, worked, mark: { seq, ...(clock !== undefined && { clock }) } }
+  }
+
+  private changeClock(): number {
+    return SeqRow.parse(this.statement("SELECT seq FROM change_clock WHERE id=1").get()).seq
+  }
+
+  /** Each root's newest entry after `after` through `upTo`, into `changed`. */
+  private changedIn(changed: Map<string, number>, after: number, upTo: number): void {
+    for (const row of this.statement("SELECT root, MAX(at) AS at FROM entries WHERE seq > ? AND seq <= ? GROUP BY root").all(after, upTo)) {
+      const { root, at } = RootAtRow.parse(row)
+      later(changed, root, at)
+    }
+  }
+
+  /** The folders of work changed since `clock`, into `worked`; of all work, read at once, without one. */
+  private workedSince(worked: Map<string, number>, clock: number | undefined, now: number): void {
+    if (clock === undefined) {
+      for (const row of this.statement("SELECT checkout, cwd, MAX(coalesce(ended_at, ?)) AS at FROM activity GROUP BY checkout, cwd").all(now)) workedIn(worked, WorkedRow.parse(row))
+      return
+    }
+    for (const { thread } of this.statement("SELECT thread FROM thread_changes WHERE seq > ?").all(clock).map((row) => ThreadRow.parse(row)))
+      for (const row of this.statement(`SELECT a.checkout, a.cwd, coalesce(a.ended_at, ?) AS at FROM activity_changes c JOIN activity a ON a.session = c.session AND a.kind = c.kind AND a.id = c.id
+        WHERE c.thread = ? AND c.seq > ?`).all(now, thread, clock)) workedIn(worked, WorkedRow.parse(row))
   }
 
   /** Close what a host that stopped left open: it ran until the host was last seen. */

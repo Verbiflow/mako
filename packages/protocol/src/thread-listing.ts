@@ -278,7 +278,7 @@ export const ReportedSessionSchema = z
     fins: z.array(ListedFinSchema).min(1).max(LISTED_FINS).optional(),
     /**
      * Its Session's place among its Thread's Sessions, as its owner's store keeps them: 0 the first, the newest the
-     * highest (link version 21 on). Written only by the owner, which alone holds the Thread's group; a device showing
+     * highest (link version 22 on). Written only by the owner, which alone holds the Thread's group; a device showing
      * a Thread it doesn't hold ranks that Thread's rows by it, as it ranks a Thread it holds by its group. Absent from
      * a host before it, whose rows rank as they arrive.
      */
@@ -407,7 +407,7 @@ function finStateOf19(state: ListedFinState): ListedFinState {
 }
 
 /**
- * The rows a link of `version` takes, each with only the fields that version knows: from link version 21, every one
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 22, every one
  * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
  * and the rest go without their native IDs.
  */
@@ -417,7 +417,7 @@ export function rowsForLink(rows: readonly ReportedSession[], version: number): 
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
-    // Before version 21 a gateway knows no `order`: the row goes without, and ranks where it arrives.
+    // Before version 22 a gateway knows no `order`: the row goes without, and ranks where it arrives.
     delete older.order
     if (version >= FIN_STATES_VERSION) {
       kept.push(older)

@@ -2,7 +2,7 @@ import { attentionLine } from "@mako/host/contracts/notifications"
 import { formatRelative } from "@/lib/format"
 import type { RunPlace } from "@mako/host/contracts/account-devices"
 import type { MoveWay } from "./move-progress"
-import { CLOUD_WHERE, type WebThread } from "./threads"
+import { CLOUD_WHERE, placeLine, type WebThread } from "./threads"
 
 /** What a row says under its title, and in which tone. */
 export interface RowDetail {
@@ -57,9 +57,8 @@ export function rowDetail(thread: WebThread, named: boolean, context: RowContext
   if (context.move) return { text: context.move === "cloud" ? "Moving to the cloud" : "Coming back from the cloud", tone: "working", move: context.move }
   if (thread.standing === "moving") return { text: "Moving", tone: "working" }
   if (thread.waitingMessages) return { text: thread.waitingMessages === 1 ? "1 message waiting" : `${thread.waitingMessages} messages waiting`, tone: "faint" }
-  const cloud = thread.where === CLOUD_WHERE
-  const words = [thread.project, !cloud && named ? thread.where : undefined].filter(Boolean).join(" · ")
-  const detail: RowDetail = { text: words || (cloud ? "Cloud" : thread.where), tone: "faint", place: cloud ? "cloud" : thread.machine ? "machine" : "device" }
+  const line = placeLine(thread.where, thread.project, { named, machine: thread.machine })
+  const detail: RowDetail = { text: line.text, tone: "faint", place: line.place }
   if (context.done && !thread.quietSince) detail.lead = "Done"
   return detail
 }

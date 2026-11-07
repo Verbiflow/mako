@@ -45,6 +45,7 @@ import { useCopyMissing } from "./copies"
 import { FinOfApexContext, OpenChildContext, childSession, placedSessionOf } from "./fin-of-apex"
 import { PhoneFinCount } from "./apex-fins"
 import { transcriptChunk } from "./chunks"
+import { TranscriptLoading } from "./transcript-loading"
 import { ApexMark } from "@/components/ui/apex-mark"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 
@@ -611,13 +612,3 @@ export function ArchivedThread({ thread }: { thread: WebThread }) {
   )
 }
 
-export function TranscriptLoading() {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 px-5 pt-8" aria-busy aria-label="Opening the conversation">
-      <span className="skeleton ml-auto h-12 w-3/5" />
-      <span className="skeleton h-3.5 w-4/5" />
-      <span className="skeleton h-3.5 w-2/3" />
-      <span className="skeleton h-3.5 w-3/4" />
-    </div>
-  )
-}
