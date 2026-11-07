@@ -132,7 +132,7 @@ try {
   const ledger: TurnLedger = {
     placement: () => ({ thread: "T1", session: "S1" }),
     flushed: async () => undefined,
-    countTurn: (thread, turn, state) => ({ ...summary, thread, turn, state }),
+    countTurn: async (thread, turn, state) => ({ ...summary, thread, turn, state }),
     settledThrough: () => settledYet,
     counted: (record) => counted.push(record),
     turnsChangedAfter: () => new Map(),

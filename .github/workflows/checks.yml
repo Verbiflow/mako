@@ -126,6 +126,8 @@ jobs:
       # The attribution journal and workspace snapshots: per-turn changes, undo, Git operations, and the guard that keeps
       # every script's scratch repositories away from the one it was started in.
       - run: npm run test:attribution
+      # Letting go of idle roots and counting a turn read the journal in slices, never holding the host's loop for either.
+      - run: npm run test:attribution-holds
       - run: npm run test:workspace-snapshots
       # A worktree's packages linked from the main checkout's: workspace packages resolve to the worktree's own code,
       # and no install writes through the links into the main checkout.
