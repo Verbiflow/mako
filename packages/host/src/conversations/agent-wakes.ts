@@ -156,6 +156,11 @@ export class AgentWakes {
     if (rewritten && !rest.length && lines.length) this.deps.giveLines?.(conversation, lines)
   }
 
+  /** Whether a steer carrying this notice hasn't been answered yet. */
+  steered(id: string): boolean {
+    return this.steering.has(id)
+  }
+
   /** Whether a digest waits unsent in this Apex's queue: a turn of its own is coming. */
   waits(conversation: string): boolean {
     return this.deps.unsent(conversation).length > 0

@@ -32,7 +32,7 @@ export function GitSection() {
 }
 
 function ChangesView() {
-  const layout = usePrefs((prefs) => prefs.changesLayout)
+  const layout = usePrefs((prefs) => prefs.changesView)
   const diffStyle = usePrefs((prefs) => prefs.diffStyle)
   const wrapDiff = usePrefs((prefs) => prefs.wrapDiff)
   const filesView = usePrefs((prefs) => prefs.filesView)
@@ -43,11 +43,11 @@ function ChangesView() {
         <p className="mt-0.5 text-label text-muted-foreground">How the Changes panel shows your working tree. Both commit, push and open pull requests the same way.</p>
       </div>
       <div role="radiogroup" aria-label="Changes layout" className="grid grid-cols-2 gap-3">
+        <LayoutChoice value="files" chosen={layout} title="Files" description="The changed files, with staging on each. A diff opens as a tab.">
+          <FilesPicture />
+        </LayoutChoice>
         <LayoutChoice value="review" chosen={layout} title="Review" description="Every changed file's diff in one scroll. Commit what you see.">
           <ReviewPicture />
-        </LayoutChoice>
-        <LayoutChoice value="files" chosen={layout} title="Files" description="A tree with staging on each file, and one file's diff.">
-          <FilesPicture />
         </LayoutChoice>
       </div>
       <ListCard>
@@ -76,8 +76,8 @@ function ChangesView() {
 }
 
 function LayoutChoice({ value, chosen, title, description, children }: {
-  value: Prefs["changesLayout"]
-  chosen: Prefs["changesLayout"]
+  value: Prefs["changesView"]
+  chosen: Prefs["changesView"]
   title: string
   description: string
   children: ReactNode
@@ -89,7 +89,7 @@ function LayoutChoice({ value, chosen, title, description, children }: {
       role="radio"
       aria-checked={selected}
       aria-label={title}
-      onClick={() => setPref("changesLayout", value)}
+      onClick={() => setPref("changesView", value)}
       className={cn(
         "pressable flex flex-col gap-3 p-3 text-left transition-[background-color,box-shadow] duration-150 ease-[var(--ease-out)]",
         selected

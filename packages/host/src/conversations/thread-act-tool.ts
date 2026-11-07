@@ -1,7 +1,9 @@
+import { z } from "zod"
 import type { MethodTable } from "../base/methods.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentAskWant } from "../contracts/agent-asks.js"
 import type { AgentCaller } from "../contracts/agents.js"
+import type { JsonValue } from "../contracts/json.js"
 import { AFTER_ACT, type ThreadActInput, type ThreadActResult } from "../contracts/thread-tools.js"
 import type { AgentAskGate } from "./agent-ask-gate.js"
 import { namedUuid } from "./cloud-moves.js"
@@ -13,9 +15,11 @@ export interface ThreadActToolDeps {
   threadOf(conversationId: string): string | undefined
   tier(conversationId: string): AccessTier | undefined
   /** A host call through the table every client calls: Rename and Archive as the app presses them. */
-  invoke(channel: "mako:thread-rename" | "mako:thread-archive", args: unknown[]): Promise<void>
+  invoke(channel: "mako:thread-rename" | "mako:thread-archive", args: unknown[]): Promise<JsonValue | undefined>
   gate: AgentAskGate
 }
+
+const ArchiveAnswerSchema = z.object({ cloud: z.object({ kind: z.string(), reason: z.string().optional().default("The cloud refused it.") }).loose().optional() }).loose()
 
 type Done = Extract<ThreadActResult, { outcome: "renamed" | "archived" | "restored" }>
 type Act = Extract<AgentAskWant, { kind: "rename" | "archive" | "restore" }>
@@ -57,7 +61,9 @@ export class ThreadActTool {
       return { outcome: "renamed", title: want.title }
     }
     const archived = want.kind === "archive"
-    await this.#deps.invoke("mako:thread-archive", [{ id: want.op, target: { kind: "live", id: conversationId }, archived }])
+    // A cloud Thread's archive is its object's to refuse, which the host answers rather than throws.
+    const cloud = ArchiveAnswerSchema.safeParse(await this.#deps.invoke("mako:thread-archive", [{ id: want.op, target: { kind: "live", id: conversationId }, archived }])).data?.cloud
+    if (cloud?.kind === "refused") throw new Error(cloud.reason)
     return archived ? { outcome: "archived", next: AFTER_ACT.archived } : { outcome: "restored" }
   }
 }

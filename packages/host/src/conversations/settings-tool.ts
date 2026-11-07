@@ -1,3 +1,4 @@
+import { z } from "zod"
 import type { MethodTable } from "../base/methods.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
@@ -14,6 +15,10 @@ export interface SettingsToolDeps {
   invoke(channel: string, args: unknown[]): Promise<JsonValue | undefined>
   gate: AgentAskGate
 }
+
+const HandOffSchema = z.object({ onSleep: z.boolean(), unavailable: z.string().optional() }).loose()
+const ContinuingSchema = z.object({ continueAfterRestart: z.boolean() }).loose()
+const OrderSchema = z.array(z.string())
 
 /** The settings an agent may read and change for the person, each by the host calls Settings makes. Their own decisions (sign-ins, access, spend, rules for Fins) aren't here. */
 export class SettingsTool {
@@ -36,14 +41,29 @@ export class SettingsTool {
     return this.run(parsed).catch((error: Error) => ({ refused: "failed", why: error.message }))
   }
 
-  /** The change as Settings makes it. */
+  /** The change as Settings makes it, read back: what's said is what the host kept. */
   async run(setting: Setting): Promise<Extract<SettingsResult, { outcome: "set" }>> {
     const { invoke } = this.#deps
-    if (setting.name === "hand-off-on-sleep") await invoke("mako:handoff-settings-set", [setting.value])
-    else if (setting.name === "continue-after-restart") await invoke("mako:conversation-settings-set", [{ continueAfterRestart: setting.value }])
-    else if (setting.name === "harness-order") await invoke("mako:harness-order", [setting.value])
-    else await invoke("mako:utility-choice", ["commit", setting.value])
-    return { outcome: "set", setting: setting.name, value: setting.value }
+    const set = { outcome: "set", setting: setting.name, value: setting.value } as const
+    if (setting.name === "hand-off-on-sleep") {
+      const kept = HandOffSchema.safeParse(await invoke("mako:handoff-settings-set", [setting.value])).data
+      if (kept?.onSleep !== setting.value) throw new Error(kept?.unavailable ?? "Mako kept this setting as it was.")
+      return { ...set, ...(kept.unavailable && { note: kept.unavailable }) }
+    }
+    if (setting.name === "continue-after-restart") {
+      const kept = ContinuingSchema.safeParse(await invoke("mako:conversation-settings-set", [{ continueAfterRestart: setting.value }])).data
+      if (kept?.continueAfterRestart !== setting.value) throw new Error("Mako kept this setting as it was.")
+      return set
+    }
+    if (setting.name === "harness-order") {
+      await invoke("mako:harness-order", [setting.value])
+      const kept = OrderSchema.safeParse(await invoke("mako:harness-order-saved", [])).data
+      if (JSON.stringify(kept) !== JSON.stringify([...new Set(setting.value)])) throw new Error("Mako kept the harness order as it was.")
+      return set
+    }
+    // It refuses a model that isn't connected; what it saves it answers nothing about.
+    await invoke("mako:utility-choice", ["commit", setting.value])
+    return set
   }
 
   async #read(): Promise<SettingsResult> {

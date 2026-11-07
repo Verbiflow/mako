@@ -78,7 +78,8 @@ export interface SettingsInput {
 
 export type SettingsResult =
   | { outcome: "read"; settings: { handOff: JsonValue; conversations: JsonValue; harnessOrder: JsonValue } }
-  | { outcome: "set"; setting: string; value: boolean | string | string[] }
+  /** `note`: kept, but it can't take effect yet, and why. */
+  | { outcome: "set"; setting: string; value: boolean | string | string[]; note?: string }
   | { outcome: "asked"; ask: string; next: string }
   | { refused: "unavailable" | "no-thread" | "bad-value" | "failed"; why: string }
 
