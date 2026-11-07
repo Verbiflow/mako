@@ -9,7 +9,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 | Claude Code | 2026-10-30 | 2.1.314 | its own listing (MCP) |
 | Codex | 2026-10-30 | 0.166.0 | its own listing (skills) |
 | Cursor | 2026-10-30 | SDK 1.2.0 | its own listing (skills, MCP) |
-| OpenCode | 2026-10-30 | 2.2.3 | its own listing (skills, MCP) |
+| OpenCode | 2026-11-07 | 2.2.6 | its own listing (skills, MCP) |
 | Grok | 2026-10-25 | 1.0.70 | its own listing (skills, MCP) |
 | Devin | 2026-10-30 | 3000.11.234 | its own listing (skills, MCP) |
 
