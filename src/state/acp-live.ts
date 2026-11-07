@@ -198,42 +198,58 @@ export function noteListedOutcome(
   })
 }
 
-/** Each Apex's Fins' asks said to the person so far, by the conversation they were said on, by Fin and ask. */
-const announcedFinAsks = new Map<string, ReadonlySet<string>>()
+/**
+ * Each Apex Thread's Fins' asks said to the person so far, by Fin and ask, with the subjects each was said on: kept by
+ * the Thread, so one is taken back by the ask's own state whichever of its Sessions said it, held here or not.
+ */
+const announcedFinAsks = new Map<string, Map<string, readonly string[]>>()
+
+/** The Thread a conversation's Fins are said for: its Thread, else the conversation alone. */
+const asksKey = (conversation: Pick<LiveAcpConversation, "key" | "threadId">) => conversation.threadId ?? conversation.key
+
+/** The asks of a conversation's Thread's Fins that are the person's, as they stand (`conversationRoster`), by id. */
+function openFinAsks(conversation: LiveAcpConversation) {
+  const asks = personAsks(rosterChildren(conversationRoster(acpStore.get(), conversation)))
+  return new Map(asks.map((ask) => [`${ask.fin}:${ask.ask.id}`, ask]))
+}
+
+/**
+ * Takes back each ask said for the conversation's Thread that its Fins no longer have open, by the ask's own state as
+ * the Thread's Fins stand now, from the subjects it was said on, whichever Session said it and wherever it heard the
+ * answer: a batch (`noteFinAsks`) or a snapshot read in recovery, a gap or a Session this window didn't hold
+ * (`applyLiveSnapshot`). It says nothing new: a snapshot's quiet history isn't announced again.
+ */
+export function retireAnsweredFinAsks(conversation: LiveAcpConversation): void {
+  const said = announcedFinAsks.get(asksKey(conversation))
+  if (!said) return
+  const open = openFinAsks(conversation)
+  for (const [id, subjects] of said) {
+    if (open.has(id)) continue
+    for (const subject of subjects) retireSubject(subject, "asks")
+    said.delete(id)
+  }
+  if (!said.size) announcedFinAsks.delete(asksKey(conversation))
+}
 
 /**
  * What an Apex's Fins ask the person, said on the Apex as its own ask would
- * be: once per ask, the Fin's name before its line, and taken back from the
- * attention centre once each is answered, on this device or another. Its
- * Thread's Fins as they stand (`conversationRoster`), and said once for the
- * Thread: only its newest Session hears an ask answered (`finReaders`), so
- * one an older Session said is taken back there too.
+ * be: once per ask for its Thread, the Fin's name before its line, and taken
+ * back from the attention centre once each is answered, on this device or
+ * another (`retireAnsweredFinAsks`). Its Thread's Fins as they stand
+ * (`conversationRoster`): only its newest Session hears an ask answered
+ * (`finReaders`), so one an older Session said is taken back all the same.
  */
 export function noteFinAsks(conversation: LiveAcpConversation, quiet = false): void {
-  const state = acpStore.get()
-  const asks = personAsks(rosterChildren(conversationRoster(state, conversation)))
-  const now = new Set(asks.map((ask) => `${ask.fin}:${ask.ask.id}`))
-  const sessions = Object.values(state.conversations).filter((each): each is LiveAcpConversation =>
-    each.kind === "live" && (each.key === conversation.key || (conversation.threadId !== undefined && each.threadId === conversation.threadId)))
-  const said = new Set<string>()
-  for (const session of sessions) {
-    const before = announcedFinAsks.get(session.key)
-    if (!before) continue
-    if ([...before].some((id) => !now.has(id))) for (const id of liveSubjectIds(session.key, session.threadPath)) retireSubject(id, "asks")
-    const still = new Set([...before].filter((id) => now.has(id)))
-    if (still.size) announcedFinAsks.set(session.key, still)
-    else announcedFinAsks.delete(session.key)
-    for (const id of still) said.add(id)
-  }
-  const mine = new Set(announcedFinAsks.get(conversation.key))
-  for (const ask of asks) {
-    const id = `${ask.fin}:${ask.ask.id}`
+  retireAnsweredFinAsks(conversation)
+  const key = asksKey(conversation)
+  const said = announcedFinAsks.get(key) ?? new Map<string, readonly string[]>()
+  for (const [id, ask] of openFinAsks(conversation)) {
     if (said.has(id)) continue
     const words = finAskWaiting(ask.ask, ask.title, askWords(ask))
     noteOutcome({ kind: words.for, subject: liveSubject(conversation), marker: `fin:${id}`, detail: words.line, quiet })
-    mine.add(id)
+    said.set(id, liveSubjectIds(conversation.key, conversation.threadPath))
   }
-  if (mine.size) announcedFinAsks.set(conversation.key, mine)
+  if (said.size) announcedFinAsks.set(key, said)
 }
 
 export function syncThreadStatus(

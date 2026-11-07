@@ -427,13 +427,14 @@ export function AgentsToggle() {
   useHarnessIdentity()
   const reading = useAcp((state) => {
     const live = activeLiveAcp(state)
-    const agents = live?.nativeAgents?.agents ?? []
+    // Its provider's own work; its Fins are its Thread's (`conversationRoster`), whichever of its Sessions is on screen.
+    const work = (live?.nativeAgents?.agents ?? []).filter((agent) => !agent.child)
     // An Apex's Fins say how they stand by the Thread's one rollup, as the crew card, the pips and the phone read it;
     // the rest of the roster counts as it runs.
     const children = live?.threadId ? threadRollup(state, live.threadId) : rollup(rosterChildren(live?.nativeAgents))
-    const running = agents.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient && !agent.child)
+    const running = work.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient)
     return {
-      total: agents.length,
+      total: work.length + children.total,
       fins: children.total ? rollupChip(children) : "",
       finsLabel: children.total ? rollupLabel(children) : "",
       finsTotal: children.total,

@@ -8,13 +8,13 @@ import { conversationShown } from "@mako/host/conversations/session-report"
 import { AccountSessions } from "@mako/protocol/account-sessions"
 import { ReportedSessionSchema } from "@mako/protocol/thread-listing"
 import { apexConversation, threadChildren, threadRollup } from "@/state/apex-fins"
-import { acpStore, conversationWork } from "@/state/acp-state"
+import { acpStore, conversationWork, removeAcpConversation } from "@/state/acp-state"
 import { NativeAgentSchema } from "@mako/host/contracts/native-agents"
 import { selectAcpPresence } from "@/state/acp-presence"
 import { finAskLine } from "@/state/fin-asks"
 import { noteFinAsks } from "@/state/acp-live"
 import { notificationsStore } from "@/state/notifications"
-import { applyLiveSnapshot, listLive } from "@/state/live-recovery"
+import { applyLiveBatch, applyLiveSnapshot, hydrateLive, listLive } from "@/state/live-recovery"
 import { applyThreadGroupChange } from "@/state/thread-groups"
 
 /**
@@ -120,6 +120,55 @@ for (const [olderSaw, newestSays] of [[asking, idle], [idle, asking]] as const) 
   }
   // The Apex's conversation answers go through, away from it, is its newest Session's.
   assert.equal(apexConversation(state, thread)?.key, newestConversation, "the Apex's conversation is its newest Session")
+}
+// An ask said for the Thread is taken back by its own state, wherever the answer is heard: as a snapshot read across a
+// gap, or for a Session this window wasn't holding, and after the Session that said it has left this window. (#524's
+// third review: each of these left an answered question on the attention centre.)
+const snapshotOf = (id: string, session: string, agent: typeof asking, revision: number) => ({
+  session: { id, harness: "codex", cwd: "/fixture", status: "ready" as const, connection: "connected" as const, modes: [], currentMode: null, configOptions: [] },
+  threadId: thread, sessionId: session, epoch: "E", revision, createdAt: now, blocks: [], requests: [], permissions: [], base: null, nativeAgents: { agents: [agent], limited: false },
+})
+const reads: string[] = []
+// The window's bridge, as `hydrateLive` reads a snapshot through it: the newest Session, answered, at revision 3.
+Object.defineProperty(globalThis, "window", { value: { mako: { liveSnapshot: async (id: string) => (reads.push(id), snapshotOf(id, newest, idle, 3)) } }, configurable: true })
+const unseen = () => notificationsStore.get().items.filter((item) => item.id.endsWith(`:fin:${edge.child}:ask-color`) && !item.seen)
+const recoveries: [string, () => Promise<void>][] = [
+  ["the answer comes as a snapshot of the newest Session, not held here", async () => {
+    removeAcpConversation(newestConversation)
+    applyLiveSnapshot(snapshotOf(newestConversation, newest, idle, 3))
+  }],
+  ["the answer's batch finds the newest Session not held, and its recovery reads the snapshot", async () => {
+    removeAcpConversation(newestConversation)
+    applyLiveBatch({ id: newestConversation, epoch: "E", revision: 3, updates: [], nativeAgents: { agents: [idle], limited: false } })
+    assert.equal(await hydrateLive(newestConversation), true, "recovered")
+    assert.deepEqual(reads, [newestConversation], "through its snapshot")
+  }],
+  ["the answer's batch comes past a gap, and the recovery reads the snapshot", async () => {
+    applyLiveBatch({ id: newestConversation, epoch: "E", revision: 3, updates: [], nativeAgents: { agents: [idle], limited: false } })
+    assert.equal(await hydrateLive(newestConversation), true, "recovered")
+    assert.deepEqual(reads, [newestConversation], "through its snapshot")
+  }],
+  ["the Session that said it has left this window, and the newest hears the answer", async () => {
+    removeAcpConversation(olderConversation)
+    applyLiveSnapshot(snapshotOf(newestConversation, newest, idle, 3))
+    const latest = acpStore.get().conversations[newestConversation]
+    assert.ok(latest?.kind === "live")
+    noteFinAsks(latest)
+  }],
+]
+for (const [how, answer] of recoveries) {
+  notificationsStore.set({ items: [] })
+  acpStore.set({ activeKey: null, conversations: {}, threadSessions: { [thread]: [older, newest] } })
+  applyLiveSnapshot(snapshotOf(olderConversation, older, asking, 1))
+  applyLiveSnapshot(snapshotOf(newestConversation, newest, asking, 1))
+  const olderHeld = acpStore.get().conversations[olderConversation]
+  assert.ok(olderHeld?.kind === "live")
+  noteFinAsks(olderHeld)
+  assert.equal(unseen().length, 1, `${how}: the older Session said the question`)
+  reads.length = 0
+  await answer()
+  assert.equal(threadChildren(acpStore.get(), thread)[0]?.child?.state?.kind, "idle", `${how}: the Thread's Fin is answered`)
+  assert.equal(unseen().length, 0, `${how}: and the question is taken back`)
 }
 applyThreadGroupChange({ thread, group: null })
 console.log("thread fins order: a Thread's Fins are its newest Session's, listed or held, in any order they arrive")
