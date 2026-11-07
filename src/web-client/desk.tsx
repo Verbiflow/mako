@@ -35,6 +35,8 @@ import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { AgentsLayer } from "./agents-layer"
+import { SetupLayer } from "./setup-layer"
+import { closeSetup, setupOpenStore } from "./setup-open"
 import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
@@ -58,7 +60,7 @@ import { FilesLayer } from "./files-layer"
 import { closeFiles, filesOpenStore, openFiles, useFilesOpen } from "./files-open"
 import { closeReview, deskReviewCode, openReview, reviewOpenStore, useReviewOpen } from "./review-open"
 
-const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
+const DeskSettings = lazy(() => import("./desk-settings"))
 
 /** The rail's narrowest and widest, as the desktop's. */
 const RAIL_MIN = 200
@@ -143,7 +145,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           <>
             <nav ref={rail} aria-label="Threads" style={{ width: prefsStore.get().railWidth }} className="flex min-h-0 shrink-0 flex-col overflow-hidden">
               <AgentThreads />
-              <DeskIdentity settings={!starting && under.kind === "settings"} onSettings={() => open({ kind: "settings" })} />
+              <DeskIdentity settings={!starting && (under.kind === "settings" || under.kind === "setup")} onSettings={() => open({ kind: "settings" })} />
             </nav>
             <Divider
               side="left"
@@ -162,9 +164,9 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
             <DeskStart key="new" startIn={startIn} onDismiss={back} onStarted={onStarted} />
           ) : under.kind === "thread" ? (
             <DeskThread key={under.thread} threadId={under.thread} sessionId={under.session} addSessionRef={addSession} onArchived={back} onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })} />
-          ) : under.kind === "settings" ? (
+          ) : under.kind === "settings" || under.kind === "setup" ? (
             <Suspense fallback={null}>
-              <Settings onBack={undefined} />
+              <DeskSettings route={under} open={open} />
             </Suspense>
           ) : (
             <DeskEmpty onNew={() => newThread()} />
@@ -174,6 +176,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
         <FilesLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
         <AgentsLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
+        <SetupLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} onAll={(project) => open({ kind: "setup", project })} />
       </div>
       <CommandPalette />
       <ConfirmHost />
@@ -230,6 +233,7 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
 function toggleSide(): void {
   if (filesOpenStore.get().open) return closeFiles()
   if (agentsOpenStore.get().open) return closeAgents()
+  if (setupOpenStore.get().open) return closeSetup()
   toggleChanges()
 }
 
