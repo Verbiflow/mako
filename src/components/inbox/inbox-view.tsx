@@ -206,7 +206,7 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
           <FinAnswers item={item} sending={sending} send={(answer) => settle(answerFin(item.apex.conversation, item.ask, answer))} />
         ) : item.kind === "approval" && item.answerable ? (
           <ApprovalAnswers item={item} sending={sending} send={(option) => settle(answerApproval(item, option))} />
-        ) : item.kind === "agent-ask" ? (
+        ) : item.kind === "agent-ask" && item.ask.want.kind !== "back" ? (
           <AgentAskAnswers item={item} sending={sending} send={(allow) => settle(answerAgentAsk(item.conversation, item.ask, allow))} />
         ) : null}
         <span className="flex-1" />

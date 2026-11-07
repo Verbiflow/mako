@@ -372,6 +372,7 @@ export function installMockBridge() {
   let wakeApex: (() => void) | undefined
   const respondCalls: Array<AgentsRespondInput & { conversation: string }> = []
   const agentAskAnswers: Array<{ conversationId: string; ask: string; allow: boolean }> = []
+  const returnCalls: string[] = []
   const continueCalls: string[] = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
@@ -518,6 +519,8 @@ export function installMockBridge() {
       /** The person's answers to Fins' asks, as the Apex's host heard them. */
       responds: () => [...respondCalls],
       agentAsks: () => [...agentAskAnswers],
+      /** The moves back this window asked of its host. */
+      returns: () => [...returnCalls],
       /** The Apex's own agent asks now, as the host's control-only batch says it. */
       raiseAgentAsk: () => {
         const snapshot = liveSnapshots.get(APEX_CONVERSATION)
@@ -3185,6 +3188,7 @@ export function installMockBridge() {
     },
     /** A fixture's way back: its steps a moment apart, as a real one takes them. */
     threadReturn: async (conversationId: string, move: string, options?: ThreadReturnOptions) => {
+      returnCalls.push(conversationId)
       const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
       const step = (next: ThreadReturnStep) => emit({ type: "thread-return-step", conversationId, move, step: next })
       if (mockReturnOutdated.value === "project-gone") {

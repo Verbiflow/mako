@@ -64,13 +64,13 @@ export class ThreadMoveTool {
   async move(caller: AgentCaller, input: ThreadsMoveInput): Promise<ThreadsMoveResult> {
     const own = caller.kind === "agent" ? this.#deps.conversationOf(caller.session) : undefined
     if (caller.kind === "agent" && !own) {
-      if (this.#deps.machine) return this.#fromTheMac(input)
+      if (this.#deps.machine) return this.#fromTheMac(input, undefined)
       return refused("no-thread", "No conversation here has that Session. Call it from a Thread's mako tools, or its shell, where MAKO_SESSION_ID names it.")
     }
     if (own && input.conversation && input.conversation !== own) return refused("not-yours", "An agent moves its own Thread only: leave conversation out.")
     const conversationId = own ?? input.conversation
     if (!conversationId) return refused("no-thread", "Name the conversation whose Thread moves (--conversation), or call it from a Thread's shell.")
-    if (this.#deps.machine) return this.#fromTheMac(input)
+    if (this.#deps.machine) return this.#fromTheMac(input, own)
     const moves = this.#deps.moves()
     if (!moves) return refused("unavailable", "Moving to the cloud needs this Mac signed in to Mako Cloud.")
     const place = this.#deps.place(conversationId)
@@ -140,10 +140,11 @@ export class ThreadMoveTool {
     )
   }
 
-  #fromTheMac(input: ThreadsMoveInput): ThreadMoveRefused {
-    return input.to === "cloud"
-      ? refused("already-there", "This Thread runs in the cloud already.")
-      : refused("from-the-mac", "A cloud Thread comes back from the Mac it came from: the person presses Bring it back to this Mac there, or runs `mako thread move back --conversation <id>` in a shell on it.")
+  /** A cloud machine can't reach its Mac: its agent asks, and the person's allow presses Bring it back where they are. */
+  #fromTheMac(input: ThreadsMoveInput, own: string | undefined): ThreadsMoveResult {
+    if (input.to === "cloud") return refused("already-there", "This Thread runs in the cloud already.")
+    if (!own) return refused("from-the-mac", "A cloud Thread comes back from the Mac it came from: the person presses Bring it back to this Mac there, or runs `mako thread move back --conversation <id>` in a shell on it.")
+    return { outcome: "asked", ask: this.#deps.gate.ask(own, { kind: "back" }).id, next: AFTER_MOVE.askedBack }
   }
 }
 

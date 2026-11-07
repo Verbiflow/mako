@@ -22,6 +22,8 @@ export function settingValue(name: string, value: boolean | string | string[] | 
 export const AgentAskWantSchema = z.discriminatedUnion("kind", [
   /** Move to the cloud. `handsOff`: its Thread works in its own worktree; otherwise it goes onto its own branch first, once its turns end. */
   z.object({ kind: z.literal("move"), move: z.string(), handsOff: z.boolean() }),
+  /** Bring it back to this Mac, from inside a cloud Thread: its machine can't reach its Mac, so the person's allow presses it. */
+  z.object({ kind: z.literal("back") }),
   /** Rename, Archive and Restore on the Thread's menu. `op`: the operation the answer runs under. */
   z.object({ kind: z.literal("rename"), op: z.string(), title: z.string() }),
   z.object({ kind: z.literal("archive"), op: z.string() }),
@@ -43,6 +45,8 @@ export function agentAskLine(want: AgentAskWant): string {
   switch (want.kind) {
     case "move":
       return "Wants to move this Thread to the cloud"
+    case "back":
+      return "Wants to bring this Thread back to your Mac"
     case "rename":
       return `Wants to rename this Thread to ${want.title}`
     case "archive":
@@ -93,6 +97,8 @@ export function agentAskWords(want: AgentAskWant, name: string): AgentAskWords {
         allow: "Move to the cloud",
         keep: "Keep here",
       }
+    case "back":
+      return { title, description: "with its worktree, branch and sessions", detail: "Its work comes back to the Mac it came from, and the cloud machine ends.", allow: "Bring it back", keep: "Keep in the cloud" }
     case "rename":
       return { title, description: "its title in the list", detail: "The title it shows everywhere; the agent's work goes on as it is.", allow: "Rename", keep: "Keep this title" }
     case "archive":

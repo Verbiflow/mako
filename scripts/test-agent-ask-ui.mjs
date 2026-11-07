@@ -132,6 +132,38 @@ async function check() {
   assert.equal((await answers()).at(-1).allow, true)
   console.log("PASS: the phone's card, and Move to the cloud reaching the host")
 
+  // From inside a cloud Thread, on the desk: allowed, it's Bring it back on this Mac, which the Inbox leaves to the card.
+  window.setContentSize(1440, 900)
+  await window.loadURL(`${base}?mock&app=apex&ask=back`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the rail")
+  await evaluate("document.querySelector('[data-rail-top-row=inbox]').click(); true")
+  await until("document.querySelectorAll('[data-inbox-kind=agent-ask]').length === 1", "the ask to come back in the Inbox")
+  assert.equal(await evaluate("document.querySelectorAll('[data-inbox-kind=agent-ask] [data-inbox-answer]').length"), 0, "only the card can press Bring it back")
+  await evaluate("document.querySelector('[data-inbox-kind=agent-ask] [data-inbox-open]').click(); true")
+  await until("Boolean(document.querySelector('[data-agent-ask=back]'))", "the desk's card to come back")
+  await evaluate("[...document.querySelectorAll('[data-agent-ask=back] button')].find((node) => node.innerText.includes('Bring it back')).click(); true")
+  await until("window.apexScene.returns().length === 1", "the desk's Bring it back")
+  console.log("PASS: on the desk, allowing it presses Bring it back, and the Inbox leaves that to the card")
+
+  // In a laptop's browser: allowed, it's the sheet that picks the Mac.
+  window.setContentSize(1280, 800)
+  await window.loadURL(`${base}scripts/web-desk.html?app=apex&thread=apex&ask=back`)
+  await until("Boolean(document.querySelector('[data-agent-ask=back]'))", "the laptop browser's card to come back")
+  await evaluate("[...document.querySelectorAll('[data-agent-ask=back] button')].find((node) => node.innerText.includes('Bring it back')).click(); true")
+  await until("Boolean(document.querySelector('[data-move-ask=device]'))", "the laptop browser's sheet that brings it back")
+  console.log("PASS: in a laptop's browser, allowing it opens the Bring it back sheet")
+
+  // From inside a cloud Thread: allowed on the phone, it's the sheet that picks the Mac, as the menu's Bring it back opens.
+  window.setContentSize(390, 844)
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex&ask=back&open=${APEX_THREAD}`)
+  await until("Boolean(document.querySelector('[data-ask=agent]'))", "the phone's card to come back")
+  const back = await evaluate("document.querySelector('[data-ask=agent]').innerText.replace(/\\s+/g, ' ')")
+  assert.ok(back.includes("Wants to bring this Thread back to your Mac") && back.includes("Bring it back"), back)
+  await evaluate("document.querySelector('[data-agent-answer=allow]').click(); true")
+  await until("Boolean(document.querySelector('[data-move-ask=device]'))", "the sheet that brings it back")
+  await shoot("phone-back", "[data-move-ask=device]")
+  console.log("PASS: allowed, the phone's Bring it back sheet opens")
+
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])
   console.log("Agent ask UI: passed")
   app.exit(0)

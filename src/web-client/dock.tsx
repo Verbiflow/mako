@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
 import { answerAgentAsk } from "@/state/agent-asks"
+import { askBringBack } from "./moves"
 import { shallowEqual } from "@/state/store"
 import { record, type AnsweredRecord } from "./answered"
 import { Composer, type EditingQueued, type Outgoing, type Steering } from "./composer"
@@ -362,6 +363,8 @@ function AgentAskCard({ ask, conversation, harness }: { ask: AgentAsk; conversat
     noteAnswered()
     void answerAgentAsk(conversation, ask, allow).then((answered) => {
       if (!answered) setChosen(undefined)
+      // Its machine can't reach the Mac: the person's allow is their Bring it back, on the sheet that picks the Mac.
+      else if (allow && ask.want.kind === "back") askBringBack(conversation)
     })
   }
   const busy = chosen !== undefined
