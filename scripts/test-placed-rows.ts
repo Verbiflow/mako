@@ -9,7 +9,6 @@ import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { apexViewStore, finOpening, openFinInApex, threadChildren } from "../src/state/apex-fins"
 import { acpStore } from "../src/state/acp-state"
 import { listLive } from "../src/state/live-recovery"
-import { applyThreadGroupChange } from "../src/state/thread-groups"
 import { foldThreads, placedUnder, threadById } from "../src/web-client/threads"
 import { waitingThreads, webInboxCount } from "../src/web-client/inbox"
 
@@ -137,11 +136,11 @@ test("C1: a placed Fin's row opens its own conversation on its device, and opens
 const OLD_FIN_SESSION = uuid(4)
 const oldFinRow = row({ session: OLD_FIN_SESSION, thread: FIN_THREAD, conversation: "c-fin-old", harness: "opencode", title: "Approval proof", state: "idle", folder: "/data/worktrees/hello-world/approval-proof", runsOn: { kind: "device", deviceId: LOFT }, createdAt: at(-60), activityAt: at(-50) })
 
+// The Fin's Thread is Loft's: this window holds no group of it, so its rows' own creation times, which Loft wrote, order them.
 test("a placed Fin with two Sessions on its device: its newest is the one its row opens and stands by, whichever is listed first", () => {
   const apex = { thread: APEX_THREAD, session: APEX_SESSION }
-  const finThread = ThreadIdSchema.parse(FIN_THREAD)
-  applyThreadGroupChange({ thread: finThread, group: { id: finThread, sessions: [OLD_FIN_SESSION, FIN_SESSION].map((id) => ({ id: SessionIdSchema.parse(id), origin: "started", started: true })) } })
-  try {
+  assert.equal(acpStore.get().threadSessions?.[FIN_THREAD], undefined, "the Fin's Thread's group is its own device's, not held here")
+  {
     for (const order of ["older first", "newest first"] as const) {
       acpStore.set({ activeKey: null, conversations: {} })
       const rows = order === "older first" ? [oldFinRow, finRow] : [finRow, oldFinRow]
@@ -153,7 +152,5 @@ test("a placed Fin with two Sessions on its device: its newest is the one its ro
       assert.deepEqual(finOpening(acpStore.get(), children[0]!), { kind: "conversation", key: "c-fin" }, `${order}: from under the Apex it opens the approval`)
       assert.deepEqual(finOpening(acpStore.get(), placedChild()), { kind: "conversation", key: "c-fin" }, `${order}: and so does the Apex's own roster entry`)
     }
-  } finally {
-    applyThreadGroupChange({ thread: finThread, group: null })
   }
 })

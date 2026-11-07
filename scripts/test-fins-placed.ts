@@ -19,6 +19,15 @@ import { remoteKey } from "@mako/host/conversations/placed-checkouts"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import { HostMethods } from "@mako/host/transport/methods"
 import { AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
+import { ReportedSessionSchema, type ListedSession } from "@mako/protocol/thread-listing"
+import { listedFins } from "@mako/host/contracts/children"
+import { listedApexOf, listedSummary } from "@mako/host/contracts/listed-conversations"
+import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { conversationShown } from "@mako/host/conversations/session-report"
+import { acpStore } from "../src/state/acp-state.ts"
+import { finOpening, threadChildren } from "../src/state/apex-fins.ts"
+import { childStateOf } from "@mako/host/contracts/children"
+import { listLive } from "../src/state/live-recovery.ts"
 
 /**
  * Fins placed on another device (`npm run test:fins-placed`): two hosts, each a real Thread store, live conversations
@@ -845,6 +854,62 @@ async function activitySurvivesTheApexRestart(): Promise<void> {
  * notice, from before that work, is replayed. The Fin still reads working, the tree still runs one, and a second start
  * is refused: the newest word of the Fin's device is kept on the edge, so an older one changes nothing.
  */
+/**
+ * A placed Fin with two Sessions on its device: the person opened a second one there (`+`), newer, waiting on an
+ * approval, while the older sits idle. The Apex's device holds no group of the Fin's Thread, only its device does; so
+ * a window on the Apex's device, given the rows that device writes, in either order, must open and stand by the newer
+ * Session's row: it carries the creation time its owner wrote, which `newestSaid` orders a Thread it holds no group of by.
+ */
+async function aPlacedFinsNewestSessionOnItsDevice(): Promise<void> {
+  const cloud = account()
+  const mac = await device(cloud, "MacBook", () => "Noted.")
+  const studio = await device(cloud, "Studio", () => "Done.")
+  try {
+    const apex = await mac.world.apex("claude")
+    const fin = started(await mac.world.agents.start(apex.caller, { ...PROBE, cwd: mac.world.root }))
+    await until("its first result", () => wakesOf(mac, apex.conversation).length === 1)
+    await mac.world.settle(40)
+    const child = ThreadIdSchema.parse(fin.child!)
+    const thread = studio.world.store.thread(child)!
+    const older = studio.world.store.conversationsOf(thread.sessions[0]!).at(-1)!
+    // A second Session of the Fin's Thread on its own device, as the person's `+` makes one: a conversation of its own, newer.
+    const placement = studio.world.store.createSession({ operationId: randomUUID(), thread: child, actor: studio.world.store.person() })
+    const newer = randomUUID()
+    await studio.world.live.start("codex", studio.world.root, { conversationId: newer, session: placement.session, title: "a second Session" })
+    assert.equal(studio.world.store.thread(child)?.sessions.length, 2, "the Fin's device holds its Thread's two Sessions")
+    assert.equal(mac.world.store.group(child), undefined, "the Apex's device holds no group of the Fin's Thread: its device does")
+    // The rows as each device writes them: the Apex's from the Mac, the Fin's two from Studio, each with the creation
+    // time its owner's live engine gave the conversation.
+    const mock = { deviceId: "6f1d2c3b-4a59-4e68-8a7b-9c0d1e2f3a4b" }
+    const iso = (at: number) => new Date(at).toISOString()
+    const rowOf = (session: string, conversation: string, snapshotOf: AgentsWorld, shown: Parameters<typeof conversationShown>[0], extra: Partial<ListedSession> = {}): ListedSession => {
+      const snapshot = snapshotOf.live.snapshot(conversation)
+      assert.ok(snapshot, `${conversation} is held live on its device`)
+      const row = ReportedSessionSchema.parse({ session, thread: snapshot.threadId ?? child, conversation, harness: snapshot.session.harness, ...conversationShown(shown), createdAt: iso(snapshot.createdAt), activityAt: iso(Date.now()), generation: 1 })
+      return { ...row, runsOn: { kind: "device", deviceId: mock.deviceId }, listedAt: iso(Date.now()), ...extra }
+    }
+    const apexSession = mac.world.store.journalPlacement(apex.conversation)!.session
+    const apexRow = rowOf(apexSession, apex.conversation, mac.world, { session: { ...mac.world.live.snapshot(apex.conversation)!.session, title: "Placed Fins" }, working: undefined, waitingOn: () => undefined, fins: () => listedFins(mac.world.agents.roster(apex.conversation)) })
+    const olderRow = rowOf(thread.sessions[0]!, older, studio.world, { session: { ...studio.world.live.snapshot(older)!.session, title: "probe" }, working: undefined, waitingOn: () => undefined })
+    const newerRow = rowOf(placement.session, newer, studio.world, { session: { ...studio.world.live.snapshot(newer)!.session, title: "probe" }, working: "waiting", waitingOn: () => ({ line: "Approve: echo HOTEL", for: "approval" }) })
+    assert.ok(Date.parse(newerRow.createdAt) > Date.parse(olderRow.createdAt), "the newer Session's row says it was made later")
+    for (const order of ["older first", "newest first"] as const) {
+      acpStore.set({ activeKey: null, conversations: {}, threadSessions: {} })
+      const rows = order === "older first" ? [olderRow, newerRow] : [newerRow, olderRow]
+      listLive([listedSummary(apexRow, "MacBook", undefined), ...rows.map((row) => listedSummary(row, "Studio", undefined, listedApexOf(row, [apexRow, olderRow, newerRow])))])
+      const children = threadChildren(acpStore.get(), apexRow.thread)
+      assert.equal(children.length, 1, `${order}: the Apex's one Fin`)
+      assert.equal(children[0]?.child?.conversation, newer, `${order}: the roster's entry opens the newer Session's conversation`)
+      assert.deepEqual(childStateOf(children[0]!), { kind: "blocked", question: "Approve: echo HOTEL", on: "approval" }, `${order}: and stands as it does there`)
+      assert.deepEqual(finOpening(acpStore.get(), children[0]!), { kind: "conversation", key: newer }, `${order}: from under the Apex it opens the approval`)
+    }
+    console.log("two sessions: a placed Fin's newer Session on its device, its rows written by that device in either order, is the one a window on the Apex's device opens and stands by, with no group of that Thread held there")
+  } finally {
+    await mac.close()
+    await studio.close()
+  }
+}
+
 async function anOldNoticeLowersNothing(): Promise<void> {
   const cloud = account()
   const mac = await device(cloud, "MacBook", () => "Noted.", { budget: { running: 1, started: 100 } })
@@ -923,6 +988,7 @@ const CASES = {
   "stop-start-slow": () => stopBeatsAStartStillOnItsWay("slow"),
   activity: activitySurvivesTheApexRestart,
   "old-notice": anOldNoticeLowersNothing,
+  "two-sessions": aPlacedFinsNewestSessionOnItsDevice,
 } satisfies Record<string, () => Promise<void> | void>
 
 try {
