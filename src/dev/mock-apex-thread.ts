@@ -165,11 +165,15 @@ function movedTo(step: FallbackStep, account: string): FinRerouted {
 }
 const PASSED_OVER = new Map([["token-refresh", "Your Fins default for Grok, grok-4.6-mini, isn't listed by Grok anymore: it runs on Grok 4.7 instead."]])
 
+const SPAWNED_BEFORE_MS = 80 * 3_600_000
+
 /** One Fin's roster entry, made by `childEntry` from its edge and what its Thread shows, as the host makes it. */
 export function apexFin(index: number, state: ChildState = CHILDREN[index]!.state): NativeAgent {
   const fixture = CHILDREN[index]!
   const now = Date.now()
-  const createdAt = now - fixture.minutes * 60_000
+  // Spawned days ago, each at work or standing as it does for its own `minutes`: a row's time is the second, never the first.
+  const stoodSince = now - fixture.minutes * 60_000
+  const createdAt = stoodSince - SPAWNED_BEFORE_MS
   const child = childThread(index)
   const apex = SessionIdSchema.parse(APEX_SESSION)
   const edge: ThreadParent = {
@@ -195,7 +199,8 @@ export function apexFin(index: number, state: ChildState = CHILDREN[index]!.stat
       model: fixture.model,
       ...(RUNS_ON.has(fixture.name) && { runsOn: RUNS_ON.get(fixture.name) }),
       startedAt: createdAt,
-      updatedAt: now,
+      updatedAt: stoodSince,
+      ...(state.kind === "working" && { workSince: stoodSince }),
       ...(fixture.toolUses && { toolUses: fixture.toolUses }),
       ...(started(fixture) && { session: SessionIdSchema.parse(childSession(index)), conversation: childConversation(index), nativeId: `apex-fin-${index}`, path: `/mock/apex-fin-${index}.jsonl` }),
       ...thread,

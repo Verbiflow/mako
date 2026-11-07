@@ -1,14 +1,14 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Git } from "@mako/git"
 import { LocalUpdates } from "@mako/host/application/local-updates"
 import { resolveLocalIdentity } from "./mac-local-signing.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
-const USAGE = "Use npm run test:settings-build -- [<checkout>] [--keep] [--as-installed-updater] [--from upstream|checkout]"
+const USAGE = "Use npm run test:settings-build -- [<checkout>] [--keep] [--as-installed-updater] [--ci-passed] [--from upstream|checkout]"
 
 async function buildFromSettings() {
   const root = process.env.MAKO_BUILD_TEST_ROOT
@@ -23,7 +23,7 @@ async function buildFromSettings() {
     const state = updater.snapshot().local
     if (state.kind === "building" && phases.at(-1) !== state.phase) { phases.push(state.phase); console.log(`Settings build: ${state.phase}`) }
     if (!updater.building && (state.kind === "ready" || state.kind === "error")) finish(state)
-  }, null, { buildSource: !asInstalled })
+  }, null, { buildSource: !asInstalled, ...process.env.MAKO_BUILD_TEST_CI_PASSED === "1" && { ciPassed: async () => ({ passed: true, run: "rehearsal" }) } })
   await updater.select(source)
   updater.start(from)
   const result = await settled
@@ -54,7 +54,7 @@ export async function finishRehearsal(root, { keep, log = console.log, unregiste
 
 /** Parse the command line; the checkout defaults to this one. */
 export function rehearsalOptions(args) {
-  const flags = new Set(["--keep", "--as-installed-updater"])
+  const flags = new Set(["--keep", "--as-installed-updater", "--ci-passed"])
   const at = args.indexOf("--from")
   const from = at === -1 ? undefined : args[at + 1]
   assert.ok(from === undefined || from === "upstream" || from === "checkout", USAGE)
@@ -64,13 +64,14 @@ export function rehearsalOptions(args) {
     source: resolve(positional[0] ?? "."),
     keep: args.includes("--keep"),
     asInstalledUpdater: args.includes("--as-installed-updater"),
+    ciPassed: args.includes("--ci-passed"),
     ...from && { from },
   }
 }
 
 async function rehearse(args) {
   const options = rehearsalOptions(args)
-  const root = await mkdtemp(join(tmpdir(), "mako-settings-build-"))
+  const root = testScratch("mako-settings-build-")
   try {
     await mkdir(join(root, "profile"))
     await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-settings-build", main: fileURLToPath(import.meta.url) }))
@@ -82,6 +83,7 @@ async function rehearse(args) {
       MAKO_BUILD_TEST_IDENTITY: identity,
       MAKO_BUILD_TEST_AS_INSTALLED: options.asInstalledUpdater ? "1" : "0",
       MAKO_BUILD_TEST_FROM: options.from ?? "",
+      MAKO_BUILD_TEST_CI_PASSED: options.ciPassed ? "1" : "0",
     }
     delete env.ELECTRON_RUN_AS_NODE
     if (options.asInstalledUpdater) console.log("Rehearsing an installed updater that does not pass MAKO_BUILD_SOURCE to the checks.")

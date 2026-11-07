@@ -8,7 +8,7 @@ import { AppKeySchema } from "../contracts/thread-environments.js"
 import { PROJECT_CHECKOUT_FILE } from "../contracts/thread-worktrees.js"
 import { projectRepositories } from "../git/index.js"
 import { folderApp } from "./thread-environment.js"
-import { CARRYING, CARRYING_STALE_MS, carryOutputs, isSpareCheckout, removeBelowAgents, SPARE_PREFIX, type CheckoutSetup } from "./worktree-carry.js"
+import { CARRYING, CARRYING_STALE_MS, carryOutputs, cloneTracked, isSpareCheckout, removeBelowAgents, SPARE_PREFIX, type CheckoutSetup } from "./worktree-carry.js"
 import { PARALLEL_CHECKOUT, type Git } from "@mako/git"
 
 /** Enough for two new Threads in a row without waiting; the one after that waits for a refill. */
@@ -463,6 +463,7 @@ export class WorktreeSpares {
       for (const worktree of worktreesOf(spare)) {
         await this.git.output(worktree.repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree.path, worktree.base], true)
         await this.git.output(worktree.repoRoot, ["worktree", "lock", "--reason", LOCK_REASON, worktree.path])
+        await cloneTracked(this.git, worktree.repoRoot, worktree.path, worktree.base, true)
         await this.git.output(worktree.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", worktree.base], true)
       }
       const written = Date.now()

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // The crew card (`crew-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
 // its own turn settles and its Fins still work, on the mock bridge's Apex scene (`?mock&app=apex`): every Fin
@@ -19,7 +19,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-crew-card-ui-"))
+  const root = testScratch("mako-crew-card-ui-")
   await writeFile(
     join(root, "package.json"),
     JSON.stringify({
@@ -60,7 +60,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Crew card UI evidence: ${root}`)
 }
 
 /**
@@ -360,6 +359,14 @@ async function check() {
     5,
     "composer-chips, dictation, outbox, hunks and token-refresh (asking its Apex) work"
   )
+  // Each was spawned days ago: a row's time is how long its turn has run, never the Fin's age.
+  const onTurn = working.find((row) => row.text.includes("Composer chips on iPad"))
+  assert.match(onTurn.text, /\b18m$/, `a working row counts its turn: ${onTurn.text}`)
+  for (const row of rows12) assert.doesNotMatch(row.text, /\b\d+h\b/, `no row says the Fin's age: ${row.text}`)
+  // Every time says what it means: in a sentence on the row, and a finished row's number never reads as how long it ran.
+  const times = await evaluate("[...document.querySelectorAll('[data-crew-row]')].map((row) => [...row.querySelectorAll('.tabular[title]')].map((time) => ({ time: time.textContent, title: time.title, group: row.dataset.childGroup }))).flat()")
+  assert.ok(times.length >= 7, `the rows' times carry their sentence: ${JSON.stringify(times)}`)
+  assert.ok(times.some((each) => /^On this turn for \d+m$/.test(each.title)), `a working row says so: ${JSON.stringify(times)}`)
   const asking = working.find((row) => row.text.includes("Push token refresh"))
   assert.ok(
     asking?.html.includes("lucide-corner-up-left"),
@@ -434,6 +441,9 @@ async function check() {
     "Boolean(document.querySelector('[data-apex-fins]'))",
     "the Agents panel's Fins section"
   )
+  // The Agents panel reads the same time as the card.
+  await until("Boolean(document.querySelector('[data-apex-fins] [data-child-row]'))", "the panel's rows")
+  assert.doesNotMatch(await evaluate("document.querySelector('[data-apex-fins]').innerText"), /\b\d+h\b/, "no row of the panel says the Fin's age")
   await click(`[data-crew-row="${sheetMotion}"] button[data-fin-answer=allow]`)
   await until(
     `document.querySelector('[data-crew-row="${sheetMotion}"]')?.dataset.childGroup === 'working'`,
@@ -597,6 +607,20 @@ async function check() {
     "Boolean(document.querySelector('[data-crew]'))",
     "the crew card on the phone"
   )
+  await settle()
+  assert.doesNotMatch(await evaluate("document.querySelector('[data-crew]').innerText"), /\b\d+h\b/, "no row on the phone says the Fin's age")
+  // A laptop's browser draws the same rows from the same roster.
+  await window.loadURL(`${base}scripts/web-desk.html?thread=apex&theme=dark`)
+  await until("document.querySelectorAll('[data-crew] [data-crew-row]').length > 0", "the crew card in a laptop's browser")
+  const laptop = await evaluate("document.querySelector('[data-crew]').innerText")
+  assert.match(laptop, /Composer chips on iPad[\s\S]*?18m/, `its working row counts its turn: ${laptop}`)
+  assert.doesNotMatch(laptop, /\b\d+h\b/, "no row in the browser says the Fin's age")
+  window.setContentSize(390, 844)
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
+  await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone again")
+  await click("[data-thread]")
+  await until("Boolean(document.querySelector('[data-crew]'))", "the crew card on the phone again")
+  await evaluate("window.apexScene.setRunning(false); true")
   await settle()
   const phone = await evaluate(`(() => {
     const card = document.querySelector('[data-crew]')

@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile, mkdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (!process.versions.electron) {
   const { createServer } = await import('vite')
-  const root = await mkdtemp(join(tmpdir(), 'mako-browser-settings-ui-'))
+  const root = testScratch('mako-browser-settings-ui-')
   const server = await createServer({ cacheDir: join(root, 'cache'), server: {host:'127.0.0.1',port:0} })
   await server.listen()
   await writeFile(join(root,'package.json'),JSON.stringify({main:fileURLToPath(import.meta.url)}))
