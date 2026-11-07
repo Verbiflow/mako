@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { spawn } from "node:child_process"
 import { z } from "zod"
@@ -16,6 +15,7 @@ import { SessionMemory } from "@mako/host/threads/session-memory"
 import { withHostClient } from "@mako/host/base/host-client"
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
 import { auditSnapshot } from "./performance-audit-fixtures"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /** The retained-history window a history-aware client reads from a snapshot or an earlier page. */
 const HistoryViewSchema = z.object({
@@ -27,7 +27,7 @@ const HistoryViewSchema = z.object({
   }),
   requests: z.array(z.unknown()).optional(),
 })
-const root = await mkdtemp(join(tmpdir(), "mako-history-wire-"))
+const root = testScratch("mako-history-wire-")
 const socket = join(root, "owner.sock")
 const peerSocket = join(root, "peer.sock")
 const source = auditSnapshot(300, "claude", 150, 120 * 1024)

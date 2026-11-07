@@ -37,6 +37,17 @@ export const MACHINE_GITHUB_PERSON_ENV = "MAKO_GITHUB_PERSON"
 export const MACHINE_GITHUB_AS = "MAKO_GITHUB_AS"
 
 /**
+ * Who the machine's commits and pull requests are authored as (`github-authorship.ts`), one value per file, which the
+ * agent writes before any harness runs and again on each answer the account gives: `name` and `email`, which it also
+ * sets as Git's global `user.name` and `user.email` and every harness shell exports as `GIT_AUTHOR_*` and
+ * `GIT_COMMITTER_*`; `as`, `you` or `mako`; `pull-requests`, `you`, `mako` or `mako-fallback` (`you` without a saved
+ * GitHub token); and in `mako` mode `co-author`, the person as `Name <email>`, which the machine's Git adds as a
+ * `Co-authored-by` trailer. Its push refuses new commits naming anyone else. The host reads only `pull-requests`, so a
+ * Thread's first pull request reply says when the bot opened it for want of a token.
+ */
+export const MACHINE_IDENTITY_DIR = "/run/mako/secrets/identity"
+
+/**
  * One of the project's carried files the agent placed in the Thread's checkout (its `.env`, a local settings file):
  * its path and the variables it defines, never a value. The host checks a recipe's named secrets against them.
  */
