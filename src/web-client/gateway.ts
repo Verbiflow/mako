@@ -23,6 +23,12 @@ export interface WebConnection {
   expiresAt: number
   deviceId: string
   account: WebAccount
+  /**
+   * The Mako cloud's own address, as the gateway says it of itself: where a machine joins the account
+   * (`mako-host join --cloud`). The page's origin isn't it where the app has a host of its own, which passes on only
+   * the app's routes. Absent from a gateway before it said so.
+   */
+  cloud?: string
 }
 
 /** The browser's sign-in ended: signed out here or on another device, or it ran out. Sign in again. */
