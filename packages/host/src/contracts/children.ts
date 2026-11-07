@@ -462,7 +462,7 @@ export function sameRollup(left: Rollup, right: Rollup): boolean {
 }
 
 /** Each group's words after its count, in the one vocabulary every surface uses. */
-function groupWords(group: ChildGroup, count: number): string {
+export function groupWords(group: ChildGroup, count: number): string {
   switch (group) {
     case "needs":
       return count === 1 ? "needs you" : "need you"

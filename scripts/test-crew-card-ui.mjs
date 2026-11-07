@@ -433,7 +433,7 @@ async function check() {
   const railBefore = await evaluate(
     "document.querySelector('.thread-jump-scope [data-fin-pips]').getAttribute('aria-label')"
   )
-  await click("[data-apex-count]")
+  await click("[data-agents-toggle]")
   await until(
     "Boolean(document.querySelector('[data-apex-fins]'))",
     "the Agents panel's Fins section"
@@ -596,8 +596,8 @@ async function check() {
   )
   await click("[data-thread]")
   await until(
-    "Boolean(document.querySelector('[data-child-chips]'))",
-    "the Apex's chips on the phone"
+    "Boolean(document.querySelector('[data-apex-count]'))",
+    "the Apex's count on the phone"
   )
   await evaluate("window.apexScene.setRunning(false); true")
   await until(

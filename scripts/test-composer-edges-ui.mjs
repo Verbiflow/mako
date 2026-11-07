@@ -101,7 +101,7 @@ async function check() {
 
   for (const [name, path, width, height] of [
     ["the desk", "/?mock&app=apex", 1440, 900],
-    ["a narrow desk", "/?mock&app=apex", 1280, 720],
+    ["a narrow desk", "/?mock&app=apex", 1100, 760],
     ["a laptop's browser", "/scripts/web-desk.html?thread=apex&theme=dark", 1280, 800],
   ]) {
     await load(path, width, height)
