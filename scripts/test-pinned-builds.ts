@@ -20,7 +20,7 @@ assert.deepEqual(buildSources(codexPlans, "0.167.0"), [{ kind: "npm", name: "@op
 const vendor = (statuses: Record<string, number>, npm: Record<string, string[]> = {}): typeof fetch => async (input) => {
   // SAFETY: the check fetches by a URL string, as `unpublished` builds it.
   const url = String(input as string)
-  const listed = Object.entries(npm).find(([name]) => url === `https://registry.npmjs.org/${name.replace("/", "%2F")}`)
+  const listed = Object.entries(npm).find(([name]) => url === `https://registry.npmjs.org/${name.replaceAll("/", "%2F")}`)
   if (listed) return Response.json({ versions: Object.fromEntries(listed[1].map((version) => [version, {}])) })
   if (url in statuses) return new Response("", { status: statuses[url] })
   throw new Error(`the stub has no ${url}`)

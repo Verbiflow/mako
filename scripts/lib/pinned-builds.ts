@@ -43,7 +43,7 @@ export async function unpublished(plans: readonly HarnessUpdateCommand[], versio
         if (WITHDRAWN.has(response.status)) return `${source.url} answers ${response.status}`
         continue
       }
-      const url = `https://registry.npmjs.org/${source.name.replace("/", "%2F")}`
+      const url = `https://registry.npmjs.org/${source.name.replaceAll("/", "%2F")}`
       const response = await fetcher(url, { headers: { accept: "application/vnd.npm.install-v1+json" }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
       if (WITHDRAWN.has(response.status)) return `${url} answers ${response.status}`
       if (!response.ok) continue
