@@ -51,7 +51,8 @@ const FIN_CONVERSATION = "1ead1ead-5000-4000-8000-000000000013"
 const FIN_TITLE = "Docs sweep"
 /** What the desk shows when a wait runs out: the open conversation and the rail's rows; and the crew card's rows. */
 const ACTIVE = "import('/src/state/acp.ts').then(({ acpStore }) => ({ active: acpStore.get().activeKey, rows: [...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].map((node) => [node.dataset.conversationId, node.dataset.apexRow ?? '', node.innerText.split('\\n')[0]]) }))"
-const CREW = `${ACTIVE}.then((shown) => { const card = document.querySelector('[data-crew]'); const scroller = card?.querySelector('[data-crew-scroller]'); const rect = (node) => node ? { top: Math.round(node.getBoundingClientRect().top), height: Math.round(node.getBoundingClientRect().height) } : null; const skipped = []; for (let node = card; node; node = node.parentElement) { const visibility = getComputedStyle(node).contentVisibility; if (visibility && visibility !== 'visible') skipped.push(visibility) } return { ...shown, crew: card !== null, card: rect(card), scroller: rect(scroller), contentVisibility: skipped, crewRows: [...document.querySelectorAll('[data-crew-row]')].map((node) => node.dataset.crewRow) } })`
+/** The transcript's state and every crew card on the page, each with its box and the ancestors that could hide it. */
+const TRANSCRIPT = `${ACTIVE}.then((shown) => { const rect = (node) => node ? { top: Math.round(node.getBoundingClientRect().top), height: Math.round(node.getBoundingClientRect().height) } : null; const viewport = document.querySelector('[data-transcript-viewport]'); const cards = [...document.querySelectorAll('[data-crew]')].map((card) => { const ancestors = []; for (let node = card; node; node = node.parentElement) { const style = getComputedStyle(node); const why = [node.hidden && 'hidden', style.display === 'none' && 'display:none', style.visibility !== 'visible' && style.visibility, style.contentVisibility && style.contentVisibility !== 'visible' && style.contentVisibility].filter(Boolean); if (why.length || node === card || node.hasAttribute('data-transcript-viewport')) ancestors.push([node.tagName.toLowerCase(), [...node.attributes].filter((a) => a.name.startsWith('data-')).map((a) => a.name + (a.value ? '=' + a.value.slice(0, 24) : '')).join(' '), why.join(',')]) } return { inTranscript: viewport?.contains(card) ?? false, card: rect(card), scroller: rect(card.querySelector('[data-crew-scroller]')), rows: card.querySelectorAll('[data-crew-row]').length, ancestors } }); return { ...shown, transcript: { viewport: rect(viewport), virtualized: viewport?.hasAttribute('data-virtualized') ?? null, skeleton: document.querySelector('.skeleton-transcript') !== null, composer: document.querySelector('[data-composer-input], textarea') !== null, blocks: viewport?.querySelectorAll('[data-flip-key], [data-request], [data-transcript-tool]').length ?? null }, cards } })`
 
 async function check() {
   const { app, BrowserWindow } = await import("electron")
@@ -123,17 +124,23 @@ async function check() {
       // the open one. A cold runner's first transcript takes a while to come up.
       assert.ok(await desk.click(`.thread-jump-scope [data-conversation-id="${APEX_CONVERSATION}"]`), `the Apex's row in the rail (${scene})`)
       await desk.activeIs(APEX_CONVERSATION, "the Apex's conversation open in place")
-      // The card draws its rows through a virtualizer, which draws none while the card's scroller measures no height:
-      // below the fold on a runner it did, and the wait ran out with the card mounted and empty. On screen, as a
-      // reader scrolls to it, it measures and draws; here it's brought on screen first, which the screenshots need too.
-      await desk.until("Boolean(document.querySelector('[data-crew]'))", "the Apex's crew card", 90_000, CREW)
-      await desk.evaluate("document.querySelector('[data-crew]').scrollIntoView({ block: 'start' }); true")
-      await desk.until(`Boolean(document.querySelector('[data-crew-row="${FIN_THREAD}"]'))`, "the Fin in the Apex's crew card", 30_000, CREW)
+      // The Apex's transcript first: its viewport, with its skeleton gone. A cold runner's first transcript takes a
+      // while; one that never comes up is this check's failure to say, never something to pass around.
+      await desk.until("Boolean(document.querySelector('[data-transcript-viewport]')) && !document.querySelector('.skeleton-transcript')", "the Apex's transcript", 90_000, TRANSCRIPT)
+      // Then the crew card in that transcript (a compact card can stand elsewhere on the page, under a hidden surface).
+      // The card draws its rows through a virtualizer, which draws none while the card's scroller measures no
+      // height: below the fold on a runner it did, and the wait ran out with the card mounted and empty. On screen,
+      // as a reader scrolls to it, it measures and draws; here it's brought on screen first, which the screenshots
+      // need too. On a timeout, every card on the page is printed with its box and the ancestors that could hide it.
+      const CARD = "[data-transcript-viewport] [data-crew]"
+      await desk.until(`Boolean(document.querySelector('${CARD}'))`, "the crew card in the Apex's transcript", 60_000, TRANSCRIPT)
+      await desk.evaluate(`document.querySelector('${CARD}').scrollIntoView({ block: 'start' }); true`)
+      await desk.until(`Boolean(document.querySelector('${CARD} [data-crew-row="${FIN_THREAD}"]'))`, "the Fin in the Apex's crew card", 30_000, TRANSCRIPT)
       // The card fades in; its screenshot is taken once that's done. Only the card's own animation: rows hold marks
       // that pulse for as long as a Fin works.
-      await desk.evaluate("Promise.all(document.querySelector('[data-crew]').getAnimations().filter((animation) => animation.effect.getTiming().iterations !== Infinity).map((animation) => animation.finished)).then(() => true)")
+      await desk.evaluate(`Promise.all(document.querySelector('${CARD}').getAnimations().filter((animation) => animation.effect.getTiming().iterations !== Infinity).map((animation) => animation.finished)).then(() => true)`)
       // The crew card's row for a Fin that needs the person opens from its title; every other row is the button itself.
-      assert.equal(await desk.evaluate(`document.querySelector('[data-crew-row="${FIN_THREAD}"][data-openable], [data-crew-row="${FIN_THREAD}"] [data-openable]').dataset.openable`), scene === "unlisted" ? "false" : "true")
+      assert.equal(await desk.evaluate(`document.querySelector('${CARD} [data-crew-row="${FIN_THREAD}"][data-openable], ${CARD} [data-crew-row="${FIN_THREAD}"] [data-openable]').dataset.openable`), scene === "unlisted" ? "false" : "true")
       await desk.both(`desk-crew-${scene}`)
       const before = await desk.activeKey()
       await desk.click(`.thread-jump-scope [data-asking-fin="${FIN_THREAD}"]`)
