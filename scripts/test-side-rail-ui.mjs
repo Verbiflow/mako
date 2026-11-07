@@ -44,7 +44,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`UI evidence: ${root}`)
 }
 
 async function check() {

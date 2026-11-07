@@ -1,5 +1,5 @@
 import { Slot } from "@/extend/slot"
-import { elementScroll, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual"
+import { elementScroll, measureElement, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual"
 import { registerCommands } from "@/extend/commands"
 import {
   TranscriptSourceContext,
@@ -39,6 +39,7 @@ import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
 import { SCROLL_WRITE_EVENT, TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
 import { CompactPresentationContext } from "./compact-presentation"
+import { rowChecker } from "./row-check"
 import { wokeAfterRest } from "@/lib/woke-after-rest"
 
 const NEAR_BOTTOM = 96
@@ -85,16 +86,19 @@ const WINDOWED_ITEMS = 400
 
 /**
  * What each windowed transcript's rows measured, by row key, at the window's width, for the few read last. Opened
- * again, its rows are placed at those sizes in the first frame: the virtualizer's own measurements arrive a frame
- * after it paints, and placed at the estimate the newest turn painted, then jumped as they landed.
+ * again, the virtualizer starts from these as its own measurements (`seedMeasured`), so its rows are placed at those
+ * sizes in the first frame: its measurements arrive a frame after it paints, and placed at the estimate the newest turn
+ * painted, then jumped as they landed. They can't be its estimates: a row measured at its estimate is never stored, so
+ * when the estimate moved (these sizes replaced, a new width) every such row moved with it, and no resize said so.
  */
 type RowSizes = Virtualizer<HTMLDivElement, Element>["itemSizeCache"]
-type Key = RowSizes extends Map<infer Key, number> ? Key : never
 const measuredRows = new Map<string, { width: number; sizes: RowSizes }>()
 const MEASURED_KEPT = 8
 const ESTIMATED_ROW = 360
 /** The column's `gap-7` between turns, kept by the virtualizer between windowed rows. */
 const ROW_GAP = 28
+/** A row can grow with nothing in the document changing (an image's size, a font): how long that can go unseen. */
+const ROW_CHECK_MS = 1_000
 
 function keepMeasured(source: string, sizes: RowSizes): void {
   if (!sizes.size) return
@@ -106,9 +110,10 @@ function keepMeasured(source: string, sizes: RowSizes): void {
   }
 }
 
-function measuredSize(source: string, key: Key): number {
+function seedMeasured(source: string, sizes: RowSizes): void {
   const kept = measuredRows.get(source)
-  return (kept?.width === innerWidth ? kept.sizes.get(key) : undefined) ?? ESTIMATED_ROW
+  if (kept?.width !== innerWidth || kept.sizes === sizes) return
+  for (const [key, size] of kept.sizes) if (!sizes.has(key)) sizes.set(key, size)
 }
 
 const NO_KEYS: ReadonlyMap<string, string> = new Map()
@@ -677,7 +682,7 @@ export function ConversationTimeline({
     let height = 0
     for (let index = 0; index < exchanges.length; index += 1) {
       const key = rowKey(index)
-      if (!rows.itemSizeCache.has(key)) height += measuredSize(readingSource, key)
+      if (!rows.itemSizeCache.has(key)) height += ESTIMATED_ROW
     }
     return height
   }
@@ -688,16 +693,21 @@ export function ConversationTimeline({
    * painted over what follows it. The space between rows is the virtualizer's gap, so a row arriving below another
    * doesn't change that one's size.
    */
+  const [rowCheck] = useState(rowChecker)
   const rows = useVirtualizer({
     count: exchanges.length,
     enabled: windowed,
     getScrollElement: () => viewport.current,
-    estimateSize: (index) => measuredSize(readingSource, rowKey(index)),
+    estimateSize: () => ESTIMATED_ROW,
     getItemKey: (index) => rowKey(index),
     overscan: 6,
     gap: ROW_GAP,
     scrollMargin: edge ? 80 : 24,
     directDomUpdates: true,
+    measureElement: (element, entry, instance) => {
+      if (entry) rowCheck.heard(element)
+      return measureElement(element, entry, instance)
+    },
     onChange: (instance) => {
       const total = instance.getTotalSize()
       if (total === placedTotal.current) return
@@ -708,6 +718,21 @@ export function ConversationTimeline({
       elementScroll(offset, options, instance)
       if (viewport.current) owned(viewport.current)
     },
+  })
+  const seeded = useRef<string | undefined>(undefined)
+  if (!windowed) seeded.current = undefined
+  else if (seeded.current !== identity) {
+    seeded.current = identity
+    seedMeasured(readingSource, rows.itemSizeCache)
+  }
+  const mountedRows = useRef<() => boolean>(() => false)
+  mountedRows.current = () => rowCheck.check({
+    rows,
+    list: viewport.current?.querySelector("[data-virtual-transcript]") ?? null,
+    keyOf: rowKey,
+    partsOf: (index) => exchanges[index]!.response.length,
+    streaming: (index) => exchanges[index]!.id === streamingId,
+    following: pinned.current,
   })
   /** Sends the virtualizer toward a row or the end, which it keeps reconciling toward until `endSeek`. */
   const seek = useCallback((target: number | "end") => {
@@ -1268,6 +1293,30 @@ export function ConversationTimeline({
     structure.observe(node, { childList: true, characterData: true, subtree: true })
     return () => { structure.disconnect(); grown.disconnect(); cancelAnimationFrame(shrinkFrame); node.style.overflowY = "" }
   }, [identity, isEmpty, owned, holdReader])
+
+  useEffect(() => {
+    const node = viewport.current
+    if (!windowed || !node) return
+    let frame = 0
+    const look = () => {
+      frame = 0
+      if (mountedRows.current()) soon()
+    }
+    const soon = () => {
+      frame ||= requestAnimationFrame(look)
+    }
+    const changes = new MutationObserver(soon)
+    changes.observe(node, { childList: true, characterData: true, subtree: true })
+    node.addEventListener("scroll", soon, { passive: true })
+    const steady = setInterval(soon, ROW_CHECK_MS)
+    soon()
+    return () => {
+      changes.disconnect()
+      node.removeEventListener("scroll", soon)
+      clearInterval(steady)
+      cancelAnimationFrame(frame)
+    }
+  }, [windowed, identity])
 
   const endEarlier = useCallback((progressed: boolean) => {
     awaitingEarlier.current = false

@@ -44,7 +44,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`UI evidence: ${root}`)
 }
 
 const FALLBACK = "Pull requests are opened by Mako by Verbiflow until you add a token in Open pull requests as me."

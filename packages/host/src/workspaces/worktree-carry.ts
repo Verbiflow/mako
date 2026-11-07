@@ -4,6 +4,7 @@ import { constants, existsSync } from "node:fs"
 import { copyFile, cp, link, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from "node:path"
 import { promisify } from "node:util"
+import { z } from "zod"
 import { belowAgents } from "../base/background-priority.js"
 import type { Prepared } from "./thread-processes.js"
 import type { SpareInstall } from "./spare-install.js"
@@ -12,6 +13,8 @@ import { discoverRepositories } from "../git/index.js"
 import type { Git } from "@mako/git"
 import { onLinux, onMac } from "../base/platform.js"
 import type { CheckoutBorrowing } from "./checkout-borrowing.js"
+import { errorMessage } from "../base/error-message.js"
+import { hostWarn } from "../base/host-log.js"
 
 const execute = promisify(execFile)
 
@@ -171,6 +174,73 @@ async function cloneTrees(pairs: Array<[string, string]>, background: boolean): 
   return results
 }
 
+/** Clones each pair in a list file, `clonefile` itself: Node's copy reports success on macOS and writes every byte. */
+const CLONE_LISTED = `function run(argv) {
+  ObjC.bindFunction("clonefile", ["int", ["char *", "char *", "unsigned int"]])
+  const paths = ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError(argv[0], $.NSUTF8StringEncoding, null)).split("\\n")
+  for (let i = 0; i + 1 < paths.length; i += 2) $.clonefile(paths[i], paths[i + 1], 1)
+}`
+
+/** Clones single files, each to a place that doesn't exist yet. One that can't be cloned is left out, for Git to write. */
+async function cloneFiles(pairs: readonly (readonly [string, string])[], list: string, background: boolean): Promise<void> {
+  if (!onMac()) {
+    const left = pairs.values()
+    await Promise.all(Array.from({ length: 16 }, async () => {
+      for (const [from, to] of left) await copyFile(from, to, constants.COPYFILE_FICLONE_FORCE).catch(() => {})
+    }))
+    return
+  }
+  await writeFile(list, pairs.flat().join("\n"), { mode: 0o600 })
+  try {
+    const script = ["-l", "JavaScript", "-e", CLONE_LISTED, list]
+    const [command, args] = background ? belowAgents("/usr/bin/osascript", script) : ["/usr/bin/osascript", script]
+    await execute(command, args)
+  } finally {
+    await rm(list, { force: true })
+  }
+}
+
+/** Each tracked file's mode and blob, from `ls-tree -r -z` or `ls-files -s -z`; a file in a conflict is nobody's to clone. */
+function trackedFiles(listing: string): Map<string, string> {
+  const files = new Map<string, string>()
+  for (const line of listing.split("\0")) {
+    const tab = line.indexOf("\t")
+    if (tab < 0) continue
+    const [mode, second, third] = line.slice(0, tab).split(" ")
+    // `ls-tree` says mode, type, blob; `ls-files` says mode, blob, stage.
+    const blob = third && /^[0-9a-f]{40,64}$/.test(third) ? third : second
+    if (third === "0" || third === blob) files.set(line.slice(tab + 1), `${mode} ${blob}`)
+  }
+  return files
+}
+
+/**
+ * A spare's tracked files, cloned from the main checkout wherever that holds the same file, so a worktree shares
+ * their blocks rather than writing them: `mako-backend` costs 59 MB of its own this way, and 694 MB written out. Only a
+ * hint for Git, which still decides: the index is read and refreshed here, so each clone is hashed, and the `reset
+ * --hard` that follows writes whatever is missing or came out different. Files changed in the main checkout, symlinks
+ * and submodules are left to it, and on a volume that can't share blocks all of them are.
+ */
+export async function cloneTracked(git: Git, repoRoot: string, checkout: string, commit: string, background = false): Promise<void> {
+  try {
+    if (!await sharesBlocks(repoRoot, checkout)) return
+    const [wanted, held, changed] = await Promise.all([
+      git.readOutput(repoRoot, ["ls-tree", "-r", "-z", commit]),
+      git.readOutput(repoRoot, ["ls-files", "-s", "-z"]),
+      git.readOutput(repoRoot, ["status", "--porcelain", "-z", "--untracked-files=no", "--no-renames"]),
+    ])
+    const here = trackedFiles(held)
+    const differs = new Set(changed.split("\0").map((entry) => entry.slice(3)))
+    const same = [...trackedFiles(wanted)].flatMap(([path, file]) => here.get(path) === file && !differs.has(path) && /^100/.test(file) && !path.includes("\n") ? [path] : [])
+    await Promise.all([...new Set(same.map((path) => dirname(path)))].map((folder) => mkdir(join(checkout, folder), { recursive: true })))
+    await cloneFiles(same.map((path) => [join(repoRoot, path), join(checkout, path)]), `${checkout}.clones`, background)
+    await git.output(checkout, ["read-tree", commit], background)
+    await git.output(checkout, ["update-index", "-q", "--refresh"], background).catch(() => {})
+  } catch (error) {
+    hostWarn("worktrees", "a checkout's files couldn't be cloned, so Git writes them", { checkout, error: errorMessage({ error }) })
+  }
+}
+
 /** Whether this volume shares blocks between copies; Linux only has a per-file answer, so ask with one of Git's files. */
 async function sharesBlocks(repoRoot: string, checkout: string): Promise<boolean> {
   if (onMac()) return true
@@ -188,6 +258,12 @@ async function sharesBlocks(repoRoot: string, checkout: string): Promise<boolean
 
 /** In a linked folder of a checkout: the main checkout's folder its entries link to. */
 export const LINKED_MARK = ".mako-linked"
+
+/**
+ * What tools keep for themselves in a package folder: no install makes these, and they hold what the tool last
+ * learned, an account among it. A clone leaves them behind, so no worktree inherits another's.
+ */
+const TOOL_STATE = [".cache", ".mf"]
 
 /** A package folder, linked package by package; how npm, pnpm and Yarn lay one out, not a guess about the project. */
 function packageFolder(entry: string): boolean {
@@ -511,11 +587,39 @@ export async function bringFiles(git: Git, repoRoot: string, checkout: string, e
   return report
 }
 
+/** What says a package is the same one: a vendored tarball can change under one version. */
+const lockedPackage = z.object({ version: z.string().optional(), resolved: z.string().optional(), integrity: z.string().optional(), link: z.boolean().optional() })
+const NpmLockfile = z.object({ packages: z.record(z.string(), lockedPackage) })
+
 /**
- * Each install step's outputs, cloned from the main checkout into one whose
- * inputs are the same, so its first install only catches up. When the main
- * checkout's own record says the step passed with those inputs, the new
- * checkout's record says so too and the step doesn't run there at all.
+ * What must go from a clone of the main checkout's installed packages before the install runs here: every folder two
+ * npm lockfiles disagree on, and the record of what's installed. Left in place, \`npm install\` trusts them: on a real
+ * \`mako-backend\` a vendored tarball kept its old files under a new lockfile, and npm recorded the new integrity.
+ * Undefined unless every input is an npm lockfile both sides can read: nothing else can say what a clone got wrong.
+ */
+async function lockfilesApart(repoRoot: string, checkout: string, inputs: readonly string[]): Promise<string[] | undefined> {
+  if (!inputs.length || !inputs.every((input) => basename(input) === "package-lock.json")) return undefined
+  try {
+    const apart = await Promise.all(inputs.map(async (input) => {
+      const [there, here] = await Promise.all([repoRoot, checkout].map(async (root) => NpmLockfile.parse(JSON.parse(await readFile(join(root, input), "utf8"))).packages))
+      const same = (path: string) => JSON.stringify(lockedPackage.parse(there![path] ?? {})) === JSON.stringify(lockedPackage.parse(here![path] ?? {}))
+      const folder = dirname(input)
+      const packages = [...new Set([...Object.keys(there!), ...Object.keys(here!)])].filter((path) => path.includes("node_modules/") && !same(path))
+      return [...packages, "node_modules/.package-lock.json"].map((path) => join(folder, path))
+    }))
+    return apart.flat()
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Each install step's outputs, cloned from the main checkout so its first
+ * install only catches up. When the inputs are the same and the main checkout's
+ * own record says the step passed with them, the new checkout's record says so
+ * too and the step doesn't run there at all. Where they differ the step always
+ * runs, over a clone of what its npm lockfiles agree on (`lockfilesApart`); with
+ * any other lockfile nothing can say what's stale, so it installs in full.
  *
  * Copy-on-write only: where the volume can't share blocks, a copy would cost
  * the outputs' full size per worktree, so nothing is carried. Each entry is
@@ -526,7 +630,7 @@ export async function carryOutputs(git: Git, repoRoot: string, checkout: string,
   const result: OutputsCarry = { carried: [], skipped: [] }
   const producing = steps.filter((step) => step.outputs?.length)
   if (!producing.length) return result
-  const clones = producing.some((step) => !step.link) && (await sharesBlocks(repoRoot, checkout))
+  const clones = await sharesBlocks(repoRoot, checkout)
   if (producing.some((step) => !step.link) && !clones)
     result.skipped.push("This volume can't share files between copies, so each would cost its full size; installs run in full here.")
   const staging = join(dirname(checkout), CARRYING)
@@ -534,17 +638,21 @@ export async function carryOutputs(git: Git, repoRoot: string, checkout: string,
   for (const step of producing) {
     if (!step.link && !clones) continue
     const [there, here] = await Promise.all([inputsDigest(git, repoRoot, step.inputs), inputsDigest(git, checkout, step.inputs)])
-    if (there !== here) {
+    const fits = there === here
+    const stale = fits ? [] : clones ? await lockfilesApart(repoRoot, checkout, step.inputs) : undefined
+    if (!stale) {
       result.skipped.push(`${step.command}: ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "differs" : "differ"} from the main checkout's, so it installs here in full.`)
       continue
     }
+    if (!fits) result.skipped.push(`${step.command}: ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "differs" : "differ"} from the main checkout's, so it installs here, over a clone of what they agree on.`)
     const matched = await matchedEntries(git, repoRoot, step.outputs ?? [])
     const unsafe = matched.filter((entry) => virtualEnvironment(join(repoRoot, entry)))
     for (const entry of unsafe) result.skipped.push(`${entry} is a Python virtual environment, which names its own folder; it's made here instead.`)
     const wanted = matched.filter((entry) => !unsafe.includes(entry) && !existsSync(join(checkout, entry)))
     const staged = wanted.map((entry) => ({ entry, from: join(repoRoot, entry), to: join(checkout, entry), temporary: join(staging, randomUUID()) }))
     const entries: string[] = []
-    if (step.link) {
+    // Links would be the main checkout's own outputs, which don't fit these inputs; a clone is this checkout's to change.
+    if (step.link && fits) {
       // The links are the main checkout's outputs, so there's nothing for the step to catch up on until the inputs change.
       if (staged.length) await mkdir(staging, { recursive: true, mode: 0o700 })
       for (const { entry, to, temporary } of staged) {
@@ -570,6 +678,7 @@ export async function carryOutputs(git: Git, repoRoot: string, checkout: string,
           continue
         }
         try {
+          if (packageFolder(entry)) await Promise.all(TOOL_STATE.map((name) => removeBelowAgents(join(temporary, name))))
           await rename(temporary, to)
           entries.push(entry)
         } catch {
@@ -577,6 +686,11 @@ export async function carryOutputs(git: Git, repoRoot: string, checkout: string,
         }
       }
       if (entries.length < staged.length) result.skipped.push(`${step.command}: ${staged.length - entries.length} of its outputs couldn't be cloned on this volume.`)
+    }
+    // Outputs of other inputs are a head start, not a result: the step still runs, and fills in what goes here.
+    if (!fits) {
+      await Promise.all(stale.map((path) => removeBelowAgents(join(checkout, path))))
+      continue
     }
     if (entries.length) result.carried.push({ command: step.command, inputs: step.inputs, digest: here, entries })
     const whole = matched.length > 0 && !unsafe.length && matched.every((entry) => existsSync(join(checkout, entry)))

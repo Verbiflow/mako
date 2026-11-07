@@ -315,6 +315,7 @@
     "test:test-scratch": "node scripts/test-test-scratch.mjs",
     "test:crew-card-ui": "node scripts/test-crew-card-ui.mjs",
     "test:transcript-send-ui": "node scripts/test-transcript-send-ui.mjs",
+    "test:transcript-rows-ui": "node scripts/test-transcript-rows-ui.mjs",
     "test:highlight-pool-ui": "node scripts/test-highlight-pool-ui.mjs",
     "test:fin-view-keeps-ui": "node scripts/test-fin-view-keeps-ui.mjs",
     "test:orch-ui": "node scripts/test-orch-ui.mjs",
