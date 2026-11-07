@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { XIcon } from "lucide-react"
 import type { GitFile } from "@mako/host/contracts/git-workspace-search"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { countedChanges, turnFilesIn } from "@mako/host/contracts/turn-changes"
 import { CommentTargetContext, type CommentTarget } from "@/components/inspector/comment-target"
 import { ReviewBar } from "@/components/inspector/review"
 import { ScopePicker, TurnReview, type TurnReads } from "@/components/inspector/review-stream"
-import { IconAction } from "@/components/ui/kit"
 import { recordRoots } from "@/lib/turn-changes"
 import { acp, useAcp } from "@/state/acp"
 import { turnWords } from "@/state/prompt-delivery"
@@ -14,6 +12,7 @@ import type { TurnScope } from "@/state/review-scope"
 import { hunksReader, type HunksKey } from "./review-data"
 import { changedRequests, hunksDiff, hunksWriters } from "./review-model"
 import { openReview, type ReviewOpen } from "./review-open"
+import { WebSideRail } from "./side-rail"
 
 /*
  * Changes in a laptop's browser: the desktop's own review of a turn
@@ -105,13 +104,8 @@ export function DeskReview({ open, onClose }: { open: ReviewOpen; onClose: () =>
 
   const picker = scope && turn ? <ScopePicker scope={scope} workspace={turn.root} turnsOnly onChoose={(next) => next.kind === "turn" && openReview({ conversation, scope: { kind: "turn", requestId: next.requestId } })} /> : null
   return (
-    <section ref={pane} aria-label="Changes" data-desk-review={conversation} tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface outline-none">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-hairline pr-2 pl-3">
-        <h2 className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">Changes</h2>
-        <IconAction label="Close changes" keys={["Esc"]} onClick={onClose}>
-          <XIcon />
-        </IconAction>
-      </div>
+    <section ref={pane} aria-label="Changes" data-desk-review={conversation} tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
+      <WebSideRail active="changes" conversation={conversation} />
       <CommentTargetContext.Provider value={target}>
         {!request ? (
           <p role="status" className="p-3 text-label text-faint">

@@ -466,8 +466,9 @@ function publishBackground() {
  * object new). `reconciled` applies batches the way the window does;
  * otherwise each batch replaces the roster outright, the baseline.
  */
-const agentsProfile = { commits: 0, ms: 0 }
-const chatProfile = { commits: 0, ms: 0 }
+const agentsProfile = { commits: 0, ms: 0, each: new Array<number>() }
+const chatProfile = { commits: 0, ms: 0, each: new Array<number>() }
+const medianOf = (values: readonly number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0
 const BENCH_HARNESSES = ["claude", "cursor", "codex", "grok", "opencode", "devin"]
 /** `detached`: every entry a child Thread (`childEntry`'s shape) on one of six harnesses, as `agents_start`'s are. */
 async function backgroundBench(reconciled: boolean, entries = 50, batches = 120, detached = false) {
@@ -487,8 +488,10 @@ async function backgroundBench(reconciled: boolean, entries = 50, batches = 120,
   await new Promise((resolve) => setTimeout(resolve, 200))
   agentsProfile.commits = 0
   agentsProfile.ms = 0
+  agentsProfile.each = []
   chatProfile.commits = 0
   chatProfile.ms = 0
+  chatProfile.each = []
   for (let batch = 0; batch < batches; batch++) {
     roster = { ...roster, agents: roster.agents.map((agent, index) => index === 7 ? { ...agent, observedAt: now + batch + 1, state: { kind: "working" as const, activity: `Step ${batch}` }, usage: { toolUses: batch } } : agent) }
     const wire = NativeAgentRosterSchema.parse(JSON.parse(JSON.stringify(roster)))
@@ -500,6 +503,8 @@ async function backgroundBench(reconciled: boolean, entries = 50, batches = 120,
   return {
     reconciled, entries, batches, detached, commits: agentsProfile.commits, renderMs: Math.round(agentsProfile.ms * 10) / 10, perBatchMs: Math.round(agentsProfile.ms / batches * 100) / 100,
     chatCommits: chatProfile.commits, chatPerBatchMs: Math.round(chatProfile.ms / batches * 100) / 100,
+    medianMs: Math.round(medianOf(agentsProfile.each) * 100) / 100, chatMedianMs: Math.round(medianOf(chatProfile.each) * 100) / 100,
+    longestMs: Math.round(Math.max(0, ...agentsProfile.each) * 100) / 100, chatLongestMs: Math.round(Math.max(0, ...chatProfile.each) * 100) / 100,
   }
 }
 Object.assign(window, { makoBackgroundBench: backgroundBench })
@@ -630,7 +635,7 @@ export function Fixture() {
           >
             <main className="flex min-w-0 flex-1 flex-col">
               <HostConnectionNotice />
-              <Profiler id="chat" onRender={(_, __, actual) => { chatProfile.commits += 1; chatProfile.ms += actual }}>
+              <Profiler id="chat" onRender={(_, __, actual) => { chatProfile.commits += 1; chatProfile.ms += actual; chatProfile.each.push(actual) }}>
                 <AcpPanel />
                 <Composer />
               </Profiler>
@@ -639,7 +644,7 @@ export function Fixture() {
               className={`min-h-0 shrink-0 border-l border-hairline ${narrow ? "w-80" : "w-96"}`}
               aria-label="Agents companion"
             >
-              <Profiler id="agents" onRender={(_, __, actual) => { agentsProfile.commits += 1; agentsProfile.ms += actual }}>
+              <Profiler id="agents" onRender={(_, __, actual) => { agentsProfile.commits += 1; agentsProfile.ms += actual; agentsProfile.each.push(actual) }}>
                 <AgentsPanel />
               </Profiler>
             </aside>

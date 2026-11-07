@@ -35,7 +35,7 @@ if (process.versions.electron) {
   console.log(`Agent ask UI evidence: ${process.env.MAKO_ASK_UI_SHOTS ?? join(root, "shots")}`)
 }
 
-const TITLE = "wants to move this thread to the cloud"
+const TITLE = "wants to move this Thread to the cloud"
 const APEX_THREAD = "1ead1ead-0000-4000-8000-000000001ead"
 
 async function check() {
@@ -86,17 +86,50 @@ async function check() {
   assert.equal(kept.allow, false)
   console.log("PASS: the desk's card, and Keep here reaching the host")
 
+  // The desk's Inbox: the ask is listed once, counted, with the card's two answers, and an answer takes it away.
+  await window.loadURL(`${base}?mock&app=apex&ask=move`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the rail")
+  await evaluate("document.querySelector('[data-rail-top-row=inbox]').click(); true")
+  await until("Boolean(document.querySelector('[data-inbox]'))", "the Inbox")
+  await until("document.querySelectorAll('[data-inbox-kind=agent-ask]').length === 1", "the ask in the Inbox, once")
+  const inbox = await evaluate("document.querySelector('[data-inbox-kind=agent-ask]').innerText.replace(/\\s+/g, ' ')")
+  assert.ok(inbox.includes("Move to the cloud") && inbox.includes("Keep here"), inbox)
+  assert.ok(await evaluate("!document.querySelector('[data-inbox]').innerText.includes('Nothing waits on you')"), "the Inbox says what the rail says")
+  await shoot("inbox", "[data-inbox-kind=agent-ask]")
+  await evaluate("document.querySelector('[data-inbox-kind=agent-ask] [data-inbox-answer=allow]').click(); true")
+  await until("document.querySelectorAll('[data-inbox-kind=agent-ask]').length === 0", "the answered ask leaving the Inbox")
+  assert.equal((await answers()).at(-1).allow, true)
+  console.log("PASS: the desk's Inbox lists the ask once, and its answer reaches the host")
+
+  // An ask arriving with another Thread open is said at once, by the control-only batch that carries it.
+  await window.loadURL(`${base}?mock&app=apex`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the rail")
+  await until("Boolean(window.apexScene)", "the scene")
+  await evaluate("window.apexScene.raiseAgentAsk(); true")
+  await until("import('/src/state/notifications.ts').then(({ notificationsStore }) => notificationsStore.get().items.some((item) => item.body.includes('move this Thread to the cloud')))", "the notice of a new ask")
+  console.log("PASS: a new ask is said as it arrives")
+
+  // A laptop's browser: the desk's composer draws the card, and the answer reaches the host.
+  window.setContentSize(1280, 800)
+  await window.loadURL(`${base}scripts/web-desk.html?app=apex&thread=apex&ask=move`)
+  await until("Boolean(document.querySelector('[data-agent-ask=move]'))", "the laptop browser's card")
+  await shoot("laptop", "[data-agent-ask=move]")
+  await evaluate("[...document.querySelectorAll('[data-agent-ask=move] button')].find((node) => node.innerText.includes('Move to the cloud')).click(); true")
+  await until("!document.querySelector('[data-agent-ask=move]')", "the answered card leaving the laptop browser")
+  assert.equal((await answers()).at(-1).allow, true)
+  console.log("PASS: the laptop browser's card, and its answer reaching the host")
+
   // The phone: the dock's card in the same words; Move to the cloud reaches the host and takes it away.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex&ask=move&open=${APEX_THREAD}`)
   await until("Boolean(document.querySelector('[data-ask=agent]'))", "the phone's card")
   const phone = await evaluate("document.querySelector('[data-ask=agent]').innerText.replace(/\\s+/g, ' ')")
-  assert.ok(phone.includes(TITLE), phone)
+  assert.ok(phone.includes("Wants to move this Thread to the cloud"), phone)
+  assert.equal(await evaluate("document.querySelector('[data-agent-answer=keep]').hasAttribute('data-refuse')"), false, "the safe answer doesn't read as a refusal")
   await shoot("phone", "[data-ask=agent]")
   await evaluate("document.querySelector('[data-agent-answer=allow]').click(); true")
   await until("!document.querySelector('[data-ask=agent]')", "the answered card leaving the phone")
-  const [allowed] = await answers()
-  assert.equal(allowed.allow, true)
+  assert.equal((await answers()).at(-1).allow, true)
   console.log("PASS: the phone's card, and Move to the cloud reaching the host")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])

@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { AgentAsk } from "@mako/host/contracts/agent-asks"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { agentAskLine, agentAskWords } from "@mako/host/contracts/agent-asks"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
@@ -16,7 +17,7 @@ const person = { kind: "person" as const }
 const ActSchema = z.object({ action: z.enum(["rename", "archive", "restore"]), title: z.string().optional(), clientKey: z.string() })
 const operationOf = (call: { args: unknown[] } | undefined) => z.object({ id: z.string() }).parse(call?.args[0]).id
 
-function world(tier: "full" | "auto" = "full", fails = false) {
+function world(tier: "full" | "auto" = "full", fails = false, archiveAnswer: JsonValue = { revision: 1, keys: [] }) {
   const calls: Array<{ channel: string; args: unknown[] }> = []
   const kept = new Map<string, AgentAsk[]>()
   const gate = new AgentAskGate({
@@ -35,6 +36,7 @@ function world(tier: "full" | "auto" = "full", fails = false) {
     invoke: async (channel, args) => {
       if (fails) throw new Error("That Thread no longer exists")
       calls.push({ channel, args })
+      return channel === "mako:thread-archive" ? archiveAnswer : undefined
     },
     gate,
   })
@@ -75,8 +77,8 @@ function world(tier: "full" | "auto" = "full", fails = false) {
   assert.equal(calls.length, 1, "a repeat of an answer finds nothing")
   assert.equal(kept.get("mine")?.length, 0)
   const archive = await tool.act(agent("s-mine"), { action: "archive", clientKey: "k4" })
-  assert.equal(agentAskLine(kept.get("mine")![0]!.want), "Wants to archive this thread")
-  assert.equal(agentAskWords(kept.get("mine")![0]!.want, "Codex").title, "Codex wants to archive this thread")
+  assert.equal(agentAskLine(kept.get("mine")![0]!.want), "Wants to archive this Thread")
+  assert.equal(agentAskWords(kept.get("mine")![0]!.want, "Codex").title, "Codex wants to archive this Thread")
   await gate.answer("mine", askOf(archive), true)
   assert.equal(calls.at(-1)?.channel, "mako:thread-archive")
 }
@@ -91,6 +93,14 @@ function world(tier: "full" | "auto" = "full", fails = false) {
   assert.equal(calls.length, 0)
   assert.deepEqual(await tool.act(person, { action: "restore", conversation: "elsewhere", clientKey: "k" }), { outcome: "restored" })
   assert.deepEqual(await world("full", true).tool.act(agent("s-mine"), { action: "archive", clientKey: "k" }), { refused: "failed", why: "That Thread no longer exists" })
+  // A cloud Thread's archive is its object's to refuse, which the host answers rather than throws.
+  const stayed = world("full", false, { revision: 1, keys: [], cloud: { kind: "refused", thread: "t-1", reason: "Its machine still has unsaved work.", anyway: true } })
+  assert.deepEqual(await stayed.tool.act(agent("s-mine"), { action: "archive", clientKey: "k" }), { refused: "failed", why: "Its machine still has unsaved work." })
+  assert.deepEqual(await stayed.tool.act(agent("s-mine"), { action: "restore", clientKey: "r" }), { refused: "failed", why: "Its machine still has unsaved work." })
+  // Allowed below full access, a refusal reaches the person's answer instead of passing as done.
+  const asked = world("auto", false, { revision: 1, keys: [], cloud: { kind: "refused", thread: "t-1", reason: "Its machine still has unsaved work." } })
+  const archiving = await asked.tool.act(agent("s-mine"), { action: "archive", clientKey: "k" })
+  await assert.rejects(asked.gate.answer("mine", "ask" in archiving ? archiving.ask : "", true), /unsaved work/)
 }
 
 {
