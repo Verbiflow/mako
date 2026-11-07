@@ -9,6 +9,8 @@ import { Git } from "@mako/git"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import type { LiveBatch } from "@mako/host/contracts/live-conversations"
 import { openAttribution, type TreeWatcher } from "@mako/host/attribution/index"
+import { JournalStore } from "@mako/host/attribution/journal-store"
+import { ThreadFiles } from "@mako/host/attribution/thread-files"
 import { resolveSpelling, type Place, type ReferenceContext, type Touch } from "@mako/host/files/resolve"
 import { SuffixIndex } from "@mako/host/files/suffix-index"
 import { RenameHistory } from "@mako/host/files/git-renames"
@@ -373,5 +375,55 @@ test("through a real journal: renames from before tracking come from Git, an ans
     await journal.close()
     rmSync(repo, { recursive: true, force: true })
     rmSync(userRoot, { recursive: true, force: true })
+  }
+})
+
+test("a Thread's work is read once and then only what moved, in slices: another Thread's writes cost it nothing", async () => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-work-")))
+  const store = JournalStore.open(join(folder, "journal.sqlite"), { device: "d-1" })
+  const files = new ThreadFiles({ git: new Git(), home: folder })
+  try {
+    const call = (thread: string, at: number, end: number | null = at + 1) =>
+      ({ kind: "call" as const, id: `${thread}-${at}`, session: `s-${thread}`, thread, cwd: folder, named: [join(folder, `f-${at % 7}.ts`)], start: at, end })
+    for (let at = 1; at <= 6_000; at += 1) store.saveActivity(call("busy", at))
+    store.saveActivity(call("busy", 6_001, null))
+    let read = 0
+    const page = store.activityFrom.bind(store)
+    store.activityFrom = (thread, from, limit) => {
+      const rows = page(thread, from, limit)
+      read += rows.length
+      return rows
+    }
+    let turns = 0
+    let waiting = true
+    const turn = () => { turns += 1; if (waiting) setImmediate(turn) }
+    setImmediate(turn)
+    const first = await files.context(store, { thread: "busy", current: [] })
+    waiting = false
+    assert.ok(first.touched.has(join(folder, "f-3.ts")), "it reads what the Thread touched")
+    assert.ok(read >= 6_001, `its whole history is read once (${read})`)
+    assert.ok(turns > 3, `with other work running between slices (${turns} turns)`)
+
+    read = 0
+    store.saveActivity(call("other", 1))
+    await files.context(store, { thread: "busy", current: [] })
+    assert.equal(read, 0, "another Thread writing doesn't read this one again")
+
+    await files.context(store, { thread: "busy", current: [] })
+    assert.equal(read, 0, "nor does asking twice")
+
+    store.saveActivity(call("busy", 6_002))
+    const moved = await files.context(store, { thread: "busy", current: [] })
+    assert.ok(read > 0 && read <= 8, `its own new work reads only what's new and what was still open (${read})`)
+    assert.ok(moved.touched.has(join(folder, "f-6.ts")))
+
+    read = 0
+    store.saveActivity({ ...call("busy", 6_001), named: [join(folder, "finished.ts")] })
+    const ended = await files.context(store, { thread: "busy", current: [] })
+    assert.ok(read > 0 && read <= 8, `a call that was open is read again when it ends (${read})`)
+    assert.ok(ended.touched.has(join(folder, "finished.ts")), "with what it did")
+  } finally {
+    store.close()
+    rmSync(folder, { recursive: true, force: true })
   }
 })

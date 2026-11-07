@@ -188,6 +188,9 @@ const ActivityRow = z.object({
   status: CallStatusSchema.nullable().optional(), run: z.string().nullable().optional(),
 })
 const Count = z.object({ count: z.number() })
+const ThreadEntries = z.object({ count: z.number(), seq: z.number().nullable() })
+const ThreadNewest = z.object({ at: z.number().nullable() })
+const ThreadWriteRow = z.object({ seq: z.number(), root: z.string(), path: z.string(), at: z.number(), kind: z.string(), certainty: z.string() })
 const TurnChangesRow = z.object({ summary: z.string() })
 const TurnSeqRow = z.object({ turn: z.string(), seq: z.number() })
 const ChoiceRow = z.object({ spelling: z.string(), path: z.string(), at: z.number() })
@@ -716,6 +719,28 @@ export class JournalStore {
 
   activityOfThread(thread: string): StoredActivity[] {
     return this.statement("SELECT * FROM activity WHERE thread=? ORDER BY started_at").all(thread).map((row) => this.activityOf(row))
+  }
+
+  /** Up to `limit` of a Thread's activity from `from` on, oldest first: a page of a history too long to read in one go. */
+  activityFrom(thread: string, from: number, limit: number): StoredActivity[] {
+    return this.statement("SELECT * FROM activity WHERE thread=? AND started_at>=? ORDER BY started_at LIMIT ?").all(thread, from, limit).map((row) => this.activityOf(row))
+  }
+
+  /**
+   * What moves when a Thread's own work does, however busy the journal: `version` moves with every write by anyone.
+   * Each part reads an index alone, so it costs the same for a Thread of 84,000 calls.
+   */
+  threadVersion(thread: string): string {
+    const entries = ThreadEntries.parse(this.statement("SELECT count(*) AS count, max(seq) AS seq FROM entries WHERE thread=?").get(thread))
+    const newest = ThreadNewest.parse(this.statement("SELECT max(started_at) AS at FROM activity WHERE thread=?").get(thread)).at
+    // Through the open rows alone: there are few, and a Thread's own rows are all of its history.
+    const open = Count.parse(this.statement("SELECT count(*) AS count FROM activity INDEXED BY activity_open WHERE ended_at IS NULL AND thread=?").get(thread)).count
+    return `${entries.count}:${entries.seq ?? 0}:${newest ?? 0}:${open}:${this.carriedVersion(thread)}`
+  }
+
+  /** Up to `limit` of a Thread's writes after `seq`: where and when, no more, for a walk over all of them. */
+  threadWrites(thread: string, seq: number, limit: number): { seq: number; root: string; path: string; at: number; kind: string; certainty: string }[] {
+    return this.statement("SELECT seq, root, path, at, kind, certainty FROM entries WHERE thread=? AND seq>? ORDER BY seq LIMIT ?").all(thread, seq, limit).map((row) => ThreadWriteRow.parse(row))
   }
 
   /** When each root's newest entry was journaled. */
