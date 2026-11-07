@@ -1,5 +1,5 @@
 import { Slot } from "@/extend/slot"
-import { elementScroll, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual"
+import { elementScroll, measureElement, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual"
 import { registerCommands } from "@/extend/commands"
 import {
   TranscriptSourceContext,
@@ -39,6 +39,7 @@ import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
 import { SCROLL_WRITE_EVENT, TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
 import { CompactPresentationContext } from "./compact-presentation"
+import { rowChecker } from "./row-check"
 import { wokeAfterRest } from "@/lib/woke-after-rest"
 
 const NEAR_BOTTOM = 96
@@ -86,6 +87,8 @@ const MEASURED_KEPT = 8
 const ESTIMATED_ROW = 360
 /** The column's `gap-7` between turns, kept by the virtualizer between windowed rows. */
 const ROW_GAP = 28
+/** A row can grow with nothing in the document changing (an image's size, a font): how long that can go unseen. */
+const ROW_CHECK_MS = 1_000
 
 function keepMeasured(source: string, sizes: RowSizes): void {
   if (!sizes.size) return
@@ -640,6 +643,7 @@ export function ConversationTimeline({
    * painted over what follows it. The space between rows is the virtualizer's gap, so a row arriving below another
    * doesn't change that one's size.
    */
+  const [rowCheck] = useState(rowChecker)
   const rows = useVirtualizer({
     count: exchanges.length,
     enabled: windowed,
@@ -650,6 +654,10 @@ export function ConversationTimeline({
     gap: ROW_GAP,
     scrollMargin: edge ? 80 : 24,
     directDomUpdates: true,
+    measureElement: (element, entry, instance) => {
+      if (entry) rowCheck.heard(element)
+      return measureElement(element, entry, instance)
+    },
     onChange: (instance) => {
       const total = instance.getTotalSize()
       if (total === placedTotal.current) return
@@ -660,6 +668,15 @@ export function ConversationTimeline({
       elementScroll(offset, options, instance)
       if (viewport.current) owned(viewport.current)
     },
+  })
+  const mountedRows = useRef<() => boolean>(() => false)
+  mountedRows.current = () => rowCheck.check({
+    rows,
+    list: viewport.current?.querySelector("[data-virtual-transcript]") ?? null,
+    keyOf: rowKey,
+    partsOf: (index) => exchanges[index]!.response.length,
+    streaming: (index) => exchanges[index]!.id === streamingId,
+    following: pinned.current,
   })
   /** Sends the virtualizer toward a row or the end, which it keeps reconciling toward until `endSeek`. */
   const seek = useCallback((target: number | "end") => {
@@ -1197,6 +1214,30 @@ export function ConversationTimeline({
     structure.observe(node, { childList: true, characterData: true, subtree: true })
     return () => { structure.disconnect(); grown.disconnect(); cancelAnimationFrame(shrinkFrame); node.style.overflowY = "" }
   }, [identity, isEmpty, owned, holdReader])
+
+  useEffect(() => {
+    const node = viewport.current
+    if (!windowed || !node) return
+    let frame = 0
+    const look = () => {
+      frame = 0
+      if (mountedRows.current()) soon()
+    }
+    const soon = () => {
+      frame ||= requestAnimationFrame(look)
+    }
+    const changes = new MutationObserver(soon)
+    changes.observe(node, { childList: true, characterData: true, subtree: true })
+    node.addEventListener("scroll", soon, { passive: true })
+    const steady = setInterval(soon, ROW_CHECK_MS)
+    soon()
+    return () => {
+      changes.disconnect()
+      node.removeEventListener("scroll", soon)
+      clearInterval(steady)
+      cancelAnimationFrame(frame)
+    }
+  }, [windowed, identity])
 
   const endEarlier = useCallback((progressed: boolean) => {
     awaitingEarlier.current = false

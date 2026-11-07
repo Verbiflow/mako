@@ -1529,7 +1529,10 @@ Three rules hold this together, and each has a specific failure it prevents:
   surface-panel rows carry `.contain-turn`. Timelines above 200 turns or 400
   messages and calls (a few prompts can hold thousands of calls), and
   navigators above 100 prompts, additionally window measured rows; a timeline
-  stays windowed while it's shown. A conversation keeps at most 24 MB of
+  stays windowed while it's shown. Its mounted rows are also held against the
+  virtualizer before each paint (`row-check.ts`), so an observer that goes quiet
+  never shows, and a correction it didn't report is logged with what was found
+  (`Transcript row corrected` in the host's log). A conversation keeps at most 24 MB of
   finished turns (`CONVERSATION_MEMORY` in `live-residency.ts`), the one being
   read included: what's on screen, near it, read in the last minute or still
   at work stays, and the rest come back as the reader nears them. Preserve
