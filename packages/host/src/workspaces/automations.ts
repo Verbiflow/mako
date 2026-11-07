@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
-import { automationTriggerAvailable, type Automation, type AutomationRun } from "../contracts/automations-usage-updates.js"
+import { automationTriggerAvailable, type Automation, type AutomationFired, type AutomationRun } from "../contracts/automations-usage-updates.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { watchTree, type TreeWatch } from "./tree-watcher.js"
 import type { WatchBackend } from "./watch-backend.js"
@@ -322,15 +322,15 @@ export class Automations {
    * watcher pointed at a directory an agent is editing will otherwise re-trigger
    * on the agent's own output, which is a loop that bills.
    */
-  async fire(id: string, reason: AutomationRun["reason"]): Promise<void> {
+  async fire(id: string, reason: AutomationRun["reason"]): Promise<AutomationFired> {
     const automation = this.automations.find((entry) => entry.id === id)
     const state = this.runtime
-    if (!automation || !state) return
-    if (reason !== "manual" && (!automation.enabled || automation.trigger.kind !== reason)) return
-    if (state.inFlight.has(id)) return
+    if (!automation || !state) return { status: "not-run", why: "Mako can't find that automation here." }
+    if (reason !== "manual" && (!automation.enabled || automation.trigger.kind !== reason)) return { status: "not-run", why: "It isn't on for this." }
+    if (state.inFlight.has(id)) return { status: "not-run", why: "It's running already." }
 
     const last = state.lastRun.get(id) ?? 0
-    if (reason !== "manual" && Date.now() - last < MIN_INTERVAL_MS) return
+    if (reason !== "manual" && Date.now() - last < MIN_INTERVAL_MS) return { status: "not-run", why: "It ran a moment ago." }
 
     state.inFlight.add(id)
     const runId = randomUUID()
@@ -361,7 +361,9 @@ export class Automations {
           status: "completed",
         },
       })
+      return { status: "completed" }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
       emit({
         type: "automation-run",
         run: {
@@ -371,9 +373,10 @@ export class Automations {
           reason,
           at: Date.now(),
           status: "failed",
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
         },
       })
+      return { status: "failed", error: message }
     } finally {
       state.inFlight.delete(id)
     }

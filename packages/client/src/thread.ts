@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { parseArgs } from "node:util"
 import type { AgentCaller } from "@mako/host/contracts/agents"
 import { SESSION_VARIABLE } from "@mako/host/contracts/agent-tools"
-import { HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, THREAD_MOVE_TOOL, type HarnessActInput, type SettingsInput, type ThreadActInput, type ThreadsMoveInput } from "@mako/host/contracts/thread-tools"
+import { AUTOMATION_TOOL, HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, THREAD_MOVE_TOOL, type AutomationActInput, type HarnessActInput, type SettingsInput, type ThreadActInput, type ThreadsMoveInput } from "@mako/host/contracts/thread-tools"
 import { ThreadMoveAnswerSchema, threadToolText } from "@mako/host/conversations/thread-move-tool"
 import { localHost } from "./transport.js"
 
@@ -16,7 +16,9 @@ export const THREAD_HELP = `  mako thread move cloud|back [--conversation <id>] 
                     What the settings tool reads and changes: hand-off-on-sleep, continue-after-restart, harness-order
                     (harnesses first to last, comma-separated) and commit-model.
   mako harness read | install <harness> | update <harness>
-                    Install and Update in Settings › Harnesses, as the harness tool does.`
+                    Install and Update in Settings › Harnesses, as the harness tool does.
+  mako automation list | run <id> | on <id> | off <id>
+                    Settings › Automations, as the automation tool does.`
 
 const OPTIONS = {
   conversation: { type: "string" },
@@ -66,11 +68,19 @@ export function harnessInput(argv: string[]): HarnessActInput {
   return { action, clientKey: values.key ?? randomUUID(), ...(harness && { harness }) }
 }
 
-/** `mako settings` and `mako harness`: the same host calls as the in-Thread `settings` and `harness`. A refusal exits 1. */
+/** `mako automation list|run|on|off`'s input, from its arguments. */
+export function automationInput(argv: string[]): AutomationActInput {
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS })
+  const [, action, id] = positionals
+  if (action !== "list" && action !== "run" && action !== "on" && action !== "off") throw new Error("automation needs list, run <id>, on <id> or off <id>")
+  return { action, clientKey: values.key ?? randomUUID(), ...(id && { id }) }
+}
+
+/** `mako settings`, `mako harness` and `mako automation`: the same host calls as the in-Thread `settings`, `harness` and `automation`. A refusal exits 1. */
 export async function settingsMain(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS })
   if (values.help) return void process.stdout.write(`${THREAD_HELP}\n`)
-  const [tool, input] = positionals[0] === "harness" ? [HARNESS_TOOL, harnessInput(argv)] : [SETTINGS_TOOL, settingsInput(argv)]
+  const [tool, input] = positionals[0] === "harness" ? [HARNESS_TOOL, harnessInput(argv)] : positionals[0] === "automation" ? [AUTOMATION_TOOL, automationInput(argv)] : [SETTINGS_TOOL, settingsInput(argv)]
   const transport = localHost(values.socket ? { socket: values.socket } : {})
   try {
     const result = ThreadMoveAnswerSchema.parse(await transport.call(tool.channel, [caller(), input]))

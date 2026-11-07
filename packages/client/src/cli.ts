@@ -28,9 +28,9 @@ ${THREAD_HELP}
 
 A conversation on a cloud Thread works through this computer's Mako as it works in the app.`
 
-/** `agents`, `mcp`, `thread`, `settings` and `harness` parse their own options (`agentsMain`, `threadMain`, `settingsMain`). */
+/** `agents`, `mcp`, `thread`, `settings`, `harness` and `automation` parse their own options (`agentsMain`, `threadMain`, `settingsMain`). */
 const threadCommand = process.argv[2] === "thread"
-const settingsCommand = process.argv[2] === "settings" || process.argv[2] === "harness"
+const settingsCommand = process.argv[2] === "settings" || process.argv[2] === "harness" || process.argv[2] === "automation"
 const delegated = process.argv[2] === "agents" || process.argv[2] === "mcp" || threadCommand || settingsCommand
 const { values, positionals } = parseArgs({
   args: delegated ? [] : process.argv.slice(2),

@@ -374,6 +374,23 @@ const inputs = {
   "mako:appshot-windows": () => z.tuple([]),
   "mako:automation-enabled": () => z.tuple([z.string(), z.boolean()]),
   "mako:automations": () => z.tuple([]),
+  "mako:automations-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+      ]),
+      z.object({
+        action: z.union([
+          z.literal("run"),
+          z.literal("off"),
+          z.literal("on"),
+          z.literal("list"),
+        ]),
+        id: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:boot": () => z.tuple([]),
   "mako:browser-control-connect": () => z.tuple([z.string()]),
   "mako:browser-control-disconnect": () => z.tuple([z.string()]),
@@ -2729,6 +2746,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:appshot-windows", "control"],
   ["mako:automation-enabled", "workspaces"],
   ["mako:automations", "workspaces"],
+  ["mako:automations-act", "conversations"],
   ["mako:boot", "workspaces"],
   ["mako:browser-control-connect", "control"],
   ["mako:browser-control-disconnect", "control"],
