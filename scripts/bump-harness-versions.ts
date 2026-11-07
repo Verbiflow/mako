@@ -6,11 +6,13 @@ import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { z } from "zod"
 import { compareVersions } from "@mako/host/contracts/runtime-version"
+import type { HarnessUpdateCommand } from "@mako/host/contracts/harness-updates"
 import type { HarnessVersions } from "@mako/host/contracts/harness-versions"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 import { RuntimeUpdates } from "@mako/host/harnesses/runtime-updates"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { unpublished } from "./lib/pinned-builds.ts"
 
 /**
  * The daily harness bump. Each harness declares its versions on its updates
@@ -26,6 +28,8 @@ import { NativeStores } from "@mako/sessions/read-only-sqlite"
  *
  *   npx tsx scripts/bump-harness-versions.ts --dry-run       what would move; changes nothing
  *   npx tsx scripts/bump-harness-versions.ts --json          the same, as JSON (the workflow's matrix)
+ *   npx tsx scripts/bump-harness-versions.ts --published     fails when a pinned tested build is no longer published
+ *                                                            and its feed names nothing to move to
  *   npx tsx scripts/bump-harness-versions.ts codex --write   move one harness, install it through
  *                                                            Mako's install plan, rerun its drift
  *                                                            tools and tests (CI, on a fresh runner)
@@ -43,6 +47,7 @@ const { values: options, positionals } = parseArgs({
   options: {
     "dry-run": { type: "boolean", default: false },
     json: { type: "boolean", default: false },
+    published: { type: "boolean", default: false },
     write: { type: "boolean", default: false },
     verify: { type: "boolean", default: false },
     install: { type: "boolean", default: false },
@@ -57,6 +62,8 @@ interface Declared {
   provider: string
   versions: HarnessVersions
   file: string
+  /** Where Mako installs it from, which says whether its tested build is still published. */
+  install: readonly HarnessUpdateCommand[]
 }
 
 interface Reading extends Declared {
@@ -65,6 +72,8 @@ interface Reading extends Declared {
   newest?: string
   /** When npm published `newest`, for a bundled runtime that declares its release date. */
   released?: string
+  /** Why the pinned tested build is no longer published (`unpublished`): a bump moves off it even to the same release line. */
+  withdrawn?: string
   error?: string
   bump: boolean
 }
@@ -75,7 +84,7 @@ function declarations(): Declared[] {
     if (!source.versions) return []
     const file = join(REPO, "packages/host/src/harnesses", source.provider, "versions.ts")
     if (!existsSync(file)) throw new Error(`${source.provider} declares its versions outside ${file}, where the bump can't move them`)
-    return [{ provider: source.provider, versions: source.versions, file }]
+    return [{ provider: source.provider, versions: source.versions, file, install: source.install }]
   })
 }
 
@@ -111,9 +120,11 @@ async function readings(only: string[]): Promise<Reading[]> {
     const current = entry.versions.bundled?.version ?? entry.versions.tested
     try {
       const newest = await newestRelease(entry.versions.feed)
-      const bump = compareVersions(newest, current) > 0
+      // A bundled runtime is Mako's own package; a pinned one is fetched from its vendor, which can withdraw it.
+      const withdrawn = entry.versions.bundled ? undefined : await unpublished(entry.install, entry.versions.tested)
+      const bump = compareVersions(newest, current) > 0 || (withdrawn !== undefined && newest !== current)
       const released = bump && entry.versions.bundled?.released !== undefined ? await published(entry.versions.feed, newest) : undefined
-      return { ...entry, current, newest, bump, ...released && { released } }
+      return { ...entry, current, newest, bump, ...released && { released }, ...withdrawn && { withdrawn } }
     } catch (error) {
       return { ...entry, current, error: error instanceof Error ? error.message : String(error), bump: false }
     }
@@ -131,6 +142,8 @@ function describe(reading: Reading): string {
     : `oldest ${versions.oldest ?? "none"} · tested ${versions.tested}`
   const verdict = error
     ? `couldn't read ${feedName(versions.feed)}: ${error}`
+    : reading.withdrawn && !bump
+      ? `tested ${versions.tested} is no longer published (${reading.withdrawn}), and ${feedName(versions.feed)} names nothing else to move to`
     : bump
       ? `would bump to ${newest} (${feedName(versions.feed)})`
       : `current: ${feedName(versions.feed)} says ${newest}`
@@ -300,6 +313,7 @@ function checks(steps: Step[]): void {
 function summary(reading: Reading, steps: Step[]): string {
   const lines = [
     `Moves ${reading.provider}'s tested version from ${reading.versions.tested} to the vendor's newest release, ${reading.newest} (${feedName(reading.versions.feed)}).`,
+    ...reading.withdrawn ? ["", `${reading.versions.tested} is no longer published (${reading.withdrawn}), so every install of it fails until this lands.`] : [],
     "",
     "Opened by the daily harness bump (`scripts/bump-harness-versions.ts`). The drift tools and session flows ran against a scripted model, so no account or usage was involved. A green bump can merge; a red one stays out of Mako's Update until what broke is fixed, and people who update outside Mako already run it, because a newer version always runs.",
     "",
@@ -356,8 +370,14 @@ if (options.write || options.verify || options.install) {
 } else {
   const found = await readings(only)
   if (options.json) {
-    console.log(JSON.stringify(found.map(({ provider, current, newest, error, bump, versions }) =>
-      ({ provider, tested: versions.tested, oldest: versions.oldest ?? null, bundled: versions.bundled ?? null, current, newest: newest ?? null, error: error ?? null, bump }))))
+    console.log(JSON.stringify(found.map(({ provider, current, newest, withdrawn, error, bump, versions }) =>
+      ({ provider, tested: versions.tested, oldest: versions.oldest ?? null, bundled: versions.bundled ?? null, current, newest: newest ?? null, withdrawn: withdrawn ?? null, error: error ?? null, bump }))))
+  } else if (options.published) {
+    // A withdrawn build a bump can't move off: every install of it fails, and nothing will open a pull request.
+    const stuck = found.filter((reading) => reading.withdrawn && !reading.bump)
+    for (const reading of found) if (reading.withdrawn) console.log(describe(reading))
+    if (stuck.length) process.exitCode = 1
+    else console.log("Every pinned tested build is still published, or a bump moves off it.")
   } else {
     if (!options["dry-run"]) console.log("Reading only; pass a harness with --write to move it.\n")
     for (const reading of found) console.log(describe(reading))
