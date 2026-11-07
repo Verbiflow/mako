@@ -260,7 +260,7 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching"
+  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
 >
 
 export interface AgentsDeps {
@@ -710,6 +710,28 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!edge?.run || edge.closedAt !== undefined) return true
     const reading = this.childReading(edge)
     return !(reading.source === "followed" && reading.working)
+  }
+
+  /** `resume`, every conversation it reads read in first a slice at a time (`LiveConversations.readIn`): what a host starting calls. */
+  async resumeInSlices(): Promise<void> {
+    const store = this.store()
+    if (!store) return
+    await this.deps.live.readIn(this.resumeReads(store))
+    if (!this.stopped) this.resume()
+  }
+
+  /** The conversations `resume` reads: every open Fin's, and its Apexes' the last host left a message of unsettled. */
+  private resumeReads(store: ThreadStore): string[] {
+    const edges = store.edges()
+    const reads = new Set<string>()
+    for (const edge of edges.all) {
+      if (edge.closedAt !== undefined || (edge.run && !edge.run.ended)) continue
+      const conversation = this.conversationOf(edge.child)
+      if (conversation) reads.add(conversation)
+    }
+    for (const apex of new Set(edges.all.map((edge) => edge.parent)))
+      for (const conversation of this.conversationsOfThread(apex)) if (this.deps.live.leftUnsettled(conversation)) reads.add(conversation)
+    return [...reads]
   }
 
   /** What the last host left: reports no Apex heard, sent again under their ids, Fins' messages its exit paused, and spawns the budget held. */

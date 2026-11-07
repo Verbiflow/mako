@@ -301,6 +301,7 @@
     "test:orch-front-door": "tsx scripts/test-orch-front-door.ts && tsx --tsconfig tsconfig.app.json scripts/test-routed-transcript.ts",
     "test:orch-answer": "tsx scripts/test-orch-answer.ts",
     "test:fin-resume": "tsx scripts/test-fin-resume.ts",
+    "test:resume-holds": "tsx scripts/test-resume-holds.ts",
     "test:fin-move": "tsx scripts/test-fin-move.ts",
     "test:limit-replay": "tsx scripts/test-limit-replay.ts",
     "test:fin-fallback": "tsx scripts/test-fin-fallback.ts && tsx scripts/test-limit-wake-room.ts && tsx scripts/test-limit-or-cut.ts && esbuild scripts/test-fin-moved-line.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-fin-moved-line.mjs --log-level=warning && node node_modules/.tmp/test-fin-moved-line.mjs",

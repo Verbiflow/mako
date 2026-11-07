@@ -534,8 +534,11 @@ only, `never` for none unless it waited; a question its Apex doesn't hear is
 the person's, never dropped. A Fin's turn an exit or an update cut short
 always continues in the next host (`LeftTurn.always`), and its messages the
 exit paused go on. So does an Apex's own turn while it has open Fins
-(`inTree`, `continueCrashed`), under the same loop guard. A crash's cut reads
-as `uncertain`. A Fin's cut turn that nothing picks up within
+(`inTree`, `continueCrashed`), under the same loop guard. The next host reads
+every journal that resume looks at in first, one at a time and a slice at a
+time (`Agents.resumeInSlices`, `LiveConversations.readIn`): read whole, a
+day's Fins held its loop 4.8 s as it started (`test:resume-holds`). A crash's
+cut reads as `uncertain`. A Fin's cut turn that nothing picks up within
 `STRANDED_AFTER_MS` (`strandedTurn`) becomes a question for its Apex
 (`reportCut`). That covers the loop guard being spent, a sign-out, a reason
 Mako doesn't continue, and a continuation that was dropped. The question says
