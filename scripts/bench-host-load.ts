@@ -33,7 +33,8 @@ import { removeScratch } from "./lib/scratch-processes.mjs"
  * after it 74 ms and 605 ms: each limit is several times from either. Every number goes to the job's summary
  * (`GITHUB_STEP_SUMMARY`) whether it passes or not; `--report-only` judges without failing. `--cpu-prof <dir>` keeps the host's CPU profile and
  * prints the longest slices it held the loop for, named by the host's own functions; `--out <file>` keeps the report;
- * `--peak-limit-mb` fails on the host's peak resident memory, sampled each second;
+ * `--peak-limit-mb` fails on the host's peak resident memory, sampled each second. Memory barely varies between
+ * machines: 629 MB on a Mac and 669 MB on a CI runner at this scale, so `checks.yml` sets 1,500;
  * `--home-from <home>` runs on APFS clones of a real home's harness stores (macOS, read-only to the original).
  *
  *   npm run bench:host-load [-- --scale today|ci] [--seconds 60] [--warmup 20] [--host <mako-host.js>] [--cpu-prof <dir>] [--out <file>] [--keep]
