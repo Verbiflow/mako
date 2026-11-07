@@ -116,6 +116,26 @@ function uploadsFollowParents(): void {
   assert.equal(scope.sessions[1]!.thread, scope.sessions[0]!.thread)
 }
 
+/** Two connections' own counters start alike, so a read-only store's version has to show that it reopened on a newer file. */
+function readOnlyStoreVersion(): void {
+  const path = join(root, "read-only-version.sqlite")
+  const journal = () => ({ conversationId: randomUUID(), createdAt: Date.now(), harness: "codex", bindings: [] })
+  const who = { kind: "service", name: "workspace" } as const
+  const first = new ThreadStore(path, { now: () => Date.now() })
+  const apex = first.registerJournal(journal(), who)
+  first.close()
+  const reader = new ThreadStore(path, { now: () => Date.now(), readOnly: true })
+  const before = reader.version()
+  assert.equal(reader.version(), before, "reading doesn't move it")
+  const writer = new ThreadStore(path, { now: () => Date.now() })
+  const placed = writer.registerJournal(journal(), who)
+  writer.keepEdge(edge({ child: placed.thread, parent: apex.thread, parentSession: apex.session, run: { harness: "codex", nativeId: "fin-new", device: writer.deviceId, startedAt: 1 } }))
+  writer.close()
+  assert.notEqual(reader.version(), before, "a new Fin moves it, on a reopened connection too")
+  assert.deepEqual(reader.childSessions().get(apex.thread), [{ harness: "codex", nativeId: "fin-new" }], "and it reads that Fin")
+  reader.close()
+}
+
 function storeKeeps(): void {
   const path = join(root, "keeps.sqlite")
   const threads = new ThreadStore(path, { now: () => Date.now() })
@@ -1829,6 +1849,7 @@ try {
   rosterAndLists()
   uploadsFollowParents()
   storeKeeps()
+  readOnlyStoreVersion()
   await startsAndWakes()
   await explicitReports()
   await refusals()

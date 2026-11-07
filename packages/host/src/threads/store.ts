@@ -708,6 +708,8 @@ export class ThreadStore {
   readonly self: ExecutionOwner
   private db: DatabaseSync
   private reader: ReadOnlyConnection | undefined
+  /** How many times `reader` opened on a newer file. */
+  private reopened = 0
   /**
    * The store's own numbers. In a newer Mako's format this build reads
    * Threads and Sessions and changes nothing (`write` declines), whether the
@@ -1213,7 +1215,8 @@ export class ThreadStore {
   /** Moves with every write to this store, this host's or another's, without reading a table. */
   version(): string {
     this.syncVersion()
-    return `${this.dataVersion}:${TotalChangesSchema.parse(this.sql("SELECT total_changes() AS count").get()).count}`
+    // Connection's own counters: a snapshot reopened on a newer file starts them again, so the reopening has to count.
+    return `${this.reopened}:${this.dataVersion}:${TotalChangesSchema.parse(this.sql("SELECT total_changes() AS count").get()).count}`
   }
 
   /**
@@ -3019,6 +3022,7 @@ export class ThreadStore {
       this.db = this.reader.database
       this.statements.clear()
       this.dataVersion = -1
+      this.reopened += 1
     }
     const version = VersionSchema.parse(this.sql("PRAGMA data_version").get()).data_version
     if (version === this.dataVersion) return

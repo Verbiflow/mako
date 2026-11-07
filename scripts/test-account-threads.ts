@@ -1024,55 +1024,98 @@ test("a renewed token reaches the catalog while it's too busy to take the scope,
 const tierCount = (sessions: number) => ({ sessions, threads: 1, readable: sessions, held: sessions, whole: sessions, inCloud: sessions, threadsInCloud: 1 })
 const activity = (failures: SyncFailure[] = []) => ({ sending: [], paused: false, pushes: 1, bytes: 10, failed: failures.length, lastSuccessAt: NOW, failures })
 
-test("a device with everything in the account costs a tick nothing until its Sessions change, its links still go at once", async () => {
+test("a tick works out the scope only when something it's made from moved, and always hears the catalog", async () => {
   const synced = { ...tierCount(1), inCloud: 1 }
-  const catalog: CatalogSyncStatus = { paused: false, tiers: { now: synced, day: synced, week: synced }, stale: 0, copies: activity(), originals: activity() }
+  let catalog: CatalogSyncStatus = { paused: false, tiers: { now: synced, day: synced, week: synced }, stale: 0, copies: activity(), originals: activity() }
   let listed: ReportedSession[] = [{ ...row(1), nativeId: "n-1" }]
   let now = NOW
-  let reads = 0
   let children = 0
-  let storeVersion = "1"
+  let version = "1"
+  let scopes = 0
+  let known = new Set(["n-1"])
   const given: string[] = []
   const link = (authorization: string): RecordsLink => ({ id: "d-1/records", base: "https://cloud.test/v1/devices/d-1/records", authorization })
   let links: UploadLinks = { state: "on", copies: link("Bearer a"), originals: link("Bearer a") }
   const uploads = new SessionUploads({
     rows: () => listed,
-    path: (_harness, nativeId) => `/rail/${nativeId}.jsonl`,
+    path: (_harness, nativeId) => (known.has(nativeId) ? `/rail/${nativeId}.jsonl` : undefined),
     agents: () => (children += 1, new Map()),
-    storeVersion: () => storeVersion,
+    scopeVersion: () => version,
     links: async () => links,
     power: async () => ({ onBattery: false, percent: 100, lowPower: false }),
-    scope: async () => {},
+    scope: async () => void (scopes += 1),
     copies: async (taken) => void given.push(String(taken?.authorization)),
     originals: async () => {},
-    status: async () => (reads += 1, catalog),
+    status: async () => catalog,
     backfill: async () => undefined,
     now: () => now,
   })
-  await uploads.tick()
-  assert.equal(uploads.status().state, "synced")
-  const looks = () => [children, reads]
-  const first = looks()
-  for (let tick = 0; tick < 5; tick += 1) {
+  const tick = async () => {
     now += 5_000
     await uploads.tick()
   }
-  assert.deepEqual(looks(), first, "five quiet ticks read nothing")
-  links = { state: "on", copies: link("Bearer b"), originals: link("Bearer b") }
   await uploads.tick()
-  assert.deepEqual(given, ["Bearer a", "Bearer b"], "a renewed token still goes on the next tick")
+  assert.equal(uploads.status().state, "synced")
+  const first = children
+  for (let at = 0; at < 5; at += 1) await tick()
+  assert.equal(children, first, "five quiet ticks don't work out the scope")
+
+  catalog = { ...catalog, copies: activity([{ at: NOW, harness: "codex", nativeId: "n-1", message: "refused" }]) }
+  await tick()
+  assert.equal(uploads.status().state, "failing", "the catalog's word is heard on the next tick, quiet or not")
+  assert.equal(children, first, "without working out the scope")
+  catalog = { ...catalog, copies: activity() }
+  await tick()
+
   listed = [...listed, { ...row(2), nativeId: "n-2" }]
-  await uploads.tick()
-  assert.deepEqual(looks(), [first[0]! + 1, first[1]! + 1], "a new Session is looked at on the next tick")
-  storeVersion = "2"
-  await uploads.tick()
-  assert.deepEqual(looks(), [first[0]! + 2, first[1]! + 2], "a new Fin has no row of its own: the store moving is looked at on the next tick")
+  known = new Set([...known, "n-2"])
+  await tick()
+  assert.equal(children, first + 1, "a new Session is looked at on the next tick")
+  version = "2"
+  await tick()
+  assert.equal(children, first + 2, "and so is anything the version says moved: a new Fin, or a file newly listed")
+
   now += 60_000
   await uploads.tick()
-  assert.deepEqual(looks(), [first[0]! + 3, first[1]! + 3], "and a minute on, in case a tier moved")
-  links = { state: "off", reason: "signed-out" }
+  assert.equal(children, first + 3, "a minute on it looks again, as the power is read again")
+
+  links = { state: "on", copies: link("Bearer b"), originals: link("Bearer b") }
+  await tick()
+  assert.deepEqual(given.at(-1), "Bearer b", "a renewed token goes on the next tick")
+})
+
+test("signing out and into another account during a quiet stretch reads the new account at once", async () => {
+  const synced = { ...tierCount(1), inCloud: 1 }
+  const catalog: CatalogSyncStatus = { paused: false, tiers: { now: synced, day: synced, week: synced }, stale: 0, copies: activity(), originals: activity() }
+  let now = NOW
+  const given: (string | undefined)[] = []
+  const link = (authorization: string): RecordsLink => ({ id: "d-1/records", base: "https://cloud.test/v1/devices/d-1/records", authorization })
+  let links: UploadLinks = { state: "on", copies: link("Bearer a"), originals: link("Bearer a") }
+  const uploads = new SessionUploads({
+    rows: () => listed,
+    path: (_harness, nativeId) => `/rail/${nativeId}.jsonl`,
+    scopeVersion: () => "same",
+    links: async () => links,
+    power: async () => ({ onBattery: false, percent: 100, lowPower: false }),
+    scope: async () => {},
+    copies: async (taken) => void given.push(taken?.authorization),
+    originals: async () => {},
+    status: async () => catalog,
+    backfill: async () => undefined,
+    now: () => now,
+  })
+  const listed: ReportedSession[] = [{ ...row(1), nativeId: "n-1" }]
   await uploads.tick()
-  assert.equal(uploads.status().state, "off", "signing out stops it at once")
+  assert.equal(uploads.status().state, "synced")
+  links = { state: "off", reason: "signed-out" }
+  now += 5_000
+  await uploads.tick()
+  assert.deepEqual(uploads.status(), { state: "off", reason: "signed-out" }, "signing out stops it at once")
+  links = { state: "on", copies: link("Bearer b"), originals: link("Bearer b") }
+  now += 5_000
+  await uploads.tick()
+  assert.deepEqual(given, ["Bearer a", undefined, "Bearer b"])
+  assert.equal(uploads.status().state, "synced", "and the status says so, not a minute on")
 })
 
 test("the Sessions not synced are one line each, its copy's or its records', the longest failing first, with how many in all and how many only retrying", () => {
