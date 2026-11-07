@@ -9,11 +9,10 @@ import { AccountSessions } from "@mako/protocol/account-sessions"
 import { ReportedSessionSchema } from "@mako/protocol/thread-listing"
 import { apexConversation, threadChildren, threadRollup } from "@/state/apex-fins"
 import { acpStore, conversationWork, removeAcpConversation } from "@/state/acp-state"
-import { NativeAgentSchema, type NativeAgent } from "@mako/host/contracts/native-agents"
-import type { LivePermissionRequest } from "@/lib/types"
+import { NativeAgentSchema } from "@mako/host/contracts/native-agents"
 import { selectAcpPresence } from "@/state/acp-presence"
 import { finAskLine } from "@/state/fin-asks"
-import { noteFinAsks, syncThreadStatus } from "@/state/acp-live"
+import { noteFinAsks } from "@/state/acp-live"
 import { notificationsStore } from "@/state/notifications"
 import { applyLiveBatch, applyLiveSnapshot, hydrateLive, listLive } from "@/state/live-recovery"
 import { applyThreadGroupChange } from "@/state/thread-groups"
@@ -171,56 +170,7 @@ for (const [how, answer] of recoveries) {
   assert.equal(threadChildren(acpStore.get(), thread)[0]?.child?.state?.kind, "idle", `${how}: the Thread's Fin is answered`)
   assert.equal(unseen().length, 0, `${how}: and the question is taken back`)
 }
-// Two Fins asking on one Session: the attention centre shows one unseen ask a subject (the newer covers the older), and
-// each is taken back by its own state. Answering either leaves the other shown. (#524's fourth review: answering the
-// covered one took the shown one with it, and answering the shown one never brought the covered one back.)
-// Each case its own Thread: what was said is remembered by the Thread.
-const twoAsks = () => {
-  const solo = ThreadIdSchema.parse(randomUUID()), session = SessionIdSchema.parse(randomUUID()), key = randomUUID()
-  const fin = (name: string, id: string) => {
-    const quiet = childEntry(ThreadParentSchema.parse({ ...edge, child: randomUUID(), parent: solo, parentSession: session, name, op: `start-${name}` }), { source: "live" }, {})
-    const asks = NativeAgentSchema.parse({ ...quiet, child: { ...quiet.child!, state: { kind: "blocked", question: `Question ${id}`, on: "person", ask: { kind: "question", id, options: [{ label: "Yes" }] } } } })
-    return { quiet, asks }
-  }
-  const a = fin("A", "a"), b = fin("B", "b")
-  const apexOf = (agents: NativeAgent[], permission: LivePermissionRequest | null = null) =>
-    // SAFETY: the fields `noteFinAsks` and `syncThreadStatus` read of a held conversation, and its roster.
-    ({ kind: "live", key, threadId: solo, sessionId: session, title: "An Apex", cwd: "/fixture", harness: "codex", permission, queued: [], session: { id: key, harness: "codex", status: "ready", connection: "connected" }, nativeAgents: { agents, limited: false } }) as never
-  return { key, a, b, apexOf }
-}
-const shown = () => notificationsStore.get().items.filter((item) => !item.seen).map((item) => item.body)
-for (const order of ["covered", "shown"] as const) {
-  const { key, a, b, apexOf } = twoAsks()
-  for (const [answered, open] of order === "covered" ? [[a, b]] as const : [[b, a]] as const) {
-    const which = answered === a ? "the covered one" : "the shown one"
-    notificationsStore.set({ items: [] })
-    const both = apexOf([a.asks, b.asks])
-    acpStore.set({ activeKey: null, conversations: { [key]: both }, threadSessions: {} })
-    noteFinAsks(both)
-    assert.equal(shown().length, 1, "two asks on one subject show as one")
-    assert.match(shown()[0]!, /Question b/, "the newer")
-    const after = apexOf(answered === a ? [a.quiet, b.asks] : [a.asks, b.quiet])
-    acpStore.set({ conversations: { [key]: after } })
-    noteFinAsks(after)
-    assert.equal(shown().length, 1, `answering ${which} leaves one shown`)
-    assert.match(shown()[0]!, open === a ? /Question a/ : /Question b/, `answering ${which} shows the one still open`)
-  }
-}
-{
-  const { key, a, apexOf } = twoAsks()
-  // The Apex's own approval, answered, takes back its own notice alone: a Fin's open ask on the same subject stays.
-  notificationsStore.set({ items: [] })
-  const approval = { id: "own-approval", observationId: "o", sessionId: key, title: "Run npm test", options: [{ optionId: "allow", name: "Allow", kind: "allow_once" as const }] }
-  const asking = apexOf([a.asks], approval)
-  acpStore.set({ activeKey: null, conversations: { [key]: asking } })
-  noteFinAsks(asking)
-  syncThreadStatus(asking, "ready")
-  assert.equal(notificationsStore.get().items.filter((item) => !item.seen).length, 2, "the Apex's approval and its Fin's ask")
-  const allowed = apexOf([a.asks])
-  acpStore.set({ conversations: { [key]: allowed } })
-  syncThreadStatus(allowed, "ready")
-  assert.deepEqual(shown().map((body) => /Question a/.test(body)), [true], "its approval answered, the Fin's ask stays")
-}
+// Asks on one subject, the Apex's own and its Fins', in every order: `test-ask-notices.ts`.
 applyThreadGroupChange({ thread, group: null })
 console.log("thread fins order: a Thread's Fins are its newest Session's, listed or held, in any order they arrive")
 process.exit(0)

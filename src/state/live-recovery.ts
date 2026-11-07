@@ -5,7 +5,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveAction, LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
 import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation } from "@/state/acp-state"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
-import { noteFinAsks, noteListedOutcome, retireAnsweredFinAsks, syncThreadStatus } from "@/state/acp-live"
+import { noteFinAsks, noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch } from "@mako/host/contracts/live-conversations"
@@ -187,9 +187,10 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
   const buffered = (pending.get(id) ?? []).filter((batch) => sameEpoch(snapshot, batch))
   pending.delete(id)
   for (const batch of buffered) applyLiveBatch(batch)
-  // An answer its Fins heard while this window held a gap, or held the Session not at all, takes back what was said.
+  // An answer its Fins heard while this window held a gap, or held the Session not at all, takes back what was said; an
+  // ask that came meanwhile is said, quietly, as its own approval is (`syncThreadStatus`).
   const read = acpStore.get().conversations[id]
-  if (read?.kind === "live") retireAnsweredFinAsks(read)
+  if (read?.kind === "live") noteFinAsks(read, true)
 }
 
 /**
