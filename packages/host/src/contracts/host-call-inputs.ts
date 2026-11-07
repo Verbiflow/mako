@@ -1042,6 +1042,7 @@ const inputs = {
       z.union([z.literal("after"), z.literal("before")]).optional(),
     ]),
   "mako:live-rewind-recover": () => z.tuple([]),
+  "mako:live-roster": () => z.tuple([z.string()]),
   "mako:live-side-question": () =>
     z.tuple([
       z.string(),
@@ -2847,6 +2848,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-rewind", "conversations"],
   ["mako:live-rewind-preview", "conversations"],
   ["mako:live-rewind-recover", "conversations"],
+  ["mako:live-roster", "conversations"],
   ["mako:live-side-question", "conversations"],
   ["mako:live-sign-in-readiness", "conversations"],
   ["mako:live-sign-in-resume", "conversations"],

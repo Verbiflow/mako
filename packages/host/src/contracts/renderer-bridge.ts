@@ -64,7 +64,7 @@ import type { RecordRef } from "@mako/sessions/entries"
 import type { NativeRequest, NativeRequestInput } from "./native-requests.js"
 import type { ForkInput, TransferInput } from "./conversation-control.js"
 import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissionResponse, PromptAttachment } from "./providers-acp.js"
-import type { LiveStartOptions, LiveSnapshot, LiveRequest, SignInReadiness, SignInResume } from "./live-conversations.js"
+import type { LiveStartOptions, LiveRoster, LiveSnapshot, LiveRequest, SignInReadiness, SignInResume } from "./live-conversations.js"
 import type { ConversationSettings } from "./turn-continuation.js"
 import type { KeepAwakeSettings, KeepAwakeState } from "./keep-awake.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
@@ -416,6 +416,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot | null>("mako:live-attach", path),
     liveSnapshot: (id: string) =>
       invokeTrustedHost<LiveSnapshot | null>("mako:live-snapshot", id),
+    liveRoster: (id: string) =>
+      invokeTrustedHost<LiveRoster | null>("mako:live-roster", id),
     liveContextBreakdown: (id: string) =>
       invokeTrustedHost<ContextBreakdown | null>("mako:live-context-breakdown", id),
     liveRead: (id: string, input: LiveHistoryRead) =>

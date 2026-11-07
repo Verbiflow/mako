@@ -45,6 +45,7 @@
     "test:side-rail-ui": "node scripts/test-side-rail-ui.mjs",
     "test:fin-transitions-ui": "node scripts/test-fin-transitions-ui.mjs",
     "test:rail-list": "tsx --no-maglev scripts/test-rail-list.ts && tsx --no-maglev scripts/test-thread-archive-targets.ts",
+    "test:roster-delta": "tsx scripts/test-roster-delta.ts && tsx --tsconfig tsconfig.app.json scripts/test-roster-recovery.ts && tsx --tsconfig tsconfig.app.json scripts/test-roster-invariant.ts",
     "desktop": "npm run build:electron && node electron/start.mjs",
     "build:browser-extension": "tsgo -p browser-extension/tsconfig.json && node scripts/build-browser-extension.mjs",
     "build:electron": "node scripts/patch-cursor-sdk.mjs && npm run build:control-runtime && tsgo -b tsconfig.electron.json && node scripts/build-preload.mjs",

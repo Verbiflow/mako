@@ -644,6 +644,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-files-find", (id: string, query: string, limit?: number) => folderIndex(id).find(query, limit))
   methods.handle("mako:live-files-grep", (id: string, query: string, options?: FileGrepOptions) => folderIndex(id).grep(query, options))
   methods.handle("mako:live-snapshot", (id: string) => live.refreshedSnapshot(id))
+  methods.handle("mako:live-roster", (id: string) => live.roster(id))
   methods.handle("mako:live-context-breakdown", (id: string) => live.contextBreakdown(id))
   methods.handle("mako:live-read", (id: string, input: LiveHistoryRead) =>
     history.read(id, LiveHistoryReadSchema.parse(input), () => live.refreshedSnapshot(id))

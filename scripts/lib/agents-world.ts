@@ -90,6 +90,8 @@ export interface WorldOptions {
   root: string
   script: Script
   budget?: TreeBudget
+  /** Each event the host sends its windows, as it sends it. */
+  events?: (event: HostEvent) => void
   /** What the host keeps of conversations in memory (`LiveDependencies.conversationMemory`); the host's own without it. */
   conversationMemory?: ConstructorParameters<typeof LiveConversations>[0]["conversationMemory"]
   /** How long a harness at rest stays connected before it hibernates (`LiveDependencies.providerIdleMs`). */
@@ -271,6 +273,7 @@ export class AgentsWorld {
         return { ref: { harness: "claude", nativeId: path, path }, entries, start: 0, total: entries.length, hasEarlier: false }
       },
       emit: (event) => {
+        this.options.events?.(event)
         this.events.push(event)
         this.eventAt.push(Date.now())
       },

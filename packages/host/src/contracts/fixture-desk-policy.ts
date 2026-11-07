@@ -59,6 +59,7 @@ const fixtureReads = [
   "mako:thread-move-asks",
   "mako:plan-builds",
   "mako:live-snapshot",
+  "mako:live-roster",
   "mako:live-state",
   "mako:live-locate",
   "mako:automations",
