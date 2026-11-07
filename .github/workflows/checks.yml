@@ -96,6 +96,8 @@ jobs:
       - run: npm run test:transcript-events
       - run: npm run test:stage
       - run: npm run test:fin-words
+      - run: npm run test:fin-row-time
+      - run: npm run test:steer-notices
       - run: npm run test:fin-decisions
       - run: npm run test:live-controls
       - run: npm run test:prompt-delivery
@@ -394,6 +396,8 @@ jobs:
         env:
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:transcript-rows-ui
+        env:
+          MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:highlight-pool-ui
       # A limit's one notice, in the Inbox, on the phone and in the laptop's browser, and a move on every list.
       - run: npm run test:limit-notice-ui

@@ -40,6 +40,8 @@ const SUITES = [
   "test:simulators-remote", "test:skills", "test:telemetry", "test:terminal", "test:terminal-ui",
   "test:run-suite", "test:test-scratch", "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees", "test:transfer-scheduling",
   "test:tree-watcher", "test:update-local", "test:usage-worker", "test:web-delivery", "test:window-boot",
+  "test:follow-ui",
+  "test:composer-edges-ui",
 ]
 /** Past this a suite has hung: the slowest here takes about 4 minutes on a Mac at load 15. */
 const SUITE_MS = 20 * 60_000

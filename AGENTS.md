@@ -1526,10 +1526,13 @@ Three rules hold this together, and each has a specific failure it prevents:
   turn in the session.
 - **Long lists are virtualized, long content uses `content-visibility`.** The
   rail is windowed with `@tanstack/react-virtual`; transcript turns and
-  surface-panel rows carry `.contain-turn`. Timelines above 200 turns or 400
+  surface-panel rows carry `.contain-turn`. Timelines above 40 turns or 120
   messages and calls (a few prompts can hold thousands of calls), and
   navigators above 100 prompts, additionally window measured rows; a timeline
-  stays windowed while it's shown. Its mounted rows are also held against the
+  stays windowed while it's shown. A row coming in restyles itself, never the
+  page: no `group-has-[…]`, whose universal last part restyles all of `main` for
+  any element added, so write `[.group:has(…)_&]:…`
+  (`test-transcript-rows-ui.mjs` counts it). Its mounted rows are also held against the
   virtualizer before each paint (`row-check.ts`), so an observer that goes quiet
   never shows, and a correction it didn't report is logged with what was found
   (`Transcript row corrected` in the host's log). A conversation keeps at most 24 MB of
@@ -1539,7 +1542,16 @@ Three rules hold this together, and each has a specific failure it prevents:
   prompt identity, prepend anchors and complete answer-copy data. Only actual
   user scrolling may release follow mode; virtualizer size adjustments must not.
   Follow changes only as the reader moves: up leaves the end, down into it
-  follows again, and a scroll's end decides nothing. Under a finger the end
+  follows again, and a scroll's end decides nothing. A move counts from 24 px
+  (`LEFT_END`), a wheel's as its net travel over 500 ms, so a trackpad's rest
+  jitter never lets go while a flick up does at once. A wheel taken by a
+  scroller inside the transcript (the crew card's list, a code block) stays
+  with it until it settles, as the browser's own gesture does. Input ends when
+  it settles (`INPUT_SETTLE_MS`), for input that moved nothing and a browser
+  with no `scrollend`: left standing, the next layout shift would read as the
+  reader's. Focus resting in a turn keeps that turn, and only a selection or
+  moving input postpones what's released; `test-follow-ui.mjs` holds all of it
+  through bursts of reports on every form. Under a finger the end
   waits for it to lift, and a `scrollend` there (the browser sends one for the
   page's own writes too) doesn't end the gesture;
   `test-phone-scroll-ui.mjs` holds both by touch and by wheel. A Thread
@@ -2638,6 +2650,18 @@ deliberate action and never rides along with a commit.
   home path. "Waiting on 4 agents" beside "3 Fins working" is what happens
   without this; `npm run test:fin-counts-ui` draws every surface from one
   roster and requires the same numbers, and `test:fin-words` holds the words.
+- **A Fin's row says how long it has stood as it does, never how old it is.** `childSince` is the one rule, carried
+  as the entry's `since`: a working Fin's current turn, from when its request was dispatched (`dispatchedAt`), since a
+  message can wait long after it's admitted; one waiting on its own Fins from when its turn ended; each other state
+  from when it got there. A working Fin with no known turn says no time. Its line always says something (`At work`
+  with nothing else known), and "answered" only for an answer to this turn, in plain words: a plain message from its
+  Apex may close a question (rule 13), and it's still the next job and not an answer. `npm run test:fin-row-time` holds the rule, and
+  `test:orch-deliver` and `test:crew-card-ui` the real turn and every form.
+- **The notice above the composer speaks for what the person did.** A steer Mako sent by itself (a Fin's digest, an
+  Apex's message) raises nothing, whatever became of it, and hides nothing of theirs: what the harness didn't take goes
+  as the next turn, which is Mako's to handle. `actionNotice` picks the person's newest, and `sentByMako` tells them
+  apart by Mako's header, so a row already kept stops raising it. What stands over the composer keeps to its edges, on
+  every form: `npm run test:steer-notices` and `test:composer-edges-ui` hold both.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, at its last line; an agent's
   fin, still, with its harness as the badge, on its reply's byline; and a

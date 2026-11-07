@@ -120,6 +120,14 @@ schedules, and a failing schedule is pinned there.
     step) answers nothing, known by where it came from, never by its words. An answer still on its way that fails doesn't reopen a
     question something else closed (`Agents.inputDelivered`).
 
+14. **A digest that asks something doesn't wait out the minute's budget.** The
+    budget (`WAKES_PER_MINUTE`) holds what's only news. A digest with a question or
+    a decision in it (`digestAsks`) goes past a spent budget at most every
+    `ASK_EVERY_MS`, and what's asked meanwhile joins it, so a Fin asking during each
+    Apex turn gathers into one wake and doesn't loop. One joining a digest the budget
+    holds takes that digest along. Otherwise a question could outwait the minute its
+    Apex has to answer (`APEX_ANSWER_MS`), and the person would be asked first.
+
 15. **A digest cut at its hand-off goes again.** Its reports read as heard once it's
     in the queue, so a crash after `submitted` and before the harness has it would
     lose them. The next host sends it again, framed as maybe repeated, unless the

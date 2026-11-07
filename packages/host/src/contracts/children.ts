@@ -18,6 +18,10 @@ const LEGACY_FROM: ReadonlyMap<string, string> = new Map([[`your ${LEGACY_APEX_W
 export const DIGEST_WAITS = "digest"
 /** Digests an Apex takes in a minute, counted as they're sent; one past them waits for the next slot (`LiveDispatch`). */
 export const WAKES_PER_MINUTE = 6
+/** Past that, a digest that asks something goes at most this often: well inside the minute its Apex has to answer. */
+export const ASK_EVERY_MS = 10_000
+/** An idle Apex waits this long after a notice for the others of its burst, then wakes once for all of them. */
+export const WAKE_COALESCE_MS = 2_000
 
 export const FROM_AGENTS = `[mako · from ${YOUR_FINS}, not the person]`
 /**
@@ -79,6 +83,11 @@ export const HANDED_OVER_NOTE = "[mako · to deliver this, Mako stopped your run
 
 const AGENT_HEADER = /^\[mako · from (.+?)(?: \(agent\))?, not the person\]\n?/
 const PASSED_ON_HEADER = /^\[mako · the person's words, passed on by (.+?) \(agent\)\]\n?/
+
+/** Whether words came from Mako or an agent rather than the person typing them: only those carry Mako's header. */
+export function sentByMako(text: string): boolean {
+  return AGENT_HEADER.test(text) || PASSED_ON_HEADER.test(text)
+}
 
 /** A brief's lines for its Fin alone, who it is and how it reports: the person's card of the brief leaves them out. */
 export function briefIntro(name: string): string {
@@ -294,9 +303,13 @@ export function finAskWaiting(ask: Pick<FinAsk, "id" | "kind">, name: string, li
   return { for: ask.kind === "approval" ? "approval" : "question", line: `${name}: ${line}` }
 }
 
-/** Who answered a Fin's question, while it works on the answer: "You answered: Merge", "Apex answered: Merge". */
-export function answeredWords(answered: FinAnswered): string {
-  return `${answered.by === "person" ? "You" : APEX_WORD} answered: ${answered.answer}`
+/**
+ * Who answered a Fin's question, while it works on the answer: "You answered: Merge", "Apex answered: Merge". Answers
+ * kept before their header was left off lose it here, and one with nothing else in it says nothing.
+ */
+export function answeredWords(answered: FinAnswered): string | undefined {
+  const answer = (agentWords(answered.answer)?.body ?? answered.answer).trim()
+  return answer ? `${answered.by === "person" ? "You" : APEX_WORD} answered: ${answer}` : undefined
 }
 
 type ListedWaitingOn = NonNullable<Extract<ListedFinState, { kind: "idle" }>["waitingOn"]>[number]
@@ -551,7 +564,7 @@ export function childLine(state: ChildState, now?: number): string | undefined {
     case "starting":
       return "Starting"
     case "working":
-      return state.phase ?? (state.answered && answeredWords(state.answered)) ?? readableStep(state.step)
+      return state.phase ?? (state.answered && answeredWords(state.answered)) ?? readableStep(state.step) ?? "At work"
     case "blocked":
       return state.question
     case "idle":
@@ -559,6 +572,52 @@ export function childLine(state: ChildState, now?: number): string | undefined {
     case "ended":
       return state.decision?.question ?? state.reason
   }
+}
+
+/** How long a Fin has stood as it does, one unit: "25s", "18m", "1h 4m", "3 d". Nothing under a second. */
+export function stoodFor(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  if (seconds < 1) return ""
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours >= 24) return `${Math.floor(hours / 24)} d`
+  const rest = minutes % 60
+  return rest ? `${hours}h ${rest}m` : `${hours}h`
+}
+
+/** A row's time, and the sentence that says what it means. */
+export interface TimeWords {
+  time: string
+  title: string
+}
+
+/**
+ * A row's time and what it means. It's how long the Fin has stood as it does (`childSince`), which on an ended row
+ * would read as how long it ran, so that one says "ago"; the sentence says it whole in every state.
+ */
+export function timeWords(state: ChildState, stood: string): TimeWords {
+  if (!stood) return { time: "", title: "" }
+  switch (state.kind) {
+    case "queued":
+      return { time: stood, title: `Queued for ${stood}` }
+    case "starting":
+      return { time: stood, title: `Starting for ${stood}` }
+    case "working":
+      return { time: stood, title: state.step?.startsWith("Waiting for ") ? `Waiting for ${stood}` : `On this turn for ${stood}` }
+    case "blocked":
+      return { time: stood, title: `Asked ${stood} ago` }
+    case "idle":
+      return { time: stood, title: `${state.waitingOn?.length ? "Waiting" : "Idle"} for ${stood}` }
+    case "ended":
+      return { time: `${stood} ago`, title: `${{ done: "Finished", failed: "Failed", stopped: "Stopped" }[state.outcome]} ${stood} ago` }
+  }
+}
+
+/** `timeWords` for a time in milliseconds. */
+export function childTime(state: ChildState, ms: number): TimeWords {
+  return timeWords(state, stoodFor(ms))
 }
 
 /** A child's state in one word, as its strip and its tip say it. */
