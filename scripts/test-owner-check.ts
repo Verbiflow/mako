@@ -25,6 +25,7 @@ import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { ThreadStore } from "@mako/host/threads/store"
 import type { AccountListNotice, CloudAccount } from "@mako/host/usage/cloud-account-methods"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { ranOut } from "./lib/ran-out.ts"
 
 /**
  * A Mac back from away runs nothing of its own Sessions before it hears its account (`OwnerCheck`): `npm run
@@ -354,10 +355,13 @@ scenario("still this Mac's, a message runs here as the list arrives", async () =
   await delay(50)
   assert.equal(w.request(typed)?.status, "queued", "it waits for the account")
   const answered = performance.now()
-  list.open({ sessions: [w.row()], seq: 2 })
-  await until(() => w.fx.prompts.some((prompt) => prompt.text === "typed before the list"), "it runs here")
+  const { waits } = await ranOut(async () => {
+    list.open({ sessions: [w.row()], seq: 2 })
+    await until(() => w.fx.prompts.some((prompt) => prompt.text === "typed before the list"), "it runs here")
+  })
   const after = w.fx.prompts.find((prompt) => prompt.text === "typed before the list")!.at - answered
-  assert.ok(after < 100, `as the list arrives (${after.toFixed(1)} ms after it)`)
+  // As the list arrives, by what it waited for rather than the runner's clock: nothing ran out between the two.
+  assert.deepEqual(waits, [], `as the list arrives, with no wait beyond it (${after.toFixed(1)} ms after it)`)
   console.log(`  still here: sent ${after.toFixed(1)} ms after the list answered`)
   assert.equal(w.threads.execution(w.placed.session)?.state, "here")
   assert.match(describeOwnerChecks(w.readings.readings().list.ownerChecks) ?? "", /^heard \d+ ms after this Mac woke$/)
@@ -444,11 +448,13 @@ scenario("offline, a message typed while the account's link is down runs here as
   w.link(false, async () => false)
   const typed = randomUUID()
   const sent = performance.now()
-  w.owner.submit(w.id, typed, "typed offline", [])
-  await until(() => w.request(typed)?.status === "completed", "it runs here")
+  const { waits: offlineWaits } = await ranOut(async () => {
+    w.owner.submit(w.id, typed, "typed offline", [])
+    await until(() => w.request(typed)?.status === "completed", "it runs here")
+  })
   const ran = w.fx.prompts.filter((prompt) => prompt.text === "typed offline")
   assert.equal(ran.length, 1, "once")
-  assert.ok(ran[0]!.at - sent < 1_000, `as the link couldn't open, not after the check's bound (${Math.round(ran[0]!.at - sent)} ms)`)
+  assert.ok(offlineWaits.every((ms) => ms < 1_000), `as the link couldn't open, not after the check's bound (${Math.round(ran[0]!.at - sent)} ms; ran out: ${offlineWaits.join(", ")})`)
   assert.equal(w.reaches(), 1)
   assert.match(describeOwnerChecks(w.readings.readings().list.ownerChecks) ?? "", /^not heard \d+ ms after a message while the account's link was down, so what waited ran here$/)
   const next = randomUUID()

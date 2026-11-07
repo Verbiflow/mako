@@ -54,6 +54,8 @@ jobs:
       - run: npm run test:protocol
       # A window's connection banner follows its host's event stream, never one call's failure or slowness.
       - run: npx tsx scripts/test-host-liveness.ts
+      # A cloud host's restart on Linux, whose lock can't name a stuck holder as macOS's can.
+      - run: npx tsx scripts/test-host-lifecycle.ts
       - run: npm run test:loop-profile
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
@@ -96,6 +98,8 @@ jobs:
       - run: npm run test:transcript-events
       - run: npm run test:stage
       - run: npm run test:fin-words
+      # Setup's rows and words: each grant, lease, ask and reading in its part, said against its source.
+      - run: npm run test:setup
       - run: npm run test:fin-row-time
       - run: npm run test:steer-notices
       - run: npm run test:fin-decisions

@@ -11,6 +11,7 @@ import type {
   StopTarget,
 } from "./thread-lifecycle.js"
 import type { ThreadGroup } from "./thread-groups.js"
+import type { SetupAct, SetupActOutcome, SetupView } from "./setup.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { ProjectAppSetup } from "./project-app.js"
@@ -557,6 +558,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     cloudCarriedFiles: (folder: string) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files", folder),
     cloudCarriedFilesDecide: (folder: string, allowed: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-decide", folder, allowed),
     cloudCarriedFilesKeep: (folder: string, path: string, keep: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-keep", folder, path, keep),
+    /* A project's Setup: what each place has for it and where each thing stands, and the person's taps on it. */
+    setup: (folder: string) => invokeTrustedHost<SetupView>("mako:setup", folder),
+    setupAct: (folder: string, act: SetupAct) => invokeTrustedHost<SetupActOutcome>("mako:setup-act", folder, act),
     /** Starts the harness's own sign-in for Mako Cloud to keep; wait, paste and cancel as an account sign-in. */
 
     /* What this install reports to Mako, and what the person allows. */

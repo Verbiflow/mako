@@ -363,10 +363,12 @@ try {
     assert.equal(drifted.pending, 0)
     assert.equal(drifted.heardAgoMs, null)
     assert.deepEqual(drifted.mismatches, [{ path: "a.txt", held: null, fresh: ".M" }, { path: "new.txt", held: null, fresh: "??" }])
+    const told = Date.now()
     repo.changed(["a.txt", "new.txt"])
     const healed = await repo.diagnose()
     assert.equal(healed.pending, 2)
-    assert.ok(healed.heardAgoMs !== null && healed.heardAgoMs < 5_000)
+    // Heard when it was told, so no longer ago than that, however long the runner took since.
+    assert.ok(healed.heardAgoMs !== null && healed.heardAgoMs <= Date.now() - told, `heard ${healed.heardAgoMs} ms ago`)
     assert.deepEqual(healed.mismatches, [])
     assert.equal(healed.held.head, healed.fresh.head)
     release()
