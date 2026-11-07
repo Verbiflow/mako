@@ -133,7 +133,7 @@ async function checkWindow() {
       window.__answers = []
       window.__receipt = undefined
       window.mako.livePermission = async (_conversation, requestId, response) => {
-        window.__answers.push({ requestId, response })
+        window.__answers.push({ requestId, response, at: performance.now() })
         const receipt = { id, origin, digest: 'a'.repeat(64), nativeAnswerDigest: 'b'.repeat(64), createdAt: Date.now(), state: { kind: 'dispatching' } }
         batch({ ...receipts(receipt), permissions: [permission] })
         // Each save reaches the window as its own event, as the host's batches do.
@@ -206,13 +206,12 @@ async function checkWindow() {
     for (const harness of asking) {
       await ask(harness, true)
       await answer("Allow once")
-      const sent = Date.now()
-      await new Promise((resolveWait) => setTimeout(resolveWait, 500))
-      assert.deepEqual(await evaluate("window.__stacks"), [], `${harness}: an answer half a second on its way draws nothing`)
       await until("document.querySelector('[data-approval-recovery]')?.textContent.includes('Sending your answer')", `${harness}: a slow answer says so`)
-      assert.ok(Date.now() - sent >= 900, `${harness}: said after the hold, not before`)
       const [arrived, ...more] = await evaluate("window.__stacks")
       assert.equal(more.length, 0)
+      // Both read in the page, from when the answer reached the bridge: a slow click or a slow look can't move them.
+      const sent = await evaluate("window.__answers[0].at")
+      assert.ok(arrived.at - sent >= 900, `${harness}: said after the hold, not before: ${Math.round(arrived.at - sent)} ms`)
       assert.match(arrived.words, /Sending your answer/, `${harness}: the bar arrives with its words`)
       assert.equal(arrived.row, "1", `${harness}: the words are never fainter than their bar`)
       if (harness === "claude") await capture("approval-bar-after-slow-sending-dark")
