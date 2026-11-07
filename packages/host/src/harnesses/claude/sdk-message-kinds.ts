@@ -32,6 +32,8 @@ const KNOWN = {
   "system/task_started": "shown",
   "system/task_updated": "shown",
   "system/task_progress": "shown",
+  /** A full disk lost lines of the transcript or Claude's own settings: resuming may miss part of the conversation. */
+  "system/session_writes_lost": "shown",
   "system/init": "state",
   "system/background_tasks_changed": "state",
   "system/commands_changed": "state",

@@ -4,10 +4,10 @@ import type { SessionMetaSlotProps } from "@/extend/slots"
 
 /**
  * What a notice says about itself. `danger` and `caution` stop or change what
- * a send does and go first; `progress` is work under way; `info` and
- * `success` are worth knowing.
+ * a send does and go first, with `attention`, which waits on the person's
+ * answer; `progress` is work under way; `info` and `success` are worth knowing.
  */
-export type ComposerNoticeTone = "danger" | "caution" | "progress" | "info" | "success"
+export type ComposerNoticeTone = "danger" | "caution" | "attention" | "progress" | "info" | "success"
 
 export interface ComposerNoticeAction {
   label: string
@@ -71,7 +71,7 @@ export function registerNotice(id: string, use: NoticeProducer, order = 0): () =
   return noticeProducers.register(id, { id, order, use })
 }
 
-const RANK = { danger: 0, caution: 0, progress: 1, info: 2, success: 2 } satisfies Record<ComposerNoticeTone, number>
+const RANK = { danger: 0, caution: 0, attention: 0, progress: 1, info: 2, success: 2 } satisfies Record<ComposerNoticeTone, number>
 
 /** Where a notice goes in the stack: urgent first, then work under way, then the rest. */
 export function noticeRank(notice: Pick<ComposerNotice, "tone" | "priority">): number {

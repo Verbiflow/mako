@@ -13,6 +13,7 @@ import { useSignInRecoveryNotice } from "@/components/composer/sign-in-recovery"
 import { useMovedReviewNotice } from "@/components/composer/moved-review-notice"
 import { useWorkspaceMoveNotice } from "@/components/composer/workspace-move-card"
 import { useAgentAskNotice } from "@/components/composer/agent-ask-card"
+import { useSetupAskNotice } from "@/components/composer/setup-ask-notice"
 import { useInterruptedSendsNotice, useRejectedDraftsNotice } from "@/components/composer/unsent-notices"
 import { useFailureNotice } from "@/components/viewer/failure-notice"
 import { useTransferNotice } from "@/components/viewer/transfer-notice"
@@ -49,6 +50,7 @@ export function installComposerNotices(): Array<() => void> {
     registerNotice("approval-status", useApprovalStatusNotice),
     registerNotice("workspace-move", useWorkspaceMoveNotice),
     registerNotice("agent-ask", useAgentAskNotice),
+    registerNotice("setup-ask", useSetupAskNotice),
     registerNotice("thread-move", useThreadMoveNotice),
     registerNotice("cloud-machine", useMachineNotice),
     registerNotice("moved-review", useMovedReviewNotice),

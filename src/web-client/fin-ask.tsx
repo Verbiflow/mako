@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { CheckIcon, XIcon } from "lucide-react"
 import { FIN_WORD } from "@mako/host/contracts/agents"
-import { askWords } from "@mako/host/contracts/children"
+import { approvalWords, askWords } from "@mako/host/contracts/children"
 import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { useLimitContinue } from "@/state/limit-continue"
 import { WebHarnessIcon } from "./harness-icon"
@@ -58,11 +58,11 @@ export function FinAskCard({ apex, ask, more, answerTyped, from }: { apex: strin
             <>
               <button type="button" data-fin-answer="allow" data-primary disabled={Boolean(sent)} data-chosen={sent?.allow === true || undefined} onClick={() => send({ allow: true })} className="web-ask-option">
                 <CheckIcon className="size-4 shrink-0" />
-                Allow once
+                {approvalWords(ask.ask).allow}
               </button>
               <button type="button" data-fin-answer="refuse" data-refuse disabled={Boolean(sent)} data-chosen={sent?.allow === false || undefined} onClick={() => send({ allow: false })} className="web-ask-option">
                 <XIcon className="size-4 shrink-0" />
-                Refuse
+                {approvalWords(ask.ask).refuse}
               </button>
             </>
           ) : (

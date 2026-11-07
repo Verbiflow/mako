@@ -25,7 +25,7 @@ export class LiveAsks {
     const ask = this.open(id)[0]
     if (!ask) return undefined
     const words = agentAskWords(ask.want, "")
-    return { request: ask.id, kind: "approval", options: [{ optionId: AGENT_ASK_ALLOW, name: words.allow, kind: "allow_once" }, { optionId: AGENT_ASK_KEEP, name: words.keep, kind: "reject_once" }], questions: [] }
+    return { request: ask.id, kind: "approval", options: [{ optionId: AGENT_ASK_ALLOW, name: words.allow, kind: "allow_once" }, { optionId: AGENT_ASK_KEEP, name: words.keep, kind: "reject_once" }], questions: [], named: true }
   }
 
   open(id: string): readonly AgentAsk[] {

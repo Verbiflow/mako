@@ -679,4 +679,10 @@ try {
   console.log(
     "PASS: Claude's MCP servers and plugins that did not start are setup notices, once per session"
   )
+  assert.deepEqual(
+    markers({ type: "system", subtype: "session_writes_lost", error_code: "ENOSPC", lost: ["transcript", "global_config"], transcript_session_ids: ["fixture"], uuid: randomUUID(), session_id: "fixture" }).map((marker) => [marker.label, marker.detail, marker.tone]),
+    [["Warning", "Claude Code couldn't save part of this conversation, so resuming it may miss what it said: the disk is full.", "warning"]],
+    "a transcript a full disk cut short is a warning"
+  )
+  console.log("PASS: Claude Code's lost writes are a warning")
 }
