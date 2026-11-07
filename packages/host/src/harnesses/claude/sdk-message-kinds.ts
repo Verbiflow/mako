@@ -85,6 +85,9 @@ const CommandLifecycleSchema = z.object({
 
 /** A prompt's progress through Claude Code's queue, from a CLI newer than the SDK's types. */
 export function claudeCommandLifecycle(message: SDKMessage): z.infer<typeof CommandLifecycleSchema> | undefined {
+  // Every message comes through here: one this can't be stops on its `type`, where a failed parse would build an error.
+  const kind: string = message.type
+  if (kind !== "command_lifecycle") return undefined
   return CommandLifecycleSchema.safeParse(message).data
 }
 
