@@ -1,4 +1,5 @@
 import { agentAskWords } from "@mako/host/contracts/agent-asks"
+import { approvalWords } from "@mako/host/contracts/children"
 import { memo, useEffect, useRef, useState } from "react"
 import { CheckIcon, ChevronRightIcon, XIcon } from "lucide-react"
 import { childStateOf } from "@mako/host/contracts/children"
@@ -233,11 +234,11 @@ function FinAnswers({ item, sending, send }: { item: FinInboxItem; sending: bool
       <>
         <button type="button" data-inbox-answer="allow" disabled={sending} onClick={() => send({ allow: true })} className={cn(BUTTON, PRIMARY)}>
           <CheckIcon className="size-3" />
-          Allow once
+          {approvalWords(item.ask.ask).allow}
         </button>
         <button type="button" data-inbox-answer="refuse" disabled={sending} onClick={() => send({ allow: false })} className={cn(BUTTON, QUIET)}>
           <XIcon className="size-3" />
-          Refuse
+          {approvalWords(item.ask.ask).refuse}
         </button>
       </>
     )

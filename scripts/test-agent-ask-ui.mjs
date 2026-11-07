@@ -113,6 +113,23 @@ async function check() {
   assert.equal(await evaluate("document.querySelectorAll('[data-inbox-kind=agent-ask]').length"), 0, "a Fin's ask isn't the person's until its Apex leaves it")
   console.log("PASS: a Fin's ask goes through its Apex, not straight to the person's Inbox")
 
+  // On its Apex's row the Fin's ask reads in its own words, as its own card does: never as a command's approval.
+  await until("[...document.querySelectorAll('[data-inbox-kind=fin]')].some((node) => node.innerText.includes('Dictation fallback'))", "the Fin's ask in the Inbox, from its Apex's row")
+  const inboxFin = await evaluate("[...[...document.querySelectorAll('[data-inbox-kind=fin]')].find((node) => node.innerText.includes('Dictation fallback')).querySelectorAll('[data-inbox-answer]')].map((node) => node.innerText.trim())")
+  assert.deepEqual(inboxFin, ["Move to the cloud", "Keep here"], `the Inbox answers in the ask's words: ${JSON.stringify(inboxFin)}`)
+  await evaluate("[...[...document.querySelectorAll('[data-inbox-kind=fin]')].find((node) => node.innerText.includes('Dictation fallback')).querySelectorAll('[data-inbox-answer]')][0].click(); true")
+  await until("window.apexScene.responds().some((each) => each.allow === true)", "its answer reaching the Apex's host as an allow")
+  await window.loadURL(`${base}?mock&app=apex&ask=fin`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the rail")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("[...document.querySelectorAll('[data-crew] [data-fin-ask]')].some((node) => node.innerText.includes('Dictation fallback'))", "the Fin's ask on the crew card")
+  const crew = await evaluate("[...document.querySelectorAll('[data-crew] [data-fin-ask]')].find((node) => node.innerText.includes('Dictation fallback')).innerText.replace(/\\s+/g, ' ')")
+  assert.ok(crew.includes("Move to the cloud") && crew.includes("Keep here"), `the crew card answers in the ask's words: ${crew}`)
+  assert.ok(!crew.includes("Allow once") && !crew.includes("waits on this command"), `and not as a command's approval: ${crew}`)
+  await shoot("crew-fin-ask", "[data-crew]")
+  console.log("PASS: a Fin's ask reads in its own words on its Apex's crew card and in the Inbox")
+
   // An ask arriving with another Thread open is said at once, by the control-only batch that carries it.
   await window.loadURL(`${base}?mock&app=apex`)
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the rail")
@@ -131,6 +148,13 @@ async function check() {
   assert.equal((await answers()).at(-1).allow, true)
   console.log("PASS: the laptop browser's card, and its answer reaching the host")
 
+  // The laptop browser's crew card answers a Fin's ask in its own words.
+  await window.loadURL(`${base}scripts/web-desk.html?app=apex&thread=apex&ask=fin`)
+  await until("[...document.querySelectorAll('[data-crew] [data-fin-ask]')].some((node) => node.innerText.includes('Dictation fallback'))", "the laptop browser's crew card")
+  const laptopFin = await evaluate("[...document.querySelectorAll('[data-crew] [data-fin-ask]')].find((node) => node.innerText.includes('Dictation fallback')).innerText.replace(/\\s+/g, ' ')")
+  assert.ok(laptopFin.includes("Move to the cloud") && !laptopFin.includes("Allow once"), `the laptop browser answers in the ask's words: ${laptopFin}`)
+  console.log("PASS: the laptop browser's crew card answers a Fin's ask in its own words")
+
   // The phone: the dock's card in the same words; Move to the cloud reaches the host and takes it away.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex&ask=move&open=${APEX_THREAD}`)
@@ -143,6 +167,14 @@ async function check() {
   await until("!document.querySelector('[data-ask=agent]')", "the answered card leaving the phone")
   assert.equal((await answers()).at(-1).allow, true)
   console.log("PASS: the phone's card, and Move to the cloud reaching the host")
+
+  // The phone's Inbox answers a Fin's ask in its own words too.
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex&ask=fin&screen=inbox`)
+  await until("[...document.querySelectorAll('[data-ask=fin]')].some((node) => node.innerText.includes('Wants to move'))", "the Fin's ask in the phone's Inbox")
+  const phoneFin = await evaluate("[...document.querySelectorAll('[data-ask=fin]')].find((node) => node.innerText.includes('Wants to move')).innerText.replace(/\\s+/g, ' ')")
+  assert.ok(phoneFin.includes("Move to the cloud") && phoneFin.includes("Keep here") && !phoneFin.includes("Allow once"), `the phone answers in the ask's words: ${phoneFin}`)
+  await shoot("phone-fin-ask", "[data-ask=fin]")
+  console.log("PASS: the phone's Inbox answers a Fin's ask in its own words")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])
   console.log("Agent ask UI: passed")
