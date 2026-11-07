@@ -47,7 +47,7 @@
     "test:rail-list": "tsx --no-maglev scripts/test-rail-list.ts && tsx --no-maglev scripts/test-thread-archive-targets.ts",
     "desktop": "npm run build:electron && node electron/start.mjs",
     "build:browser-extension": "tsgo -p browser-extension/tsconfig.json && node scripts/build-browser-extension.mjs",
-    "build:electron": "node scripts/patch-cursor-sdk.mjs && npm run build:control-runtime && tsgo -b tsconfig.electron.json && node scripts/build-preload.mjs",
+    "build:electron": "node scripts/patch-cursor-sdk.mjs && npm run build:control-runtime && tsgo -b tsconfig.electron.json && node scripts/build-preload.mjs && node scripts/build-sleep-watch.mjs --if-fresh",
     "build": "node scripts/build-parallel.mjs",
     "postinstall": "node scripts/patch-cursor-sdk.mjs",
     "icons": "swiftc -O -o build/make-icns scripts/make-icns.swift && build/make-icns mako-icons/_masters/desktop-gradient.png build/Mako.iconset && iconutil -c icns build/Mako.iconset -o build/Mako.icns && cp build/Mako.iconset/icon_512x512@2x.png public/icons/app-icon.png",
