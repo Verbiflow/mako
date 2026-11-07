@@ -10,8 +10,8 @@ export interface TurnLedger {
   placement(conversationId: string): { thread: string; session: string } | undefined
   /** Every change heard so far journaled. */
   flushed(): Promise<void>
-  /** Count a turn from the journal as it stands; undefined while the journal isn't open. */
-  countTurn(thread: string, turn: string, state: TurnChanges["state"]): TurnChanges | undefined
+  /** Count a turn from the journal as it stands, a slice at a time; undefined while the journal isn't open. */
+  countTurn(thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined>
   /** Whether every change by `at` has its author for good. */
   settledThrough(at: number): boolean
   /** Keep the summary beside the entries, for "changes made". */
@@ -46,6 +46,8 @@ export interface TurnChangesHost {
 
 export class LiveTurnChanges {
   private readonly host: TurnChangesHost
+  /** The count under way, if any: one runs at a time, so a count that began later is never written over by one that began before it. */
+  private counting: Promise<unknown> = Promise.resolve()
 
   constructor(host: TurnChangesHost) {
     this.host = host
@@ -77,47 +79,57 @@ export class LiveTurnChanges {
     const done = () => {
       resident.counting = Math.max(0, (resident.counting ?? 1) - 1)
     }
+    const failed = (error: Error) =>
+      hostWarn("attribution", "a turn's changes could not be counted", { conversation: resident.snapshot.session.id, request: requestId, error: errorMessage({ error }) })
     const settle = () => {
-      try {
-        const now = Date.now()
-        if (!ledger.settledThrough(endedAt) && now - endedAt < GIVE_UP_MS) {
+      void (async () => {
+        if (!ledger.settledThrough(endedAt) && Date.now() - endedAt < GIVE_UP_MS) {
           setTimeout(settle, ledger.settleMs / 4).unref?.()
-          return
+          return false
         }
-        const summary = this.count(resident, ledger, placed.thread, requestId, "settled")
+        const summary = await this.count(resident, ledger, placed.thread, requestId, "settled")
         if (summary) {
           ledger.counted(summary, placed.session)
-          this.recountBehind(resident, ledger, placed, requestId)
+          await this.recountBehind(resident, ledger, placed, requestId)
         }
         this.host.flush(resident)
+        return true
+      })().then((ended) => ended && done(), (error: Error) => {
         done()
-      } catch (error) {
-        done()
-        hostWarn("attribution", "a turn's changes could not be counted", { conversation: resident.snapshot.session.id, request: requestId, error: errorMessage({ error }) })
-      }
+        failed(error)
+      })
     }
     void ledger.flushed().then(
-      () => {
-        if (this.count(resident, ledger, placed.thread, requestId, "settling")) this.host.flush(resident)
+      async () => {
+        if (await this.count(resident, ledger, placed.thread, requestId, "settling")) this.host.flush(resident)
       },
       () => undefined,
-    ).finally(() => {
+    ).catch(failed).finally(() => {
       setTimeout(settle, Math.max(0, endedAt + ledger.settleMs - Date.now())).unref?.()
     })
   }
 
-  /** Count one turn into its request; undefined when the journal isn't open or the request is gone. */
-  private count(resident: Resident, ledger: TurnLedger, thread: string, requestId: string, state: TurnChanges["state"]): TurnChanges | undefined {
-    const request = resident.snapshot.requests.find((item) => item.id === requestId)
-    // A settled count stands until another settled one replaces it.
-    if (!request || (state === "settling" && countedChanges(request.changes)?.state === "settled")) return undefined
-    const summary = ledger.countTurn(thread, requestId, state)
-    if (summary) this.write(resident, requestId, summary)
-    return summary
+  /** Count one turn into its request, after any count under way; undefined when the journal isn't open or the request is gone. */
+  private count(resident: Resident, ledger: TurnLedger, thread: string, requestId: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined> {
+    const due = () => {
+      const request = resident.snapshot.requests.find((item) => item.id === requestId)
+      // A settled count stands until another settled one replaces it.
+      return request !== undefined && !(state === "settling" && countedChanges(request.changes)?.state === "settled")
+    }
+    const counted = this.counting.then(async () => {
+      if (!due()) return undefined
+      const summary = await ledger.countTurn(thread, requestId, state)
+      // Read again: the request may have gone, or a settled count landed, while this one ran.
+      if (!summary || !due()) return undefined
+      this.write(resident, requestId, summary)
+      return summary
+    })
+    this.counting = counted.catch(() => undefined)
+    return counted
   }
 
   /** Earlier turns the journal has newer entries for (their background work wrote since): counted again. */
-  private recountBehind(resident: Resident, ledger: TurnLedger, placed: { thread: string; session: string }, except: string): void {
+  private async recountBehind(resident: Resident, ledger: TurnLedger, placed: { thread: string; session: string }, except: string): Promise<void> {
     const counted = resident.snapshot.requests.flatMap((request) => {
       const changes = countedChanges(request.changes)
       return changes?.state === "settled" && request.id !== except ? [{ request, changes }] : []
@@ -126,7 +138,7 @@ export class LiveTurnChanges {
     const newest = ledger.turnsChangedAfter(placed.thread, Math.min(...counted.map((item) => item.changes.through)))
     for (const { request, changes } of counted) {
       if ((newest.get(request.id) ?? 0) <= changes.through) continue
-      const summary = this.count(resident, ledger, placed.thread, request.id, "settled")
+      const summary = await this.count(resident, ledger, placed.thread, request.id, "settled")
       if (summary) ledger.counted(summary, placed.session)
     }
   }

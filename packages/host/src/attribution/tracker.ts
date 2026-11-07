@@ -25,6 +25,7 @@ import {
   type TrackerPorts,
 } from "@mako/protocol"
 import { join } from "node:path"
+import { inSlices, type Steps } from "@mako/sessions/slices"
 import { HourCounts } from "../base/hour-counts.js"
 import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
@@ -1977,16 +1978,22 @@ export class LaptopTracker implements AttributionTracker {
    * the paths let go.
    */
   async letGoIdle(): Promise<string[]> {
-    const before = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
-    const changed = this.store.lastChanged()
-    const worked = this.store.lastWorked(this.now()).filter(({ at }) => at >= before)
-    const idle = [...this.states.values()].filter(({ root, pending }) =>
-      root.trackedAt < before && (changed.get(root.id) ?? 0) < before && !pending.size &&
-      !worked.some(({ folder }) => within(root.path, folder) || within(folder, root.path)))
+    const idle = await inSlices(this.idleRoots())
     for (const { root } of idle) await this.untrack(root.id)
     const paths = idle.map(({ root }) => root.path)
     if (paths.length) this.log("let go of idle roots", { roots: paths.length, paths: paths.join(", ").slice(0, 500) })
     return paths
+  }
+
+  /** The roots `letGoIdle` lets go, the journal read a step at a time (`JournalStore.recency`) and decided on as it stands in the last. */
+  private *idleRoots(): Steps<RootState[]> {
+    const before = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
+    const unchanged = (changed: ReadonlyMap<string, number>) =>
+      [...this.states.values()].filter(({ root, pending }) => root.trackedAt < before && (changed.get(root.id) ?? 0) < before && !pending.size)
+    // Where Threads worked is read only for a root nobody changed lately: on most passes there's none.
+    const { changed, worked } = yield* this.store.recency(this.now(), (changed) => unchanged(changed).length > 0)
+    const recent = [...worked].filter(([, at]) => at >= before).map(([folder]) => folder)
+    return unchanged(changed).filter(({ root }) => !recent.some((folder) => within(root.path, folder) || within(folder, root.path)))
   }
 
   /** Drop kept content past the retention window and over the budget. */
