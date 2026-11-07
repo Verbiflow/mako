@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.166.0"
+    "version": "0.167.0"
   },
   "about": "Say hello. The model fails with a server error, the harness retries once and the turn fails.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/30/rollout-2026-10-30T12-57-20-01a18ce2-dec0-7ce1-90de-4c7fb38c583a.jsonl",
+      "path": ".codex/sessions/2026/11/06/rollout-2026-11-06T14-20-05-01a1b13b-22f0-74f2-8a98-de40db3b000c.jsonl",
       "known": [
         {
           "side": "-",

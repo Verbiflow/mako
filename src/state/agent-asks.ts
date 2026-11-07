@@ -1,5 +1,6 @@
 import { toast } from "sonner"
-import { agentAskLine, type AgentAsk } from "@mako/host/contracts/agent-asks"
+import { agentAskLine, agentAskWords, type AgentAsk } from "@mako/host/contracts/agent-asks"
+import type { AskCard } from "@/lib/ask-card"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveAcpConversation } from "@/state/acp-state"
 
@@ -12,6 +13,32 @@ export function agentAskOf(conversation: Pick<LiveAcpConversation, "control"> | 
 export function agentAskDetail(conversation: Pick<LiveAcpConversation, "control">): string | undefined {
   const ask = agentAskOf(conversation)
   return ask && agentAskLine(ask.want)
+}
+
+/**
+ * What its agent asked, as every surface draws an ask (`AskCard`, shared with Setup's): who asked, what it wants, why,
+ * and its two answers, which say whether they landed so a card can be answered again when one didn't.
+ *
+ * `pressBack`: how this surface brings a Thread back once the person allows its agent's ask to come back. A surface
+ * without one (the Inbox) can't answer that ask, so its card says where to.
+ */
+export function agentAskCard(conversationId: string, ask: AgentAsk, harness: string, pressBack?: (conversationId: string) => void): AskCard {
+  const words = agentAskWords(ask.want, harness)
+  const line = agentAskLine(ask.want)
+  const said = { who: harness, want: line.charAt(0).toLowerCase() + line.slice(1), description: words.description, detail: words.detail }
+  if (ask.want.kind === "back" && !pressBack) return { ...said, note: "Bring it back from its Thread", choices: [] }
+  const allow = async () => {
+    const answered = await answerAgentAsk(conversationId, ask, true)
+    if (answered && ask.want.kind === "back") pressBack?.(conversationId)
+    return answered
+  }
+  return {
+    ...said,
+    choices: [
+      { answer: "allow", label: words.allow, primary: true, choose: allow },
+      { answer: "keep", label: words.keep, choose: () => answerAgentAsk(conversationId, ask, false) },
+    ],
+  }
 }
 
 export async function answerAgentAsk(conversationId: string, ask: AgentAsk, allow: boolean): Promise<boolean> {

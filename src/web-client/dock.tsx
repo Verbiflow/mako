@@ -3,7 +3,7 @@ import { FinOfApexNote } from "./apex-fins"
 import { FinAskCard, LimitContinueCard } from "./fin-ask"
 import { FinsNeedYou } from "@/components/composer/fin-asks"
 import { sendDirect, useAddressee, useThreadAsks, useThreadRollup } from "@/state/apex-fins"
-import { agentAskLine, agentAskWords, type AgentAsk } from "@mako/host/contracts/agent-asks"
+import type { AgentAsk } from "@mako/host/contracts/agent-asks"
 import { FIN_WORD } from "@mako/host/contracts/agents"
 import { useCrewCardVisible } from "@/state/crew-card-view"
 import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
@@ -24,7 +24,8 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
-import { answerAgentAsk } from "@/state/agent-asks"
+import { agentAskCard } from "@/state/agent-asks"
+import { runChoice, wantLine, type AskChoice } from "@/lib/ask-card"
 import { askBringBack } from "./moves"
 import { shallowEqual } from "@/state/store"
 import { record, type AnsweredRecord } from "./answered"
@@ -355,43 +356,48 @@ function primaryOption(options: LivePermissionRequest["options"]): string | unde
 
 /** What the agent asked through Mako's tools, in the desk's words; the answer goes to the conversation's owner. */
 function AgentAskCard({ ask, conversation, harness }: { ask: AgentAsk; conversation: string; harness: string }) {
-  const [chosen, setChosen] = useState<boolean | undefined>(undefined)
-  const words = agentAskWords(ask.want, harness)
-  const answer = (allow: boolean) => {
+  // Its machine can't reach the Mac: allowing it to come back is the person's Bring it back, on the sheet that picks the Mac.
+  const card = agentAskCard(conversation, ask, harness, askBringBack)
+  const [chosen, setChosen] = useState<string | undefined>(undefined)
+  const choose = (choice: AskChoice) => {
     if (chosen !== undefined) return
-    setChosen(allow)
     noteAnswered()
-    void answerAgentAsk(conversation, ask, allow).then((answered) => {
-      if (!answered) setChosen(undefined)
-      // Its machine can't reach the Mac: the person's allow is their Bring it back, on the sheet that picks the Mac.
-      else if (allow && ask.want.kind === "back") askBringBack(conversation)
+    setChosen(choice.answer)
+    void runChoice(choice, (held) => {
+      if (!held) setChosen(undefined)
     })
   }
   const busy = chosen !== undefined
   return (
     <div className="web-ask-body" aria-busy={busy || undefined} data-busy={busy || undefined}>
-      <p className="web-ask-asker">{`${harness} asks`}</p>
+      <p className="web-ask-asker">{`${card.who} asks`}</p>
       <p className="web-ask-title">
         <ShieldQuestionIcon className="size-4 shrink-0 text-attention" />
-        <span className="min-w-0 break-words">{agentAskLine(ask.want)}</span>
+        <span className="min-w-0 break-words">{wantLine(card)}</span>
       </p>
       <div className="web-ask-scroll">
-        <p className="web-ask-hint">{words.detail}</p>
+        <p className="web-ask-hint">{card.detail}</p>
       </div>
       <div className="web-ask-options" role="group" aria-label="Answers">
-        <button type="button" data-agent-answer="allow" data-primary disabled={busy} data-chosen={chosen === true || undefined} onClick={() => answer(true)} className="web-ask-option">
-          <CheckIcon className="size-4 shrink-0" />
-          {words.allow}
-        </button>
-        <button type="button" data-agent-answer="keep" disabled={busy} data-chosen={chosen === false || undefined} onClick={() => answer(false)} className="web-ask-option">
-          <XIcon className="size-4 shrink-0" />
-          {words.keep}
-        </button>
+        {card.choices.map((choice) => (
+          <button
+            key={choice.answer}
+            type="button"
+            data-agent-answer={choice.answer}
+            data-primary={choice.primary || undefined}
+            disabled={busy}
+            data-chosen={chosen === choice.answer || undefined}
+            onClick={() => choose(choice)}
+            className="web-ask-option"
+          >
+            {choice.primary ? <CheckIcon className="size-4 shrink-0" /> : <XIcon className="size-4 shrink-0" />}
+            {choice.label}
+          </button>
+        ))}
       </div>
     </div>
   )
 }
-
 function ApprovalCard({ permission, conversation, harness }: { permission: LivePermissionRequest; conversation: string; harness: string }) {
   const [chosen, setChosen] = useState<string | undefined>(undefined)
   const inFlight = useAcp((state) => Boolean(activeLiveAcp(state)?.control?.approvalResponses?.some((receipt) => receipt.id === permission.id)))

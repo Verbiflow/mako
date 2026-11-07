@@ -170,6 +170,8 @@ const reads = [
   "mako:cloud-sign-ins",
   /** A project's carried files and where each stands in the cloud, read, never sent. */
   "mako:cloud-carried-files",
+  /** A project's Setup: what each place reads of itself and what the broker grants, read, never changed. */
+  "mako:setup",
   /** Who the account's own GitHub token belongs to, read from the cloud; never the token. */
   "mako:github-token",
   /** Who the account's cloud commits and pull requests are authored as, read from the cloud. */

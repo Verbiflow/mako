@@ -56,6 +56,7 @@ import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environmen
 import { playSetupTurn } from "./mock-setup-turn"
 import { MOCK_GITHUB_USER_ID, mockCloudAccount } from "./mock-cloud-account"
 import { mockCarriedFiles } from "./mock-carried-files"
+import { mockSetup } from "./mock-setup"
 import { mockSimulators } from "./mock-simulators"
 import { mockGitHubToken } from "./mock-github-token"
 import { mockModelConnections } from "./mock-model-connections"
@@ -373,6 +374,7 @@ export function installMockBridge() {
   const respondCalls: Array<AgentsRespondInput & { conversation: string }> = []
   const agentAskAnswers: Array<{ conversationId: string; ask: string; allow: boolean }> = []
   const returnCalls: string[] = []
+  let refuseNextAgentAnswer = false
   const continueCalls: string[] = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
@@ -521,6 +523,8 @@ export function installMockBridge() {
       agentAsks: () => [...agentAskAnswers],
       /** The moves back this window asked of its host. */
       returns: () => [...returnCalls],
+      /** The host refuses the next answer to an agent's ask, as one whose allowed action failed. */
+      refuseNextAgentAnswer: () => void (refuseNextAgentAnswer = true),
       /** The Apex's own agent asks now, as the host's control-only batch says it. */
       raiseAgentAsk: () => {
         const snapshot = liveSnapshots.get(APEX_CONVERSATION)
@@ -1064,6 +1068,10 @@ export function installMockBridge() {
     putBackMovedFiles: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
     workspaceMoveOutcome: async () => null,
     answerAgentAsk: async (conversationId: string, ask: string, allow: boolean) => {
+      if (refuseNextAgentAnswer) {
+        refuseNextAgentAnswer = false
+        throw new Error("The host refused that answer.")
+      }
       agentAskAnswers.push({ conversationId, ask, allow })
       const snapshot = liveSnapshots.get(conversationId)
       if (!snapshot?.control) return
@@ -1764,6 +1772,7 @@ export function installMockBridge() {
     ...mockCloudAccount(emit),
     ...mockSimulators(emit),
     ...mockCarriedFiles(),
+    ...mockSetup(),
     ...mockGitHubToken(),
     ...mockModelConnections(),
     providerConnections: async () => [],

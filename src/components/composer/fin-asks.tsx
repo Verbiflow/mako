@@ -1,11 +1,6 @@
 import { useMemo, useState } from "react"
 import { CheckIcon, XIcon } from "lucide-react"
-import {
-  childGroup,
-  childStateOf,
-  childWord,
-  DONE_NEEDS_YOU,
-} from "@mako/host/contracts/children"
+import { approvalWords, childGroup, childStateOf, childWord, DONE_NEEDS_YOU } from "@mako/host/contracts/children"
 import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import { FinMark } from "@/components/stage/child-tabs"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -149,7 +144,7 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
               className="pressable flex items-center gap-1.5 border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50"
             >
               <CheckIcon className="size-3" />
-              Allow once
+              {approvalWords(ask.ask).allow}
             </button>
             <button
               type="button"
@@ -159,7 +154,7 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
               className="pressable flex items-center gap-1.5 border border-hairline px-2 py-1 text-label text-negative/80 hover:bg-negative/10 hover:text-negative disabled:opacity-50"
             >
               <XIcon className="size-3" />
-              Refuse
+              {approvalWords(ask.ask).refuse}
             </button>
           </>
         ) : (

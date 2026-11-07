@@ -32,7 +32,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -41,8 +41,8 @@ import { makoViews, type ThreadRef } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { busySinceLastAsk } from "./base/machine-load.js"
-import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
+import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice } from "./usage/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, type CloudSignInPlace, type PrefetchOutcome, harnessLabel } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import type { GitHubPerson } from "./contracts/github-person.js"
@@ -1342,6 +1342,53 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const helperRuns = new HelperRuns(helperRunsRoot(environment.dataRoot))
   declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets, recordHelperRun: helperRuns.record, person: shell.machineGitHubPerson })
   declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
+  declareSetupMethods(
+    methods,
+    new SetupViews({
+      recipe: async (folder) => late.movers?.appTools?.desk.setup(folder),
+      ...(carriedFiles && {
+        carried: {
+          view: (folder) => carriedFiles.view(folder),
+          decide: (folder, allowed) => carriedFiles.decide(folder, allowed ? "allowed" : "declined"),
+          keep: (folder, path, keep) => carriedFiles.keep(folder, path, keep),
+        },
+      }),
+      cloudSignIns: {
+        state: async () => late.cloud?.signIns?.(),
+        share: async (sharing) => {
+          await methods.invoke("mako:cloud-sign-ins-share", [sharing])
+        },
+      },
+      accounts: () => harnesses.accounts.catalog(),
+      keys: () => providerHost.modelConnections.snapshot(),
+      device: async () => ({ id: await late.cloud?.deviceId().catch(() => undefined), name: (await describeThisDevice(environment.version)).name }),
+      label: (harness) => harnessLabel(providerHost, harness),
+      borrowing: {
+        local: async () => {
+          const checkouts = workspaces.worktrees?.borrowing.borrowing
+          const saved = fixtureDesk ? undefined : await secrets.borrowing()
+          return [checkouts, saved].filter((broker) => broker !== undefined)
+        },
+        account: {
+          snapshot: async (since) => (await late.cloud?.borrow?.snapshot(since)) ?? null,
+          answer: async (ask, answer) => {
+            if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
+            await late.cloud.borrow.answer(ask, answer)
+          },
+          revoke: async (grant) => {
+            if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
+            await late.cloud.borrow.revoke(grant)
+          },
+        },
+        secretVersion: (kind, name) => (fixtureDesk ? Promise.resolve(undefined) : secrets.secretVersion(kind, name)),
+        asker: (thread) => {
+          const parsed = ThreadIdSchema.safeParse(thread)
+          const title = parsed.success ? threads.store?.thread(parsed.data)?.title : undefined
+          return title ? { thread, title, fin: false } : undefined
+        },
+      },
+    })
+  )
   declareControlMethods(methods, control, environment.appRoot, config.executable)
   declareCloudControlPreviewMethods(methods, () => cloudConversations?.controlPreviews)
   declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine })
