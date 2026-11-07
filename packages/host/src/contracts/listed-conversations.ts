@@ -25,7 +25,7 @@ export const QUIET_STATUS = { ...LISTED_STATUS, working: "ready", waiting: "read
  * that takes its owner. Opening it reads the rest there, as it would any cloud conversation's. A row of a quiet device
  * is listed as that device left it, but not at work.
  */
-export function listedSummary(row: ListedSession, where: string, quietSince: string | undefined): LiveSummary {
+export function listedSummary(row: ListedSession, where: string, quietSince: string | undefined, apex?: ListedApex): LiveSummary {
   const quiet = quietSince !== undefined
   // At work only on what its ended turn left running: its turn is over, and the rail says what it waits on.
   const background = !quiet && row.state === "working" && row.background !== undefined
@@ -54,6 +54,8 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
   if (row.waitingOn && !quiet) summary.waitingOn = row.waitingOn
   if (row.state === "waiting" && !quiet) summary.waitingFor = rowWaitingFor(row)
   if (quiet) summary.quietSince = Date.parse(quietSince)
+  // A Fin of an Apex elsewhere: shown inside that Apex's Thread, never as a row of its own.
+  if (apex) summary.parent = { thread: apex.thread, session: apex.session }
   const rail: ListedRail = {}
   if (row.project) rail.project = row.project
   if (row.worktree) rail.worktree = row.worktree
@@ -69,6 +71,27 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
     summary.children = rollup(finsAsChildren(row.fins))
   }
   return summary
+}
+
+/** The Apex a listed Session is a Fin of, by the row that lists it among its Fins (`listedApexOf`). */
+export interface ListedApex {
+  thread: string
+  session: string
+}
+
+/**
+ * The Apex a listed Session is a Fin of, when the account's list says so: the row of another Session whose `fins`
+ * name its Thread. A Fin placed on another device has a row of its own, written by the device running it, which is
+ * the one that knows what it's doing and what it asks; every other device shows that row under its Apex, as the
+ * Apex's own device shows the Fin, and opens it from there. Only the device running it lists it as a Thread of its
+ * own, since its Apex's Thread isn't there (`listedUnderApex`). A row no Apex's row names stands on its own.
+ */
+export function listedApexOf(row: Pick<ListedSession, "thread" | "session">, rows: Iterable<Pick<ListedSession, "thread" | "session" | "fins">>): ListedApex | undefined {
+  for (const other of rows) {
+    if (other.session === row.session || other.thread === row.thread || !other.fins) continue
+    if (other.fins.some((fin) => fin.thread === row.thread)) return { thread: other.thread, session: other.session }
+  }
+  return undefined
 }
 
 /**

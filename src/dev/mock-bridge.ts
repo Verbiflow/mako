@@ -91,7 +91,7 @@ import {
 } from "./mock-runtime-fixtures"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
 import { openAsk } from "@mako/host/contracts/children"
-import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
+import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -472,6 +472,9 @@ export function installMockBridge() {
       acpSessions.set(snapshot.session.id, snapshot.session)
     }
     boot.live.push(...apexSummaries(), ...benchScene.summaries)
+    // The placed Fin's conversation, as Loft would answer it when opened from here.
+    const placed = placedSnapshot()
+    if (placed) liveSnapshots.set(placed.session.id, placed)
     const setChildren = (agents: NativeAgent[]) => {
       const snapshot = liveSnapshots.get(APEX_CONVERSATION)
       if (!snapshot) return

@@ -50,7 +50,7 @@ export type ReportSources = {
   /** When a conversation last moved (its journal's last write), if known; read again only once its revision moved. */
   lastMoved(conversationId: string, revision: number): number | undefined
   placement(conversationId: string): ThreadPlacement | undefined
-  /** Whether a Thread is a child's (`ThreadStore.edges`): it goes up inside its parent's Thread, never as a row. */
+  /** Whether a Thread is a child's whose Apex is here (`listedUnderApex`): it goes up inside its parent's Thread, never as a row. */
   childThread?(thread: ThreadId): boolean
   /**
    * Who may execute each of these Sessions (`ThreadStore.executionsOf`), asked once a report for every row's Session,

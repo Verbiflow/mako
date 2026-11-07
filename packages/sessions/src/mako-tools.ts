@@ -229,8 +229,11 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
     say: ({ args, answer }) => {
       const child = text(args["child"])
       const stopped = texts(answer?.["stopped"])
-      if (child === "all") return { verb: STOP, what: "all Fins", ...stopped.length && { done: count(stopped.length, "Fin", "Fins") } }
-      return { verb: STOP, what: fin(child, answer) }
+      // On a device that couldn't be reached: nothing stopped yet, and the stop is kept for when it answers.
+      const pending = Array.isArray(answer?.["pending"]) ? answer["pending"].length : 0
+      const kept = pending > 0 && !stopped.length ? verb("Stop", "Stopping", "Stop kept for") : STOP
+      if (child === "all") return { verb: kept, what: "all Fins", ...(stopped.length || pending) && { done: count(stopped.length || pending, "Fin", "Fins") } }
+      return { verb: kept, what: fin(child, answer) }
     },
   }],
   ["agents_wait", {

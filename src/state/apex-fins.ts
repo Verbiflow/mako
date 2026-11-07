@@ -1,14 +1,15 @@
 import { windowRoutesStore } from "@/state/window-routes"
 import { childGroup, childStateOf, finsAsChildren, rollup, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import type { AgentsDirected, AgentsRedirected, AgentsRedirectInput } from "@mako/host/contracts/agents"
+import { entryState, type AgentsDirected, type AgentsRedirected, type AgentsRedirectInput, type ChildState } from "@mako/host/contracts/agents"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { useMemo } from "react"
 import { toast } from "sonner"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
 import { acp, acpStore, useAcp, type AcpState } from "@/state/acp"
-import type { AcpConversation } from "@/state/acp-state"
+import type { AcpConversation, LiveAcpConversation } from "@/state/acp-state"
+import type { ThreadRef } from "@/lib/types"
 import { createHook, createStore } from "@/state/store"
 import { currentOnScreen } from "@/state/thread-sessions"
 import { threads } from "@/state/threads"
@@ -39,9 +40,68 @@ export function threadChildren(state: AcpState, thread: string | undefined): rea
       if (conversation.kind !== "live" || !conversation.threadId || index.has(conversation.threadId) || !conversation.fins) continue
       index.set(conversation.threadId, finsAsChildren(conversation.fins))
     }
+    for (const [apex, children] of index) index.set(apex, placedOver(state, children))
     byThread.set(state.conversations, index)
   }
   return index.get(thread) ?? NO_CHILDREN
+}
+
+/**
+ * A Fin placed on another device, over what its Apex says of it: that device lists the Fin's own conversation to the
+ * account, and this window holds it as a conversation listed from elsewhere. It's what opens for the Fin, and how it
+ * stands there now, which is newer than its Apex's word, unless its device is quiet, when the Apex's word is the
+ * newest there is. Whatever its Apex's device is doing, the Fin's device goes on saying what the Fin asks.
+ */
+function placedOver(state: AcpState, children: readonly NativeAgent[]): readonly NativeAgent[] {
+  let over: NativeAgent[] | undefined
+  children.forEach((agent, index) => {
+    const thread = agent.child?.thread
+    if (!thread || agent.child?.conversation) return
+    const listed = Object.values(state.conversations).find((conversation): conversation is LiveAcpConversation => conversation.kind === "live" && conversation.threadId === thread && conversation.elsewhere !== undefined)
+    if (!listed) return
+    over ??= [...children]
+    over[index] = placedEntry(agent, listed)
+  })
+  return over ?? children
+}
+
+/** The entry with the Fin's own conversation and, while its device is heard, how it stands there (`placedState`). */
+function placedEntry(agent: NativeAgent, listed: LiveAcpConversation): NativeAgent {
+  const state = listed.quietSince === undefined ? placedState(agent.child?.state, listed) : agent.child?.state
+  return { ...agent, ...(state && { state: entryState(state) }), child: { ...agent.child!, conversation: listed.key, ...(state && { state }) } }
+}
+
+/** How a placed Fin stands, from the row its device writes: what it waits on, at work, failed, or as its Apex last said. */
+function placedState(said: ChildState | undefined, listed: LiveAcpConversation): ChildState | undefined {
+  if (listed.waitingOn) return { kind: "blocked", question: listed.waitingOn, on: listed.waitingFor === "approval" ? "approval" : "person" }
+  const status = listed.session.status
+  if (status === "running" || status === "starting") return said?.kind === "working" ? said : { kind: "working" }
+  if (status === "failed") return { kind: "ended", outcome: "failed" }
+  if (said?.kind === "ended" || said?.kind === "idle" || said?.kind === "queued") return said
+  return status === "ready" ? { kind: "idle" } : said
+}
+
+/**
+ * What opens for a Fin's row: its live conversation in this window (its own device's, or listed from the device it
+ * runs on), else its saved transcript here. Undefined for one this window can't open, a Fin on a device whose row
+ * isn't listed: its row draws as not openable, and nothing sets a view with nothing behind it.
+ */
+export type FinOpening = { kind: "conversation"; key: string } | { kind: "saved"; ref: ThreadRef } | { kind: "native"; ref: ThreadRef }
+
+export function finOpening(state: AcpState, child: NativeAgent): FinOpening | undefined {
+  const thread = child.child?.thread
+  if (!thread) return undefined
+  const conversation = (child.child?.conversation ? state.conversations[child.child.conversation] : undefined) ?? childConversation(state, thread)
+  if (conversation) return { kind: "conversation", key: conversation.key }
+  const saved = threadsStore.get().threads.find((ref) => ref.threadId === thread)
+  if (saved) return { kind: "saved", ref: saved }
+  if (child.child?.path && child.child.nativeId) return { kind: "native", ref: { harness: child.provider, nativeId: child.child.nativeId, path: child.child.path, title: child.title, threadId: thread } }
+  return undefined
+}
+
+/** Whether a Fin's row opens anything here (`finOpening`), for the row to draw itself by. */
+export function useFinOpenable(child: NativeAgent): boolean {
+  return useAcp((state) => finOpening(state, child) !== undefined)
 }
 
 /** As its host listed it (`LiveSummary.children`): an Apex's count before this window holds its roster. */
@@ -155,17 +215,13 @@ export function openFinInApex(apex: string, apexTitle: string, child: NativeAgen
   if (routes?.fin) return routes.fin(apex, child)
   const thread = child.child?.thread
   if (!thread) return
+  // What will open is found first: a row with nothing behind it opens nothing, and sets no view.
   const state = acpStore.get()
-  const conversation = (child.child?.conversation ? state.conversations[child.child.conversation] : undefined) ?? childConversation(state, thread)
+  const opening = finOpening(state, child)
+  if (!opening) return
   apexViewStore.set({ open: { apex, apexTitle, child: thread, shown: false } })
-  if (conversation) {
-    acp.activate(conversation.key)
-    return
-  }
-  const saved = threadsStore.get().threads.find((ref) => ref.threadId === thread)
-  if (saved) void threads.view(saved, "native")
-  else if (child.child?.path && child.child.nativeId)
-    void threads.view({ harness: child.provider, nativeId: child.child.nativeId, path: child.child.path, title: child.title, threadId: thread }, "native")
+  if (opening.kind === "conversation") acp.activate(opening.key)
+  else void threads.view(opening.ref, "native")
 }
 
 /** Back to the Apex: the Session last shown in it. */

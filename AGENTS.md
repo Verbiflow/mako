@@ -98,6 +98,11 @@ holds all of it, type imports included.
 `packages/host/src/host-main.ts` is the program: what belongs to the process. It reads
 the configuration (`processHostConfig` in `host-config.ts`; no socket exits
 64), opens the log, takes the data root's lock, and owns signals and the exit.
+A `mako-host` command that took the lock to read (a `join` ending, a `status`
+of an older build) is waited out, `CLI_HOLD_MS` at most, unless something
+answers on the host's socket, which is a host and refuses at once; `status`
+itself takes no lock (`device-cli.ts`), since a reading must never turn a
+starting host away, as one polled with `status` inside a container did.
 `createHost(config, owner)` in `create-host.ts` is the host. Its `start()` opens
 each domain in `electron/domains/` in dependency order, declares every method,
 then listens on the socket; its `stop()` releases everything in one fixed
@@ -237,7 +242,8 @@ full) sends a Fin that named no harness, model or rule to the person's next
 harness that offers it, and otherwise runs it on the harness's nearest mode
 within its Apex's own (`fitAccess`, `modeWithin`), the start's note saying
 which; only a mode wider than the Apex's is refused. It starts
-here only (`place` other than `here` is refused). It never waits unasked:
+here, or on another of the person's devices (`place: device:<name>`,
+below); `cloud` is refused for now. It never waits unasked:
 past its place's bound or a tree's running budget, a start is refused with
 the count unless it passes `queue: true`, when it waits behind every spawn
 that waits for that place ("Queued: 3 ahead, your limit of Fins at once is
@@ -559,6 +565,119 @@ journal. `npm run test:background-agents` covers the engine,
 `bench:orch-wake`, `bench:orch-wake-latency`, `bench:orch-spawn` and
 `bench:orch-host` hold the follow, the wakes, a report's way to its Apex, a
 spawn's receipt and the host's loop to budgets.
+
+A Fin can run on another of the person's devices: `agents_start` with
+`place: device:<name>` (`conversations/agent-places.ts`). The name is
+resolved among the account's devices that run Threads, whatever its case;
+none or several of that name is refused with the names there are, and this
+device's own name is `here`. The Apex's host asks the device what it offers
+(`mako:agents-capabilities`: the version of placement it speaks, its slots
+used of how many, its harnesses; a stand-in for the runtime link's
+`advertise` frame, whose `slots` these are, until that lands and the probe
+carries the harnesses and the version too) and refuses with why when it isn't
+connected (`place-unavailable`), when its Mako has no such call or speaks
+another version (`unsupported`), or when it lacks the harness. Admission is
+a start's here, against that place's room by the device's own word
+(`awayFull`): full, it's refused with the count, or with `queue: true` waits
+on the Apex's device and is asked again on the room watch and when a Fin
+there reports. Then one call, `mako:agents-place`, settled there by the
+Apex's own op (`start:{apexSession}:{clientKey}`), carries the brief, the
+harness and model asked, the most access it may have, the Git remote of the
+Apex's folder (a folder with none is refused) and the Apex as its parent.
+The start is recorded on the Apex's device before the call goes
+(`agent_placings`, a table a build from before placement never reads, so
+such a build sharing the store neither starts it here nor drops it) and its
+row goes once the Apex's record of the Fin is written. A call whose answer
+is lost, or a host that dies with it under way, leaves the row: the start
+answers `queued`, and is asked again under its op once the device says what
+it offers, or at the Fin's first notice, and finds the Fin already there.
+The device starts it as it starts its own (`Agents.place`, then `admit`):
+at most at the Apex's access and the device's ceiling for Fins started
+elsewhere (`PLACED_CEILING`, auto), in a worktree of its checkout of that
+remote (`PlacedCheckouts`: a clone under `<user root>/projects` or a folder
+its Threads work in, matched by `remoteKey`, cloned when it has none), its
+edge naming its Apex there (`ThreadParent.remote`). The Apex's device keeps
+where it put it (`ThreadParent.placed`, an edge whose child Thread has no
+Session here; `ThreadStore.keepEdge` keeps a row for the far end of either
+edge), so the Fin is in its Apex's roster and tree as any. Its reports stay
+in its own device's store until the Apex's device takes them: each goes as
+`mako:agents-notice` (`notice:{child}:{reportId}`, the report with its
+`ownerGeneration`) to that device's runtime, is kept there once by its ID (a
+repeat is `deduped`, a stale owner's is refused) and wakes the Apex through
+the same digest as a Fin's here (`noticeOf`). One that isn't taken is tried
+again after 5 s, doubling to 5 minutes, on a job that runs only while one
+waits; it never expires, so a device away for weeks takes them when it's
+back. The Apex's device tells its places it's back when its runtime's link
+opens and when its host starts (`knock`), and a place that hears from it
+sends at once. `agents_list`, `agents_read`, `agents_send`,
+`agents_answer`, `agents_stop` and `agents_move` on a placed Fin are the
+same host calls on its device with the Apex as their caller (`ApexCaller`);
+a device that can't be reached is said, and list and read fall back to what
+it last sent. A Stop always wins. Before a start's call leaves, its row says
+so (`QueuedStart.away.sent`): from then whether a Fin runs there is that
+device's to say, whatever became of the answer. A Stop of such a start is
+kept on the row (`away.stop`) and sent as `mako:agents-cancel`, by the
+start's op: the device keeps the stop first (`agent_cancels`), so the start
+is refused there whenever it arrives, then stops the Fin if the start made
+one and answers it, and only that answer retires the row; the Apex's device
+keeps the Fin it then hears of, stopped. A device that can't be reached
+leaves the stop where it is: `agents_stop` answers `pending` with why and
+never `stopped`, and the stop goes again on the room watch, when the device
+is next heard from and when this host starts. A Stop of a placed Fin that
+has its edge is kept the same way on the edge (`Placed.stop`) until its
+device answers or its Apex sends it on. Whether a placed Fin is at work is
+kept on its Apex's edge too (`Placed.working`), never in memory, so a host
+that restarts still counts it against its tree: its start, and each message
+and answer that reaches it, set it, with a count (`Placed.epoch`) the Fin's
+device records as heard (`RemoteParent.heard`). Every notice says how the
+Fin stands as it's sent (`standing`: whether it holds a place, the count it
+had heard, and which saying of its host's this is); the Apex's device takes
+only the newest, by a mark it keeps on the edge with `working`, written
+together (`Placed.said`), so a notice replayed or late changes nothing,
+after a restart too, and only one that had heard everything it sent, so a
+report from before a message never ends the turn that message started. A
+place's answer to a list carries the same mark on each strip (`said`), so
+a notice from before the list changes nothing after it. A
+Fin whose standing changes with nothing to report (its turn ended after a
+report it made itself, or the person sent it on there) says its last report
+again with how it stands now (`restate`). Each place is also asked how the
+tree's Fins stand (`listAway`) before any start in that tree is admitted,
+when the Apex lists them and when its device is back, so work the Apex's
+device never sent counts against the running budget before admission. Where
+it runs, a placed Fin is a Thread of its own in the rail, and the device
+running it writes its row to the account's list (`listedUnderApex`), since
+its Apex's Thread isn't there. Every other device shows that row under its
+Apex, by the Apex's row that names the Fin among its Fins (`listedApexOf`,
+the one rule a Mac's host and a browser fold by), never as a Thread of its
+own, and opens it from there with the Fin's own device answering: the
+desk's rows (`finOpening`: its listed conversation, else its transcript
+here; one with neither draws as not openable and sets no view), the
+phone's chips and its Needs you, where a placed Fin waiting on the person
+is a row of its own that opens on its device (`placedWaiting`). The Fin's
+row carries what it asks whatever its Apex's device is doing: a window's
+roster of the Apex takes the Fin's own conversation and standing from it
+(`placedOver`), the Apex's word standing only while the Fin's device is
+quiet. So the person answers a placed Fin's approvals in its own Thread, on
+that device, on the web or from another device, with the Apex's device off
+too. Its Apex never grants them: it calls at no more than the device's
+ceiling (`PLACED_CEILING`, `auto`: the person's decision of 2026-11-06,
+"Auto edits, Full by choice", kept in one place until the per-device
+ceiling's Settings replace it), which is below full access.
+`scripts/test-placed-rows.ts` holds the fold, the Apex-off case and what
+opens; `test:placed-fin-ui` draws the row on the device running it, under
+its Apex on the desk, the laptop browser and the phone, waiting on an
+approval, on a quiet device and with the Apex's device off. Not
+yet: `place: cloud`, a Thread attached as context, the person's direct
+message or answer from the Apex's Thread, and a start from the Apex's
+uncommitted work. `npm run test:fins-placed` runs two hosts through the
+protocol's gateway (the start, the outbox with the Apex's device off and a
+host restarted, a repeat, a stale owner, every refusal, a full place, a
+start whose answer is lost and whose host restarts, the routed operations,
+a Stop of a start whose answer was lost, with the device reachable and not,
+by name and by `all`, a start that arrives after its Stop, and a Fin's
+activity through its Apex's restart); naming cases after the script runs
+those alone. `scripts/prove-fins-placed.ts` runs two `mako-host`s against a
+deployed cloud.
 
 What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line

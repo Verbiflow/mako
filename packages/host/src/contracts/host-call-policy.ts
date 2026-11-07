@@ -130,6 +130,8 @@ const reads = [
   "mako:agents-list",
   "mako:agents-read",
   "mako:agents-wait",
+  /** What this host offers as a place for Fins, as it stands. */
+  "mako:agents-capabilities",
   /** Simulators' setup line as it stands, re-read when asked; changes nothing on this Mac. */
   "mako:simulator-setup",
   /** What the hosts run, who holds each simulator, a page or console read, and a screenshot (`contracts/simulators.ts`). */
@@ -262,6 +264,12 @@ const replays = [
   "mako:agents-send",
   "mako:agents-answer",
   "mako:agents-stop",
+  /** A start for an Apex on another device is settled by its op: a repeat answers the same Fin. */
+  "mako:agents-place",
+  /** A placed Fin's notice is kept once by its report's ID: a repeat is heard as the same one. */
+  "mako:agents-notice",
+  /** A stop of a placed start is kept by the start's op: a repeat stops nothing more and answers the same. */
+  "mako:agents-cancel",
   /** The moved message's id names the one it becomes; a message already moved is withdrawn once. */
   "mako:agents-redirect",
   /** The person's message to a Fin is settled by its request id: a repeat answers the first delivery. */

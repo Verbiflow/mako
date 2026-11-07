@@ -3,6 +3,7 @@ import type { ComposerTarget } from "@/state/composer-settings"
 import type { LiveSnapshot, LiveStartOptions, LiveSummary, ThreadRef } from "@/lib/types"
 import type { LiveProjection } from "@/state/live-projection"
 import type { Entry } from "@mako/sessions/entries"
+import type { WaitingFor } from "@mako/protocol/attention"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import type { CloudStartStep } from "@mako/host/contracts/cloud-threads"
 import type { ListedContinueChoice } from "@mako/host/contracts/live-conversations"
@@ -46,6 +47,8 @@ interface AcpConversationBase {
   elsewhere?: string
   /** What a conversation listed from another device waits on there, while it waits on a person ("Approve: npm test"). */
   waitingOn?: string
+  /** What it waits on the person for, as its owner says it (`LiveSummary.waitingFor`): an approval, a question, or anything else. */
+  waitingFor?: WaitingFor
   /** Its Thread's name as the device it runs on has it, for a conversation listed from another device. */
   threadTitle?: string
   /** Listed from a device the account hasn't heard from since then: none of it at work, and the rail says when it was last seen. */

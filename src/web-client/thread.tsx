@@ -42,7 +42,7 @@ import { activeLiveAcp, useAcp } from "@/state/acp"
 import { openFiles } from "./files-open"
 import { openReview } from "./review-open"
 import { useCopyMissing } from "./copies"
-import { FinOfApexContext, OpenChildContext, childSession } from "./fin-of-apex"
+import { FinOfApexContext, OpenChildContext, childSession, placedSessionOf } from "./fin-of-apex"
 import { PhoneFinCount } from "./apex-fins"
 import { transcriptChunk } from "./chunks"
 import { ApexMark } from "@/components/ui/apex-mark"
@@ -60,7 +60,7 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   // waiting or working doesn't hand the screen to another tab under the person's thumb.
   const [openedOn, setOpenedOn] = useState<string | undefined>(undefined)
   // One of its Fins opened from a chip under its bar, back to it by the bar's back button.
-  const [child, setChild] = useState<{ apex: string; agent: NativeAgent } | null>(null)
+  const [child, setChild] = useState<{ apex: string; agent: NativeAgent; own?: WebSession } | null>(null)
   if (child && child.apex !== threadId) setChild(null)
   useEffect(() => heading.current?.focus({ preventScroll: true }), [threadId])
   const client = useWebClient()
@@ -98,9 +98,12 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   if (sessionId === undefined && openedOn !== session.row.session && !thread.sessions.some((each) => each.row.session === openedOn)) setOpenedOn(session.row.session)
   const owner = ownerOf(session)
   const addingTo: AddingTo | undefined = session.row.folder && !thread.archived && !session.quietSince ? { thread: thread.id, folder: session.row.folder, owner, where: session.where === CLOUD_WHERE ? "Cloud" : session.where } : undefined
-  const opened = child ? childSession(session, child.agent) : undefined
+  const opened = child ? child.own ?? childSession(session, child.agent) : undefined
   const openChild = (agent: NativeAgent) => {
-    if (agent.child?.conversation) setChild({ apex: thread.id, agent })
+    if (!agent.child?.conversation) return
+    // A Fin placed on another device: its own row, written by that device, is what opens, and that device answers.
+    const own = placedSessionOf(agent)
+    setChild({ apex: thread.id, agent, ...(own && { own }) })
   }
   if (child && opened)
     return (
