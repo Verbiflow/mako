@@ -2618,8 +2618,8 @@ deliberate action and never rides along with a commit.
   as the entry's `since`: a working Fin's current turn, from when its request was dispatched (`dispatchedAt`), since a
   message can wait long after it's admitted; one waiting on its own Fins from when its turn ended; each other state
   from when it got there. A working Fin with no known turn says no time. Its line always says something (`At work`
-  with nothing else known), and "answered" only for an answer to this turn, in plain words: a message from its Apex
-  that crossed a question closes it (rule 13) and answers nothing. `npm run test:fin-row-time` holds the rule, and
+  with nothing else known), and "answered" only for an answer to this turn, in plain words: a plain message from its
+  Apex may close a question (rule 13), and it's still the next job and not an answer. `npm run test:fin-row-time` holds the rule, and
   `test:orch-deliver` and `test:crew-card-ui` the real turn and every form.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, at its last line; an agent's

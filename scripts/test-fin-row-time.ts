@@ -59,7 +59,7 @@ const line = (journal: ChildJournal, fields: Partial<ChildThread> = {}) => child
 assert.equal(line(answered({})), "Apex answered: Clone in spares only.", "an answer, on the turn it began")
 assert.equal(line(answered({ by: "person" })), "You answered: Clone in spares only.")
 assert.equal(line(answered({ answer: "[mako · from your Apex (agent), not the person]\nClone in spares only." })), "Apex answered: Clone in spares only.", "the wrapper never reaches a line, kept rows included")
-assert.equal(line(answered({ routine: true })), "Reading a.ts", "an Apex's message that crossed a question isn't an answer")
+assert.equal(line(answered({ routine: true })), "Reading a.ts", "a plain message from its Apex is its next job, not an answer")
 assert.equal(line(answered({ by: "person", routine: true })), "You answered: Clone in spares only.", "the person's own message is theirs to have said")
 assert.equal(line(answered({ at: TURN - HOUR })), "Reading a.ts", "a later turn has moved on from it")
 assert.equal(line(answered({ answer: "[mako · from your Apex (agent), not the person]\n" })), "Reading a.ts", "nothing left to say, nothing said")

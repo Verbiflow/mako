@@ -501,7 +501,7 @@ export interface ChildJournal {
     at: number
     /** It reached the Fin, so the question no longer holds it. */
     delivered?: true
-    /** A message that happened to cross the question, rather than an answer given to it. */
+    /** It came as a message, not through a door that answers: from an Apex, that's its next job more than an answer. */
     routine?: true
   }
 }
@@ -509,7 +509,7 @@ export interface ChildJournal {
 /** An answer lands a moment either side of the turn it starts. */
 const ANSWER_TURN_SLACK_MS = 5_000
 
-/** Whether a row says who answered: an answer to this turn. An Apex's message that crossed the question closed it, and answered nothing. */
+/** Whether a row says who answered: an answer to this turn. A plain message from its Apex may close a question (`inputDelivered`), and it's still the next job and not an answer. */
 function answerShown(journal: ChildJournal, thread: ChildThread): boolean {
   const answer = journal.answered
   if (!answer || (answer.routine && answer.by !== "person")) return false
