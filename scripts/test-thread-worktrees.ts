@@ -970,6 +970,53 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   await worktrees.abandon(id).catch(() => undefined)
 }
 
+// A Fin started from its Apex's worktree takes a spare of the real project: a worktree has none of its own to take.
+{
+  const own = new ThreadWorktreeService(gitRunner, join(root, "spare-home-worktrees"), threads, undefined, undefined, undefined, setup)
+  const lone = repository("spare-home")
+  await own.want(lone)
+  await own.settled()
+  const apexId = randomUUID()
+  started(apexId)
+  const apex = await own.prepare(apexId, lone, "Apex")
+  assert.equal(apex.spare, true, "the Apex takes one of the project's")
+  await own.settled()
+  const finId = randomUUID()
+  started(finId)
+  writeFileSync(join(apex.path, "work.txt"), "the Apex's\n")
+  git(apex.path, "add", ".")
+  git(apex.path, "commit", "-q", "-m", "the Apex's work")
+  await own.list()
+  const fin = await own.prepare(finId, apex.path, "Fin", { kind: "head" })
+  assert.equal(fin.spare, true, "a Fin from its worktree takes one too")
+  assert.equal(readFileSync(join(fin.path, "work.txt"), "utf8"), "the Apex's\n", "at the commit it asked for")
+  assert.equal(git(fin.path, "rev-parse", "--abbrev-ref", "HEAD"), fin.branch, "on its own branch")
+  assert.equal(git(fin.path, "status", "--porcelain"), "")
+  await own.settled()
+  assert.equal(readdirSync(join(root, "spare-home-worktrees", "spares")).filter((name) => name.endsWith(".json")).every((name) => JSON.parse(readFileSync(join(root, "spare-home-worktrees", "spares", name), "utf8")).repoRoot === lone), true, "and spares are kept for the project, not for worktrees")
+  for (const id of [finId, apexId]) await own.abandon(id).catch(() => undefined)
+  await own.settled()
+  // Most Fins start in a project folder's worktree: each repository is matched to the project's own.
+  const folder = join(root, "spare-home-suite")
+  repository("spare-home-suite/web")
+  repository("spare-home-suite/api")
+  await own.want(folder)
+  await own.settled()
+  const suiteApexId = randomUUID()
+  started(suiteApexId)
+  const suiteApex = await own.prepare(suiteApexId, folder, "Suite Apex")
+  assert.equal(suiteApex.spare, true)
+  await own.settled()
+  const suiteFinId = randomUUID()
+  started(suiteFinId)
+  await own.list()
+  const suiteFin = await own.prepare(suiteFinId, suiteApex.path, "Suite Fin", { kind: "head" })
+  assert.equal(suiteFin.spare, true, "a Fin from a project folder's worktree takes one of the project's")
+  for (const name of ["web", "api"]) assert.equal(git(join(suiteFin.path, name), "rev-parse", "--abbrev-ref", "HEAD"), suiteFin.branch, `${name} is on its branch`)
+  for (const id of [suiteFinId, suiteApexId]) await own.abandon(id).catch(() => undefined)
+  await own.settled()
+}
+
 // Inputs that differ start from a clone only where npm's lockfiles say what's stale: a package they disagree on goes,
 // even at one version, or the install leaves a vendored tarball's old files in place and records the new integrity.
 {

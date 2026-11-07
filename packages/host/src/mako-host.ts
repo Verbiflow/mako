@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED
+#!/usr/bin/env -S node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED --heap-growing-percent=30
 import { forgetStartingRepository } from "@mako/git/environment"
 import { enableMainCompileCache } from "./base/compile-cache.js"
 

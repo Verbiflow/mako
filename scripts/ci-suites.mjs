@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { runSuite } from "./lib/run-suite.mjs"
 import { appendFile } from "node:fs/promises"
 
 /**
@@ -38,11 +38,13 @@ const SUITES = [
   "test:owner-check", "test:plugins", "test:proposed-plans", "test:provider-launch-options", "test:provider-ui",
   "test:queued-steering", "test:rail-list", "test:recovery-admission", "test:scripted-model", "test:secrets-keychain", "test:side-rail-ui", "test:fin-transitions-ui",
   "test:composer-edges-ui", "test:simulators-remote", "test:skills", "test:telemetry", "test:terminal", "test:terminal-ui",
-  "test:test-scratch", "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees", "test:transfer-scheduling",
+  "test:run-suite", "test:test-scratch", "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees", "test:transfer-scheduling",
   "test:tree-watcher", "test:update-local", "test:usage-worker", "test:web-delivery", "test:window-boot",
 ]
 /** Past this a suite has hung: the slowest here takes about 4 minutes on a Mac at load 15. */
 const SUITE_MS = 20 * 60_000
+/** So has one that says nothing for this long, which needn't wait out the rest. */
+const QUIET_MS = 5 * 60_000
 
 const [shard, shards] = process.argv.slice(2).map(Number)
 if (!Number.isInteger(shard) || !Number.isInteger(shards) || shard < 1 || shard > shards) {
@@ -50,11 +52,7 @@ if (!Number.isInteger(shard) || !Number.isInteger(shards) || shard < 1 || shard 
   process.exit(2)
 }
 
-const run = (suite) => new Promise((resolve) => {
-  const child = spawn("npm", ["run", "-s", suite], { stdio: ["ignore", "inherit", "inherit"], timeout: SUITE_MS })
-  child.once("error", () => resolve(null))
-  child.once("close", (code) => resolve(code))
-})
+const run = (suite) => runSuite("npm", ["run", "-s", suite], { limitMs: SUITE_MS, quietMs: QUIET_MS })
 
 const results = []
 for (const suite of SUITES.filter((_, index) => index % shards === shard - 1)) {
