@@ -6,10 +6,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
+import { threadToken } from "@mako/sessions/thread-references"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import type { MarkedProcess } from "@mako/host/base/marked-processes"
 import { accessModeId } from "@mako/host/contracts/access"
+import { THREAD_LIST_CAP } from "@mako/host/contracts/thread-list"
 import { childEntry, childMode, childState, modeWithin, type ThreadParent } from "@mako/host/contracts/agents"
 import { AFTER_START, type AgentsStarted } from "@mako/host/contracts/agent-tools"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
@@ -105,10 +107,35 @@ function rosterAndLists(): void {
 function uploadsFollowParents(): void {
   const parent = randomUUID()
   const at = new Date(NOW - 60_000).toISOString()
-  const rows: ReportedSession[] = [{ session: parent, thread: randomUUID(), conversation: "parent", harness: "codex", nativeId: "parent", title: "Parent", state: "idle", createdAt: at, activityAt: at, generation: 1 }]
-  const scope = uploadScope(rows, { onBattery: false, percent: undefined, lowPower: false }, (harness, nativeId) => `/${harness}/${nativeId}`, NOW, (session) => (session === parent ? [{ harness: "cursor", nativeId: "helper" }] : []))
-  assert.deepEqual(scope.sessions.map((session) => `${session.harness}:${session.nativeId}`), ["codex:parent", "cursor:helper"], "a child's Session syncs right after its parent's, under its Thread")
+  const thread = randomUUID()
+  const row = (session: string, nativeId: string): ReportedSession => ({ session, thread, conversation: nativeId, harness: "codex", nativeId, title: "Parent", state: "idle", createdAt: at, activityAt: at, generation: 1 })
+  const rows = [row(parent, "parent"), row(randomUUID(), "earlier")]
+  let looks = 0
+  const children = new Map([[thread, [{ harness: "cursor", nativeId: "helper" }]]])
+  const scope = uploadScope(rows, { onBattery: false, percent: undefined, lowPower: false }, (harness, nativeId) => { if (nativeId === "helper") looks += 1; return `/${harness}/${nativeId}` }, NOW, children)
+  assert.equal(looks, 1, "a Thread's children are walked once, however many Sessions it has")
+  assert.deepEqual(scope.sessions.filter((session) => session.nativeId !== "earlier").map((session) => `${session.harness}:${session.nativeId}`), ["codex:parent", "cursor:helper"], "a child's Session syncs right after its parent's, under its Thread")
   assert.equal(scope.sessions[1]!.thread, scope.sessions[0]!.thread)
+}
+
+/** Two connections' own counters start alike, so a read-only store's version has to show that it reopened on a newer file. */
+function readOnlyStoreVersion(): void {
+  const path = join(root, "read-only-version.sqlite")
+  const journal = () => ({ conversationId: randomUUID(), createdAt: Date.now(), harness: "codex", bindings: [] })
+  const who = { kind: "service", name: "workspace" } as const
+  const first = new ThreadStore(path, { now: () => Date.now() })
+  const apex = first.registerJournal(journal(), who)
+  first.close()
+  const reader = new ThreadStore(path, { now: () => Date.now(), readOnly: true })
+  const before = reader.version()
+  assert.equal(reader.version(), before, "reading doesn't move it")
+  const writer = new ThreadStore(path, { now: () => Date.now() })
+  const placed = writer.registerJournal(journal(), who)
+  writer.keepEdge(edge({ child: placed.thread, parent: apex.thread, parentSession: apex.session, run: { harness: "codex", nativeId: "fin-new", device: writer.deviceId, startedAt: 1 } }))
+  writer.close()
+  assert.notEqual(reader.version(), before, "a new Fin moves it, on a reopened connection too")
+  assert.deepEqual(reader.childSessions().get(apex.thread), [{ harness: "codex", nativeId: "fin-new" }], "and it reads that Fin")
+  reader.close()
 }
 
 function storeKeeps(): void {
@@ -117,12 +144,16 @@ function storeKeeps(): void {
   const apex = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "codex", bindings: [] }, { kind: "service", name: "workspace" })
   const placed = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "claude", bindings: [] }, { kind: "service", name: "workspace" })
   const first = edge({ child: placed.thread, parent: apex.thread, parentSession: apex.session })
+  const before = threads.version()
+  assert.equal(threads.version(), before, "reading doesn't move the store's version")
   assert.equal(threads.keepEdge(first).op, first.op)
+  assert.notEqual(threads.version(), before, "a new child does")
   assert.equal(threads.keepEdge({ ...first, op: "start:other", parent: ThreadIdSchema.parse(randomUUID()) }).op, first.op, "one parent per child: the first edge stands")
   const run = { harness: "claude", nativeId: "n", device: threads.deviceId, startedAt: 1 }
   threads.keepEdge({ ...first, run: { ...run, ended: { at: 1, kind: "done" } } })
   const later = threads.keepEdge({ ...first, run: { ...run, ended: { at: 2, kind: "failed" } } })
   assert.deepEqual(later.run?.ended, { at: 1, kind: "done" }, "an end is written once")
+  assert.deepEqual(threads.childSessions().get(apex.thread), [{ harness: "claude", nativeId: "n" }], "a child without a claim still names its run")
   const told = report(first.child, "done", "Fixed it.")
   const kept = threads.keepReport(told)
   assert.ok("report" in kept && !kept.deduped)
@@ -1219,6 +1250,81 @@ async function activityTellsNoOne(): Promise<void> {
   }
 }
 
+/** A list reads what the listing and the store hold, never a journal: one Fin's search once read 74 back at once. */
+async function listsReadNoJournal(): Promise<void> {
+  const rows: ThreadRef[] = []
+  const lists: (string | undefined)[] = []
+  const w = new AgentsWorld({
+    root: join(root, "lists"),
+    script: (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : "Started them."),
+    // As the catalog lists: filtered, newest first, and only then capped.
+    references: {
+      list: ({ harness } = {}) => {
+        lists.push(harness)
+        return rows.filter((row) => !harness || row.harness === harness).sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "")).slice(0, THREAD_LIST_CAP)
+      },
+      transcriptArtifact: async () => null,
+    },
+  })
+  try {
+    const apex = await w.apex("codex")
+    const fins: string[] = []
+    for (const name of ["one", "two", "three"]) {
+      const started = await w.agents.start(apex.caller, { brief: { objective: "Finish." }, harness: "claude", name, clientKey: `k-${name}`, cwd: w.root })
+      assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+      fins.push(started.conversation)
+    }
+    await w.settle()
+    const records = w.live["records"]
+    const loaded = () => w.live.residency().memory.loads.reduce((sum, load) => sum + load.count, 0)
+    const quiet = async <Answer>(what: string, list: () => Promise<Answer>): Promise<Answer> => {
+      for (const fin of fins.slice(1)) records.release(fin)
+      const before = loaded()
+      const answer = await list()
+      assert.equal(loaded(), before, `${what} reads no journal`)
+      return answer
+    }
+    const asFin = w.caller(fins[0]!)
+    for (const scope of [undefined, "tree", "apexes", "threads"] as const) await quiet(`an Apex's ${scope ?? "children"} list`, () => w.agents.list(apex.caller, { ...(scope && { scope }) }))
+    for (const scope of [undefined, "tree", "apexes", "crew", "threads"] as const) await quiet(`a Fin's ${scope ?? "children"} list`, () => w.agents.list(asFin, { ...(scope && { scope }) }))
+    await quiet("a Fin's search of Threads", () => w.agents.list(asFin, { scope: "threads", query: "anything" }))
+
+    // What a Fin may reach is exactly what it could: its tree's Sessions, unloaded or not, and nothing outside it.
+    const nativeOf = (conversation: string) => w.live.nativeIds(conversation)[0]
+    const sibling = nativeOf(fins[1]!)
+    assert.ok(sibling, "a released Fin's harness Session is still listed")
+    assert.equal(w.live.held(fins[1]!), undefined, "with nothing of it in memory")
+    assert.deepEqual([...w.live.nativeIds(fins[1]!)], w.live.snapshot(fins[1]!)?.control?.bindings.flatMap((binding) => (binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : [])), "and the listing says what the journal does")
+    records.release(fins[1]!)
+    const row = (harness: string, nativeId: string): ThreadRef => ({ harness, nativeId, path: `/rail/${nativeId}.jsonl`, title: `Thread ${nativeId}`, updatedAt: new Date(NOW).toISOString() })
+    rows.push(row(sibling.provider, sibling.nativeId), row("codex", "somebody-elses"))
+    for (let at = 0; at < 2_000; at += 1) rows.push(row("codex", `other-${at}`))
+    lists.length = 0
+    const found = await quiet("a Fin's search over 2,000 rows", () => w.agents.list(asFin, { scope: "threads" }))
+    assert.ok(found && "threads" in found, JSON.stringify(found))
+    assert.deepEqual(found.threads.map((thread) => thread.ref).filter((ref) => ref.includes(sibling.nativeId)).length, 1, "a Fin of its tree is in reach")
+    assert.equal(found.threads.some((thread) => thread.ref.includes("somebody-elses")), false, "a Thread outside it isn't")
+    assert.equal(new Set(lists).size, lists.length, `each list is read once a search, not once a row (${lists.length})`)
+
+    // A row another harness's newer Sessions would push past the cap: a Fin's sibling, known by its provider's identity.
+    const days = (ago: number) => new Date(NOW - ago * 86_400_000).toISOString()
+    const chats = `chats:${sibling.nativeId}`
+    rows.length = 0
+    rows.push({ ...row(sibling.provider, sibling.nativeId), identity: chats, updatedAt: days(30) })
+    rows.push({ ...row(sibling.provider, "not-of-this-tree"), identity: "chats:not-of-this-tree", updatedAt: days(30) })
+    for (let at = 0; at < THREAD_LIST_CAP; at += 1) rows.push({ ...row("codex", `newer-${at}`), updatedAt: days(1) })
+    assert.notEqual(sibling.provider, "codex", "the sibling's harness isn't the one filling the list")
+    const named = (id: string, what: string) => quiet(what, () => w.agents.list(asFin, { scope: "threads", query: threadToken(sibling.provider, id).slice(1) }))
+    const refsOf = (answer: Awaited<ReturnType<typeof named>>) => (answer && "threads" in answer ? answer.threads.map((thread) => thread.ref) : [])
+    assert.deepEqual(refsOf(await named(chats, "a Fin naming its sibling")), [threadToken(sibling.provider, chats).slice(1)], "its sibling is in reach by its identity, whatever fills the list")
+    assert.equal(refsOf(await named(chats.slice(0, 14), "a Fin shortening its sibling's id")).length, 1, "and by a short id only it has")
+    assert.deepEqual(refsOf(await named("chats:not-of-this-tree", "a Fin naming a stranger")), [], "a row of the same harness outside its tree isn't")
+    assert.deepEqual(refsOf(await named("chats:", "a Fin's id two rows could mean")), [], "nor an id that could mean either")
+  } finally {
+    await w.close()
+  }
+}
+
 async function stoppedApexHolds(): Promise<void> {
   let working = 0
   const w = new AgentsWorld({
@@ -1859,6 +1965,7 @@ try {
   rosterAndLists()
   uploadsFollowParents()
   storeKeeps()
+  readOnlyStoreVersion()
   await startsAndWakes()
   await explicitReports()
   await refusals()
@@ -1883,6 +1990,7 @@ try {
   await startedFinsOldQueueRow()
   await finsAtWorkByBinding()
   await stoppedApexHolds()
+  await listsReadNoJournal()
   await activityTellsNoOne()
   await followsShellRuns()
   await relinkedRuns()

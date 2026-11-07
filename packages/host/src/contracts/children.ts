@@ -29,6 +29,8 @@ export const FROM_AGENTS = `[mako · from ${YOUR_FINS}, not the person]`
  * had it: one that did carries on, one that didn't starts from it.
  */
 export const BRIEF_AGAIN = "Your brief again, in case it didn't reach you: Mako closed unexpectedly while sending it. If you already have it and started on it, carry on where you are; otherwise start from it."
+/** What heads a digest sent again: a crash cut it with nothing to say its Apex had it (`TurnContinuation.brief`). */
+export const DIGEST_AGAIN = "Your Fins' news again, in case it didn't reach you: Mako closed unexpectedly while sending it. If you already have it, carry on where you are; otherwise act on it."
 export function fromAgent(name: string): string {
   return `[mako · from ${name} (agent), not the person]`
 }

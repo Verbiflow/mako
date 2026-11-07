@@ -373,8 +373,10 @@ jobs:
 
   # A long Apex Thread on the desk, the web app and the phone opens at its end with no blank room, and a message sent
   # there, between turns and in one, overlaps no row in any frame it paints (`test:transcript-send-ui`). Geometry
-  # only, read where each frame paints; no timing passes or fails it. Then the highlight pool's workers end once no
-  # view holds them, an abandoned render's too (`test:highlight-pool-ui`). On a Mac, where the tests' Electron runs.
+  # only, read where each frame paints; no timing passes or fails it. Its rows stand apart through Fin reports with
+  # the virtualizer's observer working and with the rows taken from it, and only the second logs (`test:transcript-rows-ui`).
+  # Then the highlight pool's workers end once no view holds them, an abandoned render's too (`test:highlight-pool-ui`).
+  # On a Mac, where the tests' Electron runs.
   transcript-ui:
     runs-on: macos-15
     timeout-minutes: 20
@@ -391,6 +393,7 @@ jobs:
       - run: npm run test:transcript-send-ui
         env:
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
+      - run: npm run test:transcript-rows-ui
       - run: npm run test:highlight-pool-ui
       # A limit's one notice, in the Inbox, on the phone and in the laptop's browser, and a move on every list.
       - run: npm run test:limit-notice-ui
@@ -495,7 +498,7 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npx tsgo -b packages/host
-      - run: npm run bench:host-load -- --scale today --cpu-prof "$RUNNER_TEMP/host-load-profile"
+      - run: npm run bench:host-load -- --scale today --peak-limit-mb 1500 --cpu-prof "$RUNNER_TEMP/host-load-profile"
 
   # Codex's own sandbox on the setup the daily harness bump records Codex with, at the tested build: workspace-write
   # writes the workspace and nothing else, read-only writes nothing, and neither reaches the network.

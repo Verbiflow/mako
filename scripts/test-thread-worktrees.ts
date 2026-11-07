@@ -5,6 +5,7 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -250,14 +251,18 @@ assert.equal(readFileSync(join(caughtUp.path, "web", "index.ts"), "utf8"), "expo
 assert.equal(git(caughtUp.path, "status", "--porcelain"), "")
 await worktrees.settled()
 
-// Outputs cloned before the step's inputs changed don't fit them: they go, and aren't cloned again while they differ.
+// Inputs that differ still start from a clone, so the install only catches up; nothing says the step ran, so it does.
 writeFileSync(join(shop, "package-lock.json"), "{\"lockfileVersion\":3}\n")
 const relocked = randomUUID()
 const unlocked = await worktrees.prepare(relocked, shop, "lockfile changed")
 assert.equal(unlocked.spare, true)
-assert.deepEqual(await worktrees.outputs(relocked), { carried: [], skipped: ["npm install: package-lock.json differs from the main checkout's, so it installs here in full."] })
-assert.equal(existsSync(join(unlocked.path, "node_modules")), false)
-assert.equal(existsSync(join(unlocked.path, "web", "node_modules")), false)
+{
+  const carried = await worktrees.outputs(relocked)
+  const started = existsSync(join(unlocked.path, "node_modules"))
+  assert.deepEqual(carried, { carried: [], skipped: [`npm install: package-lock.json differs from the main checkout's, so it installs here${started ? ", over a clone of what they agree on" : " in full"}.`] })
+  assert.equal(started, false, "a lockfile only one side has says nothing of what's stale, so it installs in full")
+}
+
 rmSync(join(shop, "package-lock.json"))
 await worktrees.settled()
 
@@ -963,6 +968,117 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     closing()
   }
   await worktrees.abandon(id).catch(() => undefined)
+}
+
+// A Fin started from its Apex's worktree takes a spare of the real project: a worktree has none of its own to take.
+{
+  const own = new ThreadWorktreeService(gitRunner, join(root, "spare-home-worktrees"), threads, undefined, undefined, undefined, setup)
+  const lone = repository("spare-home")
+  await own.want(lone)
+  await own.settled()
+  const apexId = randomUUID()
+  started(apexId)
+  const apex = await own.prepare(apexId, lone, "Apex")
+  assert.equal(apex.spare, true, "the Apex takes one of the project's")
+  await own.settled()
+  const finId = randomUUID()
+  started(finId)
+  writeFileSync(join(apex.path, "work.txt"), "the Apex's\n")
+  git(apex.path, "add", ".")
+  git(apex.path, "commit", "-q", "-m", "the Apex's work")
+  await own.list()
+  const fin = await own.prepare(finId, apex.path, "Fin", { kind: "head" })
+  assert.equal(fin.spare, true, "a Fin from its worktree takes one too")
+  assert.equal(readFileSync(join(fin.path, "work.txt"), "utf8"), "the Apex's\n", "at the commit it asked for")
+  assert.equal(git(fin.path, "rev-parse", "--abbrev-ref", "HEAD"), fin.branch, "on its own branch")
+  assert.equal(git(fin.path, "status", "--porcelain"), "")
+  await own.settled()
+  assert.equal(readdirSync(join(root, "spare-home-worktrees", "spares")).filter((name) => name.endsWith(".json")).every((name) => JSON.parse(readFileSync(join(root, "spare-home-worktrees", "spares", name), "utf8")).repoRoot === lone), true, "and spares are kept for the project, not for worktrees")
+  for (const id of [finId, apexId]) await own.abandon(id).catch(() => undefined)
+  await own.settled()
+  // Most Fins start in a project folder's worktree: each repository is matched to the project's own.
+  const folder = join(root, "spare-home-suite")
+  repository("spare-home-suite/web")
+  repository("spare-home-suite/api")
+  await own.want(folder)
+  await own.settled()
+  const suiteApexId = randomUUID()
+  started(suiteApexId)
+  const suiteApex = await own.prepare(suiteApexId, folder, "Suite Apex")
+  assert.equal(suiteApex.spare, true)
+  await own.settled()
+  const suiteFinId = randomUUID()
+  started(suiteFinId)
+  await own.list()
+  const suiteFin = await own.prepare(suiteFinId, suiteApex.path, "Suite Fin", { kind: "head" })
+  assert.equal(suiteFin.spare, true, "a Fin from a project folder's worktree takes one of the project's")
+  for (const name of ["web", "api"]) assert.equal(git(join(suiteFin.path, name), "rev-parse", "--abbrev-ref", "HEAD"), suiteFin.branch, `${name} is on its branch`)
+  for (const id of [suiteFinId, suiteApexId]) await own.abandon(id).catch(() => undefined)
+  await own.settled()
+}
+
+// Inputs that differ start from a clone only where npm's lockfiles say what's stale: a package they disagree on goes,
+// even at one version, or the install leaves a vendored tarball's old files in place and records the new integrity.
+{
+  const locked = repository("locked")
+  const lock = (tarball: string) => `${JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/keeps": { version: "1.0.0", integrity: "same" }, "node_modules/vendored": { version: "0.1.0", resolved: `file:vendor/${tarball}.tgz`, integrity: tarball } } })}\n`
+  writeFileSync(join(locked, ".gitignore"), "node_modules\n")
+  writeFileSync(join(locked, "package-lock.json"), lock("new"))
+  git(locked, "add", ".")
+  git(locked, "commit", "-q", "-m", "lock")
+  const base = git(locked, "rev-parse", "HEAD")
+  writeFileSync(join(locked, "package-lock.json"), lock("old"))
+  git(locked, "commit", "-qam", "older tarball")
+  for (const name of ["keeps", "vendored"]) {
+    mkdirSync(join(locked, "node_modules", name), { recursive: true })
+    writeFileSync(join(locked, "node_modules", name, "index.js"), "// the main checkout's\n")
+  }
+  writeFileSync(join(locked, "node_modules", ".package-lock.json"), "{}\n")
+  // What a tool keeps under its packages for itself, an account's among it: never another worktree's, whatever the lockfiles say.
+  mkdirSync(join(locked, "node_modules", ".cache", "tool"), { recursive: true })
+  writeFileSync(join(locked, "node_modules", ".cache", "tool", "account.json"), "{}\n")
+  mkdirSync(join(locked, "node_modules", ".mf"), { recursive: true })
+  writeFileSync(join(locked, "node_modules", ".mf", "cf.json"), "{}\n")
+  const outputs = { command: "npm install", inputs: ["package-lock.json"], outputs: ["node_modules"], link: true }
+  const read = async (from: string) => {
+    const id = randomUUID()
+    started(id)
+    const made = await worktrees.prepare(id, locked, `Locked ${from}`, { kind: "from", ref: base })
+    await worktrees.outputs(id)
+    await rm(join(made.path, "node_modules"), { recursive: true, force: true })
+    return { id, made, carried: await carryOutputs(gitRunner, locked, made.path, [outputs], setup) }
+  }
+  const { id, made, carried } = await read("npm")
+  if (process.platform === "darwin") {
+    assert.deepEqual(carried, { carried: [], skipped: ["npm install: package-lock.json differs from the main checkout's, so it installs here, over a clone of what they agree on."] })
+    assert.equal(existsSync(join(made.path, "node_modules", "keeps", "index.js")), true, "a package they agree on is cloned")
+    assert.equal(lstatSync(join(made.path, "node_modules")).isSymbolicLink(), false, "as its own, never a link to the main checkout's other packages")
+    assert.equal(existsSync(join(made.path, "node_modules", "vendored")), false, "one they don't is left for the install, whatever its version")
+    assert.equal(existsSync(join(made.path, "node_modules", ".package-lock.json")), false, "and so is npm's record of what's there")
+    assert.equal(existsSync(join(made.path, "node_modules", ".cache")), false, "a tool's own state stays the main checkout's")
+    assert.equal(existsSync(join(made.path, "node_modules", ".mf")), false, "all of it")
+    const sameId = randomUUID()
+    started(sameId)
+    const same = await worktrees.prepare(sameId, locked, "Locked same", { kind: "from", ref: git(locked, "rev-parse", "HEAD") })
+    await worktrees.outputs(sameId)
+    await rm(join(same.path, "node_modules"), { recursive: true, force: true })
+    await carryOutputs(gitRunner, locked, same.path, [{ ...outputs, link: false }], setup)
+    assert.equal(existsSync(join(same.path, "node_modules", "keeps", "index.js")), true, "a clone of the same inputs has every package")
+    assert.equal(existsSync(join(same.path, "node_modules", ".package-lock.json")), true, "and npm's record")
+    assert.equal(existsSync(join(same.path, "node_modules", ".cache")), false, "and no tool's state either")
+    assert.equal(existsSync(join(same.path, "node_modules", ".mf")), false, "none of it")
+    await worktrees.abandon(sameId).catch(() => undefined)
+  }
+  assert.equal((await setup.prepared(made.path)).done["npm install"], undefined, "nothing says the install ran")
+  await worktrees.abandon(id).catch(() => undefined)
+  const other = { ...outputs, inputs: ["yarn.lock"] }
+  writeFileSync(join(locked, "yarn.lock"), "theirs\n")
+  const { id: yarnId, made: yarnMade } = await read("yarn")
+  await rm(join(yarnMade.path, "node_modules"), { recursive: true, force: true })
+  const yarn = await carryOutputs(gitRunner, locked, yarnMade.path, [other], setup)
+  assert.deepEqual(yarn, { carried: [], skipped: ["npm install: yarn.lock differs from the main checkout's, so it installs here in full."] })
+  assert.equal(existsSync(join(yarnMade.path, "node_modules")), false, "any other lockfile can't say what's stale, so nothing is cloned")
+  await worktrees.abandon(yarnId).catch(() => undefined)
 }
 
 // Windows ask for summaries every half minute and on focus: one pass runs, and everyone who asked while it ran shares
