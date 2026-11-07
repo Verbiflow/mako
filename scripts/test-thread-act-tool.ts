@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { AgentAsk } from "@mako/host/contracts/agent-asks"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { agentAskLine, agentAskWords } from "@mako/host/contracts/agent-asks"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
@@ -188,6 +189,7 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
   })
   let tier: "full" | "auto" = "auto"
   let hold: Promise<void> = Promise.resolve()
+  let answer: JsonValue = { versions: true }
   const deps = {
     conversationOf: (session: string) => (session === "s-mine" ? "mine" : undefined),
     tier: () => tier,
@@ -195,7 +197,7 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
       calls.push([channel, ...z.array(z.union([z.string(), z.boolean()])).parse(args).map(String)])
       if (args[0] === "nope") throw new Error("nope does not install through Mako")
       await hold
-      return { versions: true }
+      return answer
     },
     gate,
     startedAfterMs: 20,
@@ -219,6 +221,28 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
   assert.equal("outcome" in long && long.outcome, "started", "an install that outlasts the call says it's under way")
   hold = Promise.resolve()
   assert.equal(await tool.act(agent("s-mine"), { action: "install", harness: "nope", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "failed", "one refused at once says so")
+  // The host answers a failed install or update as a receipt, not a rejection: the agent hears it failed, in its words.
+  answer = { result: { at: 1, outcome: "failed", message: "npm error EACCES" } }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "k" }), { refused: "failed", why: "npm error EACCES" })
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "install", harness: "grok", clientKey: "k" }), { refused: "failed", why: "npm error EACCES" })
+  answer = { result: { at: 1, outcome: "failed" } }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "k" }), { refused: "failed", why: "Updating grok failed." })
+  // One that failed after the call said it started: `read` hands the receipt on, which `next` tells the agent to do.
+  const late = Promise.withResolvers<void>()
+  hold = late.promise
+  answer = { result: { at: 2, outcome: "failed", message: "disk full" } }
+  const running = setInterval(() => undefined, 10)
+  const started = await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "k" })
+  clearInterval(running)
+  assert.equal("outcome" in started && started.outcome, "started")
+  late.resolve()
+  hold = Promise.resolve()
+  answer = { grok: { result: { at: 2, outcome: "failed", message: "disk full" } } }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "read", clientKey: "k" }), { outcome: "read", harnesses: { grok: { result: { at: 2, outcome: "failed", message: "disk full" } } } })
+  // What it came to is said: installed, updated, or already there.
+  answer = { result: { at: 3, outcome: "unchanged" } }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "k" }), { outcome: "finished", action: "update", harness: "grok", result: "unchanged" })
+  answer = { versions: true }
   assert.equal(await tool.act(agent("s-mine"), { action: "install", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-harness")
   assert.equal(await new HarnessTool({ ...deps, machine: true }).act(agent("s-mine"), { action: "update", harness: "grok", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "cloud-machine")
   assert.equal(hostCallReplay(HARNESS_TOOL.channel), HARNESS_TOOL.replay)

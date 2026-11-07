@@ -1,7 +1,9 @@
+import { z } from "zod"
 import type { MethodTable } from "../base/methods.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
+import { HarnessUpdateResultSchema } from "../contracts/harness-updates.js"
 import type { JsonValue } from "../contracts/json.js"
 import { AFTER_ACT, type HarnessActInput, type HarnessActResult } from "../contracts/thread-tools.js"
 import type { AgentAskGate } from "./agent-ask-gate.js"
@@ -18,6 +20,8 @@ export interface HarnessToolDeps {
   /** How long a call waits for an install to refuse before saying it started. */
   startedAfterMs?: number
 }
+
+const ReceiptSchema = z.object({ result: HarnessUpdateResultSchema.optional() }).loose()
 
 /** An agent's or a shell's Install and Update of a harness, through the calls Settings › Harnesses makes. */
 export class HarnessTool {
@@ -43,9 +47,15 @@ export class HarnessTool {
   /** Starts it, as Settings does, and answers once it's under way: an install outlasts a tool call. One refused at once says so. */
   async run(action: "install" | "update", harness: string): Promise<HarnessActResult> {
     const finished = this.#deps.invoke(action === "install" ? "mako:harness-install" : "mako:harness-update", [harness]).then(
-      (): HarnessActResult => {
-        hostLog("harness-tool", "a harness an agent asked for finished", { action, harness })
-        return { outcome: "finished", action, harness }
+      (answer): HarnessActResult => {
+        // A package command that failed is a receipt the host resolves with, not a rejection.
+        const result = ReceiptSchema.safeParse(answer).data?.result
+        if (result?.outcome === "failed") {
+          hostWarn("harness-tool", "a harness an agent asked for failed", { action, harness, error: result.message ?? "no words from its updater" })
+          return { refused: "failed", why: result.message ?? `${action === "install" ? "Installing" : "Updating"} ${harness} failed.` }
+        }
+        hostLog("harness-tool", "a harness an agent asked for finished", { action, harness, result: result?.outcome ?? "unsaid" })
+        return { outcome: "finished", action, harness, ...(result && { result: result.outcome }) }
       },
       (error: Error): HarnessActResult => {
         hostWarn("harness-tool", "a harness an agent asked for failed", { action, harness, error: error.message })
