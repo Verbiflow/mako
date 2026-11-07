@@ -640,6 +640,16 @@ export function childEntryId(child: ThreadId): string {
 }
 
 /**
+ * Whether a Fin's entry says what `before` says. Its time alone doesn't count: that's its conversation's last activity,
+ * which moves with every token, and each move resends its Apex's whole roster to every conversation of the Thread. On
+ * 2026-11-07 one Fin did that about twice a second to 14 of them, 2 to 10 MB/s to every window, past what a stream may
+ * hold. What it reads moves the time along with it.
+ */
+export function sameChildEntry(before: NativeAgent, entry: NativeAgent): boolean {
+  return JSON.stringify({ ...before, observedAt: 0 }) === JSON.stringify({ ...entry, observedAt: 0 })
+}
+
+/**
  * The roster entry a child is (`CHILDREN_BINDING`), from its edge and what its
  * Thread shows. Every surface draws this one entry (the Agents panel, the
  * transcript's line, the composer's toggle, the phone), and it's never saved in
