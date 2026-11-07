@@ -263,6 +263,8 @@ jobs:
       # A Fin waiting on a pull request is woken once per outcome, never its Apex, across restarts; GitHub is a stub.
       - run: npm run test:fin-pull-waits
       - run: npm run test:fin-resume
+      # A host starting reads each Fin's journal in slices as it resumes them, never all of them at once.
+      - run: npm run test:resume-holds
       # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
       - run: npm run test:fin-states
 
