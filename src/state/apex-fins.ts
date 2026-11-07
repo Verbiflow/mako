@@ -1,3 +1,4 @@
+import { windowRoutesStore } from "@/state/window-routes"
 import { childGroup, childStateOf, finsAsChildren, rollup, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { AgentsDirected, AgentsRedirected, AgentsRedirectInput } from "@mako/host/contracts/agents"
@@ -15,44 +16,62 @@ import { threadsStore, useThreads } from "@/state/thread-store"
 import { threadGroupsStore } from "@/state/thread-groups"
 
 const NO_CHILDREN: readonly NativeAgent[] = []
-const byThread = new WeakMap<AcpState["conversations"], Map<string, readonly NativeAgent[]>>()
-const listedByThread = new WeakMap<AcpState["conversations"], Map<string, Rollup>>()
+const byThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, readonly NativeAgent[]> }>()
+const listedByThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, Rollup> }>()
+
+/**
+ * Of each Thread's conversations that say something of its Fins (`said`, with how fully, higher the fuller), the
+ * newest Session's: the last of its Thread's Sessions in the store's order (`AcpState.threadSessions`) that this window
+ * holds, and of one Session the fullest. A Fin's start, end or change of state reaches every Session of its Apex, and
+ * its progress only the newest (`progressReaders`), so every surface takes its Fins by this one rule, from a roster this
+ * window holds or a row the account lists alike. A Thread with no group has one Session.
+ */
+function newestSaid<Value>(state: AcpState, said: (conversation: Extract<AcpConversation, { kind: "live" }>) => { value: Value; fullness: number } | undefined): Map<string, Value> {
+  const index = new Map<string, Value>()
+  const rank = new Map<string, number>()
+  for (const conversation of Object.values(state.conversations)) {
+    if (conversation.kind !== "live" || !conversation.threadId) continue
+    const saying = said(conversation)
+    if (!saying) continue
+    const sessions = state.threadSessions?.[conversation.threadId]
+    const place = sessions && conversation.sessionId ? sessions.indexOf(conversation.sessionId) : -1
+    const standing = place * 2 + saying.fullness
+    if (index.has(conversation.threadId) && standing <= rank.get(conversation.threadId)!) continue
+    index.set(conversation.threadId, saying.value)
+    rank.set(conversation.threadId, standing)
+  }
+  return index
+}
 
 /**
  * A Thread's Fins, as its conversations' rosters carry them (`childEntry`, never a harness's roster), in
- * `orderedChildren`' order. Every Session of an Apex carries the same Fins, so the first that holds any says them;
- * the array is the roster's own while that roster is unchanged, so a row reading it repaints only when they change.
+ * `orderedChildren`' order, or as the account lists them where this window holds no roster of that Session (another
+ * device's, or one asleep), from its newest Session (`newestSaid`). The array is the roster's own while that roster is
+ * unchanged, so a row reading it repaints only when they change.
  */
 export function threadChildren(state: AcpState, thread: string | undefined): readonly NativeAgent[] {
   if (!thread) return NO_CHILDREN
-  let index = byThread.get(state.conversations)
-  if (!index) {
-    index = new Map()
-    for (const conversation of Object.values(state.conversations)) {
-      if (conversation.kind !== "live" || !conversation.threadId || index.has(conversation.threadId)) continue
+  let held = byThread.get(state.conversations)
+  if (!held || held.order !== state.threadSessions) {
+    const index = newestSaid(state, (conversation) => {
       const children = rosterChildren(conversation.nativeAgents)
-      if (children.length) index.set(conversation.threadId, children)
-    }
-    // An Apex this window holds no roster of (another device's, or one asleep): its row's Fins, as its owner said them.
-    for (const conversation of Object.values(state.conversations)) {
-      if (conversation.kind !== "live" || !conversation.threadId || index.has(conversation.threadId) || !conversation.fins) continue
-      index.set(conversation.threadId, finsAsChildren(conversation.fins))
-    }
-    byThread.set(state.conversations, index)
+      if (children.length) return { value: children, fullness: 1 }
+      return conversation.fins ? { value: finsAsChildren(conversation.fins), fullness: 0 } : undefined
+    })
+    held = { order: state.threadSessions, index }
+    byThread.set(state.conversations, held)
   }
-  return index.get(thread) ?? NO_CHILDREN
+  return held.index.get(thread) ?? NO_CHILDREN
 }
 
-/** As its host listed it (`LiveSummary.children`): an Apex's count before this window holds its roster. */
+/** As its host listed it (`LiveSummary.children`): an Apex's count before this window holds its roster, its newest Session's. */
 function listedRollup(state: AcpState, thread: string): Rollup | undefined {
-  let index = listedByThread.get(state.conversations)
-  if (!index) {
-    index = new Map()
-    for (const conversation of Object.values(state.conversations))
-      if (conversation.kind === "live" && conversation.threadId && conversation.children && !index.has(conversation.threadId)) index.set(conversation.threadId, conversation.children)
-    listedByThread.set(state.conversations, index)
+  let held = listedByThread.get(state.conversations)
+  if (!held || held.order !== state.threadSessions) {
+    held = { order: state.threadSessions, index: newestSaid(state, (conversation) => (conversation.children ? { value: conversation.children, fullness: 0 } : undefined)) }
+    listedByThread.set(state.conversations, held)
   }
-  return index.get(thread)
+  return held.index.get(thread)
 }
 
 /** A Thread's Fins counted by group: one selector for the rail's badge, the strip's count and the phone's row. */
@@ -150,6 +169,8 @@ export const useApexView = createHook(apexViewStore)
 
 /** Open `child` in place, inside the Apex's Thread: its live conversation, else its saved transcript. */
 export function openFinInApex(apex: string, apexTitle: string, child: NativeAgent): void {
+  const { routes } = windowRoutesStore.get()
+  if (routes?.fin) return routes.fin(apex, child)
   const thread = child.child?.thread
   if (!thread) return
   const state = acpStore.get()
@@ -178,7 +199,7 @@ export function backToApex(): void {
   if (conversation) acp.activate(conversation.key)
 }
 
-/** Keeps the Fin view honest: it ends once anything else is on screen. */
+/** Keeps the Fin view honest: it ends once anything else is on screen, a saved conversation with no Thread of its own too. */
 export function watchApexView(): () => void {
   const sync = () => {
     const open = apexViewStore.get().open
@@ -186,7 +207,7 @@ export function watchApexView(): () => void {
     const here = currentOnScreen().thread
     if (here === open.child) {
       if (!open.shown) apexViewStore.set({ open: { ...open, shown: true } })
-    } else if (open.shown && here !== undefined) apexViewStore.set({ open: null })
+    } else if (open.shown && (here !== undefined || threadsStore.get().viewing)) apexViewStore.set({ open: null })
   }
   const stops = [acpStore.subscribe(sync), threadsStore.subscribe(sync), apexViewStore.subscribe(sync)]
   return () => stops.forEach((stop) => stop())

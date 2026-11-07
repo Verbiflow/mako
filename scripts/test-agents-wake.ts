@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import { AFTER_START, AGENT_TOOLS, WAIT_LIMIT_MS, type AgentsStarted, type AgentsStartInput, type AgentsStartResult } from "@mako/host/contracts/agent-tools"
 import { childState, ReportSchema, ReportStatusSchema, reportRoute, StartModeSchema, ThreadParentSchema, WakeOnSchema, type ReportStatus, type StartMode, type WakeOn } from "@mako/host/contracts/agents"
+import { actionNotice } from "@mako/host/contracts/operation-recovery"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { agentToolSchema } from "@mako/host/conversations/agent-tools"
 import { FROM_AGENTS, WAKE_COALESCE_MS } from "@mako/host/conversations/agent-wakes"
@@ -324,6 +325,9 @@ async function refusedSteer(): Promise<void> {
     await delay(WAKE_COALESCE_MS + 500)
     assert.equal(wakesOf(w, apex.conversation).length, 0, "no turn starts while the Apex's runs")
     assert.equal(w.agents.wakes.pending(), 1, "the refused digest still waits")
+    const held = w.live.snapshot(apex.conversation)?.control?.actions ?? []
+    assert.equal(held.at(-1)?.state.kind, "not-accepted", "the harness refused it")
+    assert.equal(actionNotice(held, []), undefined, "and the person hears nothing of a steer Mako sent by itself")
     w.release(apex.conversation)
     await until("the next turn", () => wakesOf(w, apex.conversation).length === 1)
     assert.match(wakesOf(w, apex.conversation)[0]!.text, /"lint" \(Codex\) done: Lint is clean\./)

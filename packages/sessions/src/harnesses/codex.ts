@@ -15,9 +15,9 @@ const MAKO_COMPUTER = "Mako's own computer tool, which Codex records by its bare
 export const CODEX_VOCABULARY = defineVocabulary({
   harness: "codex",
   checked: {
-    version: "0.166.0",
-    on: "2026-10-30",
-    against: "the model request of 0.166.0's app-server for every listed model, with and without plan, code mode's nested tools included (scripts/fixtures/native-tools; 0.166.0 lists gpt-6.1-terra, with the same tools as the others), ~/.codex/sessions rollouts through audit:tools, and the app server's item types (packages/host/src/harnesses/codex/generated)",
+    version: "0.167.0",
+    on: "2026-11-07",
+    against: "the model request of 0.167.0's app-server for every listed model, with and without plan, code mode's nested tools included (scripts/fixtures/native-tools; 0.166.0 lists gpt-6.1-terra, with the same tools as the others; 0.167.0 rewords tool_search for gpt-5.5), ~/.codex/sessions rollouts through audit:tools, and the app server's item types (packages/host/src/harnesses/codex/generated)",
   },
   mcp: ["s.t", "s: t"],
   tools: {
@@ -67,9 +67,9 @@ export const CODEX_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "0.166.0",
-      on: "2026-10-30",
-      against: "app-server types generated from 0.166.0 (no hook, instruction, skill or subagent change since 0.159.3) and the binary through harness:self-report; developers.openai.com/codex (agents-md, hooks, skills, subagents, config-reference) and skills/list on probe folders as checked for 0.159.3 on 2026-10-06",
+      version: "0.167.0",
+      on: "2026-11-07",
+      against: "app-server types generated from 0.167.0 (no hook, instruction, skill or subagent change since 0.159.3) and the binary through harness:self-report; developers.openai.com/codex (agents-md, hooks, skills, subagents, config-reference) and skills/list on probe folders as checked for 0.159.3 on 2026-10-06",
     },
     instructions: {
       files: ["AGENTS.override.md", "AGENTS.md"],

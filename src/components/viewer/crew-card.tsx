@@ -1,5 +1,6 @@
 import {
   memo,
+  use,
   useCallback,
   useLayoutEffect,
   useMemo,
@@ -28,6 +29,8 @@ import {
   rollup,
   rollupLabel,
   rollupLine,
+  stoodFor,
+  timeWords,
   type ChildGroup,
   type Rollup,
 } from "@mako/host/contracts/children"
@@ -35,6 +38,7 @@ import { APEX_WORD, FIN_WORD, finsWord, type ChildState } from "@mako/host/contr
 import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { FinMark } from "@/components/stage/child-tabs"
+import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { LiveMark } from "@/components/ui/live-mark"
 import { Shimmer } from "@/components/ui/shimmer"
 import { useTickingText } from "@/components/ui/second-clock"
@@ -324,22 +328,11 @@ const NeedsRow = memo(function NeedsRow({
   )
 })
 
-/** How long a Fin has run, one unit: "25s", "18m", "1h 4m". Nothing under a second. */
-function took(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000))
-  if (seconds < 1) return ""
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return rest ? `${hours}h ${rest}m` : `${hours}h`
-}
-
 /**
- * The time on a row. The shared clock ticks once a second only while the Fin
- * works; a minute or an hour is the same string for that whole stretch, so
- * the row's label doesn't repaint on the seconds in between.
+ * The time on a row: how long the Fin has stood as it does (`since`), a working
+ * one's current turn and never its age. The shared clock ticks once a second; a
+ * minute or an hour is the same string for that whole stretch, so the row's
+ * label doesn't repaint on the seconds in between.
  */
 const CrewElapsed = memo(function CrewElapsed({
   agent,
@@ -348,15 +341,13 @@ const CrewElapsed = memo(function CrewElapsed({
   agent: NativeAgent
   className?: string
 }) {
-  const state = childStateOf(agent)
-  const working = state.kind === "working" || state.kind === "starting"
-  const start = agent.startedAt ?? agent.observedAt
-  const frozen = (agent.settledAt ?? agent.observedAt) - start
-  const text = useTickingText(working, (now) =>
-    took(working ? now - start : frozen)
+  const since = agent.since
+  const stood = useTickingText(since !== undefined, (now) =>
+    since === undefined ? "" : stoodFor(now - since)
   )
-  if (!text) return null
-  return <span className={cn("tabular shrink-0", className)}>{text}</span>
+  const { time, title } = timeWords(childStateOf(agent), stood)
+  if (!time) return null
+  return <span title={title} className={cn("tabular shrink-0", className)}>{time}</span>
 })
 
 /** Working, queued, failed or done: one line, its mark, title, current line and time. */
@@ -416,10 +407,12 @@ const CrewLineRow = memo(function CrewLineRow({
             <CornerUpLeftIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
           {moved ? (
-            <span data-fin-moved title={moved} className="flex shrink-0 items-center gap-1">
+            <span data-fin-moved title={moved} className="flex min-w-0 items-center gap-1">
               <ArrowRightLeftIcon className="size-3 shrink-0" aria-hidden />
-              {moved.split(":")[0]}
-              {line ? " ·" : null}
+              <span className="min-w-0 truncate">
+                {moved.split(":")[0]}
+                {line ? " ·" : null}
+              </span>
             </span>
           ) : null}
           {pr ? (
@@ -563,10 +556,14 @@ export function CrewCard({
           : index
     },
   })
+  // A Fin opens in place on the desk; the web's Thread screen opens it by its own address.
+  const routed = use(RoutedOpenContext)
   const onOpen = useCallback(
-    (agent: NativeAgent) =>
-      thread ? openFinInApex(thread, apexTitle, agent) : undefined,
-    [thread, apexTitle]
+    (agent: NativeAgent) => {
+      if (routed) routed(agent)
+      else if (thread) openFinInApex(thread, apexTitle, agent)
+    },
+    [routed, thread, apexTitle]
   )
   const stoppable = children.filter((agent) => agent.stoppable).length
   const stopAll = useCallback(() => {

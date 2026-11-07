@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Calls Mako closed, through production components on the transcript fixture
@@ -23,7 +23,7 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-stopped-calls-"))
+  const root = testScratch("mako-stopped-calls-")
   const target = process.argv.slice(2).find((arg) => !arg.startsWith("--"))
   const evidence = target ? resolve(target) : root
   await mkdir(evidence, { recursive: true })
@@ -46,7 +46,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Stopped calls evidence: ${evidence}`)
 }
 
 async function capture() {

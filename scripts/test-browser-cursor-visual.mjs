@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 if (!process.versions.electron) {
   const { build } = await import("esbuild")
   const built = await build({
@@ -17,7 +17,7 @@ if (!process.versions.electron) {
     platform: "browser",
     write: false,
   })
-  const root = await mkdtemp(join(tmpdir(), "mako-cursor-visual-"))
+  const root = testScratch("mako-cursor-visual-")
   await writeFile(join(root, "cursor.js"), built.outputFiles[0].text)
   await writeFile(
     join(root, "package.json"),

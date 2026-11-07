@@ -70,7 +70,7 @@ import type { SavedContinuation } from "@mako/host/contracts/turn-continuation"
 import { EventNotes } from "./event-notes"
 import { EventLine } from "./event-line"
 import { ShowOriginal } from "./show-original"
-import { causeWords, eventWords, type EventWords } from "@/lib/transcript-events"
+import { causeWords, eventWords, limitFailure, type EventWords } from "@/lib/transcript-events"
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
@@ -573,7 +573,7 @@ function ProviderTurn({ message, provider }: { message: ChatMessage; provider?: 
     : note
       ? eventWords(note)
       : { glyph: "notice", title: said }
-  if (note?.tone && !words.tone) words.tone = note.tone
+  if (note?.tone && !words.tone && !limitFailure(note)) words.tone = note.tone
   const quoted = !note?.cause && !note?.body && said.length > LONG_CAUSE
   return (
     <EventLine align="end" words={words} time={message.timestamp} data-provider-turn={note?.cause?.kind ?? "said"} action={<ShowOriginal origins={[message.origin]} />}>

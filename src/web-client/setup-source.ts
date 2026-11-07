@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { BORROW_PATHS, GrantSchema, LeaseEventSchema, LeaseSchema, SourceAskSchema, type SourceAnswer } from "@mako/protocol/borrow"
-import { accountSetupView, type AccountDevice, type SetupView } from "@mako/host/contracts/setup"
+import { accountSetupView, type AccountDevice, type Asker, type SetupView } from "@mako/host/contracts/setup"
 import type { SetupSource } from "@/state/setup"
 import type { Gateway } from "./gateway"
 
@@ -15,7 +15,13 @@ export type BorrowGateway = Pick<Gateway, "rest">
  * `setupView` a Mac's host uses. Decline answers a source's ask, Stop revokes a grant; a yes, a copy or an addition
  * is the source's own Mac's to make, and says so.
  */
-export function webSetup(gateway: BorrowGateway, account: string, devices: () => readonly AccountDevice[], now: () => number = Date.now): SetupSource {
+export function webSetup(
+  gateway: BorrowGateway,
+  account: string,
+  devices: () => readonly AccountDevice[],
+  now: () => number = Date.now,
+  askers?: (thread: string) => Omit<Asker, "thread"> | undefined
+): SetupSource {
   const pages = new Map<string, SetupView>()
   return {
     read: async (project) => {
@@ -26,7 +32,7 @@ export function webSetup(gateway: BorrowGateway, account: string, devices: () =>
         gateway.rest("GET", `${BORROW_PATHS.events}?since=${at - REFUSALS_SINCE_MS}`).then((answer) => z.object({ events: z.array(LeaseEventSchema) }).parse(answer).events),
         gateway.rest("GET", "/v1/borrow/asks").then((answer) => z.object({ asks: z.array(SourceAskSchema) }).parse(answer).asks),
       ])
-      const page = accountSetupView({ now: at, project, devices: devices(), snapshot: { grants, leases, events, asks: asks.map((ask) => ({ ask, at })) } })
+      const page = accountSetupView({ now: at, project, devices: devices(), snapshot: { grants, leases, events, asks: asks.map((ask) => ({ ask, at })) }, ...(askers && { askers }) })
       pages.set(project, page)
       return page
     },
@@ -47,4 +53,10 @@ export function webSetup(gateway: BorrowGateway, account: string, devices: () =>
       return { done: false, why: "Do this from your Mac, where it's kept." }
     },
   }
+}
+
+/** A Thread as the account's list names it, for an ask it made: its title and harness. */
+export function listedAsker(rows: readonly { thread: string; title?: string; harness: string }[], thread: string): Omit<Asker, "thread"> | undefined {
+  const row = rows.find((each) => each.thread === thread && each.title)
+  return row?.title ? { title: row.title, harness: row.harness, fin: false } : undefined
 }
