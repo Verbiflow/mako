@@ -214,7 +214,7 @@ function trackedFiles(listing: string): Map<string, string> {
 }
 
 /**
- * A new checkout's tracked files, cloned from the main checkout wherever that holds the same file, so a worktree shares
+ * A spare's tracked files, cloned from the main checkout wherever that holds the same file, so a worktree shares
  * their blocks rather than writing them: `mako-backend` costs 59 MB of its own this way, and 694 MB written out. Only a
  * hint for Git, which still decides: the index is read and refreshed here, so each clone is hashed, and the `reset
  * --hard` that follows writes whatever is missing or came out different. Files changed in the main checkout, symlinks

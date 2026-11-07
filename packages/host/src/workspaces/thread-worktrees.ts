@@ -11,7 +11,7 @@ import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDet
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { previewDiffs, projectRepositories } from "../git/index.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
-import { carryOutputs, cloneTracked, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
+import { carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { GitError, numstatEntries, PARALLEL_CHECKOUT, untrackedLines, type Git } from "@mako/git"
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
@@ -1452,9 +1452,7 @@ export class ThreadWorktreeService {
       if (!spare) {
         await mkdir(dirname(receipt.path), { recursive: true, mode: 0o700 })
         try {
-          await this.git.output(receipt.repoRoot, ["worktree", "add", "--no-checkout", receipt.path, receipt.branch])
-          await cloneTracked(this.git, receipt.repoRoot, receipt.path, receipt.branch)
-          await this.git.output(receipt.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", "HEAD"])
+          await this.git.output(receipt.repoRoot, [...PARALLEL_CHECKOUT, "worktree", "add", receipt.path, receipt.branch])
         } catch (error) {
           if (error instanceof GitError && /already (checked out|used by worktree)/i.test(error.stderr))
             throw new Error(`${receipt.branch} is checked out in another folder. Git keeps a branch in one checkout at a time, so start a new branch from it instead.`, { cause: error })
@@ -1543,9 +1541,7 @@ export class ThreadWorktreeService {
       }
       await mkdir(dirname(member.path), { recursive: true, mode: 0o700 })
       try {
-        await this.git.output(member.repoRoot, ["worktree", "add", "--no-checkout", member.path, branch])
-        await cloneTracked(this.git, member.repoRoot, member.path, branch)
-        await this.git.output(member.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", "HEAD"])
+        await this.git.output(member.repoRoot, [...PARALLEL_CHECKOUT, "worktree", "add", member.path, branch])
       } catch (error) {
         throw new Error(`Git couldn't create the worktree of ${relative(source, member.repoRoot)}: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
       }
