@@ -16,50 +16,42 @@ import { threadsStore, useThreads } from "@/state/thread-store"
 import { threadGroupsStore } from "@/state/thread-groups"
 
 const NO_CHILDREN: readonly NativeAgent[] = []
-const byThread = new WeakMap<AcpState["conversations"], Map<string, readonly NativeAgent[]>>()
+const byThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, readonly NativeAgent[]> }>()
 const listedByThread = new WeakMap<AcpState["conversations"], Map<string, Rollup>>()
-
-const movedAt = new WeakMap<readonly NativeAgent[], number>()
-
-/** When the latest of a roster's Fins last moved, kept by the roster's array of them, which a roster keeps while none moves. */
-function lastMoved(children: readonly NativeAgent[]): number {
-  const held = movedAt.get(children)
-  if (held !== undefined) return held
-  const moved = children.reduce((latest, agent) => Math.max(latest, agent.observedAt), 0)
-  movedAt.set(children, moved)
-  return moved
-}
 
 /**
  * A Thread's Fins, as its conversations' rosters carry them (`childEntry`, never a harness's roster), in
- * `orderedChildren`' order. Every Session of an Apex carries the same Fins, so the first that holds any says them;
- * the array is the roster's own while that roster is unchanged, so a row reading it repaints only when they change.
+ * `orderedChildren`' order. A Fin's start, end or change of state reaches every Session of its Apex, and its progress
+ * only the newest (`progressReaders`), so they're the newest Session's held here: the last of its Thread's Sessions in
+ * the store's order (`AcpState.threadSessions`) that this window holds, and with no group the Thread's one Session.
+ * The array is the roster's own while that roster is unchanged, so a row reading it repaints only when they change.
  */
 export function threadChildren(state: AcpState, thread: string | undefined): readonly NativeAgent[] {
   if (!thread) return NO_CHILDREN
-  let index = byThread.get(state.conversations)
-  if (!index) {
-    index = new Map()
-    // Of a Thread's conversations, the one whose Fins moved last: a Fin's progress alone goes to its newest Session and
-    // the ones running, not to every one it ever had (`progressReaders`).
-    const newest = new Map<string, number>()
+  const order = state.threadSessions
+  let held = byThread.get(state.conversations)
+  if (!held || held.order !== order) {
+    const index = new Map<string, readonly NativeAgent[]>()
+    const place = new Map<string, number>()
     for (const conversation of Object.values(state.conversations)) {
       if (conversation.kind !== "live" || !conversation.threadId) continue
       const children = rosterChildren(conversation.nativeAgents)
       if (!children.length) continue
-      const moved = lastMoved(children)
-      if (index.has(conversation.threadId) && moved <= newest.get(conversation.threadId)!) continue
+      const sessions = order?.[conversation.threadId]
+      const at = sessions && conversation.sessionId ? sessions.indexOf(conversation.sessionId) : -1
+      if (index.has(conversation.threadId) && at <= place.get(conversation.threadId)!) continue
       index.set(conversation.threadId, children)
-      newest.set(conversation.threadId, moved)
+      place.set(conversation.threadId, at)
     }
     // An Apex this window holds no roster of (another device's, or one asleep): its row's Fins, as its owner said them.
     for (const conversation of Object.values(state.conversations)) {
       if (conversation.kind !== "live" || !conversation.threadId || index.has(conversation.threadId) || !conversation.fins) continue
       index.set(conversation.threadId, finsAsChildren(conversation.fins))
     }
-    byThread.set(state.conversations, index)
+    held = { order, index }
+    byThread.set(state.conversations, held)
   }
-  return index.get(thread) ?? NO_CHILDREN
+  return held.index.get(thread) ?? NO_CHILDREN
 }
 
 /** As its host listed it (`LiveSummary.children`): an Apex's count before this window holds its roster. */

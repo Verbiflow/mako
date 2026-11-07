@@ -4593,21 +4593,16 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * The conversations a Fin's progress alone goes to: its Thread's newest Session's, and any other one in memory that
-   * isn't closed. Every step went to every Session, and one let go of was read back from its journal for it and held: on
+   * The conversations a Fin's progress alone goes to: its Thread's newest Session's, by the store's order of its
+   * Sessions. Every step went to every Session, and one let go of was read back from its journal for it and held: on
    * 2026-11-06 an Apex of 14 Sessions, 13 of them closed, took each of 74 steps in five minutes 14 times, 202 MB to each
-   * window. A window draws a Thread's Fins from whichever of its conversations holds the newest (`threadChildren`); a
-   * start, an end or a change of how a Fin stands still goes to every one, and one read in takes its Fins as they are.
+   * window. A window draws a Thread's Fins from its newest Session by the same order (`threadChildren`); a start, an end
+   * or a change of how a Fin stands still goes to every one, and one read in takes its Fins as they are.
    */
   private progressReaders(thread: string): string[] {
     const store = this.store()
     const sessions = store?.thread(ThreadIdSchema.parse(thread))?.sessions ?? []
-    const newest = new Set(sessions.length ? store?.conversationsOf(sessions[sessions.length - 1]!) : [])
-    return this.conversationsOfThread(thread).filter((conversation) => {
-      if (newest.has(conversation)) return true
-      const held = this.deps.live.held(conversation)
-      return held !== undefined && held.session.status !== "closed"
-    })
+    return sessions.length ? (store?.conversationsOf(sessions[sessions.length - 1]!) ?? []) : []
   }
 
   private conversationsOfThread(thread: string): string[] {

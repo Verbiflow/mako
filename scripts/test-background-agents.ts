@@ -1252,9 +1252,9 @@ async function activityTellsNoOne(): Promise<void> {
 }
 
 /**
- * A Fin's progress alone goes to its Apex Thread's newest Session and any other in memory that isn't closed, and never
- * reads one back from its journal; a change of how it stands goes to every one. One Apex of 14 Sessions, 13 closed, took
- * every step 14 times.
+ * A Fin's progress alone goes to its Apex Thread's newest Session, by the store's order, and never reads another back
+ * from its journal; a change of how it stands goes to every one. One Apex of 14 Sessions, 13 closed, took every step 14
+ * times.
  */
 async function progressGoesWhereItsRead(): Promise<void> {
   const w = world("progress", (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "Done: it's finished.") : "Started it."))
@@ -1297,9 +1297,20 @@ async function progressGoesWhereItsRead(): Promise<void> {
       w.agents["childMoved"](edge, true)
       return told
     }
-    assert.deepEqual(moveFrom({ ...now, title: `${now.title} before`, observedAt: now.observedAt - 1 }).map(([id]) => id).sort(), [apex.conversation, older.running].sort(), "a step goes to the newest Session and the one running")
+    assert.deepEqual(moveFrom({ ...now, title: `${now.title} before`, observedAt: now.observedAt - 1 }).map(([id]) => id), [apex.conversation], "a step goes to the newest Session alone, not one running before it")
     assert.ok(told.every(([, progress]) => progress), "as progress")
     assert.deepEqual(moveFrom({ ...now, state: { kind: now.state.kind === "waiting" ? "working" : "waiting" } }).map(([id]) => id).sort(), [apex.conversation, ...Object.values(older)].sort(), "a change of how it stands goes to every Session")
+    // A Session after the Apex's own is the newest: the order is the store's, not whose the Fin is.
+    const newer = randomUUID()
+    mock.method(store, "thread", (id: Parameters<typeof store.thread>[0]) => {
+      const real = thread(id)
+      return real && id === apexThread ? { ...real, sessions: [...Object.values(older).map(sessionOf), ...real.sessions, sessionOf(newer)] } : real
+    })
+    mock.method(store, "conversationsOf", (session: string) => {
+      const conversation = [...Object.values(older), newer].find((each) => sessionOf(each) === session)
+      return conversation ? [conversation] : conversationsOf(session)
+    })
+    assert.deepEqual(moveFrom({ ...now, title: `${now.title} again`, observedAt: now.observedAt - 1 }).map(([id]) => id), [newer], "a step goes to the Session made last")
   } finally {
     mock.restoreAll()
     await w.close()

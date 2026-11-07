@@ -17,6 +17,10 @@ import { listedSummary } from "@mako/host/contracts/listed-conversations"
 import { listedFins, rollup } from "@mako/host/contracts/children"
 import { conversationShown } from "@mako/host/conversations/session-report"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
+import { randomUUID } from "node:crypto"
+import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { acpStore } from "@/state/acp-state"
+import { applyThreadGroupChange } from "@/state/thread-groups"
 import { threadChildren } from "@/state/apex-fins"
 import { apexPips } from "@/state/fin-pips"
 import type { AcpState } from "@/state/acp-state"
@@ -108,6 +112,50 @@ try {
   }
   same("held starts included")
   assert.deepEqual({ ...rollup(owner()) }, { total: 4, needs: 0, working: 2, queued: 2, idle: 0, failed: 0, done: 0 })
+  // A Fin's progress reaches only its Apex's newest Session (`progressReaders`), so the Fins drawn are that Session's,
+  // by its Thread's order of Sessions, whichever of its conversations a window holds first. Stamps are the host's own:
+  // a queued Fin keeps its edge's time as its place moves, and a step may land in the same millisecond as the last.
+  const before = owner().filter((entry) => entry.child)
+  const queued = before.find((entry) => entry.child?.state?.kind === "queued")
+  const atWork = before.find((entry) => entry.child?.state?.kind === "working")
+  assert.ok(queued && atWork, "an Apex with a Fin queued and one at work")
+  const withState = (entry: typeof queued, state: NonNullable<NonNullable<typeof queued.child>["state"]>) => ({ ...entry, child: { ...entry.child!, state } })
+  const queuedState = queued.child!.state!
+  assert.equal(queuedState.kind, "queued")
+  const after = before.map((entry) => {
+    if (entry === queued && queuedState.kind === "queued") return withState(entry, { ...queuedState, ahead: queuedState.ahead + 3 })
+    if (entry === atWork) return withState(entry, { kind: "working", step: "an older step" })
+    return entry
+  })
+  const latest = before.map((entry) => {
+    if (entry === atWork) return withState(entry, { kind: "working", step: "the newest step" })
+    return entry
+  })
+  assert.deepEqual(after.map((entry) => entry.observedAt), latest.map((entry) => entry.observedAt), "the two rosters' stamps are the same")
+  const sessionHolding = (key: string, session: string, agents: typeof before) =>
+    // SAFETY: the fields `threadChildren` reads of a live conversation: its Thread, its Session and its roster.
+    ({ kind: "live", key, threadId: placed.thread, sessionId: session, nativeAgents: { agents, limited: false } }) as never
+  const said = (state: AcpState) => threadChildren(state, placed.thread).map((entry) => {
+    const now = entry.child?.state
+    return now?.kind === "working" ? now.step : now?.kind === "queued" ? `${now.ahead} ahead` : now?.kind
+  })
+  const wanted = said({ activeKey: null, conversations: { only: sessionHolding("only", "newest-session", latest) } })
+  assert.ok(wanted.includes("the newest step") && wanted.includes(`${queuedState.ahead} ahead`))
+  // The order a window keeps is the one its groups say, as they load and change.
+  const group = (sessions: string[]) => applyThreadGroupChange({ thread: placed.thread, group: { id: ThreadIdSchema.parse(placed.thread), sessions: sessions.map((id) => ({ id: SessionIdSchema.parse(id), origin: "started", started: true })) } })
+  const olderId = randomUUID(), newestId = randomUUID()
+  group([olderId, newestId])
+  assert.deepEqual(acpStore.get().threadSessions?.[placed.thread], [olderId, newestId], "the window keeps the group's order")
+  const ordered = acpStore.get().threadSessions
+  for (const order of [["old", "new"], ["new", "old"]] as const) {
+    const conversations = Object.fromEntries(order.map((which) => [which, which === "old" ? sessionHolding("old", olderId, after) : sessionHolding("new", newestId, latest)]))
+    assert.deepEqual(said({ activeKey: null, conversations, threadSessions: ordered }), wanted, `the newest Session's Fins, held ${order.join(" then ")}`)
+  }
+  // A Session made after the newest one held is newer still: the newest held of those the window has.
+  group([olderId, newestId, randomUUID()])
+  assert.deepEqual(said({ activeKey: null, conversations: { old: sessionHolding("old", olderId, after), new: sessionHolding("new", newestId, latest) }, threadSessions: acpStore.get().threadSessions }), wanted, "the newest Session held")
+  applyThreadGroupChange({ thread: placed.thread, group: null })
+  assert.equal(acpStore.get().threadSessions?.[placed.thread], undefined, "and a Thread back to one Session has no order to keep")
 
   // A Fin ends: one held starts, and the other moves up the line; the owner's next report says both.
   await w.agents.stop(apex.caller, { child: "li-openoutreach" })
@@ -135,20 +183,6 @@ try {
   const listed = windowOf(browser).conversations[apex.conversation]
   assert.ok(listed?.kind === "live" && listed.fins !== undefined, "the browser holds the moved Apex's Fins")
   await w.agents.stop(apex.caller, { child: "all" })
-  // An Apex's older Session hears a Fin's progress no more (`progressReaders`): the Fins drawn are from the roster that
-  // moved last, whichever of its Thread's conversations a window happens to hold first. A step is stamped as it's seen.
-  const behind = owner().filter((entry) => entry.child)
-  assert.ok(behind.length > 1, "an Apex with Fins")
-  const latest = Math.max(...behind.map((entry) => entry.observedAt))
-  const fresh = behind.map((entry, at) => (at === behind.length - 1 ? { ...entry, observedAt: latest + 1_000, child: { ...entry.child!, state: { kind: "working" as const, step: "a newer step" } } } : entry))
-  const sessionHolding = (key: string, agents: typeof behind) =>
-    // SAFETY: the fields `threadChildren` reads of a live conversation: its Thread and its roster.
-    ({ kind: "live", key, threadId: placed.thread, nativeAgents: { agents, limited: false } }) as never
-  const steps = (state: AcpState) => threadChildren(state, placed.thread).map((entry) => (entry.child?.state?.kind === "working" ? entry.child.state.step : undefined))
-  const wanted = steps({ activeKey: null, conversations: { newest: sessionHolding("newest", fresh) } })
-  assert.ok(wanted.includes("a newer step"))
-  for (const [first, second] of [[behind, fresh], [fresh, behind]] as const)
-    assert.deepEqual(steps({ activeKey: null, conversations: { a: sessionHolding("a", first), b: sessionHolding("b", second) } }), wanted, "the roster that moved last, held first or not")
   console.log("fin tree sync: an Apex's Fins, held starts included, read the same on its owner, another Mac and a browser; live, asleep with its age, and moved to the cloud under the one-owner rule")
 } finally {
   await w.close()
