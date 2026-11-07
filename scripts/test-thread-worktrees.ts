@@ -953,6 +953,11 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     writeFileSync(join(locked, "node_modules", name, "index.js"), "// the main checkout's\n")
   }
   writeFileSync(join(locked, "node_modules", ".package-lock.json"), "{}\n")
+  // What a tool keeps under its packages for itself, an account's among it: never another worktree's, whatever the lockfiles say.
+  mkdirSync(join(locked, "node_modules", ".cache", "tool"), { recursive: true })
+  writeFileSync(join(locked, "node_modules", ".cache", "tool", "account.json"), "{}\n")
+  mkdirSync(join(locked, "node_modules", ".mf"), { recursive: true })
+  writeFileSync(join(locked, "node_modules", ".mf", "cf.json"), "{}\n")
   const outputs = { command: "npm install", inputs: ["package-lock.json"], outputs: ["node_modules"], link: true }
   const read = async (from: string) => {
     const id = randomUUID()
@@ -969,6 +974,19 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     assert.equal(lstatSync(join(made.path, "node_modules")).isSymbolicLink(), false, "as its own, never a link to the main checkout's other packages")
     assert.equal(existsSync(join(made.path, "node_modules", "vendored")), false, "one they don't is left for the install, whatever its version")
     assert.equal(existsSync(join(made.path, "node_modules", ".package-lock.json")), false, "and so is npm's record of what's there")
+    assert.equal(existsSync(join(made.path, "node_modules", ".cache")), false, "a tool's own state stays the main checkout's")
+    assert.equal(existsSync(join(made.path, "node_modules", ".mf")), false, "all of it")
+    const sameId = randomUUID()
+    started(sameId)
+    const same = await worktrees.prepare(sameId, locked, "Locked same", { kind: "from", ref: git(locked, "rev-parse", "HEAD") })
+    await worktrees.outputs(sameId)
+    await rm(join(same.path, "node_modules"), { recursive: true, force: true })
+    await carryOutputs(gitRunner, locked, same.path, [{ ...outputs, link: false }], setup)
+    assert.equal(existsSync(join(same.path, "node_modules", "keeps", "index.js")), true, "a clone of the same inputs has every package")
+    assert.equal(existsSync(join(same.path, "node_modules", ".package-lock.json")), true, "and npm's record")
+    assert.equal(existsSync(join(same.path, "node_modules", ".cache")), false, "and no tool's state either")
+    assert.equal(existsSync(join(same.path, "node_modules", ".mf")), false, "none of it")
+    await worktrees.abandon(sameId).catch(() => undefined)
   }
   assert.equal((await setup.prepared(made.path)).done["npm install"], undefined, "nothing says the install ran")
   await worktrees.abandon(id).catch(() => undefined)

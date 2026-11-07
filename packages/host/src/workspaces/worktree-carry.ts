@@ -190,6 +190,12 @@ async function sharesBlocks(repoRoot: string, checkout: string): Promise<boolean
 /** In a linked folder of a checkout: the main checkout's folder its entries link to. */
 export const LINKED_MARK = ".mako-linked"
 
+/**
+ * What tools keep for themselves in a package folder: no install makes these, and they hold what the tool last
+ * learned, an account among it. A clone leaves them behind, so no worktree inherits another's.
+ */
+const TOOL_STATE = [".cache", ".mf"]
+
 /** A package folder, linked package by package; how npm, pnpm and Yarn lay one out, not a guess about the project. */
 function packageFolder(entry: string): boolean {
   return basename(entry) === "node_modules"
@@ -603,6 +609,7 @@ export async function carryOutputs(git: Git, repoRoot: string, checkout: string,
           continue
         }
         try {
+          if (packageFolder(entry)) await Promise.all(TOOL_STATE.map((name) => removeBelowAgents(join(temporary, name))))
           await rename(temporary, to)
           entries.push(entry)
         } catch {
