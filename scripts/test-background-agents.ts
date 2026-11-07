@@ -105,9 +105,14 @@ function rosterAndLists(): void {
 function uploadsFollowParents(): void {
   const parent = randomUUID()
   const at = new Date(NOW - 60_000).toISOString()
-  const rows: ReportedSession[] = [{ session: parent, thread: randomUUID(), conversation: "parent", harness: "codex", nativeId: "parent", title: "Parent", state: "idle", createdAt: at, activityAt: at, generation: 1 }]
-  const scope = uploadScope(rows, { onBattery: false, percent: undefined, lowPower: false }, (harness, nativeId) => `/${harness}/${nativeId}`, NOW, (session) => (session === parent ? [{ harness: "cursor", nativeId: "helper" }] : []))
-  assert.deepEqual(scope.sessions.map((session) => `${session.harness}:${session.nativeId}`), ["codex:parent", "cursor:helper"], "a child's Session syncs right after its parent's, under its Thread")
+  const thread = randomUUID()
+  const row = (session: string, nativeId: string): ReportedSession => ({ session, thread, conversation: nativeId, harness: "codex", nativeId, title: "Parent", state: "idle", createdAt: at, activityAt: at, generation: 1 })
+  const rows = [row(parent, "parent"), row(randomUUID(), "earlier")]
+  let looks = 0
+  const children = new Map([[thread, [{ harness: "cursor", nativeId: "helper" }]]])
+  const scope = uploadScope(rows, { onBattery: false, percent: undefined, lowPower: false }, (harness, nativeId) => { if (nativeId === "helper") looks += 1; return `/${harness}/${nativeId}` }, NOW, children)
+  assert.equal(looks, 1, "a Thread's children are walked once, however many Sessions it has")
+  assert.deepEqual(scope.sessions.filter((session) => session.nativeId !== "earlier").map((session) => `${session.harness}:${session.nativeId}`), ["codex:parent", "cursor:helper"], "a child's Session syncs right after its parent's, under its Thread")
   assert.equal(scope.sessions[1]!.thread, scope.sessions[0]!.thread)
 }
 
@@ -123,6 +128,7 @@ function storeKeeps(): void {
   threads.keepEdge({ ...first, run: { ...run, ended: { at: 1, kind: "done" } } })
   const later = threads.keepEdge({ ...first, run: { ...run, ended: { at: 2, kind: "failed" } } })
   assert.deepEqual(later.run?.ended, { at: 1, kind: "done" }, "an end is written once")
+  assert.deepEqual(threads.childSessions().get(apex.thread), [{ harness: "claude", nativeId: "n" }], "a child without a claim still names its run")
   const told = report(first.child, "done", "Fixed it.")
   const kept = threads.keepReport(told)
   assert.ok("report" in kept && !kept.deduped)

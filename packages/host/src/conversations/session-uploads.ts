@@ -27,10 +27,10 @@ export type UploadSources = {
   /** Where the catalog reads a native session, by its harness and ID; undefined for one it doesn't list. */
   path(harness: string, nativeId: string): string | undefined
   /**
-   * The children of a Session's Thread, by their harness Sessions (`ThreadStore.childSessions`): no row of their own,
-   * they go up with it, so another device reads each under it as this one shows it.
+   * Every Thread's children, by their harness Sessions (`ThreadStore.childSessions`): no row of their own, they go up
+   * with their parent, so another device reads each under it as this one shows it. Read once a tick.
    */
-  agents?(session: string): readonly { harness: string; nativeId?: string }[]
+  agents?(): ReadonlyMap<string, readonly { harness: string; nativeId?: string }[]>
   /** Where this device's copies and originals go in the account, while it's signed in with the cloud; else why not. */
   links(): Promise<UploadLinks>
   power(): Promise<PowerReading>
@@ -57,10 +57,11 @@ export function uploadScope(
   power: PowerReading,
   pathOf: (harness: string, nativeId: string) => string | undefined,
   now: number,
-  agentsOf: (session: string) => readonly { harness: string; nativeId?: string }[] = () => []
+  agents: ReadonlyMap<string, readonly { harness: string; nativeId?: string }[]> = new Map()
 ): SyncScope {
   const threads = threadActivity(rows)
   const seen = new Set<string>()
+  const walked = new Set<string>()
   const sessions: SyncScope["sessions"] = []
   for (const row of [...rows].sort((left, right) => syncOrder(left, right, threads))) {
     if (!row.nativeId) continue
@@ -70,7 +71,10 @@ export function uploadScope(
     if (!path || !tier || seen.has(key)) continue
     seen.add(key)
     sessions.push({ harness: row.harness, nativeId: row.nativeId, path, thread: row.thread, busy: busyRow(row), tier })
-    for (const agent of agentsOf(row.session)) {
+    // A Thread's children follow its first Session in the order; an Apex can have dozens of each.
+    if (walked.has(row.thread)) continue
+    walked.add(row.thread)
+    for (const agent of agents.get(row.thread) ?? []) {
       const at = agent.nativeId && pathOf(agent.harness, agent.nativeId)
       const own = agent.nativeId && `${agent.harness}\n${agent.nativeId}`
       if (!at || !own || seen.has(own)) continue
@@ -131,7 +135,7 @@ export class SessionUploads {
     // Once a scope was given, the links go first, whatever the scope does: a scope the catalog's process was too busy
     // to take in time once kept every renewed token from it, and its pushes went with an expired one.
     if (this.#scopeKey !== undefined) await this.#give(links)
-    const scope = uploadScope(rows, await this.#reading(), (harness, nativeId) => this.#sources.path(harness, nativeId), this.#sources.now(), (session) => this.#sources.agents?.(session) ?? [])
+    const scope = uploadScope(rows, await this.#reading(), (harness, nativeId) => this.#sources.path(harness, nativeId), this.#sources.now(), this.#sources.agents?.())
     const scopeKey = JSON.stringify(scope)
     if (scopeKey !== this.#scopeKey) {
       await this.#sources.scope(scope)
