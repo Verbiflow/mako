@@ -58,7 +58,7 @@ import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
 import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
-import { declareGitMethods, hostGit } from "./git/index.js"
+import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
 import type { TerminalClients } from "./terminals/index.js"
 import { declareApplicationMethods, Updates, type Application } from "./application/index.js"
@@ -491,6 +491,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   let windowRows: ThreadRef[] | undefined
   /** The rows by native session, read again with them: where the uploads read each Session. */
   let windowPaths: Map<string, string> | undefined
+  /** Moves with everything the catalog says, so what reads its paths knows they may have. */
+  let catalogMoves = 0
   // The Threads moving to the cloud from here, said on their rows from the move's first step.
   const movesUnderWay = new MovesUnderWay()
   // What each project on the list has checked out, as the rail shows it beside the project: read once a project is
@@ -572,6 +574,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     work: shell.work,
   })
   catalog.subscribe((event) => {
+    catalogMoves += 1
     if (event.type === "thread-ref") {
       const at = windowRows?.findIndex((row) => row.path === event.ref.path) ?? -1
       if (windowRows && at >= 0) windowRows[at] = event.ref
@@ -625,7 +628,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     uploads = new SessionUploads({
       rows: () => sessions.listed(),
       path: (harness, nativeId) => (windowPaths ??= new Map((windowRows ??= catalog.recent(windowStart(Date.now()))).map((ref) => [`${ref.harness}\n${ref.nativeId}`, ref.path]))).get(`${harness}\n${nativeId}`),
-      agents: (session) => threads.store?.childSessions(session) ?? [],
+      agents: () => threads.store?.childSessions() ?? new Map(),
+      scopeVersion: () => (threads.store ? `${threads.store.version()}:${catalogMoves}` : undefined),
       links: async () => {
         const cloud = late.cloud
         const blocked = cloud?.cloudBlocked ? await cloud.cloudBlocked() : "signed-out"
@@ -1069,6 +1073,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // What an agent below full access asks the person, for every tool that acts for them.
   late.agentAsks = new AgentAskGate(live.asks)
   // The same three moves for an agent's `thread_move` and `mako thread move`: its own Thread, or the person's named one.
+  // An agent's ask is answered on the path a harness's approval is, by whoever answers: one answer for each.
+  live.asks.answering = async (conversation, ask, allow) => late.agentAsks?.answer(conversation, ask, allow)
   late.threadMoves = new ThreadMoveTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
     place: (id) => {
@@ -1252,6 +1258,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     checkWaitMs: (harness) => harnesses.tools.mcpSources.get(harness)?.callWaitMs,
     jobs: shell.jobs,
     person: shell.machineGitHubPerson,
+    pullRequestsAs: config.machineAgentFd === undefined ? undefined : () => machinePullRequestsAs(),
     emit,
     warn: (message, facts) => hostWarn("workspace", message, facts),
   })

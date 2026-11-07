@@ -3,6 +3,7 @@ import {
   rpcRequest,
   streamRequest,
   runDiscovery,
+  withDiscoveryStream,
 } from "@mako/host/harnesses/profile-transport"
 import { DiscoveryProcesses, type DiscoveryOptions } from "@mako/host/harnesses/discovery-process"
 import { z } from "zod"
@@ -17,6 +18,24 @@ await assert.rejects(
 await assert.rejects(
   streamRequest(processes, process.execPath, earlyExit, {}, process.env, () => undefined),
   /exited|closed/
+)
+// The child is gone and this loop hasn't turned, so its exit isn't heard when the write fails: the exit still says why.
+await assert.rejects(
+  withDiscoveryStream(processes, { command: process.execPath, args: earlyExit, env: process.env }, async ({ request }) => {
+    const gone = performance.now() + 500
+    while (performance.now() < gone);
+    return request({}, () => undefined)
+  }),
+  /exited with 2 before discovery completed/
+)
+// A child alive with its input closed has no exit to wait for: the broken pipe stands, well before the timeout.
+const aliveAndDeaf = ["-e", 'require("node:fs").closeSync(0); process.stdout.write("{}\\n"); setInterval(() => {}, 1000)']
+await assert.rejects(
+  withDiscoveryStream(processes, { command: process.execPath, args: aliveAndDeaf, env: process.env, timeoutMs: 8_000 }, async ({ request }) => {
+    await request({}, () => true)
+    return request({}, () => undefined)
+  }),
+  /EPIPE/
 )
 const closedInput = [
   "-e",

@@ -34,7 +34,8 @@ import {
   type TurnContinuation,
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
-import { childGroup, childStateOf, rollup } from "../contracts/children.js"
+import { digestAsks } from "../contracts/agents.js"
+import { childGroup, childStateOf, DIGEST_WAITS, rollup, WAKE_COALESCE_MS } from "../contracts/children.js"
 import { latestPendingQuestion, retireQuestionsForInput, type PendingAsk } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
@@ -450,6 +451,11 @@ export class LiveConversations {
     return this.records.session(id)
   }
 
+  /** The harness Sessions the conversation is bound to, from what's already listed: this never reads it in. */
+  nativeIds(id: string): readonly { provider: string; nativeId: string }[] {
+    return this.records.nativeIds(id)
+  }
+
   /** What memory holds of the conversation now; `undefined` for one only on disk, which this never reads in. */
   held(id: string): LiveSnapshot | undefined {
     return this.records.get(id)?.snapshot
@@ -503,8 +509,10 @@ export class LiveConversations {
     const resident = this.records.get(id)
     const request = resident?.snapshot.requests.find((candidate) => candidate.id === requestId)
     if (!resident || !request || (request.status !== "queued" && request.status !== "held")) return false
+    // A question joining a digest the budget holds takes it along, within the burst's window (`digestAsks`).
+    const wake = request.wake?.after === DIGEST_WAITS && digestAsks(digest.notices) ? { ...request.wake, at: Math.min(request.wake.at, Date.now() + WAKE_COALESCE_MS) } : request.wake
     const next: LiveRequest = digest.notices.length
-      ? { ...request, text, digest: { ...digest, ...(request.digest?.resting && { resting: true as const, ...(request.digest.nextTry !== undefined && { nextTry: request.digest.nextTry }) }) }, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
+      ? { ...request, wake, text, digest: { ...digest, ...(request.digest?.resting && { resting: true as const, ...(request.digest.nextTry !== undefined && { nextTry: request.digest.nextTry }) }) }, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
       : { ...request, status: "canceled" }
     const previous = resident.snapshot
     resident.snapshot = { ...previous, requests: previous.requests.map((candidate) => (candidate === request ? next : candidate)) }
@@ -629,7 +637,7 @@ export class LiveConversations {
       }
     const question = latestPendingQuestion(conversationControl(resident), resident.snapshot.requests)
     const open = question?.native.questions.filter((item) => !question.answered?.includes(item.id)) ?? []
-    return question && open.length ? { request: question.id, kind: "question", options: [], questions: open } : undefined
+    return question && open.length ? { request: question.id, kind: "question", options: [], questions: open } : this.asks.pending(id)
   }
 
   /**
@@ -1474,6 +1482,8 @@ export class LiveConversations {
     requestId: string,
     response: LivePermissionResponse
   ): Promise<void> {
+    // An agent's ask through Mako's tools is answered on the path a harness's approval is (`agents_answer`, the person).
+    if (this.asks.open(id).some(ask => ask.id === requestId)) return this.asks.answer(id, requestId, response)
     if (conversationControl(this.records.require(id)).questions?.some(question => question.id === requestId)) {
       await this.questions.answer(id, requestId, response)
       return

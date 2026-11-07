@@ -6,6 +6,9 @@ export const SettingSchema = z.discriminatedUnion("name", [
   z.object({ name: z.literal("continue-after-restart"), value: z.boolean() }),
   z.object({ name: z.literal("harness-order"), value: z.array(z.string().min(1).max(40)).min(1).max(16) }),
   z.object({ name: z.literal("commit-model"), value: z.string().min(1).max(400) }),
+  /** Settings › Conversation: keep this Mac awake while agents work, and with its lid closed on power. */
+  z.object({ name: z.literal("keep-awake"), value: z.boolean() }),
+  z.object({ name: z.literal("keep-awake-lid-closed"), value: z.boolean() }),
 ])
 export type Setting = z.infer<typeof SettingSchema>
 
@@ -38,6 +41,10 @@ export type AgentAskWant = z.infer<typeof AgentAskWantSchema>
 export const AgentAskSchema = z.object({ id: z.string(), at: z.number(), want: AgentAskWantSchema })
 export type AgentAsk = z.infer<typeof AgentAskSchema>
 
+/** An ask's two answers as an approval's options, on the path a Fin's asks take to its Apex and the person. */
+export const AGENT_ASK_ALLOW = "allow"
+export const AGENT_ASK_KEEP = "keep"
+
 /** What a row says while the ask waits, in a line. */
 export function agentAskLine(want: AgentAskWant): string {
   switch (want.kind) {
@@ -68,6 +75,10 @@ function settingLine(setting: Setting): string {
       return `Wants to put ${setting.value[0]} first in your harness order`
     case "commit-model":
       return `Wants to draft commit messages with ${setting.value}`
+    case "keep-awake":
+      return `Wants to turn ${setting.value ? "on" : "off"} keeping this Mac awake while agents work`
+    case "keep-awake-lid-closed":
+      return `Wants to turn ${setting.value ? "on" : "off"} keeping this Mac awake with its lid closed`
   }
 }
 

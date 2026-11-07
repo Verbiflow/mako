@@ -103,7 +103,7 @@ export class KeepAwake {
   #running: Promise<void> = Promise.resolve()
   #coalesce: ReturnType<typeof setTimeout> | undefined
   #linger: ReturnType<typeof setTimeout> | undefined
-  /** The helper couldn't be had (`sleepWatchHelper` said so once); it isn't looked for again until Mako restarts. */
+  /** There's no helper (`sleepWatchHelper`); it isn't looked for again until Mako restarts. */
   #noHelper = false
   #stopped = false
 

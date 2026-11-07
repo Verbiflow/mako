@@ -38,7 +38,7 @@ async function copy(source, destination) {
   files.push({ path: destination, bytes: data.length, sha256: createHash("sha256").update(data).digest("hex") })
 }
 
-for (const file of ["package.json", "package-lock.json", "LICENSE", "scripts/patch-cursor-sdk.mjs"]) await copy(file, join("app", file))
+for (const file of ["package.json", "package-lock.json", "LICENSE", "scripts/patch-cursor-sdk.mjs", "scripts/patch-zod.mjs"]) await copy(file, join("app", file))
 const folders = new Map()
 for (const entry of await readdir("packages", { withFileTypes: true }))
   if (entry.isDirectory()) folders.set(JSON.parse(await readFile(join("packages", entry.name, "package.json"), "utf8")).name, join("packages", entry.name))

@@ -236,9 +236,10 @@ function buildModel(acp: AcpState, threads: ThreadsState): InboxModel {
     asks.push(...items)
     if (items.length && conversation.threadPath) coveredPaths.add(conversation.threadPath)
   }
-  // What an agent asked is its conversation's own, beside its Fins' asks and whatever else it waits on.
+  // What an agent asked is its conversation's own, beside its Fins' asks and whatever else it waits on. A Fin's goes
+  // through its Apex first, as its harness's approvals do, and is listed from the Apex's roster once it's the person's.
   for (const conversation of conversations) {
-    if (conversation.kind !== "live" || conversation.session.connection !== "connected") continue
+    if (conversation.kind !== "live" || conversation.parent || conversation.session.connection !== "connected") continue
     for (const ask of conversation.control?.asks ?? []) asks.push(agentAskItem(conversation, ask))
     if (conversation.control?.asks?.length && conversation.threadPath) coveredPaths.add(conversation.threadPath)
   }

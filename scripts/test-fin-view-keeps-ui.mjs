@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * What an Apex's Thread shows stays through whatever its session does (`npm run test:fin-view-keeps-ui`): the person
@@ -18,7 +18,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-fin-view-keeps-ui-"))
+  const root = testScratch("mako-fin-view-keeps-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-fin-view-keeps-ui", main: fileURLToPath(import.meta.url) }))
   const given = process.argv.slice(2).find((arg) => /^https?:/.test(arg))
   let server
@@ -38,7 +38,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Fin view keeps UI evidence: ${root}`)
 }
 
 const HARNESSES = ["claude", "codex", "cursor", "opencode", "grok", "devin"]

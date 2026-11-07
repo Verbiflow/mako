@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * A turn's tool rows never draw over one another, in the Mac's conversation at a laptop's size and in the phone's
@@ -28,7 +28,7 @@ if (process.versions.electron) {
   const args = process.argv.slice(2)
   const portAt = args.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(args.splice(portAt, 2)[1])
-  const root = await mkdtemp(join(tmpdir(), "mako-tool-rows-ui-"))
+  const root = testScratch("mako-tool-rows-ui-")
   const evidence = args[0] ? resolve(args[0]) : root
   await mkdir(evidence, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: port !== 0, hmr: false } })
@@ -45,7 +45,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Tool rows UI evidence: ${evidence}`)
 }
 
 /**
