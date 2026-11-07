@@ -4859,9 +4859,13 @@ this already, and an update of it (`from` upstream, clean by construction) runs
 the compile and `test:update-machine` alone (`application/local-update-ci.ts`):
 a real host and this Mac's Electron, every step of it among `checks`, about 10 s
 against 4 to 9 minutes. The performance check took 80 to 88% of `checking`, at
-load 26 once; both regressions it ever caught were drift over a baseline, which
-`update-checks` now trips at the commit that causes it, on a quiet runner. No
-answer runs every check: a run still going, no `gh`, a remote that isn't GitHub,
+load 26 once. It found two real problems: drift over a baseline (Devin's saved
+open), which `update-checks` now trips at the commit that causes it, on a quiet
+runner; and a hotspot (`startsWith` over resent output) behind a failure that
+hung on process-to-process timing, so a reading that was partly luck. The newest
+run of the commit's push decides, and GitHub says which branch is the default,
+as a local `origin/HEAD` can be stale. No answer runs every check: a run still
+going, a reading that disagrees with itself, no `gh`, a remote that isn't GitHub,
 a commit from before `test:update-machine`. A build of the checkout never asks.
 `test:settings-build -- --ci-passed` rehearses a commit CI passed. A failed build says
 whose it is (`local-update-failures.ts`: the code, the Mac, or the checkout),

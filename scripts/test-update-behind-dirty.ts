@@ -306,12 +306,12 @@ try {
   assert.deepEqual(clean.asked, [], "nor does the checkout as it is with none: only an upstream build is CI's commit, clean")
   assert.deepEqual(clean.ran, everything)
 
-  // A machine check failing a commit CI passed is this Mac's.
+  // A machine check failing a commit CI passed: it blocks the update, and says where to look without claiming whose it is.
   await writeFile(join(root, "emfile"), UPDATE_CHECKS.machine)
   const mine = await buildWith(passed, "upstream")
   await rm(join(root, "emfile"))
   assert.equal(mine.state.kind, "error")
-  if (mine.state.kind === "error") assert.equal(mine.state.failure?.blame, "machine")
+  if (mine.state.kind === "error") assert.match(mine.state.failure?.next ?? "", /what's different on this one/)
   assert.deepEqual(snapshot(person), before)
 
   console.log("Behind and dirty: the update says what it builds (upstream commit, how far behind, each uncommitted file and who changed it), builds the upstream clean in its own copy by default with the person's checkout byte-for-byte untouched, runs UPDATE_CHECKS in order with the verdict variable seen by the performance check alone, and says plainly when the checkout's own code fails (build the upstream instead) or the Mac does")

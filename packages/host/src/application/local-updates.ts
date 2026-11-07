@@ -710,7 +710,7 @@ export async function runUpdateChecks(run: UpdateCheckRun): Promise<UnsurePerfor
   run.phase?.("checking")
   if (run.vouched) {
     await runBuild(npm, ["run", UPDATE_CHECKS.machine], checkout, env).catch((error: Error) => {
-      throw new StepError("checking", error.message, { blame: "machine", next: "CI passed this commit, so this is this Mac, not the code.", script: UPDATE_CHECKS.machine, details: error.message, cause: error })
+      throw new StepError("checking", error.message, { blame: "machine", next: "CI passed this commit on its own Mac, so look at what's different on this one first: its macOS, its Node or how busy it is.", script: UPDATE_CHECKS.machine, details: error.message, cause: error })
     })
     return undefined
   }
