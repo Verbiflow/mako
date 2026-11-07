@@ -159,6 +159,7 @@
     "test:approval-answer-ui": "node scripts/test-approval-answer-ui.mjs",
     "test:carried-files-ui": "node scripts/test-carried-files-ui.mjs",
     "test:fin-tree-sync": "tsx --tsconfig tsconfig.app.json scripts/test-fin-tree-sync.ts",
+    "test:commit-authorship-ui": "node scripts/test-commit-authorship-ui.mjs",
     "test:account-threads-ui": "node scripts/test-account-threads-ui.mjs",
     "test:cloud-archive-ui": "node scripts/test-cloud-archive-ui.mjs",
     "test:telemetry": "tsx scripts/test-telemetry.ts",
