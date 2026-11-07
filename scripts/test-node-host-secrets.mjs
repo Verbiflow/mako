@@ -1,14 +1,14 @@
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 import { build } from "esbuild"
 import { invokeRuntime } from "@mako/host/transport/connection"
 import { ensureRuntime } from "@mako/host/transport/service"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * The real host, as `ensureRuntime` runs it under Electron's Helper in Node
@@ -26,7 +26,7 @@ if (process.platform !== "darwin") {
 }
 const NAME = "mako-secrets-proof-host"
 const run = promisify(execFile)
-const root = await mkdtemp(join(tmpdir(), "mako-node-host-secrets-"))
+const root = testScratch("mako-node-host-secrets-")
 const app = join(root, "app")
 const dataRoot = join(root, "data")
 const home = join(root, "home")

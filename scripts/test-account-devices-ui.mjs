@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { literal } from "./lib/page-code.mjs"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Settings › Devices and Settings › Account against the production components
@@ -30,7 +30,7 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-account-devices-ui-"))
+  const root = testScratch("mako-account-devices-ui-")
   const evidence = process.argv[2] ? resolve(process.argv[2]) : root
   await mkdir(evidence, { recursive: true })
   const server = await createServer({

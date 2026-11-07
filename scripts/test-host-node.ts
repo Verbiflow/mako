@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process"
 import assert from "node:assert/strict"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -8,7 +9,7 @@ import { computerPermissions } from "@mako/host/control/computer-permissions"
 import { fileResponse, localFile } from "@mako/host/workspaces/file-response"
 import { onMac } from "@mako/host/base/platform"
 import { hostCommand } from "@mako/host/transport/service"
-import { HOST_NODE_OPTIONS } from "@mako/host/base/process-warnings"
+import { HOST_HEAP_GROWTH, HOST_NODE_OPTIONS } from "@mako/host/base/process-warnings"
 import { AgentViewsApp, NO_DESKTOP_WINDOWS } from "@mako/host/control/agent-views"
 import { DesktopChannel } from "@mako/host/control/desktop-channel"
 
@@ -45,7 +46,10 @@ try {
   // `mako-host`, as a machine starts it, gives Node the same options on its first line.
   const program = (await readFile("packages/host/src/mako-host.ts", "utf8")).split("\n")[0]
   assert.equal(program, `#!/usr/bin/env -S node ${HOST_NODE_OPTIONS.join(" ")}`)
-  assert.ok(HOST_NODE_OPTIONS.every((option) => /^--disable-warning=[A-Z0-9_]+$/.test(option)), "only warnings Mako has checked, each by its code")
+  assert.ok(HOST_NODE_OPTIONS.includes(HOST_HEAP_GROWTH), "the host collects as it goes")
+  const limitWith = (options: readonly string[]) => Number(execFileSync(process.execPath, [...options, "-p", "require('node:v8').getHeapStatistics().heap_size_limit"], { encoding: "utf8" }).trim())
+  assert.equal(limitWith(HOST_NODE_OPTIONS), limitWith([]), "and its heap may still reach what it could: growing less can't run it out of memory")
+  assert.ok(HOST_NODE_OPTIONS.filter((option) => option !== HOST_HEAP_GROWTH).every((option) => /^--disable-warning=[A-Z0-9_]+$/.test(option)), "only warnings Mako has checked, each by its code")
 
   // With no Electron to start, agents read that Mako's own windows need the desktop app.
   const channel = new DesktopChannel()

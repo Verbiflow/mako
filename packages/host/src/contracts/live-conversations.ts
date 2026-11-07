@@ -320,6 +320,8 @@ export interface LiveRequest {
   id: string
   /** When the host admitted it (epoch ms); absent in journals written before it was kept. */
   createdAt?: number
+  /** When it was sent to its harness, which is when its turn began: a message can wait long after it's admitted. */
+  dispatchedAt?: number
   text: string
   attachments: PromptAttachment[]
   /**

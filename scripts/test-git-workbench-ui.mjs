@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (process.versions.electron) {
   void check().catch(async (error) => {
@@ -14,7 +14,7 @@ if (process.versions.electron) {
 } else {
   const { createServer } = await import("vite")
   const { default: electronPath } = await import("electron")
-  const root = await mkdtemp(join(tmpdir(), "mako-git-workbench-"))
+  const root = testScratch("mako-git-workbench-")
   // A Thread already has its supervised Vite app on its own address.
   const threadUrl = process.env.MAKO_THREAD_URL
   const server = threadUrl ? undefined : await createServer({
@@ -46,7 +46,6 @@ if (process.versions.electron) {
   } finally {
     if (server) await server.close()
   }
-  console.log(`Git workbench evidence: ${root}`)
 }
 
 async function check() {
@@ -147,7 +146,7 @@ async function check() {
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '13000'")
     await capture("large-changes.png")
     await evaluate(
-      "document.querySelector('[data-change-list]').scrollTop = 13000 * 24"
+      "document.querySelector('[data-change-list]').scrollTop = 13000 * 28"
     )
     await until(
       "Boolean(document.querySelector('[aria-label=\"Stage file-12999.ts\"]'))"
@@ -395,7 +394,7 @@ async function check() {
 
     await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.store.set({git: {...m.store.get().git, files: m.store.get().git.files.map((file, index) => ({...file, path: `src/${index % 2 ? 'a' : 'b/c'}/${file.path}`}))}}))")
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '15'")
-    await evaluate("document.querySelector('[aria-label=\"List by folder\"]').click()")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('filesView', 'folders'))")
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '14'")
     assert.deepEqual(
       await evaluate("Array.from(document.querySelectorAll('[data-change-row]')).map(row => row.textContent).filter(text => text.startsWith('src/')).map(text => text.match(/^src\\/[a-z/]+/)[0])"),
@@ -403,14 +402,14 @@ async function check() {
       "By folder shows each folder once, by its full path"
     )
     await captureElement("files-by-folder.png", '[aria-label="Changes in mako"]')
-    await evaluate("document.querySelector('[aria-label=\"Show as a tree\"]').click()")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('filesView', 'tree'))")
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '15'")
     console.log("Files list: switches between the folded tree and one row per folder")
 
     window.setContentSize(1200, 900)
     await fixture("m.selectProject('/fixture/review', 5000)")
     const diffsBefore = await fixture("return m.calls.diffs")
-    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('changesLayout', 'review'))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('changesView', 'review'))")
     await until("document.querySelector('[data-review-stream]')?.dataset.fileCount === '5000'")
     await until(`import('/src/dev/git-workbench-check.tsx').then(m => m.calls.diffs > ${diffsBefore}) && document.querySelectorAll('[data-review-stream] diffs-container').length > 0`)
     await new Promise((resolve) => setTimeout(resolve, 400))
@@ -444,7 +443,7 @@ async function check() {
     assert.equal(await evaluate("window.reviewMention"), "@file-04999.ts ", "Ask the agent mentions the file the way the file palette does")
     await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('theme', 'light'))")
     await capture("review-stream-light.png", true)
-    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => { m.setPref('theme', 'dark'); m.setPref('changesLayout', 'files') })")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => { m.setPref('theme', 'dark'); m.setPref('changesView', 'files') })")
     console.log(`Review: 5,000 files in one stream, ${screenDiffs} diffs read for the first screen and ${endDiffs} after jumping to the end, j moves between files, worst frame ${Math.round(reviewFrames)}ms`)
 
     const escape = async () => {
@@ -490,7 +489,7 @@ async function check() {
     await until("!document.querySelector('[data-sonner-toast]')")
     console.log("Discard: confirms with the files and where they go, stashes exactly those, and Undo restores that stash")
 
-    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('changesLayout', 'review'))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('changesView', 'review'))")
     await until("Boolean(document.querySelector('[data-review-file=\"assets/logo.png\"] img'))")
     assert.ok(await evaluate("document.querySelector('[data-review-file=\"assets/logo.png\"]').textContent.includes('→')"), "An image's header shows both sizes")
     await capture("review-image.png", true)
@@ -503,7 +502,7 @@ async function check() {
     await click("[data-pick]")
     await until("Boolean(document.querySelector('[aria-label^=\"Showing: commit bbbbbbb\"]')) && document.querySelectorAll('[data-review-file]').length > 0")
     await capture("review-commit-scope.png", true)
-    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('changesLayout', 'files'))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('changesView', 'files'))")
     console.log("Review: image thumbnails and sizes in the header; the scope picker lists Since main and recent commits and shows one commit")
     // A pull request is the harness's to write by default; the form is the override.
     await evaluate("window.__attached = []; window.addEventListener('mako:attach', (event) => window.__attached.push(event.detail.text('')))")

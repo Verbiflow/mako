@@ -33,6 +33,7 @@ function lane(name, command, args) {
 }
 
 await lane("cursor-sdk", process.execPath, ["scripts/patch-cursor-sdk.mjs"])
+await lane("zod", process.execPath, ["scripts/patch-zod.mjs"])
 await lane("prune", process.execPath, ["scripts/prune-host-output.mjs"])
 
 await lane("packages", process.execPath, [tsgo, "-b", "packages/sessions", "packages/git", "packages/lazy", "packages/control"])

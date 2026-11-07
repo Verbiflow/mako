@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { literal } from "./lib/page-code.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * The web app's Settings › Devices (`src/dev/web-devices-check.tsx`: `WebDevices`, the desktop's own `Devices`, on an
@@ -39,7 +39,7 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-web-devices-ui-"))
+  const root = testScratch("mako-web-devices-ui-")
   const args = process.argv.slice(2)
   const onlyAt = args.indexOf("--only")
   const only = onlyAt === -1 ? "" : args.splice(onlyAt, 2)[1]

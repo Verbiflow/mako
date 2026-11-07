@@ -66,6 +66,7 @@ import type { ForkInput, TransferInput } from "./conversation-control.js"
 import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissionResponse, PromptAttachment } from "./providers-acp.js"
 import type { LiveStartOptions, LiveSnapshot, LiveRequest, SignInReadiness, SignInResume } from "./live-conversations.js"
 import type { ConversationSettings } from "./turn-continuation.js"
+import type { KeepAwakeSettings, KeepAwakeState } from "./keep-awake.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
@@ -79,6 +80,7 @@ import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, Simulat
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { GitHubTokenListing } from "./github-person.js"
+import type { CommitAuthor, GitHubAuthorship } from "./github-authorship.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadContinueOffer, ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { ContinueReading } from "./cloud-continues.js"
@@ -482,6 +484,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** Whether agents at work go to the cloud as this Mac sleeps, and whether it can. */
     handOffSettings: () => invokeTrustedHost<HandOffSettings>("mako:handoff-settings"),
     setHandOffOnSleep: (onSleep: boolean) => invokeTrustedHost<HandOffSettings>("mako:handoff-settings-set", onSleep),
+    /** Whether this Mac is kept awake while agents work, the person's choice for it, and what's held now. */
+    keepAwake: () => invokeTrustedHost<KeepAwakeState>("mako:keep-awake"),
+    setKeepAwake: (change: Partial<KeepAwakeSettings>) => invokeTrustedHost<KeepAwakeState>("mako:keep-awake-set", change),
     /**
      * Brings the Thread of a conversation back from the cloud under `move`; its steps arrive as `thread-return-step`
      * events. `options.project`: the folder its project is in now, when the one its worktree was made from moved.
@@ -547,6 +552,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     githubToken: () => invokeTrustedHost<GitHubTokenListing | null>("mako:github-token"),
     githubTokenSave: (token: string, repository?: string) => invokeTrustedHost<GitHubTokenListing>("mako:github-token-save", token, repository),
     githubTokenRemove: () => invokeTrustedHost<void>("mako:github-token-remove"),
+    /* Who cloud commits and pull requests are authored as, and choosing it. */
+    githubAuthorship: () => invokeTrustedHost<GitHubAuthorship | null>("mako:github-authorship"),
+    githubAuthorshipSave: (as: CommitAuthor) => invokeTrustedHost<GitHubAuthorship>("mako:github-authorship-save", as),
     /* A project's carried files (its recipe's `carry`) in Mako Cloud: what goes, the person's word, a file kept on this Mac. */
     cloudCarriedFiles: (folder: string) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files", folder),
     cloudCarriedFilesDecide: (folder: string, allowed: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-decide", folder, allowed),
@@ -1011,7 +1019,7 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<AgentsDirected | AgentRefused>("mako:agents-direct", conversation, input),
     /** Where a Thread held by a limit could go on, for its card (`Agents.nextPlace`). */
     agentsNextPlace: (conversation: string) =>
-      invokeTrustedHost<{ label: string } | null>("mako:agents-next-place", conversation),
+      invokeTrustedHost<{ label: string; harness: string } | null>("mako:agents-next-place", conversation),
     agentsContinueNext: (conversation: string, id: string) =>
       invokeTrustedHost<boolean>("mako:agents-continue-next", conversation, id),
     agentsRespond: (conversation: string, input: AgentsRespondInput) =>

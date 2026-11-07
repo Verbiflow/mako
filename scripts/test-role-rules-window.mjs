@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Settings › Fins' fields for the person's standing rules, the production section on the mock bridge, driven with
@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url"
  */
 if (!process.versions.electron) {
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-role-rules-ui-"))
+  const root = testScratch("mako-role-rules-ui-")
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: Number(process.env.MAKO_UI_PORT ?? 0), hmr: false } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ main: fileURLToPath(import.meta.url) }))
@@ -28,7 +28,6 @@ if (!process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`UI evidence: ${evidence}`)
 } else {
   void checkWindow().catch(async (error) => {
     console.error(error)

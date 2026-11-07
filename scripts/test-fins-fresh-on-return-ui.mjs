@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * An Apex's Fins are current the moment the person comes back to its Thread (`npm run test:fins-fresh-on-return-ui`):
@@ -18,7 +18,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-fins-fresh-on-return-ui-"))
+  const root = testScratch("mako-fins-fresh-on-return-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-fins-fresh-on-return-ui", main: fileURLToPath(import.meta.url) }))
   const given = process.argv.slice(2).find((arg) => /^https?:/.test(arg))
   let server
@@ -38,7 +38,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Fins fresh on return UI evidence: ${root}`)
 }
 
 /** The asks of Fins drawn on screen, by what each asks: in the crew card, or over the composer. */

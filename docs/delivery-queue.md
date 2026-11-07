@@ -113,10 +113,28 @@ schedules, and a failing schedule is pinned there.
 13. **A Fin's question closes when input reaches it.** When its harness takes a
     message or a steer after the Fin asked, from anyone, an Apex's or the person's,
     its question is answered, whatever the words, and an answer sent after that is
-    refused as answered. Queueing isn't delivery: a message removed unheard leaves
-    the question open. What Mako sends by itself (a digest, a continuation, a goal's
+    refused as answered. An Apex's message answers only a question that has reached
+    that Apex: one that crossed it, with the question waiting or being sent but not
+    yet handed over, is just a message, and the question goes on to the Apex. Queueing isn't delivery: a
+    message removed unheard leaves the question open. What Mako sends by itself (a digest, a continuation, a goal's
     step) answers nothing, known by where it came from, never by its words. An answer still on its way that fails doesn't reopen a
     question something else closed (`Agents.inputDelivered`).
+
+14. **A digest that asks something doesn't wait out the minute's budget.** The
+    budget (`WAKES_PER_MINUTE`) holds what's only news. A digest with a question or
+    a decision in it (`digestAsks`) goes past a spent budget at most every
+    `ASK_EVERY_MS`, and what's asked meanwhile joins it, so a Fin asking during each
+    Apex turn gathers into one wake and doesn't loop. One joining a digest the budget
+    holds takes that digest along. Otherwise a question could outwait the minute its
+    Apex has to answer (`APEX_ANSWER_MS`), and the person would be asked first.
+
+15. **A digest cut at its hand-off goes again.** Its reports read as heard once it's
+    in the queue, so a crash after `submitted` and before the harness has it would
+    lose them. The next host sends it again, framed as maybe repeated, unless the
+    harness's transcript shows that very message by its id: a digest's words prove
+    nothing, as any of them may be in what the Thread was told before. It goes again
+    as a digest, so it waits out a limit and rests like any other, and later news goes
+    on its own behind it (`cutBrief`, `DIGEST_AGAIN`).
 
 ## What each failure leaves
 
