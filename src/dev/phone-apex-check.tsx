@@ -2,13 +2,15 @@
 import { createRoot } from "react-dom/client"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { applyLiveBatch, applyLiveSnapshot } from "@/state/live-recovery"
+import { applyLiveBatch, applyLiveSnapshot, hydrateLive, unloadLive } from "@/state/live-recovery"
 import { getMako } from "@/lib/bridge"
 import { acp } from "@/state/acp"
+import { acpStore } from "@/state/acp-state"
 import { threadsStore } from "@/state/thread-store"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import { WebClient, WebClientContext } from "@/web-client/client"
 import { accountListStore } from "@/web-client/account-list"
+import { syncingStore } from "@/web-client/syncing"
 import { applyTheme } from "@/web-client/theme"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
@@ -62,11 +64,29 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   push: { seen: async () => undefined },
   conversations: async () => ({
     open: (session: { row: { conversation: string } }) => {
-      acp.activate(session.row.conversation, false)
+      const conversation = session.row.conversation
+      acp.activate(conversation, false)
+      // One this page doesn't hold (`phoneApex.forget()`, as a reload leaves it) is read from its owner, "Syncing…"
+      // meanwhile, as `WebConversations.open` reads it. One it holds isn't read again here: the checks that move it by
+      // batches would see a read put it back.
+      if ((acpStore.get().conversations[conversation]?.projection?.exchanges.length ?? 0) > 0) return () => undefined
+      syncingStore.set({ conversation })
+      void hydrateLive(conversation).finally(() => syncingStore.set({ conversation: undefined }))
       return () => undefined
     },
   }),
 })
+
+// The owner's answer to a read takes `?answer=` ms, over the network (default: at once).
+const ANSWER_MS = Number(search.get("answer") ?? 0)
+const mako = getMako()
+const answered = mako.liveSnapshot.bind(mako)
+mako.liveSnapshot = async (id) => {
+  if (ANSWER_MS) await new Promise((resolve) => setTimeout(resolve, ANSWER_MS))
+  return answered(id)
+}
+/** `forget()`: the Apex's transcript let go, as a reload leaves it, so its next open reads it from its owner. */
+Reflect.set(window, "phoneApex", { forget: () => unloadLive(APEX_CONVERSATION) })
 
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>

@@ -213,7 +213,17 @@ export function ownerOf(session: WebSession): Owner {
   return session.owner.kind === "cloud" ? { kind: "cloud", threadId: session.owner.threadId } : { kind: "mac", deviceId: session.owner.deviceId }
 }
 
-/** A Session's one line under its title: the Mac's name, when it isn't the cloud, and the project. */
+/**
+ * Where a Thread runs and its project, in the one order every screen says them: the device's name, then the project.
+ * The cloud isn't named (its glyph says it), and neither is the device where `named` is false (the list, while the
+ * account has one); with nothing else to say, where it runs.
+ */
+export function placeLine(where: string, project: string | undefined, named = true): string {
+  const cloud = where === CLOUD_WHERE
+  return [cloud || !named ? undefined : where, project].filter(Boolean).join(" · ") || (cloud ? "Cloud" : where)
+}
+
+/** A Session's one line under its title: where it runs and the project (`placeLine`). */
 export function subtitle(thread: WebThread, session: WebSession): string {
-  return [session.where === CLOUD_WHERE ? undefined : session.where, thread.project].filter(Boolean).join(" · ") || (session.where === CLOUD_WHERE ? "Cloud" : session.where)
+  return placeLine(session.where, thread.project)
 }

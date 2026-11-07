@@ -6,7 +6,7 @@ import { test } from "node:test"
 import type { ListedFin, ListedSession } from "@mako/protocol/thread-listing"
 import { threadChildren } from "../src/state/apex-fins"
 import { rollup } from "@mako/host/contracts/children"
-import { foldThreads, openingSession } from "../src/web-client/threads"
+import { foldThreads, openingSession, subtitle } from "../src/web-client/threads"
 import { parseRoute, routeHref, type WebRoute } from "../src/web-client/route"
 import { typedRepository } from "../src/web-client/account"
 import { Gateway, GatewayError } from "../src/web-client/gateway"
@@ -258,7 +258,9 @@ test("a row says one fact under its title: what it waits on, that it failed or w
   assert.deepEqual(said(111), { text: "Failed", tone: "negative" })
   assert.deepEqual(said(112), { text: "Working", tone: "working" })
   assert.deepEqual(said(113), { text: "web", tone: "faint", place: "device" }, "one Mac: its name goes without saying")
-  assert.deepEqual(said(113, true), { text: "web · Studio", tone: "faint", place: "device" }, "several: the Mac is named")
+  assert.deepEqual(said(113, true), { text: "Studio · web", tone: "faint", place: "device" }, "several: the Mac is named, then the project, as the bar says them")
+  const studio = threads.find((thread) => thread.id === uuid(113))!
+  assert.equal(said(113, true).text, subtitle(studio, studio.sessions[0]!), "the list's row and the Thread's bar say where it runs in one order")
   assert.deepEqual(said(114, true), { text: "api", tone: "faint", place: "cloud" }, "the cloud is its glyph, never a word again")
 })
 
