@@ -49,6 +49,9 @@ const APEX_CONVERSATION = "1ead1ead-2000-4000-8000-000000001ead"
 const FIN_THREAD = "1ead1ead-3000-4000-8000-000000000013"
 const FIN_CONVERSATION = "1ead1ead-5000-4000-8000-000000000013"
 const FIN_TITLE = "Docs sweep"
+/** What the desk shows when a wait runs out: the open conversation and the rail's rows; and the crew card's rows. */
+const ACTIVE = "import('/src/state/acp.ts').then(({ acpStore }) => ({ active: acpStore.get().activeKey, rows: [...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].map((node) => [node.dataset.conversationId, node.dataset.apexRow ?? '', node.innerText.split('\\n')[0]]) }))"
+const CREW = `${ACTIVE}.then((shown) => ({ ...shown, crew: document.querySelector('[data-crew]') !== null, crewRows: [...document.querySelectorAll('[data-crew-row]')].map((node) => node.dataset.crewRow) }))`
 
 async function check() {
   const { app, BrowserWindow } = await import("electron")
@@ -73,10 +76,14 @@ async function check() {
       if (event.level === "error") errors.push(event.message)
     })
     const evaluate = (code) => page.executeJavaScript(code)
-    const until = async (code, what = code, ms = 20_000) => {
+    // `seen` is read when the wait runs out, so the failure says what the page showed instead.
+    const until = async (code, what = code, ms = 20_000, seen) => {
       const deadline = Date.now() + ms
       while (!(await evaluate(code))) {
-        if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}${errors.length ? `; the page said: ${errors.join(" | ")}` : ""}`)
+        if (Date.now() > deadline) {
+          const shown = seen ? `; the page showed ${JSON.stringify(await evaluate(seen))}` : ""
+          throw new Error(`Timed out waiting for ${what}${shown}${errors.length ? `; the page said: ${errors.join(" | ")}` : ""}`)
+        }
         await new Promise((done) => setTimeout(done, 40))
       }
     }
@@ -96,7 +103,7 @@ async function check() {
     // Selectors here are this script's own literals: none comes from outside it.
     const click = (selector) => evaluate(`(() => { const node = document.querySelector('${selector}'); if (!node) return false; (node.closest('button') ?? node).click(); return true })()`)
     const activeKey = () => evaluate("import('/src/state/acp.ts').then(({ acpStore }) => acpStore.get().activeKey)")
-    const activeIs = (key, what, ms) => until(`import('/src/state/acp.ts').then(({ acpStore }) => acpStore.get().activeKey === '${key}')`, what, ms)
+    const activeIs = (key, what, ms) => until(`import('/src/state/acp.ts').then(({ acpStore }) => acpStore.get().activeKey === '${key}')`, what, ms, ACTIVE)
     await window.loadURL(url)
     return { window, evaluate, until, capture, both, click, activeKey, activeIs, errors, close: () => window.close() }
   }
@@ -111,10 +118,12 @@ async function check() {
       const openable = await desk.evaluate(`document.querySelector('.thread-jump-scope [data-asking-fin="${FIN_THREAD}"]').dataset.openable`)
       assert.equal(openable, scene === "unlisted" ? "false" : "true", `the row says whether it opens (${scene})`)
       await desk.both(`desk-rail-${scene}`)
-      // The crew card, in the Apex's Thread: the same row, the same word on whether it opens. A cold runner's first
-      // transcript takes a while to come up.
-      await desk.click(`.thread-jump-scope [data-apex-row]`)
-      await desk.until(`Boolean(document.querySelector('[data-crew-row="${FIN_THREAD}"]'))`, "the Fin in the Apex's crew card", 90_000)
+      // The crew card, in the Apex's Thread: the same row, the same word on whether it opens. The Apex's row is found
+      // by its conversation, never by its place in the rail, and the card is waited for only once its conversation is
+      // the open one. A cold runner's first transcript takes a while to come up.
+      assert.ok(await desk.click(`.thread-jump-scope [data-conversation-id="${APEX_CONVERSATION}"]`), `the Apex's row in the rail (${scene})`)
+      await desk.activeIs(APEX_CONVERSATION, "the Apex's conversation open in place")
+      await desk.until(`Boolean(document.querySelector('[data-crew-row="${FIN_THREAD}"]'))`, "the Fin in the Apex's crew card", 90_000, CREW)
       // The crew card's row for a Fin that needs the person opens from its title; every other row is the button itself.
       assert.equal(await desk.evaluate(`document.querySelector('[data-crew-row="${FIN_THREAD}"][data-openable], [data-crew-row="${FIN_THREAD}"] [data-openable]').dataset.openable`), scene === "unlisted" ? "false" : "true")
       await desk.both(`desk-crew-${scene}`)
