@@ -1252,9 +1252,8 @@ async function activityTellsNoOne(): Promise<void> {
 }
 
 /**
- * A Fin's progress alone goes to its Apex Thread's newest Session, by the store's order, and never reads another back
- * from its journal; a change of how it stands goes to every one. One Apex of 14 Sessions, 13 closed, took every step 14
- * times.
+ * A Fin's progress, and a change of how it stands, go to its Apex Thread's newest Session alone, by the store's order,
+ * and never read another back from its journal. One Apex of 14 Sessions, 13 closed, took every step 14 times.
  */
 async function progressGoesWhereItsRead(): Promise<void> {
   const w = world("progress", (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "Done: it's finished.") : "Started it."))
@@ -1299,7 +1298,8 @@ async function progressGoesWhereItsRead(): Promise<void> {
     }
     assert.deepEqual(moveFrom({ ...now, title: `${now.title} before`, observedAt: now.observedAt - 1 }).map(([id]) => id), [apex.conversation], "a step goes to the newest Session alone, not one running before it")
     assert.ok(told.every(([, progress]) => progress), "as progress")
-    assert.deepEqual(moveFrom({ ...now, state: { kind: now.state.kind === "waiting" ? "working" : "waiting" } }).map(([id]) => id).sort(), [apex.conversation, ...Object.values(older)].sort(), "a change of how it stands goes to every Session")
+    assert.deepEqual(moveFrom({ ...now, state: { kind: now.state.kind === "waiting" ? "working" : "waiting" } }).map(([id]) => id), [apex.conversation], "so does a change of how it stands")
+    assert.ok(told.every(([, progress]) => !progress), "at once, not as progress")
     // A Session after the Apex's own is the newest: the order is the store's, not whose the Fin is.
     const newer = randomUUID()
     mock.method(store, "thread", (id: Parameters<typeof store.thread>[0]) => {
@@ -1313,6 +1313,66 @@ async function progressGoesWhereItsRead(): Promise<void> {
     assert.deepEqual(moveFrom({ ...now, title: `${now.title} again`, observedAt: now.observedAt - 1 }).map(([id]) => id), [newer], "a step goes to the Session made last")
   } finally {
     mock.restoreAll()
+    await w.close()
+  }
+}
+
+/**
+ * A Fin's start, end or change of how it stands goes to its Apex Thread's newest Session alone, as its progress does: an
+ * older Session in memory keeps its Fins as it last heard them, its Fins no longer hold it there, and one let go of
+ * isn't read back in for them, by the move or by its wakes. Read in, it takes them as they stand. On 2026-11-07 a window
+ * took 62 whole rosters in ten minutes for each of 13 Sessions besides the newest.
+ */
+async function finsMoveInTheNewestSession(): Promise<void> {
+  const w = new AgentsWorld({
+    root: join(root, "newest-session"),
+    script: (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "Done: it's finished.") : "Started them."),
+  })
+  try {
+    const apex = await w.apex("codex")
+    const fins: { child: string; conversation: string }[] = []
+    for (const name of ["one", "two"]) {
+      const started = await w.agents.start(apex.caller, { brief: { objective: "Keep working." }, harness: "claude", name, clientKey: `k-${name}`, cwd: w.root, wake: "never" })
+      assert.ok(!("refused" in started) && started.conversation && started.child, JSON.stringify(started))
+      fins.push({ child: started.child, conversation: started.conversation })
+    }
+    const kindIn = (conversation: string, fin: number) => w.live.held(conversation)?.nativeAgents?.agents.find((agent) => agent.child?.thread === fins[fin]!.child)?.state.kind
+    await waitFor(() => kindIn(apex.conversation, 0) === "working" && kindIn(apex.conversation, 1) === "working", "the Apex's Session has both at work")
+
+    // A new tab of the Apex's Thread is its newest Session; the Apex's own is older now.
+    const apexThread = w.store.journalPlacement(apex.conversation)!.thread
+    const tab = w.store.createSession({ operationId: randomUUID(), thread: apexThread, actor: w.store.person() })
+    const newest = randomUUID()
+    await w.live.start("codex", w.root, { conversationId: newest, session: tab.session, initialRequest: { id: randomUUID(), text: "And this?", attachments: [] } })
+    await waitFor(() => w.live.held(newest)?.requests[0]?.status === "completed", "the new tab's first turn ends")
+    assert.equal(w.agents.showsFins(newest), true, "the newest Session hears its Thread's Fins")
+    assert.equal(w.agents.showsFins(apex.conversation), false, "an older one doesn't")
+    const rostersTo = (from: number, conversation: string) => w.events.slice(from).filter((event) => event.type === "live-batch" && event.batch.id === conversation && event.batch.nativeAgents !== undefined).length
+
+    // A Fin ends with the older Session in memory: the newest hears it, the older keeps what it last heard.
+    let from = w.events.length
+    w.release(fins[0]!.conversation)
+    await waitFor(() => kindIn(newest, 0) !== undefined && kindIn(newest, 0) !== "working", "the newest Session hears the first Fin end")
+    assert.ok(rostersTo(from, newest) > 0, "every window is sent it, in the newest Session's batch")
+    assert.equal(kindIn(apex.conversation, 0), "working", "an older Session in memory isn't told")
+    assert.equal(rostersTo(from, apex.conversation), 0, "and no window is sent its roster")
+    // The person closes it, and it goes from memory while a Fin of its Thread still works.
+    await w.live.close(apex.conversation)
+    await waitFor(() => w.live["records"].release(apex.conversation), "the closed Session goes from memory")
+    assert.equal(kindIn(newest, 1), "working")
+
+    // The other ends with it let go of: nothing reads it back in, neither the move nor the wake its end refreshes.
+    from = w.events.length
+    w.release(fins[1]!.conversation)
+    await waitFor(() => kindIn(newest, 1) !== undefined && kindIn(newest, 1) !== "working", "the newest Session hears the second Fin end")
+    await w.settle(300)
+    assert.equal(w.live.held(apex.conversation), undefined, "the older Session wasn't read back in")
+    assert.equal(rostersTo(from, apex.conversation), 0)
+
+    // Read back in, closed, it takes its Fins as they stand.
+    assert.equal(w.live.snapshot(apex.conversation)?.session.status, "closed", "the closed Session reads back in")
+    for (const fin of [0, 1]) assert.equal(kindIn(apex.conversation, fin), kindIn(newest, fin), "with its Fins as they stand")
+  } finally {
     await w.close()
   }
 }
@@ -2060,6 +2120,7 @@ try {
   await listsReadNoJournal()
   await activityTellsNoOne()
   await progressGoesWhereItsRead()
+  await finsMoveInTheNewestSession()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()

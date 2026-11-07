@@ -2,7 +2,7 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { memo, useCallback, useMemo, useRef, useState } from "react"
 import { ChevronDownIcon, EyeIcon, GitBranchIcon, HourglassIcon, SquareIcon, WorkflowIcon } from "lucide-react"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
-import type { AcpState, LiveAcpConversation } from "@/state/acp-state"
+import { conversationWork, type AcpState, type LiveAcpConversation } from "@/state/acp-state"
 import { toggleAgentsPanel } from "@/state/window-routes"
 import { shallowEqual } from "@/state/store"
 import { threads, useThreads } from "@/state/threads"
@@ -441,7 +441,7 @@ export function AgentsToggle() {
       running: running.length,
       // The harnesses at work, as one string so a step elsewhere in the roster re-renders nothing.
       harnesses: [...new Set(running.filter((agent) => (agent.work ?? "agent") === "agent").map((agent) => agent.provider))].slice(0, SHOWN_MARKS).join(" "),
-      waiting: Boolean(live && backgroundWork(live.session, live.nativeAgents)),
+      waiting: Boolean(live && conversationWork(state, live)),
     }
   }, shallowEqual)
   if (!reading.total) return null

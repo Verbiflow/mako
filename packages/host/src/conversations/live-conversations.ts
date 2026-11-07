@@ -1662,7 +1662,8 @@ export class LiveConversations {
    * The conversation's children moved: a loaded conversation's roster takes
    * them from their engine, which keeps each entry's identity while it's
    * unchanged. A start or an end goes out at once, progress with the frame.
-   * One memory let go of is read back in, so its windows hear the move as it
+   * Only its Thread's newest Session's conversations are told (`finReaders`):
+   * one memory let go of is read back in, so its windows hear the move as it
    * happens; it then stays while its Fins are at work (`finsAtWork`).
    */
   childrenChanged(id: string, progressOnly = false): void {
@@ -1679,9 +1680,14 @@ export class LiveConversations {
     }).catch((error) => hostWarn("live", "a conversation whose Fins moved couldn't be read in", { conversation: id, error: errorMessage({ error }) }))
   }
 
-  /** Whether any of the conversation's Fins is at work, queued or waiting on the person: its roster still moves. */
+  /**
+   * Whether any of the conversation's Fins is at work, queued or waiting on the person, and it hears them: its roster
+   * still moves. An older Session of the Thread hears none of it, so its Fins don't hold it in memory.
+   */
   private finsAtWork(id: string): boolean {
-    return (this.dependencies.agents?.()?.roster(id) ?? []).some((agent) => {
+    const agents = this.dependencies.agents?.()
+    if (agents?.showsFins && !agents.showsFins(id)) return false
+    return (agents?.roster(id) ?? []).some((agent) => {
       const group = childGroup(childStateOf(agent))
       return group === "working" || group === "queued" || group === "needs"
     })

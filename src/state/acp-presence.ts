@@ -1,8 +1,7 @@
-import type { AcpState } from "@/state/acp-state"
+import { conversationWork, type AcpState } from "@/state/acp-state"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
-import { backgroundWork } from "@mako/host/contracts/background-work"
 import { finAskLine } from "@/state/fin-asks"
 import { workedAt } from "@mako/host/contracts/worked-at"
 
@@ -71,7 +70,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
       if (conversation.session.status === "closed") return []
       // Listed from another device and not opened here: the account's list says what its ended turn waits on.
       const listedBackground = conversation.session.connection === "hibernated" ? conversation.rail?.background : undefined
-      const work = backgroundWork(conversation.session, conversation.nativeAgents) ?? (listedBackground ? { count: listedBackground } : null)
+      const work = conversationWork(state, conversation) ?? (listedBackground ? { count: listedBackground } : null)
       const presence: AcpPresence = {
         key: conversation.key,
         harness: conversation.harness,

@@ -8,14 +8,15 @@ import { conversationShown } from "@mako/host/conversations/session-report"
 import { AccountSessions } from "@mako/protocol/account-sessions"
 import { ReportedSessionSchema } from "@mako/protocol/thread-listing"
 import { threadChildren, threadRollup } from "@/state/apex-fins"
-import { acpStore } from "@/state/acp-state"
+import { acpStore, conversationWork } from "@/state/acp-state"
 import { applyLiveSnapshot, listLive } from "@/state/live-recovery"
 import { applyThreadGroupChange } from "@/state/thread-groups"
 
 /**
  * A Thread's Fins, wherever a window reads them from, are its newest Session's (`threadChildren`'s one rule): the
  * account's listed rows of every Session, alone or beside a full roster an older Session's snapshot brought, whichever
- * order they arrive in. A Fin's progress goes to the newest Session alone (`progressReaders`), so any other is stale.
+ * order they arrive in. A Fin's moves go to the newest Session alone (`finReaders`), so any other is stale: what a
+ * Session waits on (`conversationWork`) counts its Thread's Fins from the newest too, whichever Session a window shows.
  * Built the way a window gets them: the host's own entries (`childEntry`, stamped as it stamps them) listed through
  * `listedFins`, `AccountSessions`, `listedSummary` and `listLive`, and the Thread's order through its group's change.
  */
@@ -69,6 +70,23 @@ const counted = (key: string, session: string, queued: number) =>
 for (const order of [[olderConversation, newestConversation], [newestConversation, olderConversation]]) {
   const conversations = Object.fromEntries(order.map((key) => [key, key === olderConversation ? counted(key, older, 4) : counted(key, newest, 1)]))
   assert.equal(threadRollup({ activeKey: null, conversations, threadSessions: acpStore.get().threadSessions }, thread).queued, 1, "a count is the newest Session's")
+}
+// A window showing either Session of the Thread, both held whole on this Mac: what each waits on counts the Fins the
+// newest Session's roster has, never those an older one last heard, at work or ended.
+const atWork = childEntry(edge, { source: "live", working: true, updatedAt: now, step: "building" }, {})
+const ended = childEntry(edge, { source: "live" }, {})
+const held = (key: string, session: string, agent: typeof atWork) =>
+  // SAFETY: the fields `conversationWork` reads of a held conversation: its Thread, its Session, its state and its roster.
+  ({ kind: "live", key, threadId: thread, sessionId: session, session: { id: key, status: "ready", connection: "connected" }, nativeAgents: { agents: [agent], limited: false } }) as never
+for (const [olderSaw, newestSays] of [[atWork, ended], [ended, atWork]] as const) {
+  const conversations = { [olderConversation]: held(olderConversation, older, olderSaw), [newestConversation]: held(newestConversation, newest, newestSays) }
+  const state = { activeKey: null, conversations, threadSessions: acpStore.get().threadSessions }
+  const waits = newestSays === atWork ? 1 : undefined
+  for (const key of [olderConversation, newestConversation])
+    assert.equal(conversationWork(state, conversations[key]!)?.count, waits, `${key === olderConversation ? "the older" : "the newest"} Session waits on the Fins its newest has ${newestSays === atWork ? "at work" : "ended"}`)
+  // A Thread of one Session (no group) counts its own.
+  const alone = { [olderConversation]: conversations[olderConversation]! }
+  assert.equal(conversationWork({ activeKey: null, conversations: alone }, alone[olderConversation]!)?.count, olderSaw === atWork ? 1 : undefined, "one Session alone counts its own roster")
 }
 applyThreadGroupChange({ thread, group: null })
 console.log("thread fins order: a Thread's Fins are its newest Session's, listed or held, in any order they arrive")

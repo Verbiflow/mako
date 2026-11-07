@@ -1,5 +1,5 @@
 import { windowRoutesStore } from "@/state/window-routes"
-import { childGroup, childStateOf, finsAsChildren, rollup, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
+import { childGroup, childStateOf, rollup, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { AgentsDirected, AgentsRedirected, AgentsRedirectInput } from "@mako/host/contracts/agents"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
@@ -8,7 +8,7 @@ import { toast } from "sonner"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
 import { acp, acpStore, useAcp, type AcpState } from "@/state/acp"
-import type { AcpConversation } from "@/state/acp-state"
+import { newestSaid, threadChildren, type AcpConversation } from "@/state/acp-state"
 import { createHook, createStore } from "@/state/store"
 import { currentOnScreen } from "@/state/thread-sessions"
 import { threads } from "@/state/threads"
@@ -16,53 +16,9 @@ import { threadsStore, useThreads } from "@/state/thread-store"
 import { threadGroupsStore } from "@/state/thread-groups"
 
 const NO_CHILDREN: readonly NativeAgent[] = []
-const byThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, readonly NativeAgent[]> }>()
 const listedByThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, Rollup> }>()
 
-/**
- * Of each Thread's conversations that say something of its Fins (`said`, with how fully, higher the fuller), the
- * newest Session's: the last of its Thread's Sessions in the store's order (`AcpState.threadSessions`) that this window
- * holds, and of one Session the fullest. A Fin's start, end or change of state reaches every Session of its Apex, and
- * its progress only the newest (`progressReaders`), so every surface takes its Fins by this one rule, from a roster this
- * window holds or a row the account lists alike. A Thread with no group has one Session.
- */
-function newestSaid<Value>(state: AcpState, said: (conversation: Extract<AcpConversation, { kind: "live" }>) => { value: Value; fullness: number } | undefined): Map<string, Value> {
-  const index = new Map<string, Value>()
-  const rank = new Map<string, number>()
-  for (const conversation of Object.values(state.conversations)) {
-    if (conversation.kind !== "live" || !conversation.threadId) continue
-    const saying = said(conversation)
-    if (!saying) continue
-    const sessions = state.threadSessions?.[conversation.threadId]
-    const place = sessions && conversation.sessionId ? sessions.indexOf(conversation.sessionId) : -1
-    const standing = place * 2 + saying.fullness
-    if (index.has(conversation.threadId) && standing <= rank.get(conversation.threadId)!) continue
-    index.set(conversation.threadId, saying.value)
-    rank.set(conversation.threadId, standing)
-  }
-  return index
-}
-
-/**
- * A Thread's Fins, as its conversations' rosters carry them (`childEntry`, never a harness's roster), in
- * `orderedChildren`' order, or as the account lists them where this window holds no roster of that Session (another
- * device's, or one asleep), from its newest Session (`newestSaid`). The array is the roster's own while that roster is
- * unchanged, so a row reading it repaints only when they change.
- */
-export function threadChildren(state: AcpState, thread: string | undefined): readonly NativeAgent[] {
-  if (!thread) return NO_CHILDREN
-  let held = byThread.get(state.conversations)
-  if (!held || held.order !== state.threadSessions) {
-    const index = newestSaid(state, (conversation) => {
-      const children = rosterChildren(conversation.nativeAgents)
-      if (children.length) return { value: children, fullness: 1 }
-      return conversation.fins ? { value: finsAsChildren(conversation.fins), fullness: 0 } : undefined
-    })
-    held = { order: state.threadSessions, index }
-    byThread.set(state.conversations, held)
-  }
-  return held.index.get(thread) ?? NO_CHILDREN
-}
+export { threadChildren }
 
 /** As its host listed it (`LiveSummary.children`): an Apex's count before this window holds its roster, its newest Session's. */
 function listedRollup(state: AcpState, thread: string): Rollup | undefined {

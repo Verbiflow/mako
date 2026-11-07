@@ -14,6 +14,9 @@ import type {
   LiveSessionState,
 } from "@/lib/types"
 import { createHook, createStore } from "@/state/store"
+import { backgroundWork, type BackgroundWork } from "@mako/host/contracts/background-work"
+import { finsAsChildren, rosterChildren } from "@mako/host/contracts/children"
+import { withChildren, type NativeAgent } from "@mako/host/contracts/native-agents"
 
 export interface AcpQueuedPrompt {
   text: string
@@ -292,6 +295,65 @@ export function acpForThread(
       found = conversation
   }
   return found
+}
+
+const NO_CHILDREN: readonly NativeAgent[] = []
+const byThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, readonly NativeAgent[]> }>()
+
+/**
+ * Of each Thread's conversations that say something of its Fins (`said`, with how fully, higher the fuller), the
+ * newest Session's: the last of its Thread's Sessions in the store's order (`AcpState.threadSessions`) that this window
+ * holds, and of one Session the fullest. A Fin's moves, its progress and its start, end or change of state alike, reach
+ * only its Apex's newest Session (`finReaders`), so every surface takes its Fins by this one rule, from a roster this
+ * window holds or a row the account lists alike, as what a Session waits on does (`conversationWork`). A Thread with no
+ * group has one Session.
+ */
+export function newestSaid<Value>(state: AcpState, said: (conversation: Extract<AcpConversation, { kind: "live" }>) => { value: Value; fullness: number } | undefined): Map<string, Value> {
+  const index = new Map<string, Value>()
+  const rank = new Map<string, number>()
+  for (const conversation of Object.values(state.conversations)) {
+    if (conversation.kind !== "live" || !conversation.threadId) continue
+    const saying = said(conversation)
+    if (!saying) continue
+    const sessions = state.threadSessions?.[conversation.threadId]
+    const place = sessions && conversation.sessionId ? sessions.indexOf(conversation.sessionId) : -1
+    const standing = place * 2 + saying.fullness
+    if (index.has(conversation.threadId) && standing <= rank.get(conversation.threadId)!) continue
+    index.set(conversation.threadId, saying.value)
+    rank.set(conversation.threadId, standing)
+  }
+  return index
+}
+
+/**
+ * A Thread's Fins, as its conversations' rosters carry them (`childEntry`, never a harness's roster), in
+ * `orderedChildren`' order, or as the account lists them where this window holds no roster of that Session (another
+ * device's, or one asleep), from its newest Session (`newestSaid`). The array is the roster's own while that roster is
+ * unchanged, so a row reading it repaints only when they change.
+ */
+export function threadChildren(state: AcpState, thread: string | undefined): readonly NativeAgent[] {
+  if (!thread) return NO_CHILDREN
+  let held = byThread.get(state.conversations)
+  if (!held || held.order !== state.threadSessions) {
+    const index = newestSaid(state, (conversation) => {
+      const children = rosterChildren(conversation.nativeAgents)
+      if (children.length) return { value: children, fullness: 1 }
+      return conversation.fins ? { value: finsAsChildren(conversation.fins), fullness: 0 } : undefined
+    })
+    held = { order: state.threadSessions, index }
+    byThread.set(state.conversations, held)
+  }
+  return held.index.get(thread) ?? NO_CHILDREN
+}
+
+/**
+ * What the conversation waits on between turns (`backgroundWork`), counting its Thread's Fins as every surface draws
+ * them (`threadChildren`). Only its Thread's newest Session hears them move (`finReaders`): an older one's own roster
+ * keeps them as they stood when it last heard, and counted from there it would wait on Fins long ended.
+ */
+export function conversationWork(state: AcpState, conversation: LiveAcpConversation): BackgroundWork | null {
+  const roster = conversation.threadId ? withChildren(conversation.nativeAgents, threadChildren(state, conversation.threadId)) : conversation.nativeAgents
+  return backgroundWork(conversation.session, roster)
 }
 
 export function liveAcpForThread(

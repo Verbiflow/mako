@@ -3,7 +3,7 @@ import type { CarriedFilesView } from "@mako/host/contracts/cloud-carried-files"
 import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { backgroundWork } from "@mako/host/contracts/background-work"
+import { conversationWork } from "@/state/acp-state"
 import { Action } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
@@ -58,7 +58,7 @@ export function RunPlaceChoice() {
 function ThreadRunPlace({ thread }: { thread: string }) {
   const live = useAcp((state) => {
     const active = activeLiveAcp(state)
-    return active ? { key: active.key, cwd: active.cwd, elsewhere: Boolean(active.elsewhere), running: active.session.status === "running", background: backgroundWork(active.session, active.nativeAgents) !== null, started: Boolean(active.session.nativeId) } : null
+    return active ? { key: active.key, cwd: active.cwd, elsewhere: Boolean(active.elsewhere), running: active.session.status === "running", background: conversationWork(state, active) !== null, started: Boolean(active.session.nativeId) } : null
   }, shallowEqual)
   const worktree = useWorktrees((state) => state.worktrees.find((entry) => entry.thread === thread)?.path)
   const moving = useCloudMoves((state) => (live ? Boolean(state.moving[live.key]) : false))

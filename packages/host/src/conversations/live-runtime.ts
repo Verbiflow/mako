@@ -220,6 +220,8 @@ export interface ConversationChildren {
   edgeWritten?(op: string): void
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
+  /** Whether the conversation hears its Thread's Fins move: its Thread's newest Session's. Its Fins hold no other. */
+  showsFins?(conversation: string): boolean
   /** Stops one of them, by its Thread: false when it isn't the conversation's or has nothing running. */
   stopChild(conversation: string, child: string): Promise<boolean>
   /** One of the conversation's requests settled. */

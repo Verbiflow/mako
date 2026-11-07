@@ -3371,11 +3371,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     this.rosters.delete(edge.parent)
     const kindChanged = !before || before.state.kind !== entry.state.kind || before.stoppable !== entry.stoppable
-    const quiet = progressOnly && !kindChanged
-    for (const conversation of quiet ? this.progressReaders(edge.parent) : this.conversationsOfThread(edge.parent)) {
-      this.deps.live.childrenChanged(conversation, quiet)
-      if (kindChanged) this.wakes.refresh(conversation)
-    }
+    for (const conversation of this.finReaders(edge.parent)) this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
+    // A digest still unsent is in memory, whose queue keeps it there: one only on disk holds none, and isn't read in.
+    if (kindChanged) for (const conversation of this.conversationsOfThread(edge.parent)) if (this.deps.live.held(conversation)) this.wakes.refresh(conversation)
     this.askApex(edge)
     this.watchDecision(edge)
     if (kindChanged) {
@@ -4130,7 +4128,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (entries === "[]") this.queueHeard.delete(thread)
       else this.queueHeard.set(thread, entries)
       this.forget(thread)
-      for (const conversation of progressOnly ? this.progressReaders(thread) : this.conversationsOfThread(thread)) this.deps.live.childrenChanged(conversation, progressOnly)
+      for (const conversation of this.finReaders(thread)) this.deps.live.childrenChanged(conversation, progressOnly)
     }
   }
 
@@ -4607,16 +4605,23 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * The conversations a Fin's progress alone goes to: its Thread's newest Session's, by the store's order of its
-   * Sessions. Every step went to every Session, and one let go of was read back from its journal for it and held: on
-   * 2026-11-06 an Apex of 14 Sessions, 13 of them closed, took each of 74 steps in five minutes 14 times, 202 MB to each
-   * window. A window draws a Thread's Fins from its newest Session by the same order (`threadChildren`); a start, an end
-   * or a change of how a Fin stands still goes to every one, and one read in takes its Fins as they are.
+   * The conversations a Thread's Fins go to as they move: its newest Session's, by the store's order of its Sessions.
+   * Every move went to every Session, and one let go of was read back from its journal for it and held while its Fins
+   * worked: on 2026-11-07, with progress going to the newest alone (#517), a window was still sent 62 whole rosters in
+   * ten minutes for each of 13 Sessions besides the newest, 157 of the 226 MiB of rosters it took. A window draws a
+   * Thread's Fins, and counts what each of its Sessions waits on, from its newest Session by the same order
+   * (`threadChildren`, `conversationWork`), and one read in takes its Fins as they are then.
    */
-  private progressReaders(thread: string): string[] {
+  private finReaders(thread: string): string[] {
     const store = this.store()
     const sessions = store?.thread(ThreadIdSchema.parse(thread))?.sessions ?? []
     return sessions.length ? (store?.conversationsOf(sessions[sessions.length - 1]!) ?? []) : []
+  }
+
+  /** Whether the conversation hears its Thread's Fins move (`finReaders`): only then do they hold it in memory. */
+  showsFins(conversation: string): boolean {
+    const thread = this.store()?.journalPlacement(conversation)?.thread
+    return thread !== undefined && this.finReaders(thread).includes(conversation)
   }
 
   private conversationsOfThread(thread: string): string[] {

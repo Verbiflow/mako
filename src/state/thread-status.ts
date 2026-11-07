@@ -1,5 +1,5 @@
 import { toast } from "sonner"
-import { acpForThread, acpStore, type AcpState } from "@/state/acp-state"
+import { acpForThread, acpStore, conversationWork, type AcpState } from "@/state/acp-state"
 import type { ThreadRef, ThreadRunState } from "@/lib/types"
 import { harnessLabel } from "@/lib/harness-label"
 import { workspaceName } from "@/lib/format"
@@ -14,7 +14,6 @@ import { prefsStore } from "@/state/prefs"
 import { threadTitlesStore } from "@/state/thread-titles"
 import type { AttentionByPath, ThreadsState } from "@/state/thread-state"
 import { threadsStore } from "@/state/thread-store"
-import { backgroundWork } from "@mako/host/contracts/background-work"
 import { finAskLine } from "@/state/fin-asks"
 
 export type ThreadStatus =
@@ -89,7 +88,8 @@ export function threadStatus(
   ref: ThreadRef,
   state: ThreadsState = threadsStore.get()
 ): ThreadStatus {
-  const owned = acpForThread(acpStore.get(), ref)
+  const acpState = acpStore.get()
+  const owned = acpForThread(acpState, ref)
   const attention = state.attention[owned?.threadPath ?? ref.path]
   if (owned?.kind === "live" && owned.session.connection === "connected") {
     if (owned.permission)
@@ -109,7 +109,7 @@ export function threadStatus(
     if (attention?.kind === "failed" || attention?.kind === "needs-permission") return attention
     // Work the provider still runs outranks the answer it gave before it:
     // the thread is not done, and the answer is read when the work settles.
-    const work = backgroundWork(owned.session, owned.nativeAgents)
+    const work = conversationWork(acpState, owned)
     if (work) return { kind: "background", count: work.count }
     return attention?.kind === "review" ? attention : IDLE_STATUS
   }
@@ -157,7 +157,7 @@ export function threadLiveKey(state: AcpState, ref: ThreadRef): string {
     owned.permission?.id ?? "",
     finAskLine(owned) ?? "",
     owned.waitingOn ?? "",
-    backgroundWork(owned.session, owned.nativeAgents)?.count ?? 0,
+    conversationWork(state, owned)?.count ?? 0,
   ].join("|")
 }
 
