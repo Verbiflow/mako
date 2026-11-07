@@ -120,6 +120,14 @@ schedules, and a failing schedule is pinned there.
     step) answers nothing, known by where it came from, never by its words. An answer still on its way that fails doesn't reopen a
     question something else closed (`Agents.inputDelivered`).
 
+15. **A digest cut at its hand-off goes again.** Its reports read as heard once it's
+    in the queue, so a crash after `submitted` and before the harness has it would
+    lose them. The next host sends it again, framed as maybe repeated, unless the
+    harness's transcript shows that very message by its id: a digest's words prove
+    nothing, as any of them may be in what the Thread was told before. It goes again
+    as a digest, so it waits out a limit and rests like any other, and later news goes
+    on its own behind it (`cutBrief`, `DIGEST_AGAIN`).
+
 ## What each failure leaves
 
 | What happened | The switch | Its message |
