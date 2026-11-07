@@ -8,6 +8,7 @@ import { promisify } from "node:util"
 import { build } from "esbuild"
 import { invokeRuntime } from "@mako/host/transport/connection"
 import { ensureRuntime } from "@mako/host/transport/service"
+import { endHost } from "./lib/host-end.mjs"
 import { KEPT, testScratch } from "./lib/test-scratch.mjs"
 
 /**
@@ -87,21 +88,22 @@ try {
 
   console.log("Node-mode host secrets: the real host under Electron's Helper in Node mode, with no keychain of its own, reads a saved connection as unavailable, then opens it once an Electron process unwraps the data key through the keychain and hands it over the host's socket")
 } finally {
-  let quit = true
-  if (host) {
-    await invokeRuntime(host.socket, crypto.randomUUID(), "mako:lifecycle-command", [{ kind: "wait", action: "quit" }]).catch(() => undefined)
-    const end = Date.now() + 15_000
-    while (Date.now() < end && alive(host.info.pid)) await delay(100)
-    quit = !alive(host.info.pid)
-    if (!quit) {
-      // What held it is in its own log, which goes with the scratch folder: kept first, for the job's artifacts.
-      await keepHostLogs(host.info.pid)
-      process.kill(host.info.pid, "SIGKILL")
-    }
-  }
-  // The keychain item and the folder go however it ended.
-  await run("security", ["delete-generic-password", "-s", `${NAME} Safe Storage`]).catch(() => undefined)
-  await rm(root, { recursive: true, force: true })
+  const quit = await endHost({
+    quit: async () => {
+      if (!host) return true
+      await invokeRuntime(host.socket, crypto.randomUUID(), "mako:lifecycle-command", [{ kind: "wait", action: "quit" }]).catch(() => undefined)
+      const end = Date.now() + 15_000
+      while (Date.now() < end && alive(host.info.pid)) await delay(100)
+      return !alive(host.info.pid)
+    },
+    // What held it is in its own log, which goes with the scratch folder: kept first, for the job's artifacts.
+    keep: () => keepHostLogs(host.info.pid),
+    kill: () => process.kill(host.info.pid, "SIGKILL"),
+    cleanup: [
+      ["deleting the keychain item", () => run("security", ["delete-generic-password", "-s", `${NAME} Safe Storage`]).catch(() => undefined)],
+      ["removing the scratch folder", () => rm(root, { recursive: true, force: true })],
+    ],
+  })
   assert.ok(quit, "the host quits through its lifecycle")
 }
 
