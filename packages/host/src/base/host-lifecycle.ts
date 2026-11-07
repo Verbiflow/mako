@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process"
+import { spawn } from "node:child_process"
 import { acquireHostLock, type HostLock } from "./host-lock.js"
 import type { HostLogFields } from "./host-log.js"
 
@@ -98,36 +98,12 @@ export function stopOnSignals(lifecycle: HostLifecycle): void {
   }
 }
 
-/** The environment variable a successor finds its predecessor in: its pid, and when that process started. */
+/** The environment variable a successor finds its predecessor's pid in. */
 export const SUCCEEDS_ENV = "MAKO_HOST_SUCCEEDS"
-
-/** The host a restarted one follows; `start` is absent from a host older than this, or where `ps` can't say. */
-export interface Predecessor {
-  pid: number
-  start?: string
-}
 
 /** Past the wait for its exit, how long a predecessor gets to answer each signal. */
 const TERM_MS = 5_000
 const KILL_MS = 5_000
-
-/**
- * When a process started, as the system records it, which a pid given to another process since can't share. Null when
- * nothing runs under the pid, or `ps` can't say, as on Windows.
- */
-export function processStart(pid: number): string | null {
-  try {
-    const start = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-      encoding: "utf8",
-      env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 2_000,
-    })
-    return start.trim() || null
-  } catch {
-    return null
-  }
-}
 
 /**
  * How the host ends. A restart starts the same program again, detached,
@@ -137,10 +113,9 @@ export function processStart(pid: number): string | null {
 export function nodeHostExit(): HostLifecycleOptions["exit"] {
   return (code, restart) => {
     if (restart) {
-      const start = processStart(process.pid)
       const successor = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
         // Electron's Helper runs as Node again; the host took the flag out of its own environment.
-        env: { ...process.env, [SUCCEEDS_ENV]: `${process.pid}${start ? `:${start}` : ""}`, ...(process.versions.electron && { ELECTRON_RUN_AS_NODE: "1" }) },
+        env: { ...process.env, [SUCCEEDS_ENV]: String(process.pid), ...(process.versions.electron && { ELECTRON_RUN_AS_NODE: "1" }) },
         detached: true,
         stdio: "ignore",
       })
@@ -151,15 +126,13 @@ export function nodeHostExit(): HostLifecycleOptions["exit"] {
 }
 
 /** The predecessor a restarted host waits for, read once and kept from its own children. */
-export function takePredecessor(env: NodeJS.ProcessEnv = process.env): Predecessor | undefined {
-  const [, digits, start] = /^(\d+)(?::(.+))?$/.exec(env[SUCCEEDS_ENV] ?? "") ?? []
+export function takePredecessor(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const pid = Number(env[SUCCEEDS_ENV])
   delete env[SUCCEEDS_ENV]
-  const pid = Number(digits)
-  if (!Number.isSafeInteger(pid) || pid <= 0) return undefined
-  return { pid, ...start && { start } }
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
 }
 
-/** `stuck` says why a predecessor still holding the data root wasn't ended. */
+/** `stuck` says why a predecessor still holding the data root wasn't ended, and how to end it. */
 export type SuccessorLock = HostLock | (Extract<HostLock, { kind: "taken" }> & { stuck: string })
 
 export interface SuccessorLockOptions {
@@ -169,42 +142,44 @@ export interface SuccessorLockOptions {
   /** Each signal's wait, and the signals themselves. */
   answerMs?: { SIGTERM: number; SIGKILL: number }
   signal?(pid: number, signal: "SIGTERM" | "SIGKILL"): void
-  startOf?(pid: number): string | null
+  /** This process's parent, read as it is now. */
+  parent?(): number
 }
 
 /**
  * The data root's lock for a host that may follow another. A predecessor exits once its cleanup is done, so one that
  * holds the lock past `waitMs` is stuck in its exit (Node's can deadlock with V8's compiler threads) with nothing left
- * to lose. Only that process is ended: the one under the pid it named, started when it said it did, read again before
- * each signal so a pid given to another process since is left alone, and never while another process is named as the
- * lock's holder. The lock is what says it ended:
- * the kernel frees it with the process, while a killed process can still be listed until its parent reaps it.
+ * to lose. It is ended only while it is this process's parent, as `nodeHostExit` made it, read again right before each
+ * signal: on macOS and Linux a process that exits hands its children on before its pid can be anyone else's, so the
+ * parent's pid is still the predecessor's. The read and the signal are two calls apart, and the pid would have to be
+ * freed and every other pid handed out between them; Linux's pidfd would close even that, and Node has no way to it.
+ * A predecessor that isn't this process's parent is left as it is, and the host says how to stop it. The lock is what
+ * says it ended: the kernel frees it with the process, while a killed process can still be listed until it's reaped.
  */
-export async function acquireSuccessorLock(dataRoot: string, predecessor: Predecessor | undefined, options: SuccessorLockOptions): Promise<SuccessorLock> {
-  const lock = await acquireHostLock(dataRoot, { predecessor: predecessor?.pid, waitMs: options.waitMs })
-  if (lock.kind === "held" || !predecessor) return lock
-  const { pid, start } = predecessor
+export async function acquireSuccessorLock(dataRoot: string, predecessor: number | undefined, options: SuccessorLockOptions): Promise<SuccessorLock> {
+  const lock = await acquireHostLock(dataRoot, { predecessor, waitMs: options.waitMs })
+  if (lock.kind === "held" || predecessor === undefined) return lock
+  const pid = predecessor
   const answerMs = options.answerMs ?? { SIGTERM: TERM_MS, SIGKILL: KILL_MS }
   const send = options.signal ?? ((target, signal) => void process.kill(target, signal))
-  const startOf = options.startOf ?? processStart
-  // A holder that names nobody may be this one (`acquireHostLock`), so it stands while the process still runs.
-  if (lock.holder !== pid && !(lock.holder === null && startOf(pid) !== null)) return lock
+  const parent = options.parent ?? (() => process.ppid)
+  // A holder that names nobody may be this one (`acquireHostLock`), so it stands while it's this process's parent.
+  if (lock.holder !== pid && !(lock.holder === null && parent() === pid)) return lock
+  const stop = `stop it with \`kill -9 ${pid}\`, then start Mako again`
   const notEnded = async (stuck: string): Promise<SuccessorLock> => {
     // It may have gone by itself as we looked.
     const last = await acquireHostLock(dataRoot)
     if (last.kind === "held") return last
-    options.log("the host before this one is stuck and wasn't ended", { pid, start: start ?? "", why: stuck })
+    options.log("the host before this one is stuck and wasn't ended", { pid, why: stuck })
     return { ...last, stuck }
   }
-  if (!start) return notEnded(`pid ${pid} didn't say when it started, so it can't be told from a process that took its pid`)
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-    const now = startOf(pid)
-    if (now !== start) return notEnded(`pid ${pid} is no longer the host that named it: it started ${now ?? "at no time ps can read"}, not ${start}`)
-    options.log("ending the host before this one, which held the data root past its exit", { pid, start, signal })
+    if (parent() !== pid) return notEnded(`pid ${pid} holds the data root past its exit and isn't this host's parent, so nothing says it's still that host: ${stop}`)
+    options.log("ending the host before this one, which held the data root past its exit", { pid, signal })
     try {
       send(pid, signal)
     } catch (error) {
-      return notEnded(`${signal} to pid ${pid} failed: ${error instanceof Error ? error.message : String(error)}`)
+      return notEnded(`${signal} to pid ${pid} failed (${error instanceof Error ? error.message : String(error)}): ${stop}`)
     }
     const until = Date.now() + answerMs[signal]
     for (;;) {
@@ -220,5 +195,5 @@ export async function acquireSuccessorLock(dataRoot: string, predecessor: Predec
       await new Promise((done) => setTimeout(done, 50))
     }
   }
-  return notEnded(`pid ${pid} still holds the data root after SIGKILL`)
+  return notEnded(`pid ${pid} still holds the data root after SIGKILL: ${stop}`)
 }

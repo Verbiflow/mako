@@ -6,7 +6,7 @@ import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { acquireSuccessorLock, hostLifecycle, nodeHostExit, processStart, stopOnSignals, SUCCEEDS_ENV, takePredecessor, type Predecessor, type HostStopReason, type StopFields, type SuccessorLockOptions } from "@mako/host/base/host-lifecycle"
+import { acquireSuccessorLock, hostLifecycle, nodeHostExit, stopOnSignals, SUCCEEDS_ENV, takePredecessor, type HostStopReason, type StopFields, type SuccessorLockOptions } from "@mako/host/base/host-lifecycle"
 import { acquireHostLock, hostLockName } from "@mako/host/base/host-lock"
 
 const self = fileURLToPath(import.meta.url)
@@ -56,7 +56,7 @@ async function hostChild(dataRoot: string, records: string, stuckExit = false) {
   const predecessor = takePredecessor()
   const ends: unknown[] = []
   const lock = await acquireSuccessorLock(dataRoot, predecessor, { log: (message, fields) => ends.push({ message, fields }), waitMs: stuckExit ? 500 : undefined })
-  const record = () => appendFile(records, `${JSON.stringify({ pid: process.pid, lock: lock.kind, predecessor: predecessor?.pid ?? null, start: predecessor?.start ?? null, ends, inherited: process.env.MAKO_HOST_SUCCEEDS ?? null })}\n`)
+  const record = () => appendFile(records, `${JSON.stringify({ pid: process.pid, lock: lock.kind, predecessor: predecessor ?? null, ends, inherited: process.env.MAKO_HOST_SUCCEEDS ?? null })}\n`)
   if (lock.kind !== "held") {
     await record()
     process.exit(1)
@@ -141,11 +141,8 @@ function handover() {
     assert.equal(env[SUCCEEDS_ENV], undefined, "Read once, and kept from the host's children")
     return predecessor
   }
-  assert.deepEqual(taken("123:Sat Nov  7 00:11:22 2026"), { pid: 123, start: "Sat Nov  7 00:11:22 2026" })
-  assert.deepEqual(taken("123"), { pid: 123 }, "A host older than this names only its pid, and is still waited for")
-  for (const nonsense of [undefined, "", "0", "-1", "soon", "12.5", "99999999999999999999"]) assert.equal(taken(nonsense), undefined, `Not a predecessor: ${nonsense}`)
-  assert.match(processStart(process.pid) ?? "", /\d{2}:\d{2}:\d{2} \d{4}$/, "A live process's start reads")
-  assert.equal(processStart(process.pid), processStart(process.pid), "and reads the same each time")
+  assert.equal(taken("123"), 123)
+  for (const nonsense of [undefined, "", "0", "-1", "soon", "12.5", "123:x", "99999999999999999999"]) assert.equal(taken(nonsense), undefined, `Not a predecessor: ${nonsense}`)
 }
 
 async function signals(root: string) {
@@ -190,9 +187,8 @@ async function restart(root: string) {
     assert.equal(code, 0, "The restarted host exits cleanly")
     const [before, after] = await until(2)
     successor = after.pid
-    assert.deepEqual(before, { pid: first.pid, lock: "held", predecessor: null, start: null, ends: [], inherited: null })
-    assert.match(after.start, /\d{4}$/, "It names when it started, so its successor can tell it from a pid reused")
-    assert.deepEqual({ ...after, start: null }, { pid: after.pid, lock: "held", predecessor: first.pid, start: null, ends: [], inherited: null },
+    assert.deepEqual(before, { pid: first.pid, lock: "held", predecessor: null, ends: [], inherited: null })
+    assert.deepEqual(after, { pid: after.pid, lock: "held", predecessor: first.pid, ends: [], inherited: null },
       "The successor waits for its predecessor's lock, takes it, and keeps the handoff from its own children")
     assert.notEqual(after.pid, first.pid)
   } finally {
@@ -201,7 +197,10 @@ async function restart(root: string) {
   }
 }
 
-/** A successor ends only the stuck process that named itself, and says so when it can't. */
+/**
+ * A successor ends only the stuck process that named itself, while it's the successor's parent, and says so when it
+ * can't. Here each holder is this test's child, so it stands in as the parent (`parent`); `stuckRestart` is the real one.
+ */
 async function stuckPredecessor(root: string) {
   let held = 0
   // A stuck holder never ends by itself, so a failed assertion mustn't leave one running.
@@ -213,22 +212,21 @@ async function stuckPredecessor(root: string) {
     await once(child.stdout, "data")
     return { pid: child.pid!, exited, stop: () => child.kill("SIGKILL"), alive: () => child.exitCode === null && child.signalCode === null }
   }
-  const case_ = async (behaviour: "stuck" | "silent" | "answers", predecessor: (pid: number) => Predecessor, overrides: Partial<SuccessorLockOptions> = {}) => {
+  const case_ = async (behaviour: "stuck" | "silent" | "answers", overrides: (holder: number) => Partial<SuccessorLockOptions> = () => ({})) => {
     const dataRoot = join(root, `stuck-${held++}`)
     const holder = await holding(behaviour, dataRoot)
     const logged: Array<{ message: string; signal: unknown; why: unknown }> = []
-    const lock = await acquireSuccessorLock(dataRoot, predecessor(holder.pid), {
+    const lock = await acquireSuccessorLock(dataRoot, holder.pid, {
       log: (message, fields) => logged.push({ message, signal: fields.signal, why: fields.why }),
-      waitMs: 100, answerMs: { SIGTERM: 500, SIGKILL: 15_000 }, ...overrides,
+      waitMs: 100, answerMs: { SIGTERM: 500, SIGKILL: 15_000 }, parent: () => holder.pid, ...overrides(holder.pid),
     })
     return { lock, logged, holder, dataRoot }
   }
-  const named = (pid: number): Predecessor => ({ pid, start: processStart(pid)! })
   const finish = async (lock: Awaited<ReturnType<typeof acquireSuccessorLock>>) => { if (lock.kind === "held") await lock.release() }
   try {
 
     {
-      const { lock, logged, holder } = await case_("stuck", named)
+      const { lock, logged, holder } = await case_("stuck")
       assert.equal(lock.kind, "held", "The stuck holder ended, its lock is the successor's")
       assert.deepEqual(await holder.exited, [null, "SIGKILL"], "A stuck process answers only SIGKILL")
       assert.deepEqual(logged.map((each) => each.signal), ["SIGTERM", "SIGKILL", "SIGKILL"], "Each signal logged, then the one that ended it")
@@ -236,7 +234,7 @@ async function stuckPredecessor(root: string) {
       await finish(lock)
     }
     {
-      const { lock, logged, holder } = await case_("answers", named)
+      const { lock, logged, holder } = await case_("answers")
       assert.equal(lock.kind, "held")
       assert.deepEqual(await holder.exited, [null, "SIGTERM"], "A process that can answer ends on SIGTERM")
       assert.deepEqual(logged.map((each) => each.signal), ["SIGTERM", "SIGTERM"], "SIGKILL is only for one that didn't")
@@ -245,10 +243,10 @@ async function stuckPredecessor(root: string) {
     {
       const began = Date.now()
       let firstSignal = 0
-      const { lock, logged, holder } = await case_("silent", named, {
+      const { lock, logged, holder } = await case_("silent", () => ({
         waitMs: 1_500,
         signal: (pid, signal) => { firstSignal ||= Date.now(); process.kill(pid, signal) },
-      })
+      }))
       assert.ok(firstSignal - began >= 1_500, `A holder that names nobody gets the whole wait first: ${firstSignal - began} ms`)
       assert.equal(lock.kind, "held", "A running predecessor is ended when the lock can't name its holder")
       assert.deepEqual(await holder.exited, [null, "SIGKILL"])
@@ -265,32 +263,30 @@ async function stuckPredecessor(root: string) {
     }
     let signalled = 0
     const counting = () => { signalled++ }
-    const reused = await case_("stuck", (pid) => ({ pid, start: "Thu Jan  1 00:00:00 1970" }), { signal: counting })
-    assert.equal(signalled, 0, "A pid that started at another time is never signalled")
-    await refused("A pid given to another process", reused, /no longer the host/)
-    const older = await case_("stuck", (pid) => ({ pid }), { signal: counting })
-    assert.equal(signalled, 0, "A predecessor that didn't say when it started is never signalled")
-    await refused("A host older than this", older, /didn't say when it started/)
+    // Not this process's parent, as this test isn't the holder's child: nothing says the pid is still that host's.
+    const stranger = await case_("stuck", () => ({ signal: counting, parent: () => process.ppid }))
+    assert.equal(signalled, 0, "A predecessor that isn't the parent is never signalled")
+    await refused("A predecessor that isn't the parent", stranger, /isn't this host's parent.*kill -9 \d+/)
 
-    // Reused between the two signals: read again before SIGKILL.
+    // Its parent went between the two signals, so the pid may be anyone's: read again before SIGKILL.
     const sent: string[] = []
-    const reusedLate = await case_("stuck", named, {
+    const orphaned = await case_("stuck", (holder) => ({
       signal: (_pid, signal) => void sent.push(signal),
-      startOf: (pid) => (sent.length ? "another process's start" : processStart(pid)),
-    })
-    assert.deepEqual(sent, ["SIGTERM"], "SIGKILL isn't sent to a pid that changed hands after SIGTERM")
-    await refused("A pid reused between signals", reusedLate, /no longer the host/)
+      parent: () => (sent.length ? 1 : holder),
+    }))
+    assert.deepEqual(sent, ["SIGTERM"], "SIGKILL isn't sent once the predecessor is no longer the parent")
+    await refused("A parent gone between signals", orphaned, /isn't this host's parent/)
 
-    const denied = await case_("stuck", named, { signal: () => { throw new Error("kill EPERM") } })
-    await refused("A signal the system refuses", denied, /SIGTERM to pid \d+ failed: kill EPERM/)
-    const unmoved = await case_("stuck", named, { signal: () => undefined, answerMs: { SIGTERM: 100, SIGKILL: 100 } })
-    await refused("A process SIGKILL didn't end", unmoved, /still holds the data root after SIGKILL/)
+    const denied = await case_("stuck", () => ({ signal: () => { throw new Error("kill EPERM") } }))
+    await refused("A signal the system refuses", denied, /SIGTERM to pid \d+ failed \(kill EPERM\).*kill -9 \d+/)
+    const unmoved = await case_("stuck", () => ({ signal: () => undefined, answerMs: { SIGTERM: 100, SIGKILL: 100 } }))
+    await refused("A process SIGKILL didn't end", unmoved, /still holds the data root after SIGKILL.*kill -9 \d+/)
 
     // Another process holds the lock: the named one is no holder and nobody is signalled.
     const dataRoot = join(root, "someone-else")
     const other = await holding("answers", dataRoot)
     const bystander = await holding("answers", join(root, "bystander"))
-    const notIt = await acquireSuccessorLock(dataRoot, named(bystander.pid), { log() {}, waitMs: 100, signal: counting })
+    const notIt = await acquireSuccessorLock(dataRoot, bystander.pid, { log() {}, waitMs: 100, signal: counting, parent: () => bystander.pid })
     assert.deepEqual(notIt, { kind: "taken", holder: other.pid }, "A lock held by anyone but the predecessor is an ordinary refusal")
     assert.equal(signalled, 0, "and signals nobody")
     assert.ok(other.alive() && bystander.alive())
@@ -321,10 +317,11 @@ async function stuckRestart(root: string) {
     first.kill("SIGUSR2")
     const [, after] = await until(2)
     successor = after.pid
-    assert.deepEqual(await exited, [null, "SIGKILL"], "The stuck host ended by SIGKILL, from its successor")
-    assert.equal(after.lock, "held", "The successor runs in its place")
+    // The successor's record first: one that didn't end its parent leaves it stuck, and the exit below would never come.
+    assert.equal(after.lock, "held", `The successor runs in its place: ${JSON.stringify(after.ends)}`)
     assert.equal(after.predecessor, first.pid)
     assert.deepEqual(after.ends.map((each: { fields: { signal: string } }) => each.fields.signal), ["SIGTERM", "SIGKILL", "SIGKILL"])
+    assert.deepEqual(await exited, [null, "SIGKILL"], "The stuck host ended by SIGKILL, from its successor")
   } finally {
     first.kill("SIGKILL")
     if (successor) try { process.kill(successor, "SIGKILL") } catch { /* gone */ }
