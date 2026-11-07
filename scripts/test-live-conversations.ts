@@ -364,7 +364,7 @@ async function agentAsksOutliveTheHost() {
   first.asks.raise(id, ask)
   first.asks.raise(id, ask)
   assert.deepEqual(first.snapshot(id)?.control?.asks, [ask], "raised once")
-  assert.deepEqual(first.askWaiting(id), { for: "needs-you", line: "Wants to move this thread to the cloud" })
+  assert.deepEqual(first.askWaiting(id), { for: "needs-you", line: "Wants to move this Thread to the cloud" })
   assert.deepEqual(first.waitingOn(id), first.askWaiting(id), "its row says so")
   await first.stop()
   firstMemory.close()

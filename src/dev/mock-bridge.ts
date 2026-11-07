@@ -518,6 +518,15 @@ export function installMockBridge() {
       /** The person's answers to Fins' asks, as the Apex's host heard them. */
       responds: () => [...respondCalls],
       agentAsks: () => [...agentAskAnswers],
+      /** The Apex's own agent asks now, as the host's control-only batch says it. */
+      raiseAgentAsk: () => {
+        const snapshot = liveSnapshots.get(APEX_CONVERSATION)
+        if (!snapshot?.control) return
+        const control = { ...snapshot.control, asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a7", at: Date.now(), want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a8", handsOff: true } }] }
+        const next = { ...snapshot, revision: snapshot.revision + 1, control }
+        liveSnapshots.set(APEX_CONVERSATION, next)
+        emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], control })) })
+      },
       continues: () => [...continueCalls],
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-

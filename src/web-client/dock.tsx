@@ -3,7 +3,7 @@ import { FinOfApexNote } from "./apex-fins"
 import { FinAskCard, LimitContinueCard } from "./fin-ask"
 import { FinsNeedYou } from "@/components/composer/fin-asks"
 import { sendDirect, useAddressee, useThreadAsks, useThreadRollup } from "@/state/apex-fins"
-import { agentAskWords, type AgentAsk } from "@mako/host/contracts/agent-asks"
+import { agentAskLine, agentAskWords, type AgentAsk } from "@mako/host/contracts/agent-asks"
 import { FIN_WORD } from "@mako/host/contracts/agents"
 import { useCrewCardVisible } from "@/state/crew-card-view"
 import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
@@ -370,7 +370,7 @@ function AgentAskCard({ ask, conversation, harness }: { ask: AgentAsk; conversat
       <p className="web-ask-asker">{`${harness} asks`}</p>
       <p className="web-ask-title">
         <ShieldQuestionIcon className="size-4 shrink-0 text-attention" />
-        <span className="min-w-0 break-words">{words.title}</span>
+        <span className="min-w-0 break-words">{agentAskLine(ask.want)}</span>
       </p>
       <div className="web-ask-scroll">
         <p className="web-ask-hint">{words.detail}</p>
@@ -380,7 +380,7 @@ function AgentAskCard({ ask, conversation, harness }: { ask: AgentAsk; conversat
           <CheckIcon className="size-4 shrink-0" />
           {words.allow}
         </button>
-        <button type="button" data-agent-answer="keep" data-refuse disabled={busy} data-chosen={chosen === false || undefined} onClick={() => answer(false)} className="web-ask-option">
+        <button type="button" data-agent-answer="keep" disabled={busy} data-chosen={chosen === false || undefined} onClick={() => answer(false)} className="web-ask-option">
           <XIcon className="size-4 shrink-0" />
           {words.keep}
         </button>
