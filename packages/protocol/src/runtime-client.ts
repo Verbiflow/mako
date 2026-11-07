@@ -98,7 +98,7 @@ export type ServedRuntime = {
    */
   goingQuiet(reason: GoingQuietReason): boolean
   /**
-   * Says what this device can serve and its room (`advertise`, version 20 on). False on an older gateway, which routes
+   * Says what this device can serve and its room (`advertise`, version 22 on). False on an older gateway, which routes
    * nothing to it by capability, or on a closed link. Not kept: each new link is told again.
    */
   advertise(advertisement: Advertisement): boolean

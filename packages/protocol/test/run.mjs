@@ -626,7 +626,7 @@ describe("a runtime served through serveRuntime", () => {
     await new Promise((resolve) => setTimeout(resolve, 10))
     assert.deepEqual(gateway.advertisements("d-mac"), [advertisement])
     const older = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-old", build: "test", versions: { min: 1, max: ADVERTISE_LINK_VERSION - 1 }, handle: async (operation) => answer(operation, null) })
-    assert.equal(older.advertise(advertisement), false, "a gateway before version 20 routes nothing to it by capability")
+    assert.equal(older.advertise(advertisement), false, "a gateway before version 22 routes nothing to it by capability")
     assert.deepEqual(gateway.advertisements("d-old"), [])
     assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "advertise", ...advertisement })), { type: "advertise", ...advertisement })
     const token = { capability: "cli", attributes: { command: "gh" }, token: "ghp_x" }

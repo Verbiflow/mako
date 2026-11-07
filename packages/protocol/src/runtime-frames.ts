@@ -142,7 +142,7 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
    */
   z.object({ type: z.literal("going-quiet"), reason: z.enum(["sleep", "quit", "sign-out"]) }).strict(),
   /**
-   * What a device's runtime can serve, as it probed it, and its room (version 20 on, `borrow.ts`): sent on enrolment,
+   * What a device's runtime can serve, as it probed it, and its room (version 22 on, `borrow.ts`): sent on enrolment,
    * on each change, and hourly. `slots.used` is its own work (its Fins); the account's broker counts what it lends.
    * `load` says the room in the person's words ("14 cores, 36 GB"). Capabilities are names and versions, never a value.
    */
