@@ -955,6 +955,26 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   shared.list = async () => {
     throw new Error("listing failed")
   }
+  // An inventory walks every worktree: those asked during one share the next too.
+  let walks = 0
+  let open!: () => void
+  const held = new Promise<void>((resolve) => {
+    open = resolve
+  })
+  shared.list = async () => {
+    walks++
+    await held
+    return { root, worktrees: [] }
+  }
+  const walking = Array.from({ length: 12 }, () => shared.inventory())
+  await Promise.resolve()
+  assert.equal(walks, 1, "one inventory at a time")
+  open()
+  await Promise.all(walking)
+  assert.equal(walks, 2, "those who asked during one share one after it")
+  shared.list = async () => {
+    throw new Error("listing failed")
+  }
   await assert.rejects(shared.summaries(), /listing failed/)
   shared.list = async () => ({ root, worktrees: [] })
   assert.deepEqual(await shared.summaries(), [], "a failed pass keeps none after it from running")
