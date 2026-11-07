@@ -113,6 +113,15 @@ const TURNS = `Promise.all([import('/src/state/live-recovery.ts'), import('/src/
     recovery.applyLiveBatch({ id: at.key, epoch: at.epoch, revision: (at.revision ?? 0) + 1, updates: [], requestChanges: [], ...batch })
   }
   const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
+  window.__tall = () => {
+    n += 1
+    const id = crypto.randomUUID(), m = n
+    const text = '[mako · from your Fins, not the person]\\n1 finished:\\n  • "fin-' + m + '" done: the work is in.'
+    const request = { id, createdAt: Date.now(), text, attachments: [], status: 'dispatching', digest: { sentAt: Date.now(), notices: [] } }
+    send({ requestChanges: [request], updates: [{ kind: 'user', id: 'wake-' + m, text, requestId: id }, { kind: 'text', id: 'answer-' + m, text: 'A long answer with a good deal in it, line after line. '.repeat(600) }] })
+    send({ requestChanges: [{ ...request, status: 'completed' }] })
+    return 'wake-' + m
+  }
   window.__turn = async () => {
     n += 1
     const id = crypto.randomUUID(), m = n
@@ -175,14 +184,14 @@ const FORMS = [
 ]
 
 async function check() {
-  const { app, BrowserWindow, contentTracing } = await import("electron")
+  const { app, BrowserWindow, contentTracing, nativeImage } = await import("electron")
   const root = process.env.MAKO_UI_TEST_ROOT
   const base = process.env.MAKO_UI_TEST_URL.replace(/\/$/, "")
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
   const page = window.webContents
-  const guard = guardElectronCheck({ app, page, name: "The transcript rows check", ms: 300_000 })
+  const guard = guardElectronCheck({ app, page, name: "The transcript rows check", ms: 480_000 })
   page.debugger.attach("1.3")
   const corrected = []
   page.on("console-message", (event) => {
@@ -384,6 +393,105 @@ async function check() {
       assert.deepEqual(crossing.moved.slice(0, 3), [], `${form}, reader ${reader}: what's read stays where it was across the crossing`)
     }
   }
+  // What the crossing paints, frame by frame, as the screen shows it: a frame can be wrong with every box right by the time
+  // anything can read one. A reader who's still sees no frame that isn't the one before, wherever they rest.
+  for (const up of [500, 1500]) {
+    guard.at(`a narrow window: the crossing in pixels, ${up} px up`)
+    await window.loadURL("about:blank")
+    await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false })
+    await window.loadURL(`${base}/scripts/web-desk.html?app=apex&thread=apex&turns=12&idle=1`).catch((error) => {
+      if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
+    })
+    await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", "the Apex's turns")
+    await evaluate(TURNS)
+    await wait(600)
+    const box = await evaluate("(() => { const b = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: b.left, y: b.top, width: b.width, height: b.height } })()")
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: box.x + box.width / 2, y: box.y + 80, deltaX: 0, deltaY: -up })
+    await wait(500)
+    const frames = []
+    const painted = (_event, method, params) => {
+      if (method !== "Page.screencastFrame") return
+      frames.push({ at: params.metadata.timestamp * 1000, data: params.data })
+      void page.debugger.sendCommand("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => undefined)
+    }
+    page.debugger.on("message", painted)
+    await evaluate("(() => { const node = document.querySelector('[data-transcript-viewport]'); const look = () => { if (node.hasAttribute('data-virtualized')) window.__crossedAt = performance.timeOrigin + performance.now(); else requestAnimationFrame(look) }; requestAnimationFrame(look); return true })()")
+    await page.debugger.sendCommand("Page.startScreencast", { format: "png", everyNthFrame: 1 })
+    await wait(200)
+    for (let turn = 0; turn < 40 && !(await evaluate("Boolean(window.__crossedAt)")); turn += 1) await evaluate("window.__turn()")
+    await wait(400)
+    await page.debugger.sendCommand("Page.stopScreencast")
+    page.debugger.removeListener("message", painted)
+    const crossedAt = await evaluate("window.__crossedAt")
+    assert.ok(crossedAt, "the turns crossed into a window")
+    // The transcript, short of its edges: its scrollbar and the pill that says there's more come and go on their own.
+    const crop = { x: Math.round(box.x), y: Math.round(box.y) + 20, width: Math.round(box.width) - 60, height: Math.round(box.height) - 90 }
+    const around = frames.filter((frame) => Math.abs(frame.at - crossedAt) < 400)
+    assert.ok(around.length > 20, `the screencast saw the crossing: ${around.length} frames`)
+    let last, worst = { changed: 0 }
+    for (const frame of around) {
+      const pixels = nativeImage.createFromBuffer(Buffer.from(frame.data, "base64")).crop(crop).toBitmap()
+      if (last) {
+        let changed = 0
+        for (let at = 0; at < pixels.length; at += 4)
+          if (Math.abs(pixels[at] - last[at]) + Math.abs(pixels[at + 1] - last[at + 1]) + Math.abs(pixels[at + 2] - last[at + 2]) > 48) changed += 1
+        const share = 100 * changed / (pixels.length / 4)
+        if (share > worst.changed) worst = { changed: share, at: Math.round(frame.at - crossedAt), frame }
+      }
+      last = pixels
+    }
+    console.log(`a narrow window, ${up} px up: ${around.length} painted frames around the crossing, the most any changed ${worst.changed.toFixed(2)}%${worst.frame ? ` ${worst.at} ms from it` : ""}`)
+    if (worst.changed > 1) await writeFile(join(root, `crossing ${up} px up.png`), Buffer.from(worst.frame.data, "base64"))
+    assert.ok(worst.changed <= 1, `a narrow window, ${up} px up: the crossing paints a frame ${worst.changed.toFixed(2)}% unlike the one before it, ${worst.at} ms from it`)
+  }
+
+  // A finger, or a fling, in a tall turn as the crossing comes: what's read goes with the gesture, and never leaps. Turns
+  // here run past 5,000 px on a phone, and only a tall one shows a reader sent to its top.
+  for (const { form, width, gesture } of [
+    { form: "phone, a finger", width: 390, gesture: { speed: 900, preventFling: true } },
+    { form: "phone, a fling", width: 390, gesture: { speed: 3000, preventFling: false } },
+    { form: "an iPad's width, a finger", width: 1100, gesture: { speed: 900, preventFling: true } },
+  ]) {
+    guard.at(`${form} across the crossing`)
+    await window.loadURL("about:blank")
+    await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height: 844, deviceScaleFactor: 2, mobile: true })
+    await window.loadURL(`${base}/scripts/transcript-scroll-browser.html?turns=20`).catch((error) => {
+      if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
+    })
+    await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", `${form}: the fixture`)
+    await wait(900)
+    assert.equal(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"), false, `${form}: starts short of a window`)
+    const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + 80 } })()")
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY: -500 })
+    await wait(500)
+    await evaluate(`(() => { const node = document.querySelector('[data-transcript-viewport]'); const view = node.getBoundingClientRect(); const seen = window.__gesture = { steps: [], crossed: false, tallest: 0 }
+      const under = () => [...node.querySelectorAll('[data-exchange]')].find((turn) => { const box = turn.getBoundingClientRect(); return box.top <= view.top + view.height / 2 && box.bottom > view.top + view.height / 2 })
+      let id, before
+      const read = () => { const was = node.hasAttribute('data-virtualized'); if (was && !seen.crossed) { seen.crossed = true; seen.at = seen.steps.length }
+        const turn = (id && node.querySelector('[data-exchange="' + id + '"]')) || under(); if (!turn) return
+        const box = turn.getBoundingClientRect(); seen.tallest = Math.max(seen.tallest, box.height)
+        if (turn.dataset.exchange === id) seen.steps.push(Math.round(box.top - before)); id = turn.dataset.exchange; before = box.top }
+      const after = new MessageChannel(); after.port1.onmessage = read
+      const tick = () => { after.port2.postMessage(0); requestAnimationFrame(tick) }; requestAnimationFrame(tick); return true })()`)
+    let moving = true
+    const mover = (async () => {
+      for (let step = 0; moving; step += 1) {
+        await page.debugger.sendCommand("Input.synthesizeScrollGesture", { x: at.x, y: at.y + 200, yDistance: step % 2 ? -260 : 300, gestureSourceType: "touch", ...gesture }).catch(() => undefined)
+        await wait(90)
+      }
+    })()
+    for (let turn = 0; turn < 60 && !(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')")); turn += 1)
+      await evaluate("(async () => { window.probe.startTurn(); for (let piece = 0; piece < 6; piece += 1) { window.probe.appendToTurn('The answer keeps arriving, a few words a frame. '); await new Promise(requestAnimationFrame) } return true })()")
+    await wait(600)
+    moving = false
+    await mover
+    const seen = await evaluate("window.__gesture")
+    const leaps = seen.steps.map((by, frame) => ({ by, frame })).filter(({ by }) => Math.abs(by) > 400)
+    console.log(`${form}: crossed ${seen.crossed}, ${seen.steps.length} frames, in a turn ${Math.round(seen.tallest)} px tall, the biggest step ${Math.max(...seen.steps.map(Math.abs))} px, leaps ${JSON.stringify(leaps.slice(0, 3))}`)
+    assert.ok(seen.crossed, `${form}: the turns crossed into a window`)
+    assert.deepEqual(leaps.slice(0, 3), [], `${form}: what's read goes with the gesture across the crossing`)
+  }
+
   console.log("Transcript rows: held apart in every frame on the desk, in a laptop's browser and on a phone, with and without the observer")
   app.exit(0)
 }

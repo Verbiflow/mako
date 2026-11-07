@@ -558,6 +558,15 @@ export function ConversationTimeline({
   const highWater = useRef(0)
   const highWaterWidth = useRef(0)
   const reflowing = useRef(0)
+  /** For this frame and the next, the column's height is all flowing again, and a smaller one is no shrink to keep room for. */
+  const reflow = useCallback(() => {
+    cancelAnimationFrame(reflowing.current)
+    reflowing.current = requestAnimationFrame(() => {
+      reflowing.current = requestAnimationFrame(() => {
+        reflowing.current = 0
+      })
+    })
+  }, [])
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
   /**
    * Each turn's React key, for the turns that came back under another id. A
@@ -650,6 +659,7 @@ export function ConversationTimeline({
   /** The viewport and offset a live crossing into a window starts from (`carryIntoWindow`): `initialRect` is read as it's enabled. */
   const crossingRect = useRef({ width: 0, height: 0 })
   const crossingOffset = useRef(0)
+  const carried = useRef(false)
   const rows = useVirtualizer({
     count: exchanges.length,
     enabled: windowed,
@@ -693,7 +703,8 @@ export function ConversationTimeline({
       const index = indexes.get(turn.getAttribute("data-exchange") ?? "")
       if (index === undefined) continue
       const box = turn.getBoundingClientRect()
-      rows.itemSizeCache.set(rowKey(index), Math.round(box.height))
+      // One `content-visibility` skips has its placeholder's height, not its own, and only what's inside it says so.
+      if (turn.firstElementChild?.checkVisibility({ contentVisibilityAuto: true })) rows.itemSizeCache.set(rowKey(index), Math.round(box.height))
       if (!anchor && box.bottom > view.top) anchor = { index, top: box.top }
     }
     if (!anchor) return
@@ -703,6 +714,7 @@ export function ConversationTimeline({
     crossingRect.current.width = node.clientWidth
     crossingRect.current.height = node.clientHeight
     crossingOffset.current = Math.max(0, start + view.top - anchor.top)
+    carried.current = true
   }
   const seeded = useRef<string | undefined>(undefined)
   if (!windowed) {
@@ -798,6 +810,25 @@ export function ConversationTimeline({
     const node = viewport.current,
       snapshot = readingAnchor.current
     if (!node || awaitingEarlier.current) return
+    if (carried.current) {
+      carried.current = false
+      // The rows it couldn't know take their sizes before this paints, so no frame shows them at an estimate, and the row
+      // in view is held by hand: the virtualizer keeps a reader's place for a first measure, not for one going up. It's
+      // already where the reader was, so one who's up gets no seek, which would only send them to their turn's top.
+      reflow()
+      const top = node.getBoundingClientRect().top
+      const placed = [...(node.querySelector("[data-virtual-transcript]")?.children ?? [])]
+      const held = placed.find((row) => row.getBoundingClientRect().bottom > top)
+      const before = held?.getBoundingClientRect().top
+      for (const row of placed) rows.resizeItem(Number(row.getAttribute("data-index")), Math.round(row.getBoundingClientRect().height))
+      const moved = held && before !== undefined ? held.getBoundingClientRect().top - before : 0
+      if (moved) {
+        node.scrollTop += moved
+        owned(node)
+      }
+      if (pinned.current) seek("end")
+      return
+    }
     if (pinned.current) {
       if (windowed) seek("end")
       else node.scrollTop = node.scrollHeight
@@ -812,7 +843,7 @@ export function ConversationTimeline({
     else if (index < hidden)
       setTail((current) => ({ ...current, limit: exchanges.length - index }))
     restoringReader.current = snapshot
-  }, [windowed, seek, exchanges, hidden])
+  }, [windowed, seek, exchanges, hidden, owned, reflow])
   const virtualRows = rows.getVirtualItems()
   const mountedKeys = windowed
     ? virtualRows.map((row) => row.key).join("\0")
@@ -1187,14 +1218,7 @@ export function ConversationTimeline({
           const natural = column.offsetHeight
           const measured = natural - estimated.current()
           const width = column.offsetWidth
-          if (width !== highWaterWidth.current) {
-            cancelAnimationFrame(reflowing.current)
-            reflowing.current = requestAnimationFrame(() => {
-              reflowing.current = requestAnimationFrame(() => {
-                reflowing.current = 0
-              })
-            })
-          }
+          if (width !== highWaterWidth.current) reflow()
           highWater.current = reflowing.current ? measured : Math.max(highWater.current, measured)
           highWaterWidth.current = width
           spacer.style.height = `${highWater.current - measured}px`
@@ -1720,12 +1744,9 @@ export function ConversationTimeline({
               ) : opening ? (
                 <HistoryEdge state="start" opening={opening} />
               ) : null}
+              {/* One tree either way: a turn on screen as the column crosses into a window is the same element after it. */}
               {windowed ? (
-                <div
-                  ref={rows.containerRef}
-                  data-virtual-transcript
-                  style={{ position: "relative" }}
-                >
+                <div ref={rows.containerRef} data-virtual-transcript style={{ position: "relative" }}>
                   {virtualRows.map((row) => (
                     <div
                       key={row.key}
@@ -1738,7 +1759,13 @@ export function ConversationTimeline({
                   ))}
                 </div>
               ) : (
-                shown.map(renderExchange)
+                <div style={{ display: "contents" }}>
+                  {shown.map((exchange) => (
+                    <div key={keys.get(exchange.id) ?? exchange.id} style={{ display: "contents" }}>
+                      {renderExchange(exchange)}
+                    </div>
+                  ))}
+                </div>
               )}
               {footer}
             </div>
