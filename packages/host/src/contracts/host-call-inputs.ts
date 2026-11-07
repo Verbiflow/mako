@@ -22,6 +22,7 @@ const inputs = {
   "mako:account-usage": () => z.tuple([z.string(), z.string()]),
   "mako:accounts": () => z.tuple([]),
   "mako:activate-tab": () => z.tuple([z.string()]),
+  "mako:agent-ask-answer": () => z.tuple([z.string(), z.string(), z.boolean()]),
   "mako:agents-answer": () =>
     z.tuple([
       z.union([
@@ -2450,8 +2451,6 @@ const inputs = {
         })
         .optional(),
     ]),
-  "mako:thread-move-ask-answer": () => z.tuple([z.string(), z.boolean()]),
-  "mako:thread-move-asks": () => z.tuple([]),
   "mako:thread-open": () => z.tuple([z.string()]),
   "mako:thread-original": () => z.tuple([z.string(), z.string()]),
   "mako:thread-owner-resolve": () => z.tuple([z.string()]),
@@ -2660,6 +2659,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:account-usage", "harnesses"],
   ["mako:accounts", "harnesses"],
   ["mako:activate-tab", "workspaces"],
+  ["mako:agent-ask-answer", "conversations"],
   ["mako:agents-answer", "conversations"],
   ["mako:agents-continue-next", "conversations"],
   ["mako:agents-diagnostics", "conversations"],
@@ -2999,8 +2999,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-groups", "threads"],
   ["mako:thread-harness-check", "conversations"],
   ["mako:thread-move", "conversations"],
-  ["mako:thread-move-ask-answer", "conversations"],
-  ["mako:thread-move-asks", "conversations"],
   ["mako:thread-open", "threads"],
   ["mako:thread-original", "threads"],
   ["mako:thread-owner-resolve", "conversations"],

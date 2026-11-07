@@ -66,6 +66,8 @@ const CHILDREN: ChildFixture[] = ([
  * `&fins=limit`: the tree on 2026-11-05, as the host says it. Cursor ran out: three of its Fins moved to Claude Code,
  * one had nowhere to go and stopped with its work unfinished, and the first moved carries the tree's one notice.
  */
+/** `&ask=move`: the Apex's own agent asks, below full access, to move its Thread to the cloud (`test-agent-ask-ui.mjs`). */
+const ASK_SCENE = new URLSearchParams(globalThis.location?.search).get("ask") === "move"
 const LIMIT_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "limit"
 const LIMIT_UNTIL = "Sun 12:00 AM PST"
 const LIMIT_MOVED = `Moved to Claude Code: Cursor is at its limit until ${LIMIT_UNTIL}`
@@ -416,7 +418,14 @@ export function apexSnapshot(): LiveSnapshot {
       { type: "user", text: request.text, requestId: request.id },
       { type: "text", text: "Reading the digest." },
     ],
-    control: { activeBindingId: APEX_CONVERSATION, bindings: [], merges: [], transfers: [], actions: [] },
+    control: {
+      activeBindingId: APEX_CONVERSATION,
+      bindings: [],
+      merges: [],
+      transfers: [],
+      actions: [],
+      ...(ASK_SCENE && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a5", at: STARTED, want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a6", handsOff: true } }] }),
+    },
     nativeAgents: { agents: apexFins(), limited: false },
   }
 }
