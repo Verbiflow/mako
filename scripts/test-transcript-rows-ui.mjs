@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * A long Apex's rows stand apart in every frame it paints, whether or not the virtualizer's resize observer hears
@@ -25,7 +25,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-transcript-rows-"))
+  const root = testScratch("mako-transcript-rows-")
   const { createServer } = await import("vite")
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
   await server.listen()

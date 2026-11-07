@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * The right rail and the tab model on the mock bridge's Apex (`?mock&app=apex`), the web desk and the phone. The rail
@@ -23,7 +23,7 @@ if (process.versions.electron) {
   })
 } else {
   const given = process.argv.indexOf("--url")
-  const root = await mkdtemp(join(tmpdir(), "mako-side-rail-ui-"))
+  const root = testScratch("mako-side-rail-ui-")
   let server
   let base = given > 0 ? process.argv[given + 1] : undefined
   if (!base) {
