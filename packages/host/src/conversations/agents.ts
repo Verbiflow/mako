@@ -233,11 +233,12 @@ const READ_CHARS = 8_000
 
 /**
  * The Fin's brief a cut turn still has to carry: the brief cut short, or the brief sent again and cut short too, unless
- * its harness said it had it. Whether it goes as itself or as a Continue is decided as it's sent, by the harness's
- * transcript (`LiveDispatch`): a bare Continue would leave a Fin that never had it with nothing to do.
+ * its harness said it had it. A digest cut at its hand-off is the same: its reports read as heard, so nothing else would
+ * send them. Whether it goes as itself or as a Continue is decided as it's sent, by the harness's transcript
+ * (`LiveDispatch`): a bare Continue would leave a Fin that never had it with nothing to do.
  */
 function cutBrief(op: string | undefined, cut: LiveRequest): string | undefined {
-  const root = cut.continues?.brief ?? (op !== undefined && cut.id === namedUuid(`${op}\nbrief`) ? cut.id : undefined)
+  const root = cut.continues?.brief ?? (cut.digest || (op !== undefined && cut.id === namedUuid(`${op}\nbrief`)) ? cut.id : undefined)
   return cut.nativeDelivery?.evidence.kind !== "accepted" ? root : undefined
 }
 
@@ -625,9 +626,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     })
     this.wakes = new AgentWakes({
       ready: (conversation) => this.ready(conversation),
-      // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against.
+      // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against. A digest
+      // sent again says what the one it repeats said, so later news goes on its own.
       unsent: (conversation) => (deps.live.snapshot(conversation)?.requests ?? []).flatMap((request) =>
-        request.digest && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
+        request.digest && !request.continues?.brief && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
       carried: (conversation, notice) => Boolean(deps.live.snapshot(conversation)?.requests.some((request) =>
         request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
       admit: (conversation, request, text, notices, actor, hold, lines) => {
