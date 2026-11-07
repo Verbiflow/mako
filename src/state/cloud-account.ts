@@ -1,4 +1,5 @@
 import { toast } from "sonner"
+import type { JoinedDevice } from "@mako/host/contracts/account-devices"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { createHook, createStore } from "@/state/store"
@@ -32,6 +33,10 @@ interface CloudAccountState {
   browsers?: CloudBrowserSession[]
   /** Whether this Mac's harness sign-ins are shared with the cloud; the host pushes `cloud-sign-ins` as each is sent. */
   signIns?: CloudSignInsState
+  /** The device that last joined the account from elsewhere, as its stream said it: what Add a machine waits for. */
+  joined?: JoinedDevice
+  /** Add a machine is open: a machine that joins is said there, with Remove, and not in a toast as well. */
+  addingMachine?: boolean
   busy?: Action
   failure?: { action: Action; message: string }
 }
@@ -137,6 +142,11 @@ export const cloudAccount = {
   dismissFailure() {
     cloudAccountStore.set({ failure: undefined })
   },
+
+  /** Add a machine opened or closed (`addingMachine`). */
+  addingMachine(adding: boolean) {
+    cloudAccountStore.set({ addingMachine: adding })
+  },
 }
 
 /** A place as the cloud read it, in words: "Frankfurt, Germany"; empty when it couldn't say. */
@@ -166,6 +176,9 @@ export function heardAccountEvent(heard: { event: AccountEvent; mine: boolean })
   if (mine) return
   if (event.type === "device-joined") {
     const { device } = event
+    cloudAccountStore.set({ joined: { ...device, at: Date.now() } })
+    // Add a machine is waiting for exactly this: it says the join itself, with Remove.
+    if (cloudAccountStore.get().addingMachine && device.enrolledBy === "device-code") return
     const place = placeWords(device.from)
     const how = device.enrolledBy === "browser" ? "signed in through the browser" : "with a code you approved"
     toast(`${device.name} joined your account`, {

@@ -3,7 +3,7 @@ import { finsWord } from "@mako/host/contracts/agents"
 import { FinPips } from "@/components/rail/fin-pips"
 import { apexPips, pipsCounts, pipsOf } from "@/state/fin-pips"
 import { useAcp } from "@/state/acp"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, ServerIcon, SquarePenIcon } from "lucide-react"
 import { askWords, childLine, childStateOf, childWord, finsAsChildren, rollup, rollupLabel } from "@mako/host/contracts/children"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { ApexMark } from "@/components/ui/apex-mark"
@@ -33,7 +33,7 @@ import { shownTitle } from "./renames"
 import { rowDetail, type RowContext } from "./rows"
 import { foldThreads, type ThreadStanding, type WebThread } from "./threads"
 import { webHarnessLabel } from "./labels"
-import { macCount } from "./places"
+import { computerCount } from "./places"
 import { followedWays, listedMove, useMoves } from "./moves"
 import type { MoveWay } from "./move-progress"
 import { ConnectMac } from "./connect-mac"
@@ -124,7 +124,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
   const pull = usePullToRefresh(scroller, content, () => client.list.refresh())
   const away = useAwayWhileScrolling(scroller, !wide)
   useRowFlip(scroller, showArchived ? "archived" : "threads")
-  const named = macCount(list) > 1
+  const named = computerCount(list) > 1
   return (
     <div data-list={wide ? "rail" : "screen"} className={cn("web-list relative flex min-h-0 flex-1 flex-col", wide ? "bg-shell" : "bg-surface")}>
       <header className="web-bar flex shrink-0 items-center gap-0.5 pr-1.5 pl-4">
@@ -372,7 +372,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
   const front = useRef<HTMLButtonElement>(null)
   useRowGestures(box, front, swipe, { onTap: onOpen, onHold: () => onHold?.(box.current), onArchive: () => onArchive?.() })
   // A Mac that's off says so on its own rows, dimmed with a moon where its laptop stood, rather than in a line of its own.
-  const Place = detail.move ? (detail.move === "cloud" ? ArrowUpIcon : ArrowDownIcon) : detail.place === "cloud" ? CloudIcon : thread.quietSince ? MoonIcon : LaptopIcon
+  const Place = detail.move ? (detail.move === "cloud" ? ArrowUpIcon : ArrowDownIcon) : detail.place === "cloud" ? CloudIcon : thread.quietSince ? MoonIcon : detail.place === "machine" ? ServerIcon : LaptopIcon
   const receding = thread.standing === "working" || thread.standing === "moving"
   const spoken = detail.elapsed ? `${detail.text} for ${detail.elapsed}` : detail.lead ? `${detail.lead}, ${detail.text}` : detail.text
   return (
@@ -413,7 +413,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
           </span>
           <ApexLineOr thread={thread.id} fins={thread.sessions.find((session) => session.summary.fins)?.summary.fins}>
           <span className="flex min-w-0 items-center gap-1.5 text-label">
-            {detail.place || detail.move ? <Place aria-hidden data-move-mark={detail.move} className={cn("size-3 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
+            {detail.place || detail.move ? <Place aria-hidden data-move-mark={detail.move} data-place={detail.move ? undefined : detail.place} className={cn("size-3 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
             {detail.where ? <span data-row-where className="shrink-0 text-faint">{detail.where} ·</span> : null}
             {detail.tone === "working" ? (
               <Shimmer className="min-w-0 truncate">
