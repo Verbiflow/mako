@@ -1989,6 +1989,66 @@ refused move paused goes on here in words that say it stayed
 (`SavedContinuation.stayed`), so no transcript draws "Moved to the cloud" over
 it.
 
+The account's devices are one component on a Mac and in a browser
+(`src/components/settings/devices.tsx`, `Devices`): Settings › Devices on the
+desk (`devices-section.tsx`, fed by the host's `mako:cloud-devices`) and the
+web app's Settings (`web-client/devices.tsx`, fed by the account's list and
+the gateway). It reads nothing itself; `form` picks a window's sizes or a
+finger's. Every rule it shows is in `contracts/account-devices.ts`, so both
+say the same of a device: its family (`deviceFamily`: a `runtime` device is a
+machine of the person's own), its health (`deviceHealth`: the account's
+`device-quiet` where the list hears it; then `heard`, a device that lists
+work the account doesn't call quiet, which is there whatever its record says;
+else `lastSeenAt`, which is only as new as the record's last read and which
+the cloud writes as a device joins, so one that never moved past that never
+connected. A row is evidence of when it was heard, never of now, so the
+list's word, quiet or there, counts only while the list is current: in a
+browser, followed live and said something within `HEARD_FRESH_MS`
+(`deviceReadings`; each event and each re-read of the devices while Settings
+shows makes it so), never a list painted from the cache or one being
+followed again; on a Mac, while its own link to the account is up
+(`deviceEvidence` in `lib/device-places.ts`, over the conversations its host
+lists). Otherwise the counts stay and each record speaks for itself),
+whether its Mako is behind (`needsMakoUpdate` against `DEVICE_MAKO_NEEDED`; a
+checkout's 0.0.1 is never judged), and the lines Add a machine shows
+(`joinCommand`, `containerCommand`), which are `docs/linux-device.md`'s and
+change with it. Every line runs as it's written: where a window can't name
+the cloud the container's line passes the shell's own `MAKO_CLOUD_URL` on,
+never a placeholder a shell would read as a redirection. A Mac names the
+cloud it's signed in to; a browser names the one its gateway says of itself
+with its connection (`WebConnection.cloud`), since the app's own host passes
+on only the app's routes and a machine can't join there. A row's facts say each thing once (`deviceFacts`: a Linux
+machine's system leaves out the Linux its kind said), each kept whole when the
+line breaks. What runs on a device is its Threads, counted from what the
+window already holds: a browser folds the list's rows by Thread, a Mac its
+conversations by the place they name; which rows are Fins the list doesn't
+say. Add a machine waits on the account's `device-joined`
+(`cloudAccountStore.joined`, `accountListStore.joined`) and turns into what
+joined; while it's open the join's toast is left out (`addingMachine`). The
+account never says a join failed, so the sheet stops claiming a wait once a
+code's life is past (`JOIN_WAIT_MS`, by the list's clock, which is read again
+when the window comes to the front; copying a line starts the wait again) and
+says how to get a new code (the join line again; in a container
+`CONTAINER_START_COMMAND`, since a container whose code ran out has stopped
+and keeps its name, so its run line can't run twice); a machine that joins
+after still turns it. On a phone a row's facts break between facts and its
+lines wrap, so nothing runs into Remove or is cut; the web UI test measures
+that at 393 and 320 wide. A
+removal pressed in the sheet fails in the sheet (`failure.device`), never
+behind it. Where a Thread runs is one glyph
+(`ui/place-mark.tsx`, `runPlace`): a cloud, a server for a machine of the
+person's own, a laptop for a Mac. The device's kind travels with the row
+(`LiveSummary.elsewhereKind`, from the account's devices in
+`CloudConversations` and `sessionOf`), and a conversation's place stays what
+its listing said through its live batches (`summaryOf`), so a window that
+lists after one still names the machine. `scripts/test-account-devices.ts`
+holds the rules, `npm run test:account-devices-ui` both windows at a
+desk's, a laptop browser's, a tablet's and a phone's form
+(`?mock&cloud=signed-in` and `scripts/web-devices.html` hold every state; the
+fixtures' `makoMockAccount` and `webDevicesCheck` have a machine join, a
+code run out and a removal fail, and `web-desk.html?machine` and
+`phone-apex.html?machine` run the Threads on a machine).
+
 ## MCP
 
 Mako owns a redacted, provider-neutral MCP registry. Use the current
@@ -2998,6 +3058,28 @@ routing row gives way in a fixed order as the pane narrows (the centre can be
 chip second, and what still overflows scrolls behind a faded edge instead of
 being cut off silently. The model and its reasoning are what people read
 there and are never shortened.
+
+Setup is what each place a project's Threads run in has for the project:
+Settings › Apps › a project › Setup, a Setup tab in a Thread's side panel
+showing that Thread's own place, and the phone's Settings › Setup. A
+segmented control picks the place (this Mac, each device, Cloud); six parts
+follow in a fixed order (Needs you, Code, Files, Accounts and secrets, Tools,
+Services), and every row ends in one dot and a few words against its source
+(`syncWords`: "Synced 2 d ago", "Mac's is newer" with Send, "Copy · 3 h old",
+"Waiting on you", "Not here" with Add, "Didn't copy: couldn't be read" with Retry,
+"Stays here"), never colour alone. Every row is a borrowing grant or lease
+(`@mako/protocol/borrow`), an agent's ask, or a place's own reading (the
+recipe's carry, prepare and processes, sign-ins and saved keys by name), and
+`setupView` in `@mako/protocol/setup` (re-exported by
+`@mako/host/contracts/setup`) derives them all, with `SetupViewSchema` for the
+page, so the host (`workspaces/setup-view.ts`), the mock bridge and the
+account's broker answer one page by one function. The host reads this device's own brokers (the worktrees' checkouts, the
+saved secrets) and the account's (`/v1/borrow/*`), and sends each answer and
+Stop back to the broker that holds the ask or the grant. Agents propose; only the person's tap adds: an ask is in Needs you, in
+the Inbox and above its Thread's composer, and Keep, Add to setup and the Add
+menu draft the recipe change in a new Thread for the person to send. No value
+is ever shown. `packages/protocol/test/setup.mjs` (in `test:protocol`) covers the
+rows and words; `npm run test:setup` the host's readings and brokers.
 
 ## Notifications
 

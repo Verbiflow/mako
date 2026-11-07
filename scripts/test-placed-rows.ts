@@ -50,7 +50,7 @@ test("C2: a placed Fin's row is its Apex's to show, not a Thread of its own, on 
   assert.equal(listedApexOf(loneRow, [apexRow, finRow, loneRow]), undefined, "a row no Apex names stands on its own")
   assert.equal(listedApexOf(apexRow, [apexRow, finRow]), undefined, "an Apex's own row is nobody's Fin")
   // The host's mapping for a Mac's window: the Fin's listed conversation carries its Apex, so the rail nests it.
-  const summary = listedSummary(finRow, "Loft", undefined, listedApexOf(finRow, [apexRow, finRow]))
+  const summary = listedSummary(finRow, "Loft", undefined, undefined, listedApexOf(finRow, [apexRow, finRow]))
   assert.deepEqual(summary.parent, { thread: APEX_THREAD, session: APEX_SESSION })
   assert.equal(summary.waitingFor, "approval")
   // The browser's fold: the Fin is under its Apex, with its device, and never among the Threads.
@@ -78,7 +78,7 @@ test("the Apex's device off: the Fin's row, written by its own device, still say
   // A window's roster of the Apex, as its row says it, over the Fin's own listed conversation: at work on Loft's word, with Loft's conversation to open.
   acpStore.set({ activeKey: null, conversations: {} })
   const quietApex = listedSummary(apexRow, "MacBook", at(-30))
-  const finListed = listedSummary(finRow, "Loft", undefined, listedApexOf(finRow, [apexRow, finRow]))
+  const finListed = listedSummary(finRow, "Loft", undefined, undefined, listedApexOf(finRow, [apexRow, finRow]))
   listLive([quietApex, finListed])
   const children = threadChildren(acpStore.get(), APEX_THREAD)
   assert.equal(children.length, 1)
@@ -90,7 +90,7 @@ test("the Apex's device off: the Fin's row, written by its own device, still say
 test("the Fin's device quiet: the Apex's word stands, and the row still opens Loft's conversation", () => {
   acpStore.set({ activeKey: null, conversations: {} })
   const apex = listedSummary(apexRow, "MacBook", undefined)
-  const fin = listedSummary(row({ ...finRow, state: "working", waitingOn: undefined, waitingFor: undefined }), "Loft", at(-20), { thread: APEX_THREAD, session: APEX_SESSION })
+  const fin = listedSummary(row({ ...finRow, state: "working", waitingOn: undefined, waitingFor: undefined }), "Loft", at(-20), undefined, { thread: APEX_THREAD, session: APEX_SESSION })
   listLive([apex, fin])
   const children = threadChildren(acpStore.get(), APEX_THREAD)
   assert.equal(children[0]?.child?.conversation, "c-fin")
@@ -125,7 +125,7 @@ test("C1: a placed Fin's row opens its own conversation on its device, and opens
   assert.equal(apexViewStore.get().open, null, "and no Fin view is set with nothing behind it")
   assert.equal(acpStore.get().activeKey, null)
   // Loft's row arrives: the roster's entry takes its conversation and its word, and the row opens it.
-  listLive([listedSummary(finRow, "Loft", undefined, { thread: APEX_THREAD, session: APEX_SESSION })])
+  listLive([listedSummary(finRow, "Loft", undefined, undefined, { thread: APEX_THREAD, session: APEX_SESSION })])
   const children = threadChildren(acpStore.get(), APEX_THREAD)
   assert.equal(children.length, 0, "a listed Fin's conversation is no Apex's roster by itself")
   const opening = finOpening(acpStore.get(), child)
@@ -144,7 +144,7 @@ test("a placed Fin with two Sessions on its device: its newest is the one its ro
     for (const order of ["older first", "newest first"] as const) {
       acpStore.set({ activeKey: null, conversations: {} })
       const rows = order === "older first" ? [oldFinRow, finRow] : [finRow, oldFinRow]
-      listLive([listedSummary(apexRow, "MacBook", undefined), ...rows.map((each) => listedSummary(each, "Loft", undefined, apex))])
+      listLive([listedSummary(apexRow, "MacBook", undefined), ...rows.map((each) => listedSummary(each, "Loft", undefined, undefined, apex))])
       const children = threadChildren(acpStore.get(), APEX_THREAD)
       assert.equal(children.length, 1, order)
       assert.equal(children[0]?.child?.conversation, "c-fin", `${order}: the roster's entry is the newest Session's conversation`)

@@ -117,6 +117,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     title: snapshot.session.title,
     threadPath: snapshot.threadPath,
     elsewhere: existing?.elsewhere,
+    elsewhereKind: existing?.elsewhereKind,
     // Read from its copy, its device is still off; a snapshot from the device itself says it's back.
     quietSince: snapshot.copy ? existing?.quietSince : undefined,
     cloudContinue: snapshot.copy ? existing?.cloudContinue : undefined,
@@ -611,6 +612,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
         hydrated: false,
         nativePaths: summary.nativePaths,
         elsewhere: summary.elsewhere ?? previous.elsewhere,
+        elsewhereKind: summary.elsewhereKind ?? previous.elsewhereKind,
         waitingOn: summary.waitingOn,
         waitingFor: summary.waitingFor,
         threadTitle: summary.threadTitle,
@@ -656,6 +658,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
       nativePaths: summary.nativePaths,
       threadPath: summary.threadPath,
       elsewhere: summary.elsewhere,
+      elsewhereKind: summary.elsewhereKind,
       waitingOn: summary.waitingOn,
       waitingFor: summary.waitingFor,
       threadTitle: summary.threadTitle,

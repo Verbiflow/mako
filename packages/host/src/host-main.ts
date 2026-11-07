@@ -2,8 +2,7 @@ import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import { processHostConfig } from "./host-config.js"
 import { createHost } from "./create-host.js"
-import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "./base/host-lifecycle.js"
-import { acquireHostLock } from "./base/host-lock.js"
+import { acquireSuccessorLock, hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "./base/host-lifecycle.js"
 import { probeRuntime, settleRuntime } from "./transport/index.js"
 import { hostLog, hostWarn, installHostLog, logsRoot } from "./base/host-log.js"
 import { installCrashReporting } from "./base/crash.js"
@@ -36,8 +35,8 @@ hostLog("host", "starting", {
 // A `mako-host` command that took the lock to read (a `status` of a build before this one, a `join` ending) lets go
 // within a moment, so it's waited out, briefly: a host polled with `status` as it started once exited as already
 // running. Whatever answers on the socket is a host, refused at once, and a holder that stays is refused at the bound.
-const lock = await acquireHostLock(environment.dataRoot, {
-  predecessor: takePredecessor(),
+const lock = await acquireSuccessorLock(environment.dataRoot, takePredecessor(), {
+  log: (message, fields) => hostWarn("host", message, fields),
   brief: { ms: CLI_HOLD_MS, listening: () => probeRuntime(config.socket, { timeoutMs: 1_000 }).then((probe) => probe.state === "ready", () => true) },
 })
 // A host from before this lock holds only Electron's, and answers on the socket once it listens.
@@ -51,7 +50,9 @@ if (lock.kind === "taken" || olderHost) {
     holder: lock.kind === "taken" ? lock.holder : null,
     olderHost,
   })
-  console.error("Mako is already running. Close the existing desk host before starting another desktop or web host.")
+  console.error(lock.kind === "taken" && "stuck" in lock
+    ? `Mako's previous host is stuck and couldn't be ended: ${lock.stuck}.`
+    : "Mako is already running. Close the existing desk host before starting another desktop or web host.")
   // Exiting drops queued log writes; this line is the only record a detached launch leaves.
   await log.flush()
   exit(1, false)

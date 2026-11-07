@@ -896,7 +896,7 @@ async function aPlacedFinsNewestSessionOnItsDevice(): Promise<void> {
     for (const order of ["older first", "newest first"] as const) {
       acpStore.set({ activeKey: null, conversations: {}, threadSessions: {} })
       const rows = order === "older first" ? [olderRow, newerRow] : [newerRow, olderRow]
-      listLive([listedSummary(apexRow, "MacBook", undefined), ...rows.map((row) => listedSummary(row, "Studio", undefined, listedApexOf(row, [apexRow, olderRow, newerRow])))])
+      listLive([listedSummary(apexRow, "MacBook", undefined), ...rows.map((row) => listedSummary(row, "Studio", undefined, undefined, listedApexOf(row, [apexRow, olderRow, newerRow])))])
       const children = threadChildren(acpStore.get(), apexRow.thread)
       assert.equal(children.length, 1, `${order}: the Apex's one Fin`)
       assert.equal(children[0]?.child?.conversation, newer, `${order}: the roster's entry opens the newer Session's conversation`)

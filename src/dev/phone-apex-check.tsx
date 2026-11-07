@@ -38,6 +38,7 @@ getMako().onEvent((event) => {
 })
 
 const DEVICE = "00000000-0000-4000-8000-0000000000d1"
+const STUDIO = "00000000-0000-4000-8000-0000000000d2"
 const now = new Date().toISOString()
 
 function row(session: string, thread: string, conversation: string, title: string, harness: string, state: ListedSession["state"], minutes: number): ListedSession {
@@ -58,10 +59,18 @@ accountListStore.set({
     row("00000000-0000-4000-8000-0000000000a2", "00000000-0000-4000-8000-0000000000b2", "00000000-0000-4000-8000-0000000000c2", "Fix the flaky login test", "cursor", "idle", 20),
     row("00000000-0000-4000-8000-0000000000a3", "00000000-0000-4000-8000-0000000000b3", "00000000-0000-4000-8000-0000000000c3", "Composer focus after paste", "claude", "idle", 64),
   ],
-  devices: new Map([
-    [DEVICE, { id: DEVICE, kind: "desktop", name: "Studio", platform: "darwin" }],
-    [PLACED_DEVICE, { id: PLACED_DEVICE, kind: "runtime", name: PLACED_WHERE, platform: "Linux x64 · Debian GNU/Linux 12" }],
-  ]),
+  // `?machine`: they run on a machine of the person's own, beside a Mac, so its rows and bar wear a server and its name.
+  // The placed Fin's device, Loft, is listed either way.
+  devices: search.has("machine")
+    ? new Map([
+        [DEVICE, { id: DEVICE, kind: "runtime", name: "build-box", platform: "Linux x64 · Ubuntu 24.04" }],
+        [STUDIO, { id: STUDIO, kind: "desktop", name: "Studio", platform: "darwin" }],
+        [PLACED_DEVICE, { id: PLACED_DEVICE, kind: "runtime", name: PLACED_WHERE, platform: "Linux x64 · Debian GNU/Linux 12" }],
+      ])
+    : new Map([
+        [DEVICE, { id: DEVICE, kind: "desktop", name: "Studio", platform: "darwin" }],
+        [PLACED_DEVICE, { id: PLACED_DEVICE, kind: "runtime", name: PLACED_WHERE, platform: "Linux x64 · Debian GNU/Linux 12" }],
+      ]),
 })
 
 // A stand-in for the started client, without its constructor's gateway: its conversations are in the store already,

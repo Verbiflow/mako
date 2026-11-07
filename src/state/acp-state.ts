@@ -45,6 +45,8 @@ interface AcpConversationBase {
   threadPath?: string
   /** Where its folder is when it isn't on this Mac, in words (`a cloud machine`): its files and Git are read there. */
   elsewhere?: string
+  /** `LiveSummary.elsewhereKind`: the kind of device `elsewhere` names, for its mark. */
+  elsewhereKind?: string
   /** What a conversation listed from another device waits on there, while it waits on a person ("Approve: npm test"). */
   waitingOn?: string
   /** What it waits on the person for, as its owner says it (`LiveSummary.waitingFor`): an approval, a question, or anything else. */
