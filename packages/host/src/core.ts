@@ -485,6 +485,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   let windowRows: ThreadRef[] | undefined
   /** The rows by native session, read again with them: where the uploads read each Session. */
   let windowPaths: Map<string, string> | undefined
+  /** Moves with everything the catalog says, so what reads its paths knows they may have. */
+  let catalogMoves = 0
   // The Threads moving to the cloud from here, said on their rows from the move's first step.
   const movesUnderWay = new MovesUnderWay()
   // What each project on the list has checked out, as the rail shows it beside the project: read once a project is
@@ -564,6 +566,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     work: shell.work,
   })
   catalog.subscribe((event) => {
+    catalogMoves += 1
     if (event.type === "thread-ref") {
       const at = windowRows?.findIndex((row) => row.path === event.ref.path) ?? -1
       if (windowRows && at >= 0) windowRows[at] = event.ref
@@ -617,7 +620,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     uploads = new SessionUploads({
       rows: () => sessions.listed(),
       path: (harness, nativeId) => (windowPaths ??= new Map((windowRows ??= catalog.recent(windowStart(Date.now()))).map((ref) => [`${ref.harness}\n${ref.nativeId}`, ref.path]))).get(`${harness}\n${nativeId}`),
-      agents: (session) => threads.store?.childSessions(session) ?? [],
+      agents: () => threads.store?.childSessions() ?? new Map(),
+      scopeVersion: () => (threads.store ? `${threads.store.version()}:${catalogMoves}` : undefined),
       links: async () => {
         const cloud = late.cloud
         const blocked = cloud?.cloudBlocked ? await cloud.cloudBlocked() : "signed-out"
