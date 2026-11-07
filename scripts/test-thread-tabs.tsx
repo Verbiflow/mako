@@ -135,22 +135,22 @@ const railOf = (rows: number) => {
 }
 const small = railOf(200)
 const large = railOf(2_000)
-const timeFold = ({ list, groups, threadOf }: ReturnType<typeof railOf>) => {
+const timeFold = ({ list, groups, threadOf }: ReturnType<typeof railOf>, folded: number) => {
   const started = performance.now()
   const result = foldThreads(list, groups, threadOf)
   const taken = performance.now() - started
-  assert.ok(result.byLead.size > 0)
+  assert.equal(result.byLead.size, folded)
   return taken
 }
 for (let warm = 0; warm < 20; warm++) {
-  timeFold(small)
-  timeFold(large)
+  timeFold(small, 10)
+  timeFold(large, 100)
 }
 const smallTimes: number[] = []
 const largeTimes: number[] = []
 for (let run = 0; run < 50; run++) {
-  smallTimes.push(timeFold(small))
-  largeTimes.push(timeFold(large))
+  smallTimes.push(timeFold(small, 10))
+  largeTimes.push(timeFold(large, 100))
 }
 const medianOf = (times: number[]) => [...times].sort((left, right) => left - right)[Math.floor(times.length / 2)] ?? Infinity
 const foldGrowth = medianOf(largeTimes) / medianOf(smallTimes)
