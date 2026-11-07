@@ -1529,7 +1529,10 @@ Three rules hold this together, and each has a specific failure it prevents:
   surface-panel rows carry `.contain-turn`. Timelines above 200 turns or 400
   messages and calls (a few prompts can hold thousands of calls), and
   navigators above 100 prompts, additionally window measured rows; a timeline
-  stays windowed while it's shown. A conversation keeps at most 24 MB of
+  stays windowed while it's shown. Its mounted rows are also held against the
+  virtualizer before each paint (`row-check.ts`), so an observer that goes quiet
+  never shows, and a correction it didn't report is logged with what was found
+  (`Transcript row corrected` in the host's log). A conversation keeps at most 24 MB of
   finished turns (`CONVERSATION_MEMORY` in `live-residency.ts`), the one being
   read included: what's on screen, near it, read in the last minute or still
   at work stays, and the rest come back as the reader nears them. Preserve
@@ -1640,12 +1643,12 @@ registered through them, so nothing built-in is privileged:
 registerCommand({ id, title, section, keys: "mod+j", run }) // palette + keyboard
 registerSlot("my-badge", "composer.controls", Component) // UI seams
 registerToolView("bash", { summary, body, icon }) // transcript rows
-registerSurface({ id, label, icon, render, minWidth }) // stage companions
+registerSurface({ id, label, icon, render, minWidth, reading, useOffered }) // stage companions
 ```
 
 The stage's surfaces — Changes, Files, Terminal, Control, Agents —
 are all registered through `registerSurface` on exactly the same footing as
-anything a plugin would add. One reading surface opens as the right sidebar at
+anything a plugin would add. One reading surface opens in the right rail at
 a fixed, draggable width; the independent Terminal dock can remain open below it
 at a fixed, draggable height. Neither uses percentage splits. The central workbench
 stays mounted under a covering sidebar so transcripts and file tabs keep their state.
@@ -2430,6 +2433,8 @@ The agent's Git tools work in a project folder of several repositories, whose Th
 
 A spare belongs to a project, whatever a start comes from: a Fin started from its Apex's worktree takes one of the real project's (`homeOf`), at the commit it asked for, and its start asks for more there. Keyed by the folder asked from, 27 of 30 starts with no spare on 2026-11-06 were these, looking for spares of a worktree, which has none.
 
+A spare's tracked files are cloned from the main checkout wherever it holds the same file (`cloneTracked`), so a worktree shares their blocks rather than writing them: 59 MB of its own for `mako-backend` where a checkout wrote 694 MB, with a stale main checkout too, since only what differs is written. It's a hint for Git: the index is refreshed, which hashes every clone, and `reset --hard` writes what's missing or came out different. That costs time, 7.3 s against 3.3 s for `mako-backend` on a busy Mac, so only a spare's fill does it, in the background: a start with no spare ready writes its checkout as Git does. Node's `COPYFILE_FICLONE` copies on macOS, reporting success, and `FICLONE_FORCE` is `ENOSYS` there, so this calls `clonefile` itself.
+
 Every spawn holds the host's thread for a moment, so what windows poll reads what a repository shares once, not once per worktree. `summaries` (every window's rail, every half minute and on focus) runs one pass at a time, shared by everyone who asked while the last ran; each pass reads a repository's branch tips with one `for-each-ref`, its start point once, and each worktree's `status` at most every 15 s, a wait that doubles to 5 minutes while nothing changes there unless a conversation is at work in it or its index changed (a spawn on Linux forks the whole host and held its thread for 300-450 ms, and 180 worktrees read every pass took 5 cores on this Mac), and keeps landing, ahead and behind by the commits they were read at. Before, each worktree spawned about seventeen processes outside the read slots: 1,800 a pass at 104 worktrees.
 
 Debug Git through host.log: with `MAKO_GIT_TRACE=1` (`HostConfig.gitTrace`) every Git process is logged under `git` with its arguments, folder, queued and running time, exit code and bytes. Without it, only processes slower than two seconds or stopped for time are logged. A failed probe alone isn't logged, since probes such as `rev-parse --verify` fail by design.
@@ -2603,6 +2608,23 @@ deliberate action and never rides along with a commit.
   at square corners. Only what means a dot (status dots, the unread sphere,
   a switch's knob, a sheet's grab handle) is round, through `rounded-full`;
   a device frame drawn to its hardware keeps the hardware's corners.
+- **Two rails and the conversation between them; a tab is opened on purpose.**
+  The right rail is the left's twin, on the shell with its row (`RailRow`):
+  `SideRail` draws a row a surface in a fixed order, each with its `reading`
+  at the end (lines changed, who needs the person in the attention hue), and
+  `useOffered` keeps a row away while nothing stands behind it. A reading
+  selects its own fact, so a token repaints no row. Changes is a list and a
+  diff opens as a tab (`changesView` keeps Review, every diff in one scroll,
+  in Settings). No Fin has a tab for starting: the crew card and the rail hold
+  them, and `OpenFinTab` is the one tab of the Fin opened in place, whose close
+  is the Apex again. The phone has a count in the bar (`PhoneFinCount`) and the
+  crew card, whose rows open a Fin through `RoutedOpenContext` on the web, as
+  `openFinInApex` does on the desk; a laptop's browser draws the same rail
+  (`WebSideRail`: Changes, Files and Agents, at the desktop's width) and one Fin tab. Open Fins hold no state that can
+  outlive them: `openFinInApex` is the one way in, routed by `windowRoutes.fin` where a Thread's page holds the Fin; the
+  browser's `DeskFin` keeps its Apex inside the Fin, Agents keeps only that it's open and reads whose roster from what's
+  on screen, and `watchApexView` ends the desk's view once anything else shows. `npm run test:side-rail-ui` holds the
+  rail, and `test:fin-transitions-ui` each way in through closing, another Thread, a reload and the rail on every form.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
   composer's chip, the crew card, the rail's pips, the Agents panel, the stop
   card, the phone's row) counts from the Thread's one roster

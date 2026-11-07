@@ -71,6 +71,7 @@ import { clipReason, CloudRepositorySchema, type CloudRepository } from "../cont
 import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import { CloudCarriedFileSchema, type CloudCarriedFile } from "../contracts/cloud-carried-files.js"
 import { GitHubTokenAnswerSchema, GitHubTokenListingSchema, type GitHubTokenListing } from "../contracts/github-person.js"
+import { GitHubAuthorshipSchema, type CommitAuthor, type GitHubAuthorship } from "../contracts/github-authorship.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { CloudHarnessesSchema, type CloudHarnesses } from "../contracts/cloud-harnesses.js"
@@ -452,6 +453,7 @@ export class CloudAccounts {
           return true
         },
         (error) => {
+          this.#options.log?.("cloud sign-in didn't finish", { error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) })
           this.#endSignIn({ kind: "failed", message: messageOf(error, "Signing in didn't finish. Try again.") }, { graceful: true })
           finish()
           return false
@@ -705,6 +707,21 @@ export class CloudAccounts {
   /** Turns it off: the account removes the token, and each cloud machine its copy before its next pull request. */
   async removeGitHubToken(): Promise<void> {
     await this.#call("github-token.remove", "DELETE", `${this.#accountPath()}/github-token`)
+  }
+
+  /**
+   * Who the account's cloud commits and pull requests are authored as (`github-authorship.ts`), and what that means for
+   * pull requests now; null from a cloud that doesn't keep it yet.
+   */
+  async githubAuthorship(): Promise<GitHubAuthorship | null> {
+    const response = await this.#call("github-authorship.read", "GET", `${this.#accountPath()}/github-authorship`, undefined, false, [404])
+    return response.status === 404 ? null : GitHubAuthorshipSchema.parse(await response.json())
+  }
+
+  /** Chooses it for the account; running cloud machines hear it within their minute. */
+  async saveGitHubAuthorship(as: CommitAuthor): Promise<GitHubAuthorship> {
+    const response = await this.#call("github-authorship.save", "PUT", `${this.#accountPath()}/github-authorship`, { as })
+    return GitHubAuthorshipSchema.parse(await response.json())
   }
 
   /** A project's carried files the account's store keeps (`?repository=`), listed without their values. */

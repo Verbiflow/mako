@@ -17,6 +17,7 @@ import { ACCESS_TIER_NAMES, accessModeId, sessionAccessTier, type AccessTier } f
 import {
   childAccess,
   childEntry,
+  sameChildEntry,
   reportAsk,
   ruleWords,
   childMode,
@@ -332,6 +333,12 @@ interface Ruled {
   target: FinTarget
   who: string
   rule: { n?: number; when: string }
+}
+
+/** Whether a harness took a request: `prepared` and `uncertain` say it may not have, and a refusal that it didn't. */
+function handedOver(request: LiveRequest): boolean {
+  const evidence = request.nativeDelivery?.evidence.kind
+  return request.status === "completed" || evidence === "submitted" || evidence === "accepted"
 }
 
 /** A request waiting out a limit, which a move can take over: a Stop's latch leaves it where it is. */
@@ -1644,11 +1651,25 @@ export class Agents implements AgentOperations, ConversationChildren {
       this.answersHeld.set(edge.child, { ...held, delivered })
       return this.childMoved(edge, false)
     }
+    // An Apex's message answers only what reached it: one that crossed the question is just a message, and the question goes on.
+    if (actor?.kind === "agent" && !this.reachedApex(edge, latest)) return hostLog("agents", "a message crossed a question its Apex hasn't heard", { op: edge.op, ask, request })
     const claim = store.claimAnswer({ ask, child: ThreadIdSchema.parse(edge.child), op: request, by: actor?.kind === "agent" ? "lead" : "person", answer: text.slice(0, 400), request, text, ...(actor?.kind === "agent" && { actor }), at: this.now() })
     if (!claim.claimed) return
     store.markAnswerDelivered(ask, delivered)
     this.answersHeld.set(edge.child, { ...claim.answer, delivered })
     this.childMoved(edge, false)
+  }
+
+  /**
+   * Whether a Fin's report has reached its Apex. A digest carrying it reached it once it was handed over: being sent
+   * isn't being heard. One no digest carries took another way, so the store's receipt says, unless a steer still has it.
+   */
+  private reachedApex(edge: ThreadParent, report: Report): boolean {
+    const apex = this.frontOf(edge.parent, edge.parentSession)
+    const id = `notice:${edge.child}:${report.id}`
+    if (apex && this.wakes.steered(id)) return false
+    const carriers = (apex ? this.deps.live.snapshot(apex)?.requests ?? [] : []).filter((request) => request.status !== "canceled" && request.digest?.notices.some((notice) => notice.id === id))
+    return carriers.length ? carriers.some(handedOver) : !this.store()!.undeliveredReports().some((waiting) => waiting.report.id === report.id)
   }
 
   private async answerOnce(by: Answerer, edge: ThreadParent, op: string, input: Pick<AgentsAnswerInput, "answer" | "allow" | "person">): Promise<AgentsAnswered | AgentRefused> {
@@ -2800,12 +2821,20 @@ export class Agents implements AgentOperations, ConversationChildren {
     clearTimeout(this.noticeEnds.get(root))
     this.noticeEnds.delete(root)
     const notice = this.standingNotice(root)
-    if (notice?.until === undefined) return
+    if (notice?.until !== undefined) this.waitOutNotice(root, notice, notice.until)
+  }
+
+  /**
+   * Until `notice`'s reset. A timer can fire a moment early, so one that finds the notice standing waits on for this
+   * notice: read for the tree instead, it could already be past, and that read would end the wait with nothing told.
+   */
+  private waitOutNotice(root: string, notice: LimitNotice, until: number): void {
     const timer = setTimeout(() => {
       this.noticeEnds.delete(root)
-      if (this.standingNotice(root)?.id !== notice.id) this.noticeChanged(this.store()?.edges().of(notice.fin))
+      if (this.standingNotice(root)?.id === notice.id) return this.waitOutNotice(root, notice, until)
+      this.noticeChanged(this.store()?.edges().of(notice.fin))
       this.endNotice(root)
-    }, Math.min(notice.until - this.now(), LONGEST_TIMER_MS))
+    }, Math.min(Math.max(until - this.now(), 1), LONGEST_TIMER_MS))
     timer.unref()
     this.noticeEnds.set(root, timer)
   }
@@ -3304,7 +3333,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const before = this.entries.get(edge.child)
     this.entries.delete(edge.child)
     const entry = this.entryOf(edge)
-    if (before && JSON.stringify(before) === JSON.stringify(entry)) {
+    if (before && sameChildEntry(before, entry)) {
       this.entries.set(edge.child, before)
       if (released) void this.drain()
       return

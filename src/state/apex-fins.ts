@@ -1,3 +1,4 @@
+import { windowRoutesStore } from "@/state/window-routes"
 import { childGroup, childStateOf, finsAsChildren, rollup, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { AgentsDirected, AgentsRedirected, AgentsRedirectInput } from "@mako/host/contracts/agents"
@@ -150,6 +151,8 @@ export const useApexView = createHook(apexViewStore)
 
 /** Open `child` in place, inside the Apex's Thread: its live conversation, else its saved transcript. */
 export function openFinInApex(apex: string, apexTitle: string, child: NativeAgent): void {
+  const { routes } = windowRoutesStore.get()
+  if (routes?.fin) return routes.fin(apex, child)
   const thread = child.child?.thread
   if (!thread) return
   const state = acpStore.get()
@@ -178,7 +181,7 @@ export function backToApex(): void {
   if (conversation) acp.activate(conversation.key)
 }
 
-/** Keeps the Fin view honest: it ends once anything else is on screen. */
+/** Keeps the Fin view honest: it ends once anything else is on screen, a saved conversation with no Thread of its own too. */
 export function watchApexView(): () => void {
   const sync = () => {
     const open = apexViewStore.get().open
@@ -186,7 +189,7 @@ export function watchApexView(): () => void {
     const here = currentOnScreen().thread
     if (here === open.child) {
       if (!open.shown) apexViewStore.set({ open: { ...open, shown: true } })
-    } else if (open.shown && here !== undefined) apexViewStore.set({ open: null })
+    } else if (open.shown && (here !== undefined || threadsStore.get().viewing)) apexViewStore.set({ open: null })
   }
   const stops = [acpStore.subscribe(sync), threadsStore.subscribe(sync), apexViewStore.subscribe(sync)]
   return () => stops.forEach((stop) => stop())

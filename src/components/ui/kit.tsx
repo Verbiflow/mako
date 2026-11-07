@@ -254,7 +254,8 @@ export function Segmented<T extends string>({
   label,
   disabled = false,
 }: {
-  value: T
+  /** Undefined while it isn't known: neither shows chosen. */
+  value: T | undefined
   options: Array<{ value: T; label: string }>
   onChange: (next: T) => void
   label?: string

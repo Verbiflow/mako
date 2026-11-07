@@ -2,7 +2,7 @@ import { IconAction } from "@/components/ui/kit"
 import { StillMark } from "@/components/transcript/message-avatar"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { SessionTabList } from "@/components/stage/session-tabs"
-import { ApexFinTabs } from "@/components/stage/child-tabs"
+import { OpenFinTab } from "@/components/stage/child-tabs"
 import { useApexView } from "@/state/apex-fins"
 import { Fragment, useMemo, type ReactNode } from "react"
 import { CheckoutChip } from "@/components/stage/checkout-chip"
@@ -129,7 +129,7 @@ export function StageStrip({
                 paneId={pane.id}
                 agentActive={active}
               />
-              {here.thread && !bound ? <ApexFinTabs thread={here.thread} apexTitle={inApex?.apexTitle ?? here.title ?? "this Thread"} /> : null}
+              {here.thread && !bound ? <OpenFinTab thread={here.thread} /> : null}
             </Fragment>
           )
         const title = agent ? agentTitle : document.title

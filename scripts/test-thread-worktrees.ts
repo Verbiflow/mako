@@ -860,6 +860,40 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   await worktrees.abandon(id).catch(() => undefined)
 }
 
+// A spare shares what the main checkout holds rather than writing it: a clone keeps its source's time, which Git's own
+// write can't. What differs is Git's to write, and the checkout is whole and clean either way. No start waits for this.
+{
+  const cloned = repository("cloned")
+  mkdirSync(join(cloned, "audits"))
+  writeFileSync(join(cloned, "audits", "same.txt"), "unchanged\n")
+  writeFileSync(join(cloned, "edited.txt"), "committed\n")
+  writeFileSync(join(cloned, "run.sh"), "#!/bin/sh\n", { mode: 0o755 })
+  git(cloned, "add", ".")
+  git(cloned, "commit", "-q", "-m", "files")
+  writeFileSync(join(cloned, "edited.txt"), "uncommitted\n")
+  writeFileSync(join(cloned, "ignored.log"), "not tracked\n")
+  const long = new Date("2001-02-03T04:05:06Z")
+  utimesSync(join(cloned, "audits", "same.txt"), long, long)
+  const own = new ThreadWorktreeService(gitRunner, join(root, "cloned-worktrees"), threads, undefined, undefined, undefined, setup)
+  await own.want(cloned)
+  await own.settled()
+  const id = randomUUID()
+  started(id)
+  const made = await own.prepare(id, cloned, "Cloned work")
+  assert.equal(made.spare, true, "it came from a spare")
+  const at = (file: string) => join(made.path, file)
+  assert.equal(git(made.path, "status", "--porcelain"), "", "it's whole and clean, whatever was cloned")
+  assert.equal(readFileSync(at("edited.txt"), "utf8"), "committed\n", "a file changed in the main checkout comes from the commit")
+  assert.equal(existsSync(at("ignored.log")), false, "and nothing untracked comes along")
+  assert.equal(lstatSync(at("run.sh")).mode & 0o111, 0o111, "a file keeps its mode")
+  if (process.platform === "darwin") assert.equal(lstatSync(at("audits/same.txt")).mtime.getTime(), long.getTime(), "the same file is the main checkout's, cloned")
+  writeFileSync(at("audits/same.txt"), "changed here\n")
+  assert.equal(readFileSync(join(cloned, "audits", "same.txt"), "utf8"), "unchanged\n", "and changing it here changes nothing there")
+  assert.equal(git(made.path, "status", "--porcelain"), "M audits/same.txt", "and Git sees the change")
+  await own.abandon(id).catch(() => undefined)
+  await own.settled()
+}
+
 // Windows ask every half minute: a worktree nothing changes in is read less and less, while one with a conversation
 // at work, a new index or a changed status is read as often as they ask, and one asked of alone is read then.
 {
@@ -999,6 +1033,49 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   await first
   assert.deepEqual(await Promise.all(later), later.map(() => []))
   assert.equal(lists, 2, "those who asked during a pass share one pass after it")
+  shared.list = async () => {
+    throw new Error("listing failed")
+  }
+  // An inventory walks every worktree: those asked during one share the next too.
+  let walks = 0
+  let open!: () => void
+  const held = new Promise<void>((resolve) => {
+    open = resolve
+  })
+  shared.list = async () => {
+    walks++
+    await held
+    return { root, worktrees: [] }
+  }
+  const walking = Array.from({ length: 12 }, () => shared.inventory())
+  await Promise.resolve()
+  assert.equal(walks, 1, "one inventory at a time")
+  open()
+  await Promise.all(walking)
+  assert.equal(walks, 2, "those who asked during one share one after it")
+  // One who asks as soon as a walk ends, with the next already promised, shares that one too: never two at once.
+  walks = 0
+  let walkingNow = 0
+  let mostAtOnce = 0
+  let letGo!: () => void
+  const walked = new Promise<void>((resolve) => {
+    letGo = resolve
+  })
+  shared.list = async () => {
+    walks++
+    mostAtOnce = Math.max(mostAtOnce, ++walkingNow)
+    await walked
+    walkingNow--
+    return { root, worktrees: [] }
+  }
+  let onEnd: Promise<unknown> | undefined
+  const firstWalk = shared.inventory().then(() => (onEnd = shared.inventory()))
+  const promised = shared.inventory()
+  await Promise.resolve()
+  letGo()
+  await firstWalk
+  await Promise.all([promised, onEnd])
+  assert.deepEqual([walks, mostAtOnce], [2, 1], "one asking as a walk ends shares the walk already promised")
   shared.list = async () => {
     throw new Error("listing failed")
   }

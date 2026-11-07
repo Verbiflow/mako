@@ -353,6 +353,9 @@ function apply(event: HostEvent) {
     return
   }
   if (event.type === "host-reconnected") {
+    // The stream attached, so the host is there. The boot brings the window up to date; on a busy host that took 18 s,
+    // and it isn't an outage. One that fails says so itself.
+    hostConnectionStore.set({ kind: "connected" })
     void actions.reconnect()
     return
   }

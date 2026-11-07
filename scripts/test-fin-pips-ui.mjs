@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { childGroup, childStateOf, CHILD_GROUPS, orderedChildren, rollup, rollupLabel } from "@mako/host/contracts/children"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * An Apex's row through the production rail and phone list, on the mock bridge's Apex (`?mock&app=apex`): one pip per
@@ -25,7 +25,7 @@ if (process.versions.electron) {
   })
 } else {
   const given = process.argv.indexOf("--url")
-  const root = await mkdtemp(join(tmpdir(), "mako-fin-pips-ui-"))
+  const root = testScratch("mako-fin-pips-ui-")
   let server
   let base = given > 0 ? process.argv[given + 1] : undefined
   if (!base) {
@@ -46,7 +46,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`UI evidence: ${root}`)
 }
 
 const LETTER = { needs: "n", queued: "q", idle: "i", failed: "f", done: "d" }

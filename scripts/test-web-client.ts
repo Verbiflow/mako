@@ -10,6 +10,7 @@ import { foldThreads, openingSession } from "../src/web-client/threads"
 import { parseRoute, routeHref, type WebRoute } from "../src/web-client/route"
 import { typedRepository } from "../src/web-client/account"
 import { Gateway, GatewayError } from "../src/web-client/gateway"
+import { webGitHubAuthorships } from "../src/web-client/github-authorship"
 import { renewAtMs } from "@mako/protocol"
 import { deviceOf, errorReading, note, openingThread, readingsStore, readingWords } from "../src/web-client/probe"
 import { rowDetail } from "../src/web-client/rows"
@@ -88,6 +89,12 @@ function row(n: number, fields: Partial<ListedSession>): ListedSession {
 }
 
 const devices = new Map([[STUDIO, { id: STUDIO, kind: "desktop", name: "Studio", platform: "macOS" }]])
+
+test("a gateway without who commits are authored as says so with no error, and any other failure stays one", async () => {
+  const answering = (status: number) => webGitHubAuthorships({ rest: async () => { throw new GatewayError(status, "No such route", undefined) } }, "u1")
+  assert.equal(await answering(404).read(), null)
+  await assert.rejects(answering(500).read(), GatewayError)
+})
 
 test("one row per Thread, folded by its ID, the ones that need the person first", () => {
   const rows = [
