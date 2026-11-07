@@ -16,12 +16,12 @@
 // reaches the person's apps but the Shift keys, which type nothing.
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
-import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { createInterface } from "node:readline"
 import { promisify } from "node:util"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // Electron emits ready only once its main module has finished evaluating, so the holder isn't awaited here.
 if (process.versions.electron) void holderProcess()
@@ -52,7 +52,7 @@ async function holderProcess() {
 
 async function check() {
   const run = promisify(execFile)
-  const root = await mkdtemp(join(tmpdir(), "mako-appshot-clashes-"))
+  const root = testScratch("mako-appshot-clashes-")
   const evidence = resolve(process.argv[2] ?? join(root, "evidence"))
   await mkdir(evidence, { recursive: true })
   const electron = createRequire(import.meta.url)("electron")

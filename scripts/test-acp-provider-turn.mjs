@@ -2,19 +2,19 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { readFile, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { fixtureResume, noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-provider-turn-test-"))
+  const root = testScratch("mako-provider-turn-test-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-provider-turn-test", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_PROVIDER_TURN_ROOT: root, MAKO_REPO: resolve(".") }
   delete env.ELECTRON_RUN_AS_NODE
