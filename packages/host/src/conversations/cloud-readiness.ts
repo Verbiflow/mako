@@ -39,6 +39,9 @@ const ReadyFileSchema = z.object({ version: z.literal(1), threads: z.record(z.st
 /** What keeping a Thread ready asks of the account: a cloud Thread standing by, its checkpoints and its records. */
 export type ReadinessAccount = Pick<CloudAccount, "createThread" | "sendCheckpoint" | "threadRecords">
 
+/** As the cloud weighs them: a cloud Thread is made for one repository and one branch, and refuses any other. */
+const sameRepository = (left: CloudRepository, right: CloudRepository) => left.url === right.url && left.branch === right.branch
+
 /** A cloud Thread kept ready, as a move takes it: and the checkpoint the cloud keeps for it, by its hash. */
 export type TakenReady = { cloudThread: string; checkpoint?: string }
 
@@ -110,7 +113,11 @@ export class CloudReadiness {
     await this.#rounds.get(thread)?.catch(() => undefined)
     const entries = await this.#load()
     const entry = entries[thread]
-    if (!entry || entry.folder !== folder || entry.repository.url !== repository.url) return undefined
+    if (!entry) return undefined
+    if (entry.folder !== folder || !sameRepository(entry.repository, repository)) {
+      hostLog("readiness", "a move didn't take a cloud Thread standing by for another folder or branch", { thread, cloudThread: entry.cloudThread, folderMoved: entry.folder !== folder, stoodBy: entry.repository.branch ?? "its default", moves: repository.branch ?? "its default" })
+      return undefined
+    }
     if (Date.now() - entry.at > READY_FRESH_MS) {
       // Not kept ready lately (the Mac slept, or the Thread rested): the cloud may have ended it. Forgotten here.
       delete entries[thread]
@@ -146,7 +153,7 @@ export class CloudReadiness {
     }
     const entries = await this.#load()
     let entry = entries[plan.thread]
-    if (!entry || entry.folder !== plan.folder || entry.repository.url !== plan.repository.url) {
+    if (!entry || entry.folder !== plan.folder || !sameRepository(entry.repository, plan.repository)) {
       entry = { cloudThread: this.#options.newCloudThread(), folder: plan.folder, repository: plan.repository, at: Date.now() }
       entries[plan.thread] = entry
       await this.#save()

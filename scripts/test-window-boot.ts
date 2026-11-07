@@ -137,6 +137,13 @@ try {
     const deadline = Date.now() + 5_000
     while (!predicate()) { assert.ok(Date.now() < deadline, what); await delay(10) }
   }
+  // The stream back is the host back: a boot that takes seconds on a busy host doesn't keep the banner up that long.
+  receive({ type: "host-disconnected", message: "fixture outage" })
+  answer = Promise.withResolvers<BootPayload>()
+  receive({ type: "host-reconnected" })
+  assert.equal(hostConnectionStore.get().kind, "connected", "the banner comes down as the stream attaches, before the boot answers")
+  answer.resolve(payload)
+  await tick()
   receive({ type: "host-disconnected", message: "fixture outage" })
   assert.deepEqual(hostConnectionStore.get(), { kind: "disconnected", message: "fixture outage" })
   answer = Promise.withResolvers<BootPayload>()

@@ -17,6 +17,7 @@ import { ACCESS_TIER_NAMES, accessModeId, sessionAccessTier, type AccessTier } f
 import {
   childAccess,
   childEntry,
+  sameChildEntry,
   reportAsk,
   ruleWords,
   childMode,
@@ -3324,7 +3325,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const before = this.entries.get(edge.child)
     this.entries.delete(edge.child)
     const entry = this.entryOf(edge)
-    if (before && JSON.stringify(before) === JSON.stringify(entry)) {
+    if (before && sameChildEntry(before, entry)) {
       this.entries.set(edge.child, before)
       if (released) void this.drain()
       return
