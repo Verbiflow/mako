@@ -122,7 +122,10 @@ function storeKeeps(): void {
   const apex = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "codex", bindings: [] }, { kind: "service", name: "workspace" })
   const placed = threads.registerJournal({ conversationId: randomUUID(), createdAt: Date.now(), harness: "claude", bindings: [] }, { kind: "service", name: "workspace" })
   const first = edge({ child: placed.thread, parent: apex.thread, parentSession: apex.session })
+  const before = threads.version()
+  assert.equal(threads.version(), before, "reading doesn't move the store's version")
   assert.equal(threads.keepEdge(first).op, first.op)
+  assert.notEqual(threads.version(), before, "a new child does")
   assert.equal(threads.keepEdge({ ...first, op: "start:other", parent: ThreadIdSchema.parse(randomUUID()) }).op, first.op, "one parent per child: the first edge stands")
   const run = { harness: "claude", nativeId: "n", device: threads.deviceId, startedAt: 1 }
   threads.keepEdge({ ...first, run: { ...run, ended: { at: 1, kind: "done" } } })

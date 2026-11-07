@@ -346,6 +346,7 @@ const PlacementSchema = z.object({ thread: ThreadIdSchema, session: SessionIdSch
 const CountSchema = z.object({ count: z.number() })
 const FirstJournalSchema = z.object({ count: z.number(), first: z.number().nullable() })
 const VersionSchema = z.object({ data_version: z.number() })
+const TotalChangesSchema = z.object({ count: z.number() })
 const PlacementChangeRowSchema = z.object({ seq: z.number(), session_id: z.string() })
 const ExecutionRowSchema = z.object({
   owner_kind: z.enum(["device", "cloud"]).nullable(),
@@ -1207,6 +1208,12 @@ export class ThreadStore {
         const parsed = ReportSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
         return parsed.success ? [parsed.data] : []
       })
+  }
+
+  /** Moves with every write to this store, this host's or another's, without reading a table. */
+  version(): string {
+    this.syncVersion()
+    return `${this.dataVersion}:${TotalChangesSchema.parse(this.sql("SELECT total_changes() AS count").get()).count}`
   }
 
   /**

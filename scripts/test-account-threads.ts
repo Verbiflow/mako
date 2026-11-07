@@ -1031,6 +1031,7 @@ test("a device with everything in the account costs a tick nothing until its Ses
   let now = NOW
   let reads = 0
   let children = 0
+  let storeVersion = "1"
   const given: string[] = []
   const link = (authorization: string): RecordsLink => ({ id: "d-1/records", base: "https://cloud.test/v1/devices/d-1/records", authorization })
   let links: UploadLinks = { state: "on", copies: link("Bearer a"), originals: link("Bearer a") }
@@ -1038,6 +1039,7 @@ test("a device with everything in the account costs a tick nothing until its Ses
     rows: () => listed,
     path: (_harness, nativeId) => `/rail/${nativeId}.jsonl`,
     agents: () => (children += 1, new Map()),
+    storeVersion: () => storeVersion,
     links: async () => links,
     power: async () => ({ onBattery: false, percent: 100, lowPower: false }),
     scope: async () => {},
@@ -1062,9 +1064,12 @@ test("a device with everything in the account costs a tick nothing until its Ses
   listed = [...listed, { ...row(2), nativeId: "n-2" }]
   await uploads.tick()
   assert.deepEqual(looks(), [first[0]! + 1, first[1]! + 1], "a new Session is looked at on the next tick")
+  storeVersion = "2"
+  await uploads.tick()
+  assert.deepEqual(looks(), [first[0]! + 2, first[1]! + 2], "a new Fin has no row of its own: the store moving is looked at on the next tick")
   now += 60_000
   await uploads.tick()
-  assert.deepEqual(looks(), [first[0]! + 2, first[1]! + 2], "and a minute on, in case a tier moved")
+  assert.deepEqual(looks(), [first[0]! + 3, first[1]! + 3], "and a minute on, in case a tier moved")
   links = { state: "off", reason: "signed-out" }
   await uploads.tick()
   assert.equal(uploads.status().state, "off", "signing out stops it at once")

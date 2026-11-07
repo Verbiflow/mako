@@ -33,6 +33,8 @@ export type UploadSources = {
    * with their parent, so another device reads each under it as this one shows it. Read once a tick.
    */
   agents?(): ReadonlyMap<string, readonly { harness: string; nativeId?: string }[]>
+  /** What moves when the store `agents` reads does: a new child has no row of its own, so the rows alone wouldn't show it. */
+  storeVersion?(): string | undefined
   /** Where this device's copies and originals go in the account, while it's signed in with the cloud; else why not. */
   links(): Promise<UploadLinks>
   power(): Promise<PowerReading>
@@ -105,8 +107,9 @@ export class SessionUploads {
   #statusText = JSON.stringify(this.#status)
   /** The catalog's status as it last answered: a read that fails, as one the catalog's process is too busy to answer in time, shows and hides nothing. */
   #catalog: CatalogSyncStatus | null = null
-  /** The rows the last whole look read, and when the next is due if they stay. */
+  /** The rows and the store the last whole look read, and when the next is due if they stay. */
   #looked: readonly ReportedSession[] | undefined
+  #lookedStore: string | undefined
   #nextLook = 0
   /**
    * Failures already logged, by when they began and what: the catalog keeps each Session's newest until it's pushed,
@@ -141,7 +144,8 @@ export class SessionUploads {
     // to take in time once kept every renewed token from it, and its pushes went with an expired one.
     if (this.#scopeKey !== undefined) await this.#give(links)
     // Nothing to catch up on and nothing new: the rest of a tick would read everything to say the same again.
-    if (rows === this.#looked && this.#sources.now() < this.#nextLook) return
+    const store = this.#sources.storeVersion?.()
+    if (rows === this.#looked && store === this.#lookedStore && this.#sources.now() < this.#nextLook) return
     const scope = uploadScope(rows, await this.#reading(), (harness, nativeId) => this.#sources.path(harness, nativeId), this.#sources.now(), this.#sources.agents?.())
     const scopeKey = JSON.stringify(scope)
     if (scopeKey !== this.#scopeKey) {
@@ -155,6 +159,7 @@ export class SessionUploads {
     await this.#give(links)
     await this.#read(scope, rows)
     this.#looked = rows
+    this.#lookedStore = store
     this.#nextLook = this.#status.state === "synced" ? this.#sources.now() + SYNCED_LOOK_MS : 0
   }
 

@@ -618,6 +618,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       rows: () => sessions.listed(),
       path: (harness, nativeId) => (windowPaths ??= new Map((windowRows ??= catalog.recent(windowStart(Date.now()))).map((ref) => [`${ref.harness}\n${ref.nativeId}`, ref.path]))).get(`${harness}\n${nativeId}`),
       agents: () => threads.store?.childSessions() ?? new Map(),
+      storeVersion: () => threads.store?.version(),
       links: async () => {
         const cloud = late.cloud
         const blocked = cloud?.cloudBlocked ? await cloud.cloudBlocked() : "signed-out"
