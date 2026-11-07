@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
+import { mock } from "node:test"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -1250,6 +1251,61 @@ async function activityTellsNoOne(): Promise<void> {
   }
 }
 
+/**
+ * A Fin's progress alone goes to its Apex Thread's newest Session and any other in memory that isn't closed, and never
+ * reads one back from its journal; a change of how it stands goes to every one. One Apex of 14 Sessions, 13 closed, took
+ * every step 14 times.
+ */
+async function progressGoesWhereItsRead(): Promise<void> {
+  const w = world("progress", (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "Done: it's finished.") : "Started it."))
+  try {
+    const apex = await w.apex("codex")
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Keep working." }, harness: "claude", name: "busy", clientKey: "k-busy", cwd: w.root })
+    assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+    await waitFor(() => w.agents.roster(apex.conversation).some((entry) => entry.child?.thread === started.child), "its Apex's roster has it")
+    const store = w.store
+    const apexThread = store.journalPlacement(apex.conversation)!.thread
+    assert.ok(started.child, "the Fin has a Thread")
+    const edge = store.edges().of(started.child)!
+    // Older Sessions of the Apex's Thread: one closed in memory, one let go of, one in memory and running, before its own.
+    const older = { closed: randomUUID(), released: randomUUID(), running: randomUUID() }
+    const sessionOf = (conversation: string) => `session-of-${conversation}`
+    const thread = store.thread.bind(store)
+    mock.method(store, "thread", (id: Parameters<typeof store.thread>[0]) => {
+      const real = thread(id)
+      return real && id === apexThread ? { ...real, sessions: [...Object.values(older).map(sessionOf), ...real.sessions] } : real
+    })
+    const conversationsOf = store.conversationsOf.bind(store)
+    mock.method(store, "conversationsOf", (session: string) => {
+      const conversation = Object.values(older).find((each) => sessionOf(each) === session)
+      return conversation ? [conversation] : conversationsOf(session)
+    })
+    const held = w.live.held.bind(w.live)
+    const apexHeld = held(apex.conversation)!
+    mock.method(w.live, "held", (id: string) => {
+      if (id === older.closed) return { ...apexHeld, session: { ...apexHeld.session, id, status: "closed" } }
+      if (id === older.running) return { ...apexHeld, session: { ...apexHeld.session, id, status: "running" } }
+      return id === older.released ? undefined : held(id)
+    })
+    const told: [string, boolean][] = []
+    mock.method(w.live, "childrenChanged", (id: string, progressOnly?: boolean) => void told.push([id, progressOnly ?? false]))
+    const entries = w.agents["entries"]
+    const now = entries.get(edge.child) ?? w.agents.roster(apex.conversation).find((entry) => entry.child?.thread === edge.child)!
+    const moveFrom = (before: typeof now) => {
+      entries.set(edge.child, before)
+      told.length = 0
+      w.agents["childMoved"](edge, true)
+      return told
+    }
+    assert.deepEqual(moveFrom({ ...now, title: `${now.title} before`, observedAt: now.observedAt - 1 }).map(([id]) => id).sort(), [apex.conversation, older.running].sort(), "a step goes to the newest Session and the one running")
+    assert.ok(told.every(([, progress]) => progress), "as progress")
+    assert.deepEqual(moveFrom({ ...now, state: { kind: now.state.kind === "waiting" ? "working" : "waiting" } }).map(([id]) => id).sort(), [apex.conversation, ...Object.values(older)].sort(), "a change of how it stands goes to every Session")
+  } finally {
+    mock.restoreAll()
+    await w.close()
+  }
+}
+
 /** A list reads what the listing and the store hold, never a journal: one Fin's search once read 74 back at once. */
 async function listsReadNoJournal(): Promise<void> {
   const rows: ThreadRef[] = []
@@ -1992,6 +2048,7 @@ try {
   await stoppedApexHolds()
   await listsReadNoJournal()
   await activityTellsNoOne()
+  await progressGoesWhereItsRead()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()
