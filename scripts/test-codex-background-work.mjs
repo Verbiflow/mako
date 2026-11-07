@@ -2,15 +2,15 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { chmod, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { chmod, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-codex-background-test-"))
+  const root = testScratch("mako-codex-background-test-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-codex-background-test", main: fileURLToPath(import.meta.url) }))
   const executable = join(root, "codex")
   await writeFile(executable, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${process.execPath}" "${resolve("scripts/fixtures/codex-background-app-server.mjs")}" "$@"\n`)
