@@ -335,6 +335,13 @@ export class LiveRecords {
     return [...this.loadsBy].map(([by, count]) => ({ by, count })).sort((left, right) => right.count - left.count).slice(0, 10)
   }
 
+  /** The harness Sessions a conversation is bound to, from memory or its listing: never reads its journal in. */
+  nativeIds(id: string): readonly { provider: string; nativeId: string }[] {
+    const resident = this.residents.get(id)
+    if (!resident) return this.recovered.get(id)?.nativeIds ?? []
+    return (resident.snapshot.control?.bindings ?? []).flatMap((binding) => (binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []))
+  }
+
   /** Lets go of a conversation now when nothing is using it, as the memory budget would. */
   release(id: string): boolean {
     const resident = this.residents.get(id)

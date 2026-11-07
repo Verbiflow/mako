@@ -1,9 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { basename, relative, resolve, sep } from "node:path"
+import { readFile } from "node:fs/promises"
+import { basename, join, relative, resolve, sep } from "node:path"
 import { z } from "zod"
 import { MERGE_METHODS, PULL_REQUEST_WRITING, type MergeMethod } from "../contracts/git-actions.js"
 import { mergePullRequest, openedSentence, openPullRequest, pullRequestReport, rerunFailedChecks, type PersonOf, type PullRequestDraft, type PullRequestReport } from "./pull-requests.js"
 import { authorWords, MAKO_GITHUB_APP } from "../contracts/github-person.js"
+import { PULL_REQUESTS_AS, PULL_REQUESTS_FALLBACK_SENTENCE, type PullRequestsAs } from "../contracts/github-authorship.js"
+import { MACHINE_IDENTITY_DIR } from "../contracts/machine-agent.js"
 import { toolText } from "../base/tool-text.js"
 import type { Git } from "@mako/git"
 
@@ -37,6 +40,16 @@ interface Deps {
   changed(): void
   /** On a cloud machine: whether its pull requests go as its person, asked before each write; undefined elsewhere. */
   person?: PersonOf
+  /** On a cloud machine: who its pull requests go as, as its agent last wrote it (`machinePullRequestsAs`); undefined elsewhere. */
+  pullRequestsAs?(): Promise<PullRequestsAs | undefined>
+  /** The Thread a conversation belongs to, so what's said once per Thread is said once across its Sessions. */
+  threadOf?(conversationId: string): string | undefined
+}
+
+/** On a cloud machine, who its pull requests go as (`pull-requests` in `MACHINE_IDENTITY_DIR`); undefined before the agent wrote it. */
+export async function machinePullRequestsAs(dir = MACHINE_IDENTITY_DIR): Promise<PullRequestsAs | undefined> {
+  const said = await readFile(join(dir, "pull-requests"), "utf8").then((text) => text.trim(), () => undefined)
+  return PULL_REQUESTS_AS.find((value) => value === said)
 }
 
 export interface PullRequestTools {
@@ -84,6 +97,16 @@ function standing(report: PullRequestReport): string {
 /** The pull request tools for the calling conversation: the same operations as the Git sidebar's, one repository at a time. */
 export function pullRequestTools(deps: Deps): PullRequestTools {
   const report = (repository: ReachableRepository, logs = false) => pullRequestReport(deps.git, repository.root, { startedFrom: repository.startedFrom, logs })
+  const toldFallback = new Set<string>()
+  /** The fallback sentence for a Thread's first pull request that went as the App only for want of a token; empty after. */
+  const fallbackNote = async (conversationId: string): Promise<string> => {
+    const thread = deps.threadOf?.(conversationId) ?? conversationId
+    if (toldFallback.has(thread) || !deps.pullRequestsAs) return ""
+    const as = await deps.pullRequestsAs()
+    if (as !== "mako-fallback" || toldFallback.has(thread)) return ""
+    toldFallback.add(thread)
+    return ` ${PULL_REQUESTS_FALLBACK_SENTENCE}`
+  }
   /**
    * In a project folder of several repositories with none named: the one
    * that `wanted` fits. Several or none is refused with where each one
@@ -125,7 +148,8 @@ export function pullRequestTools(deps: Deps): PullRequestTools {
       const left = result.uncommitted
         ? ` ${plural(result.uncommitted, "file")} with uncommitted changes stayed behind; commit what belongs in it and call again to push.`
         : ""
-      return `${place.repositories.length > 1 ? `${one.name}: ` : ""}${openedSentence(result)}.${left}`
+      const fallback = result.author?.as === "person" ? "" : await fallbackNote(conversationId)
+      return `${place.repositories.length > 1 ? `${one.name}: ` : ""}${openedSentence(result)}.${fallback}${left}`
     },
     async merge(conversationId, { method, repository, as } = {}) {
       const place = await deps.place(conversationId)
