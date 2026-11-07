@@ -16,6 +16,8 @@ import { syncTier } from "./sync-window.js"
 export const UPLOAD_BATTERY_FLOOR = 20
 /** How often the power is read: a change of power source isn't worth a process a second. */
 const POWER_EVERY_MS = 60_000
+/** How long a device with all its Sessions in the account goes without looking, unless they change: a tier's edge moves in hours. */
+const SYNCED_LOOK_MS = 60_000
 
 /** Where this device's two forms go in the account, its reading copies and its originals; or why nothing goes. */
 export type UploadLinks = { state: "on"; copies: RecordsLink; originals: RecordsLink } | { state: "off"; reason: "signed-out" | "no-cloud" }
@@ -91,7 +93,7 @@ export function uploadScope(
  * any device to read) and as its harness wrote it (its originals, for continuing it anywhere), both pushed by the
  * catalog from stores that keep what the account holds. Said again on each tick only when something changed; the
  * scope goes before the links. Nothing leaves the Mac without the cloud. Its status is read from the catalog on each
- * tick, and a failure the catalog's process keeps is logged here once, with the gateway's correlation ID.
+ * tick that has something to look at (`#nextLook`), and a failure the catalog's process keeps is logged here once, with the gateway's correlation ID.
  */
 export class SessionUploads {
   readonly #sources: UploadSources
@@ -103,6 +105,9 @@ export class SessionUploads {
   #statusText = JSON.stringify(this.#status)
   /** The catalog's status as it last answered: a read that fails, as one the catalog's process is too busy to answer in time, shows and hides nothing. */
   #catalog: CatalogSyncStatus | null = null
+  /** The rows the last whole look read, and when the next is due if they stay. */
+  #looked: readonly ReportedSession[] | undefined
+  #nextLook = 0
   /**
    * Failures already logged, by when they began and what: the catalog keeps each Session's newest until it's pushed,
    * and one tried again keeps when it began (`since`), so it's logged once rather than at every try.
@@ -135,6 +140,8 @@ export class SessionUploads {
     // Once a scope was given, the links go first, whatever the scope does: a scope the catalog's process was too busy
     // to take in time once kept every renewed token from it, and its pushes went with an expired one.
     if (this.#scopeKey !== undefined) await this.#give(links)
+    // Nothing to catch up on and nothing new: the rest of a tick would read everything to say the same again.
+    if (rows === this.#looked && this.#sources.now() < this.#nextLook) return
     const scope = uploadScope(rows, await this.#reading(), (harness, nativeId) => this.#sources.path(harness, nativeId), this.#sources.now(), this.#sources.agents?.())
     const scopeKey = JSON.stringify(scope)
     if (scopeKey !== this.#scopeKey) {
@@ -147,6 +154,8 @@ export class SessionUploads {
     }
     await this.#give(links)
     await this.#read(scope, rows)
+    this.#looked = rows
+    this.#nextLook = this.#status.state === "synced" ? this.#sources.now() + SYNCED_LOOK_MS : 0
   }
 
   /** The catalog's process says a link is due or was refused (`ThreadCatalog.onLinkDue`): the links go now, renewed. */
