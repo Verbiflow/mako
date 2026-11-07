@@ -21,7 +21,9 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * (`JournalStore.recency`, `countingTurn`), run in slices.
  *
  * Each is held to the same work done at once in the same run (the yardstick): the longest hold in slices must stay
- * under a `TIMES`th of the one at once, and what it finds must be exactly what the reading at once finds.
+ * under a `TIMES`th of the one at once, and what it finds must be exactly what the reading at once finds. And since
+ * other work runs between the reading and the letting go, a root a turn began on meanwhile, after the reading or
+ * between two roots let go, stays.
  */
 const TIMES = 4
 const DAY = 86_400_000
@@ -150,7 +152,53 @@ async function letGoOfIdleRoots(): Promise<void> {
   await tracker.close()
 }
 
+/** Two roots idle past retention; `meanwhile` runs as `letGoIdle` reads and lets go, and says what it began work on. */
+async function idleWhileWorkBegins(name: string, meanwhile: (tracker: LaptopTracker, folders: readonly string[], clock: FakeClock) => void): Promise<{ letGo: string[]; folders: string[]; tracker: LaptopTracker }> {
+  const storage = join(root, name)
+  const folders = ["one", "two"].map((repo) => join(storage, repo))
+  for (const folder of folders) {
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, "a.ts"), "export const a = 1\n")
+  }
+  const clock = new FakeClock(1_790_000_000_000)
+  const tracker = await LaptopTracker.open({ fs: nodeFileSystem(), events: new FakeEventSource(), clock, storage, device: "attribution-holds" })
+  for (const [index, folder] of folders.entries()) await tracker.track({ id: `root-${index}`, path: folder, kind: "workspace" })
+  await tracker.settled()
+  clock.advance(15 * DAY)
+  meanwhile(tracker, folders, clock)
+  return { letGo: await tracker.letGoIdle(), folders, tracker }
+}
+
+const turnIn = (tracker: LaptopTracker, folder: string, clock: FakeClock) =>
+  tracker.activity({ kind: "turn", id: `turn-in-${folder.split("/").at(-1)}`, edge: "start", at: clock.now(), thread: "T1", session: "S1", checkout: folder })
+
+async function workBeginsMeanwhile(): Promise<void> {
+  // pr-review's case: a turn begins on the root after the reading, before the root is let go.
+  {
+    const { letGo, folders, tracker } = await idleWhileWorkBegins("after-reading", (tracker, folders, clock) => queueMicrotask(() => turnIn(tracker, folders[0]!, clock)))
+    assert.deepEqual(letGo, [folders[1]], "the root a turn began on after the reading stays; the other goes")
+    assert.ok(tracker.rootStates().has("root-0"), "and it's still tracked")
+    await tracker.close()
+  }
+  // Between two roots let go: a turn begins on the second while the first is let go.
+  {
+    const { letGo, folders, tracker } = await idleWhileWorkBegins("between-roots", (tracker, folders, clock) => {
+      const untrack = tracker.untrack.bind(tracker)
+      tracker.untrack = async (id) => {
+        const untracked = untrack(id)
+        if (id === "root-0") turnIn(tracker, folders[1]!, clock)
+        return untracked
+      }
+    })
+    assert.deepEqual(letGo, [folders[0]], "the root a turn began on while another was let go stays")
+    assert.ok(tracker.rootStates().has("root-1"), "and it's still tracked")
+    await tracker.close()
+  }
+  console.log("a root work began on after the reading, or between two let go, stays")
+}
+
 try {
+  await workBeginsMeanwhile()
   await countATurn()
   await letGoOfIdleRoots()
   console.log("attribution holds: ok")

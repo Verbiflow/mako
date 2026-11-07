@@ -213,9 +213,28 @@ export interface TurnEntriesPage {
 
 /** When each root last changed and each folder was last worked in, by its root's ID or its path (`JournalStore.recency`). */
 export interface Recency {
-  changed: Map<string, number>
+  changed: ReadonlyMap<string, number>
   /** Read only when `recency`'s caller wants it; empty otherwise. */
-  worked: Map<string, number>
+  worked: ReadonlyMap<string, number>
+  /** Where it read through, for `recencySince`. */
+  mark: RecencyMark
+}
+
+/** How far a `Recency` read: the newest entry, and the change clock as its reading of work began (none without change tracking). */
+export interface RecencyMark {
+  seq: number
+  clock?: number
+}
+
+/** `at` into `into` under `key`, when it's later than what's there. */
+function later(into: Map<string, number>, key: string, at: number): void {
+  if (at > (into.get(key) ?? Number.NEGATIVE_INFINITY)) into.set(key, at)
+}
+
+/** A call's folders, as checkout and as working folder, into `worked`. */
+function workedIn(worked: Map<string, number>, row: z.infer<typeof WorkedRow>): void {
+  if (row.checkout) later(worked, row.checkout, row.at)
+  if (row.cwd) later(worked, row.cwd, row.at)
 }
 const ChoiceRow = z.object({ spelling: z.string(), path: z.string(), at: z.number() })
 const CarriedRow = z.object({ journal: z.string(), device: z.string(), through: z.number(), at: z.number(), received: z.number(), roots: z.string() })
@@ -883,36 +902,25 @@ export class JournalStore {
   *recency(now: number, wanted: (changed: ReadonlyMap<string, number>) => boolean): Steps<Recency> {
     const changed = new Map<string, number>()
     const worked = new Map<string, number>()
-    const later = (into: Map<string, number>, key: string, at: number) => {
-      if (at > (into.get(key) ?? Number.NEGATIVE_INFINITY)) into.set(key, at)
-    }
-    const work = (row: z.infer<typeof WorkedRow>) => {
-      if (row.checkout) later(worked, row.checkout, row.at)
-      if (row.cwd) later(worked, row.cwd, row.at)
-    }
     let read = 0
     const readEntries = (upTo: number) => {
-      for (const row of this.statement("SELECT root, MAX(at) AS at FROM entries WHERE seq > ? AND seq <= ? GROUP BY root").all(read, upTo)) {
-        const { root, at } = RootAtRow.parse(row)
-        later(changed, root, at)
-      }
+      this.changedIn(changed, read, upTo)
       read = upTo
     }
     for (let last = this.lastSeq(); read < last; ) {
       readEntries(Math.min(read + RECENT_ENTRIES, last))
       yield
     }
+    const clock = this.changesTracked() ? this.changeClock() : undefined
     if (!wanted(changed)) {
       readEntries(this.lastSeq())
-      return { changed, worked }
+      return { changed, worked, mark: { seq: read, ...(clock !== undefined && { clock }) } }
     }
-    const tracked = this.changesTracked()
-    const clock = tracked ? SeqRow.parse(this.statement("SELECT seq FROM change_clock WHERE id=1").get()).seq : 0
-    if (tracked) {
+    if (clock !== undefined) {
       for (let key = { session: "", kind: "", id: "" }; ;) {
         const rows = this.statement("SELECT session, kind, id, checkout, cwd, coalesce(ended_at, ?) AS at FROM activity WHERE (session, kind, id) > (?, ?, ?) ORDER BY session, kind, id LIMIT ?")
           .all(now, key.session, key.kind, key.id, RECENT_CALLS).map((row) => WorkedKeyRow.parse(row))
-        for (const row of rows) work(row)
+        for (const row of rows) workedIn(worked, row)
         if (rows.length < RECENT_CALLS) break
         key = rows.at(-1)!
         yield
@@ -920,14 +928,46 @@ export class JournalStore {
     }
     // The last step: no stop from here to the return.
     readEntries(this.lastSeq())
-    if (!tracked) {
-      for (const row of this.statement("SELECT checkout, cwd, MAX(coalesce(ended_at, ?)) AS at FROM activity GROUP BY checkout, cwd").all(now)) work(WorkedRow.parse(row))
-      return { changed, worked }
+    this.workedSince(worked, clock, now)
+    return { changed, worked, mark: { seq: read, ...(clock !== undefined && { clock }) } }
+  }
+
+  /**
+   * What a `recency` reading through `mark` lacks: each root's newest entry
+   * journaled since, and the folders of work changed since. Without change
+   * tracking, all work, read at once.
+   */
+  recencySince(mark: RecencyMark, now: number): Recency {
+    const changed = new Map<string, number>()
+    const worked = new Map<string, number>()
+    const seq = this.lastSeq()
+    const clock = this.changesTracked() ? this.changeClock() : undefined
+    this.changedIn(changed, mark.seq, seq)
+    this.workedSince(worked, mark.clock, now)
+    return { changed, worked, mark: { seq, ...(clock !== undefined && { clock }) } }
+  }
+
+  private changeClock(): number {
+    return SeqRow.parse(this.statement("SELECT seq FROM change_clock WHERE id=1").get()).seq
+  }
+
+  /** Each root's newest entry after `after` through `upTo`, into `changed`. */
+  private changedIn(changed: Map<string, number>, after: number, upTo: number): void {
+    for (const row of this.statement("SELECT root, MAX(at) AS at FROM entries WHERE seq > ? AND seq <= ? GROUP BY root").all(after, upTo)) {
+      const { root, at } = RootAtRow.parse(row)
+      later(changed, root, at)
+    }
+  }
+
+  /** The folders of work changed since `clock`, into `worked`; of all work, read at once, without one. */
+  private workedSince(worked: Map<string, number>, clock: number | undefined, now: number): void {
+    if (clock === undefined) {
+      for (const row of this.statement("SELECT checkout, cwd, MAX(coalesce(ended_at, ?)) AS at FROM activity GROUP BY checkout, cwd").all(now)) workedIn(worked, WorkedRow.parse(row))
+      return
     }
     for (const { thread } of this.statement("SELECT thread FROM thread_changes WHERE seq > ?").all(clock).map((row) => ThreadRow.parse(row)))
       for (const row of this.statement(`SELECT a.checkout, a.cwd, coalesce(a.ended_at, ?) AS at FROM activity_changes c JOIN activity a ON a.session = c.session AND a.kind = c.kind AND a.id = c.id
-        WHERE c.thread = ? AND c.seq > ?`).all(now, thread, clock)) work(WorkedRow.parse(row))
-    return { changed, worked }
+        WHERE c.thread = ? AND c.seq > ?`).all(now, thread, clock)) workedIn(worked, WorkedRow.parse(row))
   }
 
   /** Close what a host that stopped left open: it ran until the host was last seen. */

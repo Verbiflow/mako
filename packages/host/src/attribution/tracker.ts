@@ -25,13 +25,13 @@ import {
   type TrackerPorts,
 } from "@mako/protocol"
 import { join } from "node:path"
-import { inSlices, type Steps } from "@mako/sessions/slices"
+import { inSlices } from "@mako/sessions/slices"
 import { HourCounts } from "../base/hour-counts.js"
 import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
 import { attribute, authorOf, claim, Evidence, LEAD_MS, reaches as reachesChange, TRAIL_MS, type Interval, type ObservedChange, type Reach } from "./evidence.js"
 import { WorkingSets } from "./working-set.js"
-import { JournalStore, wholeChange, type FileState, type StatRow, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
+import { JournalStore, wholeChange, type FileState, type Recency, type StatRow, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
 import { diffLines, splitLines } from "./line-diff.js"
 import { applyHunks, BASE, baseMap, onlyBase, presentLines, presentRuns, rebase, UNKNOWN, withKnownWriters, withWriter, writers, type Run } from "./line-map.js"
 import { FootprintReader, type FootprintOptions } from "./footprint-reader.js"
@@ -1978,22 +1978,26 @@ export class LaptopTracker implements AttributionTracker {
    * the paths let go.
    */
   async letGoIdle(): Promise<string[]> {
-    const idle = await inSlices(this.idleRoots())
-    for (const { root } of idle) await this.untrack(root.id)
-    const paths = idle.map(({ root }) => root.path)
+    const before = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
+    // Where Threads worked is read only for a root nobody changed lately: on most passes there's none.
+    const read = await inSlices(this.store.recency(this.now(), (changed) => this.idle({ changed, worked: new Map() }, before).length > 0))
+    const paths: string[] = []
+    for (const state of this.idle(read, before)) {
+      // Other work ran since the reading, and runs while each root is let go: what was journaled or began there since
+      // keeps it. Nothing stops between this reading and `untrack` taking the root out of `states`.
+      if (this.states.get(state.root.id) !== state || !this.idle(this.store.recencySince(read.mark, this.now()), before).includes(state)) continue
+      await this.untrack(state.root.id)
+      paths.push(state.root.path)
+    }
     if (paths.length) this.log("let go of idle roots", { roots: paths.length, paths: paths.join(", ").slice(0, 500) })
     return paths
   }
 
-  /** The roots `letGoIdle` lets go, the journal read a step at a time (`JournalStore.recency`) and decided on as it stands in the last. */
-  private *idleRoots(): Steps<RootState[]> {
-    const before = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
-    const unchanged = (changed: ReadonlyMap<string, number>) =>
-      [...this.states.values()].filter(({ root, pending }) => root.trackedAt < before && (changed.get(root.id) ?? 0) < before && !pending.size)
-    // Where Threads worked is read only for a root nobody changed lately: on most passes there's none.
-    const { changed, worked } = yield* this.store.recency(this.now(), (changed) => unchanged(changed).length > 0)
-    const recent = [...worked].filter(([, at]) => at >= before).map(([folder]) => folder)
-    return unchanged(changed).filter(({ root }) => !recent.some((folder) => within(root.path, folder) || within(folder, root.path)))
+  /** The roots tracked before `before` that `read` says nobody changed since, with no Thread working in or around them since. */
+  private idle(read: Pick<Recency, "changed" | "worked">, before: number): RootState[] {
+    const recent = [...read.worked].filter(([, at]) => at >= before).map(([folder]) => folder)
+    return [...this.states.values()].filter(({ root, pending }) => root.trackedAt < before && (read.changed.get(root.id) ?? 0) < before && !pending.size &&
+      !recent.some((folder) => within(root.path, folder) || within(folder, root.path)))
   }
 
   /** Drop kept content past the retention window and over the budget. */
