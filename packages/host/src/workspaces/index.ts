@@ -60,6 +60,7 @@ export { captureCarry, cloneRepository, openCarry, placeOutside, planOutsideRetu
 export { mergeReturned, unchangedSince } from "./move-merge.js"
 export { ProjectMissingError } from "./worktree-reattach.js"
 export { CloudCarriedFiles, declareCarriedFilesMethods } from "./cloud-carried-files.js"
+export { declareSetupMethods, SetupViews, type SetupViewDeps } from "./setup-view.js"
 export { projectRecipe, readProjectRecipe, type ProjectRecipeRead } from "./thread-recipe.js"
 export { answeredElsewhere, elsewhereRefusal, type ElsewhereFolder } from "./elsewhere.js"
 export type { Relocation, WorkspaceConversations } from "./conversations.js"

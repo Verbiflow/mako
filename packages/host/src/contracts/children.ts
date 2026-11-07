@@ -286,6 +286,12 @@ export function openAsk(state: ChildState): OpenAsk | undefined {
   return undefined
 }
 
+/** An approval's two answers as every surface says them: a harness's "Allow once" and "Refuse", or a named ask's own. */
+export function approvalWords(ask: Pick<FinAsk, "named" | "options">) {
+  const [allow, refuse] = ask.named ? (ask.options ?? []) : []
+  return { allow: allow?.label ?? "Allow once", refuse: refuse?.label ?? "Refuse" }
+}
+
 /** How a done Fin's decision for the person reads, before its question: "Done · needs you: Merge #371?". */
 export const DONE_NEEDS_YOU = "Done · needs you"
 

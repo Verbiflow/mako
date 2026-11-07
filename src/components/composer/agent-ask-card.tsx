@@ -1,32 +1,21 @@
-import { agentAskWords } from "@mako/host/contracts/agent-asks"
 import { HarnessIcon } from "@/components/ui/provider-icon"
+import { askNotice } from "@/lib/ask-card"
 import { useHarnessLabels } from "@/lib/harness-label"
 import type { ComposerNotice } from "@/extend/notices"
 import { activeLiveAcp, useAcp } from "@/state/acp"
-import { agentAskOf, answerAgentAsk } from "@/state/agent-asks"
+import { agentAskCard, agentAskOf } from "@/state/agent-asks"
 
 /**
  * What the agent on screen asked below full access through Mako's tools, read from its conversation, so every window
- * and device shows the one ask. A notice producer (`registerNotice`); the web app's dock draws the same words.
+ * and device shows the one ask: the card every ask is drawn as (`askNotice`). A notice producer (`registerNotice`).
  */
 export function useAgentAskNotice(): ComposerNotice | null {
   const labels = useHarnessLabels()
   const live = useAcp((state) => activeLiveAcp(state))
   const ask = agentAskOf(live ?? undefined)
   if (!live || !ask) return null
-  const words = agentAskWords(ask.want, labels[live.harness] ?? live.harness)
-  return {
-    id: "agent-ask",
-    tone: "caution",
-    priority: 0,
+  return askNotice("agent-ask", agentAskCard(live.key, ask, labels[live.harness] ?? live.harness), {
     icon: <HarnessIcon harness={live.harness} />,
-    title: words.title,
-    description: words.description,
-    detail: <p>{words.detail}</p>,
-    actions: [
-      { label: words.allow, primary: true, onClick: () => void answerAgentAsk(live.key, ask, true) },
-      { label: words.keep, onClick: () => void answerAgentAsk(live.key, ask, false) },
-    ],
     data: { "data-agent-ask": ask.want.kind },
-  }
+  })
 }

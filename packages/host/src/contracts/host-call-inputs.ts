@@ -1993,6 +1993,36 @@ const inputs = {
         clientKey: z.string(),
       }),
     ]),
+  "mako:setup": () => z.tuple([z.string()]),
+  "mako:setup-act": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.object({
+          act: z.literal("answer"),
+          ask: z.string(),
+          answer: z.union([
+            z.literal("add-to-setup"),
+            z.literal("allow-project"),
+            z.literal("allow-thread"),
+            z.literal("decline"),
+          ]),
+        }),
+        z.object({
+          act: z.literal("row"),
+          place: z.string(),
+          row: z.string(),
+          action: z.union([
+            z.literal("stop"),
+            z.literal("add"),
+            z.literal("keep"),
+            z.literal("retry"),
+            z.literal("send"),
+          ]),
+        }),
+        z.object({ act: z.literal("rebuild") }),
+      ]),
+    ]),
   "mako:shutdown-ack": () => z.tuple([z.string()]),
   "mako:simulator-setup": () => z.tuple([z.boolean().optional()]),
   "mako:simulator-setup-press": () =>
@@ -2971,6 +3001,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:set-name", "workspaces"],
   ["mako:set-thinking", "workspaces"],
   ["mako:settings-act", "conversations"],
+  ["mako:setup", "workspaces"],
+  ["mako:setup-act", "workspaces"],
   ["mako:shutdown-ack", "application"],
   ["mako:simulator-setup", "control"],
   ["mako:simulator-setup-press", "control"],

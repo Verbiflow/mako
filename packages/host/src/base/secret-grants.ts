@@ -124,12 +124,20 @@ export class GrantedSecrets implements Secrets {
         await this.broker.revoke(grant.id, { kind: "person", account: DEVICE_ACCOUNT })
   }
 
+  /**
+   * The version a lease of a saved record names now (`secretVersion`), from its listing alone: never its value.
+   * Undefined for a record that isn't saved, or one saved before records had versions.
+   */
+  async version(kind: SecretKind, name: string): Promise<string | undefined> {
+    const listed = (await this.#inner.list(kind).catch((): SecretListing[] => [])).find((record) => record.name === name)
+    return listed && listed.version !== "legacy" ? secretVersion(listed) : undefined
+  }
+
   async #source(ask: SourceAsk): Promise<SourceAnswer> {
     const [kind, ...rest] = ask.ref.split("/")
     const found = SECRET_KINDS.find((known) => known === kind)
     if (!found) return { answer: "unavailable", reason: "not-found" }
-    const listed = (await this.#inner.list(found).catch((): SecretListing[] => [])).find((record) => record.name === rest.join("/"))
-    if (!listed || listed.version === "legacy") return { answer: "unavailable", reason: "not-found" }
-    return { answer: "yes", version: secretVersion(listed) }
+    const version = await this.version(found, rest.join("/"))
+    return version ? { answer: "yes", version } : { answer: "unavailable", reason: "not-found" }
   }
 }

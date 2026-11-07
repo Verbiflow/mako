@@ -18,7 +18,22 @@ import { largeCursorChat } from "./large-cursor-chat.mjs"
 // Session kept the host's pings and status reads waiting, past their timeouts
 // on a large one. Each is timed here on a Cursor chat of 25MB, as a headless
 // agent writes one: one exchange holding the whole conversation.
-const HOLD_MS = 50
+/**
+ * The longest a step may hold the loop, in CPU time: half again what parsing a JSON document the chat's size takes on
+ * this runner, now, which is about 55 ms on an M-series Mac. A runner with a slower CPU is slower at both, so this
+ * scales with it where a fixed time wouldn't; a step that holds the loop for the whole chat (unsliced) takes several times
+ * the parse. The parse is the middle of five.
+ */
+const HOLD_MS = (() => {
+  const text = JSON.stringify(Array.from({ length: 120_000 }, (_, index) => ({ id: `m${index}`, role: index % 2 ? "assistant" : "user", text: "word ".repeat(30), at: index })))
+  const parses = Array.from({ length: 5 }, () => {
+    const { user, system } = process.threadCpuUsage()
+    JSON.parse(text)
+    const after = process.threadCpuUsage()
+    return (after.user - user + after.system - system) / 1000
+  }).sort((a, b) => a - b)
+  return Math.round(parses[2] * 1.5)
+})()
 /** How many turns the loop takes through a store lock's wait before the lock goes. */
 const TURNS_THROUGH_WAIT = 20
 /** What releases the store's lock if the loop never turns through its wait. */
@@ -275,7 +290,7 @@ try {
   assert.equal(checkpointed.result.replace, true)
   held("its follow through one more checkpoint", checkpointed)
   sdk.close()
-  console.log(`loop holds ok: ${measured.join("; ")}`)
+  console.log(`loop holds ok, each at most ${HOLD_MS} ms: ${measured.join("; ")}`)
 } finally {
   await rm(home, { recursive: true, force: true })
 }

@@ -322,6 +322,47 @@ async function until(what: string, check: () => boolean, ms = 3_000) {
   }
 }
 
+test("another device's conversation keeps where it runs through its live batches: a window that lists after one still names the machine or the Mac and its kind, never the cloud", async () => {
+  const machine = await cloudMachine()
+  const box = "9e2f4a6c-1b3d-4f5a-8c7e-0d1f2a3b4c5d"
+  const studio = "4d2b8c1e-7a3f-4e5d-9b6c-0a1f2e3d4c5b"
+  const onBox = randomUUID()
+  const onStudio = randomUUID()
+  const watched: string[][] = []
+  const runtimes = new Map<string, Awaited<ReturnType<typeof serveHostThroughGateway>>>()
+  for (const device of [box, studio]) {
+    const runtime = await serveHostThroughGateway(await machine.gateway.connectRuntime(), { runtimeId: `d-${device}`, build: "test", invoke: async (channel) => JSON.stringify({ channel }), watch: (conversations) => watched.push([...conversations]) })
+    after(() => runtime.close())
+    runtimes.set(device, runtime)
+  }
+  const row = (conversation: string, deviceId: string, title: string): ListedSession => ({ session: randomUUIDFor(conversation), thread: randomUUID(), conversation, harness: "codex", title, state: "working", folder: CLONE, createdAt: "2026-11-06T18:00:00.000Z", activityAt: "2026-11-06T18:00:00.000Z", generation: 1, runsOn: { kind: "device", deviceId }, listedAt: "2026-11-06T18:00:00.000Z" })
+  machine.account.sessionListings = async () => ({ sessions: [row(onBox, box, "Rebuild the search index"), row(onStudio, studio, "Bisect the upload timeout")], seq: 1 })
+  machine.account.devices = async () => ({ devices: [{ id: box, name: "build-box", kind: "runtime" }, { id: studio, name: "Studio", kind: "desktop" }], current: (await machine.account.deviceId())! })
+  machine.account.onThreadListings = () => () => {}
+  const { router } = conversations(machine.account, join(scratch, "placed", "conversations.json"))
+  await router.start()
+  // What a window lists when it opens: the router's summaries, as the host hands them to it at boot.
+  const placed = (conversation: string) => {
+    const summary = router.summaries().find((each) => each.session.id === conversation)
+    return summary && { where: summary.elsewhere, kind: summary.elsewhereKind, revision: summary.revision }
+  }
+  await until("both conversations listed", () => placed(onBox) !== undefined && placed(onStudio) !== undefined)
+  assert.deepEqual(placed(onBox), { where: "build-box", kind: "runtime", revision: 0 })
+  assert.deepEqual(placed(onStudio), { where: "Studio", kind: "desktop", revision: 0 })
+
+  // A window watches each, and each device sends a batch of its turn, through the gateway and the router.
+  for (const [conversation, device] of [[onBox, box], [onStudio, studio]] as const) {
+    assert.ok((await router.route("mako:live-snapshot", [conversation])).handled)
+    await until("its device told it's watched", () => watched.some((conversations) => conversations.includes(conversation)))
+    // SAFETY: a batch as the device's live driver sends it, filled only as far as the router and summary read it.
+    runtimes.get(device)!.live(conversation, Payload.encoded(runtimeEventLine("event", encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision: 2, updates: [], sessionChanges: { status: "running" } } } as never)).slice(0, -1)), { n: 1 })
+    await until("its batch read", () => placed(conversation)?.revision === 2)
+  }
+  // Another window opens after the batches: its first list still says the machine and the Mac, with their kinds.
+  assert.deepEqual(placed(onBox), { where: "build-box", kind: "runtime", revision: 2 }, "a machine's conversation stays the machine's after its batch")
+  assert.deepEqual(placed(onStudio), { where: "Studio", kind: "desktop", revision: 2 }, "and a Mac's the Mac's")
+})
+
 test("another device's conversation followed here picks up where it was: a dropped link resumes from what the gateway kept, each batch once, and windows read it again only past that; a stall while it works is found in seconds", async () => {
   // A gateway whose streams linger, as the cloud's do, reached over sockets this test can cut or stall.
   const machine = await cloudMachine({ sockets: { heartbeatMs: 25_000 } }, {})
@@ -350,12 +391,14 @@ test("another device's conversation followed here picks up where it was: a dropp
   await until("its batches relayed", () => revisions().length === 3)
 
   // The link drops; two batches go by meanwhile. Followed again at once, from what the gateway kept: each once, none read again.
-  machine.network!.cut()
-  send(5)
-  send(6)
-  const cut = performance.now()
-  await until("what went by while the link was down", () => revisions().includes(6), 1_000)
-  assert.ok(performance.now() - cut < 1_000, "current within a second")
+  // Current at once, by what it waited for rather than the runner's clock: a wait of a second or more is a backoff.
+  const { waits: cutWaits } = await ranOut(async () => {
+    machine.network!.cut()
+    send(5)
+    send(6)
+    await until("what went by while the link was down", () => revisions().includes(6), 10_000)
+  })
+  assert.ok(cutWaits.every((ms) => ms < 1_000), `current at once, after no backoff: ${cutWaits.join(", ")}`)
   assert.deepEqual(revisions(), [2, 3, 4, 5, 6], "every batch, once, in order")
   assert.equal(rereads(), 0, "no window reads it again")
 
@@ -800,13 +843,16 @@ test("a Mac woken on a network the sleep didn't keep follows on at once: every e
   await new Promise((resolve) => setTimeout(resolve, 300))
   assert.equal(events.length, 1, "nothing arrives on the dead socket")
   const woke = performance.now()
-  router.wake()
-  await until("every missed event", () => events.length === 1 + MISSED, BEFORE_HEARTBEAT_MS)
+  const { waits: wakeWaits } = await ranOut(async () => {
+    router.wake()
+    await until("every missed event", () => events.length === 1 + MISSED, BEFORE_HEARTBEAT_MS)
+  })
   const ms = performance.now() - woke
   assert.deepEqual(revisions(), Array.from({ length: 1 + MISSED }, (_, index) => index + 2), "each event once, in order")
   console.log(`  woke to ${MISSED} missed events relayed: ${ms.toFixed(0)} ms`)
   // Without the wake's 100 ms probe, the stream's own silence would find the dead socket.
-  assert.ok(ms < 3_000, `caught up by the wake's probe, before the working stream's 3 s of silence could: ${ms.toFixed(0)} ms`)
+  assert.ok(wakeWaits.includes(100) && wakeWaits.every((ms) => ms < 3_000),
+    `caught up by the wake's probe, before the working stream's 3 s of silence could: ${ms.toFixed(0)} ms; ran out: ${wakeWaits.join(", ")}`)
   // Following on: the next event comes on the new connection.
   machine.batch(threadId, conversationId, 3 + MISSED, "ready")
   await until("the next event", () => events.length === 2 + MISSED)
@@ -955,9 +1001,8 @@ test("a cloud app's view is asked passively at this Mac's preview of its port; a
 
   // The machine goes to sleep: the look says so at once, from what this Mac kept, and wakes nothing.
   await machine.served.close()
-  const started = performance.now()
-  const asleep = await look()
-  assert.ok(performance.now() - started < 1_000, "answered at once, never waited out")
+  const { result: asleep, waits: lookWaits } = await ranOut(() => look())
+  assert.deepEqual(lookWaits, [], "answered at once, never waited out")
   const expected: ThreadAppView = {
     kind: "asleep",
     project: "Hello-World",
@@ -1658,11 +1703,10 @@ test("another Mac's conversation while that Mac is off reads from the copy it ke
   machine.account.editWaiting = async (session, id, expectedText, text) => (waited.push(["edit", session, id, expectedText, text]), held)
   machine.account.unwaitMessage = async (session, id) => (waited.push(["unwait", session, id]), (held = held.filter((each) => each.id !== id)))
   const requestId = randomUUID()
-  const asking = performance.now()
   const listedBeforeWait = events.filter((event) => event.type === "live-listed").length
-  const sent = await router.route("mako:live-prompt", [conversation, requestId, "Merge it once CI is green", [], undefined])
+  const { result: sent, waits: promptWaits } = await ranOut(() => router.route("mako:live-prompt", [conversation, requestId, "Merge it once CI is green", [], undefined]))
   assert.ok(sent.handled)
-  assert.ok(performance.now() - asking < 1_000, "at once: a Mac isn't woken by being called")
+  assert.deepEqual(promptWaits, [], "at once: a Mac isn't woken by being called")
   assert.deepEqual(z.object({ id: z.string(), status: z.string() }).loose().parse(decodeRuntimeValue(sent.value)), { id: requestId, text: "Merge it once CI is green", attachments: [], status: "queued" })
   assert.deepEqual(waited, [["wait", listed.session, requestId, { conversation, text: "Merge it once CI is green" }]], "kept by the account, for the Session, by the conversation the list named")
   assert.ok(events.filter((event) => event.type === "live-listed").length > listedBeforeWait, "windows read it again")
