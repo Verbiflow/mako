@@ -256,7 +256,7 @@ async function check() {
   console.log("MEMORY", JSON.stringify({ windowed, ...reader }))
 
   // Crossing into a window under a reader who's up: they stay where they are, and what's mounted falls.
-  await load("/?mock&app=apex&turns=190", 1440, 900)
+  await load("/?mock&app=apex&turns=88", 1440, 900)
   await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the Apex just short of a window's rail")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
   await until(`Boolean(${VIEW}) && Boolean(document.querySelector('[data-crew]'))`, "the Apex just short of a window")
@@ -265,11 +265,12 @@ async function check() {
   await wheel(700, 400, -1800)
   await wait(300)
   const crossing = await evaluate(`(() => { const node = ${VIEW}; const first = [...node.querySelectorAll('[data-exchange]')].find((row) => row.getBoundingClientRect().bottom > node.getBoundingClientRect().top + 40); return { id: first.dataset.exchange, top: first.getBoundingClientRect().top } })()`)
-  await evaluate("window.__burst(40, 10)")
+  assert.equal(await evaluate(`${VIEW}.hasAttribute('data-virtualized')`), false, "the Apex starts short of a window, or nothing crosses")
+  await evaluate("window.__burst(60, 10)")
   await wait(700)
   const crossed = await evaluate(`(() => { const row = document.querySelector('[data-exchange="' + ${JSON.stringify(crossing.id)} + '"]'); return { top: row ? row.getBoundingClientRect().top : null, windowed: ${VIEW}.hasAttribute('data-virtualized'), rows: ${VIEW}.querySelectorAll('[data-exchange]').length } })()`)
   console.log("CROSSING", JSON.stringify({ before: crossing.top, ...crossed }))
-  assert.equal(crossed.windowed, true, "past 200 turns the transcript is windowed")
+  assert.equal(crossed.windowed, true, "past 400 items the transcript is windowed")
   assert.ok(crossed.top !== null && Math.abs(crossed.top - crossing.top) <= 2, `crossing into a window moves nothing under the reader: ${crossing.top} → ${crossed.top}`)
   assert.ok(crossed.rows <= 40, `and what's mounted falls: ${crossed.rows}`)
 
