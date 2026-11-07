@@ -41,7 +41,7 @@ try {
     for (const [key, value] of Object.entries(message)) Object.defineProperty(message, key, { enumerable: true, get: () => (read.add(key), value) })
     return { read, message }
   }
-  const assistant = JSON.stringify({ type: "assistant", session_id: "session", parent_tool_use_id: null, message: { role: "assistant", content: [{ type: "text", text: "x".repeat(4_096) }] } })
+  const assistant = JSON.stringify({ type: "assistant", session_id: "session", parent_tool_use_id: null, command_uuid: "c", state: "queued", message: { role: "assistant", content: [{ type: "text", text: "x".repeat(4_096) }] } })
   const lifecycle = reading(assistant)
   assert.equal(claudeCommandLifecycle(lifecycle.message), undefined)
   assert.deepEqual([...lifecycle.read], ["type"], "another kind of message is turned away on its type, unread")
