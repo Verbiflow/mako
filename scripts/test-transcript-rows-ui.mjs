@@ -427,7 +427,9 @@ async function check() {
     // The transcript, short of its edges: its scrollbar and the pill that says there's more come and go on their own.
     const crop = { x: Math.round(box.x), y: Math.round(box.y) + 20, width: Math.round(box.width) - 60, height: Math.round(box.height) - 90 }
     const around = frames.filter((frame) => Math.abs(frame.at - crossedAt) < 400)
-    assert.ok(around.length > 20, `the screencast saw the crossing: ${around.length} frames`)
+    // A runner paints at its own rate: what matters is frames on both sides of it, not how many.
+    const before = around.filter((frame) => frame.at < crossedAt).length, after = around.length - before
+    assert.ok(before >= 2 && after >= 2, `the screencast saw both sides of the crossing: ${before} frames before it, ${after} after`)
     let last, worst = { changed: 0 }
     for (const frame of around) {
       const pixels = nativeImage.createFromBuffer(Buffer.from(frame.data, "base64")).crop(crop).toBitmap()
