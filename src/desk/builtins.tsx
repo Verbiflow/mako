@@ -1,7 +1,7 @@
 import { AgentsPanel } from "@/components/inspector/agents-panel"
 import { SetupPanel, SetupReading } from "@/components/inspector/setup-panel"
 import { useSetupOffered } from "@/components/inspector/setup-offered"
-import { setSetupDrafter } from "@/state/setup"
+import { setSetupDrafter, setupDrafter } from "@/state/setup"
 import { actions } from "@/state/session"
 import { ControlPreviewOverlay } from "@/components/inspector/control-preview-overlay"
 import { AppshotButton } from "@/components/composer/appshot-button"
@@ -164,13 +164,17 @@ export function installBuiltins(): () => void {
   return () => disposers.forEach((dispose) => dispose())
 }
 
+/**
+ * The words written into the composer that's on screen once the new Thread's frame is drawn; true when a composer took
+ * them (it marks the event handled), so a draft nobody received isn't taken for one.
+ */
+function composeDraft(text: string): Promise<boolean> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve(!window.dispatchEvent(new CustomEvent("mako:compose", { detail: { text }, cancelable: true })))))
+}
+
 /** Setup's requests (a tool into the recipe, a file into its carry) start a Thread of the project with the words written. */
 function installSetupDrafter(): () => void {
-  setSetupDrafter(async (root, text) => {
-    window.dispatchEvent(new CustomEvent("mako:close-settings"))
-    if (!(await actions.newConversationIn(root))) return
-    requestAnimationFrame(() => window.dispatchEvent(new CustomEvent("mako:compose", { detail: { text } })))
-  })
+  setSetupDrafter(setupDrafter((root) => actions.newConversationIn(root), composeDraft))
   return () => setSetupDrafter(undefined)
 }
 

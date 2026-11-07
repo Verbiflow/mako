@@ -6,11 +6,11 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { Grant, LeaseEvent, SourceAsk } from "@mako/protocol/borrow"
-import { partSummary, rowAction, type SetupView } from "@mako/host/contracts/setup"
+import { partSummary, rowAction, type SetupAsk, type SetupView } from "@mako/host/contracts/setup"
 import { PhoneSetup, SetupPage, ThreadSetup } from "@/components/setup/setup-page"
 import { AskRow } from "@/components/setup/setup-parts"
 import { ZodError } from "zod"
-import { allAsks, readFailure, readSetup, setSetupSource, setupAskCard, setupStore } from "@/state/setup"
+import { allAsks, readFailure, readSetup, setSetupDrafter, setSetupSource, setupAskCard, setupDrafter, setupStore } from "@/state/setup"
 import { ASK_TOUCH, askNotice, runChoice } from "@/lib/ask-card"
 import { inboxCount, inboxModel } from "@/state/inbox"
 import DeskSettings from "@/web-client/desk-settings"
@@ -85,6 +85,33 @@ assert.match(renderToStaticMarkup(<SetupRailRow open={false} conversation="c-1" 
 openSetup()
 assert.equal(setupOpenStore.get().open, true)
 closeSetup()
+
+// "Add to setup" drafts the request in a new Thread of the project: it has landed only once a Thread opened and its
+// composer took the words. A Thread that can't open, or words nobody took, leave the ask open to answer again.
+{
+  Reflect.set(globalThis, "window", Object.assign(new EventTarget(), { requestAnimationFrame: (run: () => void) => setTimeout(run, 0) }))
+  const toolAsk: SetupAsk = { id: "ask-tool", kind: "tool", tool: "terraform", version: "1.9", by: { thread: "t-1", title: "Fix the webhooks", fin: false }, at: NOW, why: "provision the database", place: "cloud" }
+  setupStore.set((state) => ({ byFolder: { ...state.byFolder, tools: { project: "tools", root: "/Users/you/tools", repository: null, places: [], at: NOW } } }))
+  const addToSetup = () => setupAskCard("tools", toolAsk, false).choices.find((choice) => choice.answer === "add-to-setup")!
+  let opened = 0
+  const composed: string[] = []
+  const draft = (open: boolean, take: boolean) => setupDrafter(async () => (opened++, open), async (text) => (take && composed.push(text), take))
+  const steps: boolean[] = []
+  setSetupDrafter(draft(false, true))
+  assert.equal(await runChoice(addToSetup(), (busy) => steps.push(busy)), false, "a new Thread that couldn't open drafted nothing")
+  assert.deepEqual([opened, composed.length, steps], [1, 0, [true, false]], "so the ask's buttons come back")
+  steps.length = 0
+  setSetupDrafter(draft(true, false))
+  assert.equal(await runChoice(addToSetup(), (busy) => steps.push(busy)), false, "words no composer took aren't a draft")
+  assert.deepEqual(steps, [true, false])
+  steps.length = 0
+  setSetupDrafter(draft(true, true))
+  assert.equal(await runChoice(addToSetup(), (busy) => steps.push(busy)), true, "a Thread opened with the request written")
+  assert.deepEqual([composed.length, steps], [1, [true]])
+  assert.match(composed[0]!, /^Add terraform 1\.9 to this project's recipe prepare/)
+  setSetupDrafter(undefined)
+  Reflect.deleteProperty(globalThis, "window")
+}
 
 // 2. On a page built away from the Mac, what only the Mac can do isn't offered.
 const page = setupStore.get().byFolder.shop!

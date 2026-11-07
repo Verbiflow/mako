@@ -102,6 +102,10 @@ async function check() {
   await until("Boolean(document.querySelector('[data-crew]'))", "the crew card")
   await until("Boolean(document.querySelector('[data-side-rail]'))", "the right rail")
 
+  // The composer on screen marks words written into it as taken, so Setup's "Add to setup" counts only a real draft.
+  await until("Boolean(document.querySelector('[data-composer] textarea'))", "the composer")
+  assert.equal(await evaluate("window.dispatchEvent(new CustomEvent('mako:compose', { detail: { text: '' }, cancelable: true }))"), false, "the composer took the words")
+
   // A row a surface, in their order, with Agents' Fins there to show.
   assert.deepEqual(await rowIds(), ["changes", "files", "control", "agents", "setup"], "the surfaces, in their fixed order")
   assert.equal(await evaluate("document.querySelector('[data-side-rail]').getAttribute('aria-orientation')"), "vertical")
