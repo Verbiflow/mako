@@ -38,6 +38,37 @@ export type Received = { from: "said"; epoch?: string; revision?: number; unlist
 const taking = new Map<string, number>()
 
 /**
+ * Reads out whose conversation the window learns only from their answer (a path's owner, a capture, the rewinds a
+ * host recovers): how many, and each conversation unlisted while any is out, by when (`unlistedSince`).
+ */
+const unplaced = { out: 0, said: 0, unlisted: new Map<string, number>() }
+
+/** A read out of no conversation the window names yet: when it went out, by what has been unlisted since. */
+export function unplacedReadGoesOut(): number {
+  unplaced.out += 1
+  return unplaced.said
+}
+
+/** That read is answered. With none left out, what was unlisted meanwhile is nobody's to weigh. */
+export function unplacedReadAnswered(): void {
+  unplaced.out = Math.max(0, unplaced.out - 1)
+  if (!unplaced.out) unplaced.unlisted.clear()
+}
+
+/** Whether conversation `id` was unlisted after a read that went out at `since`: its answer of it speaks for nothing held. */
+export function unlistedSince(id: string, since: number): boolean {
+  return (unplaced.unlisted.get(id) ?? -1) > since
+}
+
+/**
+ * Whether a read of conversation `id` is out now (`readLive`, `hydrateLive`), or with no `id`, a read of one the window
+ * learns from its answer: what a test watches the bridge by, so no read of a conversation goes around them.
+ */
+export function readingLive(id?: string): boolean {
+  return id === undefined ? unplaced.out > 0 : readsOut.has(id)
+}
+
+/**
  * Takes in what reached this window about conversation `id` (`take` writes it into its state). What its host said goes
  * on the record of every read of it out first, whatever it is or becomes (taken, waiting on a read, of another start,
  * or nothing new): the read no longer speaks alone, and an answer behind a batch it heard is past. One that names its
@@ -46,6 +77,7 @@ const taking = new Map<string, number>()
 export function receiveLive<T>(id: string, received: Received, take: () => T): T {
   if (received.from === "said") {
     if (received.epoch) currentStarts.set(id, received.epoch)
+    if (received.unlisted && unplaced.out) unplaced.unlisted.set(id, (unplaced.said += 1))
     for (const read of readsOut.get(id) ?? []) {
       read.moved = true
       if (received.unlisted) read.unlisted = true

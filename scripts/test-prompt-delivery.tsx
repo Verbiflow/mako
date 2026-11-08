@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
 import { applyLiveSnapshot, applyLiveBatch } from "../src/state/live-recovery"
 import { acpStore, activeLiveAcp } from "../src/state/acp-state"
-import { receivingLive } from "../src/state/live-door"
+import { readingLive, receivingLive } from "../src/state/live-door"
 import { failAroundTheDoor } from "./live-door-watch"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
@@ -15,7 +15,7 @@ import { agentActivity } from "../src/state/agent-activity"
 import type { LiveSnapshot, LiveRequest } from "../src/lib/types"
 import type { Entry } from "@mako/sessions/entries"
 // What the window's own code writes of a conversation goes through the door (`receiveLive`), or the suite fails.
-failAroundTheDoor(acpStore, receivingLive)
+failAroundTheDoor(acpStore, receivingLive, readingLive)
 
 const id = "11111111-1111-4111-8111-111111111111"
 const request: LiveRequest = {

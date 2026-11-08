@@ -2,7 +2,7 @@ import { reconcileRoster } from "@/lib/native-roster"
 import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
-import type { LiveAction, LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
+import type { ContinuationResolution, LiveAction, LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
 import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation } from "@/state/acp-state"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { noteFinAsks, noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
@@ -17,7 +17,7 @@ import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { prependLiveHistory, readLiveSnapshot, readLiveValue, retainLiveDetails } from "@/state/live-history"
 import { isHistoryExpired, type LiveHistoryCursor, type LiveHistoryPage } from "@mako/host/contracts/live-history"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
-import { currentStarts, readsOut, receiveLive, type ReadOut, type Received } from "@/state/live-door"
+import { currentStarts, readsOut, receiveLive, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut, type ReadOut, type Received } from "@/state/live-door"
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, HeardLiveBatch[]>()
@@ -35,21 +35,30 @@ function readGoesOut(id: string): ReadOut {
  * the current host is read afresh where this window still holds the conversation. `fresh`: it's that read's answer.
  */
 function readAnswered(id: string, read: ReadOut, snapshot: { revision: number; epoch?: string } | null, fresh = false): boolean {
+  return readVerdict(id, read, snapshot, fresh) !== "take"
+}
+
+/**
+ * `readAnswered`'s verdict: `take` it; `older` than what the window took of it while the read was out, and nothing
+ * else (what holds it still takes only its view, `takeView`); or `past` altogether.
+ */
+function readVerdict(id: string, read: ReadOut, snapshot: { revision: number; epoch?: string } | null, fresh = false): "take" | "older" | "past" {
   const out = readsOut.get(id)
   out?.delete(read)
   if (out && !out.size) readsOut.delete(id)
-  if (!snapshot) return false
+  if (!snapshot) return "take"
   // Of a conversation its host stopped listing here while it was out: nothing the window holds, nor brings back.
-  if (read.unlisted) return true
-  // Behind a batch of its own start the stream sent while it was out, taken or not: past.
-  if (read.heard && snapshot.epoch === read.heard.epoch && snapshot.revision < read.heard.revision) return true
-  if (read.revision < 0) return false
+  if (read.unlisted) return "past"
+  // Behind a batch of its own start the stream sent while it was out, taken or not: older, so a window that holds it
+  // keeps only its view, and one that doesn't never takes it.
+  if (read.heard && snapshot.epoch === read.heard.epoch && snapshot.revision < read.heard.revision) return "older"
+  if (read.revision < 0) return "take"
   const order = olderThan(snapshot, read)
-  if (order === true) return true
+  if (order === true) return "older"
   // A fresh read speaks for the current host only while nothing was taken since it was asked.
-  if (order !== undefined || (fresh && !read.moved) || snapshot.epoch === currentStarts.get(id)) return false
+  if (order !== undefined || (fresh && !read.moved) || snapshot.epoch === currentStarts.get(id)) return "take"
   if (acpStore.get().conversations[id]) readAfresh(id)
-  return true
+  return "past"
 }
 
 /** Every read out of this conversation hears the revision it now stands at here. */
@@ -65,16 +74,98 @@ function noteTaken(id: string): void {
   }
 }
 
+/** What a snapshot of the host's goes to once it's taken, with the answer it came in: by default, the door. */
+type Take<Answer> = (snapshot: LiveSnapshot, answer: Answer) => void
+const takeWhole = (snapshot: LiveSnapshot) => applyLiveSnapshot(snapshot)
+
+/** A read out, from its ask to its answer: of conversation `id`, or of one only its answer names, out `since` then. */
+interface LiveRead { id?: string; out?: ReadOut; since: number }
+
+function openRead(id: string | undefined): LiveRead {
+  return id === undefined ? { since: unplacedReadGoesOut() } : { id, out: readGoesOut(id), since: 0 }
+}
+
+/** The read's answer is `snapshot`: its verdict (`readVerdict`, or past when its conversation was unlisted since). */
+function answerVerdict(read: LiveRead, snapshot: LiveSnapshot): "take" | "older" | "past" {
+  if (read.out && read.id === snapshot.session.id) {
+    const verdict = readVerdict(read.id, read.out, snapshot)
+    read.out = undefined
+    return verdict
+  }
+  return unlistedSince(snapshot.session.id, read.since) ? "past" : "take"
+}
+
 /**
- * A conversation's snapshot read back and taken, as an answer's receipt is (`answerLiveApproval`), unless this window
- * took a newer revision of it while the read was out. The snapshot either way, or null when there's none to read.
+ * Takes a read's answer by its verdict: what's current goes to `take`; one only older than what the window took
+ * goes to the door, which keeps of it only its view while the window holds the conversation (`takeSnapshot`'s stale
+ * path, as a recapture or a renewed view needs); one that's past goes nowhere.
+ */
+function takeAnswer<Answer>(read: LiveRead, snapshot: LiveSnapshot, answer: Answer, take: Take<Answer>): void {
+  const verdict = answerVerdict(read, snapshot)
+  if (verdict === "take") take(snapshot, answer)
+  else if (verdict === "older" && acpStore.get().conversations[snapshot.session.id]) applyLiveSnapshot(snapshot)
+}
+
+function closeRead(read: LiveRead): void {
+  if (read.out && read.id !== undefined) readAnswered(read.id, read.out, null)
+  else if (read.id === undefined) unplacedReadAnswered()
+  read.out = undefined
+}
+
+/**
+ * The one read of a conversation's snapshot the window makes of its host, but `hydrateLive`'s (which keeps the same
+ * record): `ask` (its snapshot, `readLiveSnapshot`, or an action that answers with it), a read of conversation `id`
+ * out from the moment it's asked until it's answered, so what reaches the window meanwhile goes on its record
+ * (`receiveLive`). The snapshot its answer holds (`snapshotOf`) goes to `take`, by default the door
+ * (`applyLiveSnapshot`), unless it's past: older than what the window took meanwhile, of a start it can't place, or of
+ * a Session its host stopped listing here while it was out. `id` is undefined where the window learns which
+ * conversation it is from the answer (a path's owner); one that names another (a fork, a capture) is weighed by what
+ * was unlisted while it was out. Resolves with the answer, taken or not; an ask that fails rejects, its read closed.
+ */
+export async function readLiveFrom<Answer>(id: string | undefined, ask: () => Promise<Answer>, snapshotOf: (answer: Answer) => LiveSnapshot | null | undefined, take: Take<Answer> = takeWhole): Promise<Answer> {
+  const read = openRead(id)
+  try {
+    const answer = await ask()
+    const snapshot = snapshotOf(answer)
+    if (snapshot) takeAnswer(read, snapshot, answer, take)
+    return answer
+  } finally {
+    closeRead(read)
+  }
+}
+
+/** `readLiveFrom` for an ask that answers with the snapshot itself, or nothing. */
+export function readLive<Answer extends LiveSnapshot | null | undefined>(id: string | undefined, ask: () => Promise<Answer>, take: Take<Answer> = takeWhole): Promise<Answer> {
+  return readLiveFrom(id, ask, (answer) => answer, take)
+}
+
+/**
+ * How the host goes on with the session at `path`, read as any snapshot is (`readLiveFrom`): one it already holds
+ * (`attached`) is taken with the binding it answers on.
+ */
+export function readContinuation(path: string): Promise<ContinuationResolution> {
+  return readLiveFrom(undefined, () => getMako().resolveContinuation(path), (resolved) => resolved.transport === "attached" ? resolved.snapshot : null,
+    (snapshot, resolved) => applyLiveSnapshot(snapshot, resolved.transport === "attached" ? resolved.bindingId ?? null : null))
+}
+
+/** `readLive` for an ask whose answer is several conversations' snapshots (the rewinds a host recovers). */
+export async function readLives(ask: () => Promise<readonly LiveSnapshot[]>): Promise<readonly LiveSnapshot[]> {
+  const read = openRead(undefined)
+  try {
+    const snapshots = await ask()
+    for (const snapshot of snapshots) takeAnswer(read, snapshot, snapshot, takeWhole)
+    return snapshots
+  } finally {
+    closeRead(read)
+  }
+}
+
+/**
+ * A conversation's snapshot read back and taken, as an answer's receipt is (`answerLiveApproval`), unless it's past
+ * (`readLive`). The snapshot either way, or null when there's none to read.
  */
 export async function readBackLive(id: string): Promise<LiveSnapshot | null> {
-  const read = readGoesOut(id)
-  const snapshot = await readLiveSnapshot(id).catch(() => null)
-  if (snapshot && !readAnswered(id, read, snapshot)) applyLiveSnapshot(snapshot)
-  else if (!snapshot) readAnswered(id, read, null)
-  return snapshot
+  return readLive(id, () => readLiveSnapshot(id).catch(() => null))
 }
 // Invalid/oversized snapshots cannot be repaired by refetching on every token.
 // Activation and reconnect retry them. Transient outages may recover on a later
@@ -351,8 +442,7 @@ function rereadLive(id: string): void {
 export async function recaptureLive(id: string): Promise<void> {
   await fetching.get(id)
   const covers = windowStart(acpStore.get().conversations[id])
-  const snapshot = await readLiveSnapshot(id)
-  if (snapshot) applyLiveSnapshot(snapshot, undefined, covers)
+  await readLive(id, () => readLiveSnapshot(id), (snapshot) => applyLiveSnapshot(snapshot, undefined, covers))
 }
 
 export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
@@ -881,8 +971,7 @@ export async function renewLiveView(id: string, dead: string): Promise<string | 
   await fetching.get(id)
   if (named() === dead) {
     const covers = windowStart(acpStore.get().conversations[id])
-    const snapshot = await readLiveSnapshot(id)
-    if (snapshot) applyLiveSnapshot(snapshot, undefined, covers)
+    await readLive(id, () => readLiveSnapshot(id), (snapshot) => applyLiveSnapshot(snapshot, undefined, covers))
   }
   const renewed = named()
   return renewed === dead ? undefined : renewed
@@ -917,8 +1006,7 @@ async function readEarlierLive(id: string): Promise<void> {
       replaceAcpConversation(id, { ...next, projection: projectLive({ ...next, base: next.base ?? null }, undefined, next.pendingPrompts) }))
     return
   }
-  const snapshot = await getMako().liveEarlier(id)
-  applyLiveSnapshot(snapshot)
+  await readLive(id, () => getMako().liveEarlier(id))
 }
 
 /** Losing a peer host affects only the conversations that it owns. */

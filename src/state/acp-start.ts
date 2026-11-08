@@ -9,7 +9,7 @@ import {
   settingsForSend,
   type ComposerTarget,
 } from "@/state/composer-settings"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { applyLiveSnapshot, readLive } from "@/state/live-recovery"
 import { getMako } from "@/lib/bridge"
 import type { Entry } from "@mako/sessions/entries"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
@@ -256,9 +256,13 @@ export async function restorePendingStart(command: Extract<OutboxCommand, { kind
     blocks: [], queued: [], hiddenUserPrompt: null, createdAt: Date.now(), updatedAt: Date.now(), unconfirmedStart: input }
   const existing = acpStore.get().conversations[input.conversationId]
   if (existing?.kind === "live") {
-    const snapshot = await readLiveSnapshot(existing.key).catch(() => null)
-    if (snapshot && (!input.initialRequest || snapshot.requests.some((request) => request.id === input.initialRequest?.id))) {
+    const adopted = { done: false }
+    await readLive(existing.key, () => readLiveSnapshot(existing.key).catch(() => null), (snapshot) => {
+      if (input.initialRequest && !snapshot.requests.some((request) => request.id === input.initialRequest?.id)) return
       adoptStart(starting, snapshot, input)
+      adopted.done = true
+    })
+    if (adopted.done) {
       settleMessage(commandId(command))
       return
     }
@@ -307,23 +311,30 @@ async function attemptStart(starting: StartingAcpConversation, input: LiveStartO
   clearTimeout(startRetries.get(starting.key))
   startRetries.delete(starting.key)
   try {
-    adoptStart(starting, await getMako().liveStart(starting.harness, starting.cwd, input), input)
+    await readLive(input.conversationId, () => getMako().liveStart(starting.harness, starting.cwd, input), (snapshot) => adoptStart(starting, snapshot, input))
     settleMessage(input.initialRequest?.id ?? input.conversationId)
     retryDelays.delete(starting.key)
     return true
   } catch (error) {
-    let accepted = await readLiveSnapshot(starting.key).catch(() => null)
-    if (accepted && input.initialRequest && !accepted.requests.some((request) => request.id === input.initialRequest?.id) &&
-        !accepted.control?.transfers.some((transfer) => transfer.input.id === input.initialRequest?.id)) accepted = null
-    if (!accepted && input.resume && input.threadPath) {
-      const resolved = await getMako().resolveContinuation(input.threadPath).catch(() => null)
-      if (resolved?.transport === "attached" && (!input.initialRequest ||
-          resolved.snapshot.requests.some((request) => request.id === input.initialRequest?.id) ||
-          resolved.snapshot.control?.transfers.some((transfer) => transfer.input.id === input.initialRequest?.id)))
-        accepted = resolved.snapshot
+    // What the host took of this start: its first message, or a transfer of it, or anything when it sent none.
+    const tookIt = (snapshot: LiveSnapshot) => !input.initialRequest || snapshot.requests.some((request) => request.id === input.initialRequest?.id) ||
+      Boolean(snapshot.control?.transfers.some((transfer) => transfer.input.id === input.initialRequest?.id))
+    // Adopted as its read is answered, so nothing the host says meanwhile is taken for older.
+    const adopted = { done: false }
+    const adopt = (snapshot: LiveSnapshot) => {
+      if (!tookIt(snapshot)) return
+      adoptStart(starting, snapshot, input)
+      adopted.done = true
     }
-    if (accepted) {
-      adoptStart(starting, accepted, input)
+    await readLive(starting.key, () => readLiveSnapshot(starting.key).catch(() => null), adopt)
+    if (!adopted.done && input.resume && input.threadPath) {
+      const path = input.threadPath
+      await readLive(undefined, async () => {
+        const resolved = await getMako().resolveContinuation(path).catch(() => null)
+        return resolved?.transport === "attached" ? resolved.snapshot : null
+      }, adopt)
+    }
+    if (adopted.done) {
       settleMessage(input.initialRequest?.id ?? input.conversationId)
       retryDelays.delete(starting.key)
       return true

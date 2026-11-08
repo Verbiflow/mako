@@ -38,7 +38,7 @@ import { listedHeads, listedSummaries, listingChanges } from "../src/web-client/
 import { selectAcpPresence } from "../src/state/acp-presence"
 import { presenceThreadStatus } from "../src/lib/thread-fold"
 import { acpStore } from "../src/state/acp-state"
-import { receivingLive } from "../src/state/live-door"
+import { readingLive, receivingLive } from "../src/state/live-door"
 import { failAroundTheDoor } from "./live-door-watch"
 import { applyLiveSnapshot, listLive } from "../src/state/live-recovery"
 import type { ToolCall } from "../src/extend/slots"
@@ -69,7 +69,7 @@ import { AccountList, accountListStore } from "../src/web-client/account-list"
 import { WebCopies } from "../src/web-client/copies"
 import type { CopyAnswer } from "@mako/host/contracts/copy-history"
 // What the window's own code writes of a conversation goes through the door (`receiveLive`), or the suite fails.
-failAroundTheDoor(acpStore, receivingLive)
+failAroundTheDoor(acpStore, receivingLive, readingLive)
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const STUDIO = uuid(900)

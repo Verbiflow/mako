@@ -31,7 +31,7 @@ let readSnapshot: (id: string) => Promise<LiveSnapshot> = async () => { throw ne
 Object.defineProperty(globalThis, "window", { value: { mako: { liveSnapshot: (id: string) => readSnapshot(id), livePermission: async () => {} } }, configurable: true })
 Object.assign(globalThis, { requestAnimationFrame: (run: () => void) => setTimeout(run, 16), cancelAnimationFrame: clearTimeout })
 const { acpStore } = await import("../src/state/acp-state")
-const { applyLiveBatch, applyLiveSnapshot, hydrateLive, hydrateLiveSummaries, listLive, unlistLive, unloadLive } = await import("../src/state/live-recovery")
+const { applyLiveBatch, applyLiveSnapshot, hydrateLive, hydrateLiveSummaries, listLive, recaptureLive, unlistLive, unloadLive } = await import("../src/state/live-recovery")
 const { installNotificationEnvironment, notificationsStore, reconcileVisible, subjectId } = await import("../src/state/notifications")
 const { applyThreadGroupChange } = await import("../src/state/thread-groups")
 const { applyThreadActivity } = await import("../src/state/threads")
@@ -92,7 +92,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   }), { source: "live" }, {})
   let counter = 0
   const next = (prefix: string) => `${prefix}${(counter += 1)}`
-  const counts = { asked: 0, answered: 0, replaced: 0, turns: 0, lateReads: 0, staleReads: 0, oldStartReads: 0, restarts: 0, legacyStarts: 0, needsYou: 0, batchesDuringReads: 0, listings: 0, listingsDuringReads: 0, strays: 0, opened: 0, letGo: 0, removed: 0, looked: 0, several: 0 }
+  const counts = { asked: 0, answered: 0, replaced: 0, turns: 0, lateReads: 0, staleReads: 0, oldStartReads: 0, restarts: 0, legacyStarts: 0, needsYou: 0, recaptures: 0, batchesDuringReads: 0, listings: 0, listingsDuringReads: 0, strays: 0, opened: 0, letGo: 0, removed: 0, looked: 0, several: 0 }
 
   // The host: each Session's state by its start and revision, the Fins (told to the newest alone), the remote Session,
   // the outside app. A restart is a new start (`E<n>`), its numbers begun again, what it holds carried over.
@@ -337,9 +337,16 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
       trail.push(`the ${session} Session ${running ? "starts" : "ends"} a turn`)
       change(session, { running }, { session: sessionOf(session, { ...now(session), running }) })
     } else if (roll < 0.7) {
-      // The window reads a Session now (it opens it, or recovers it), answered later.
-      trail.push(`the window reads the ${session} Session at ${host.revision[session]}`)
-      void hydrateLive(keys[session])
+      // The window reads a Session now (it opens it, or recovers it), or reads it into a new view of its history (a
+      // recapture, `live-history`), answered later.
+      if (held(session) && pick() < 0.35) {
+        counts.recaptures += 1
+        trail.push(`the window recaptures the ${session} Session at ${host.revision[session]}`)
+        void recaptureLive(keys[session])
+      } else {
+        trail.push(`the window reads the ${session} Session at ${host.revision[session]}`)
+        void hydrateLive(keys[session])
+      }
     } else if (roll < 0.8) {
       // A read is answered, any of those out, as of when it was asked.
       const read = reads.splice(Math.floor(pick() * reads.length), 1)[0]

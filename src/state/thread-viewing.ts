@@ -397,7 +397,7 @@ export function loadThreadEntry(path: string, id: string): Promise<void> {
 const liveModules = Promise.all([
   import("@/state/acp"),
   import("@/state/live-recovery"),
-]).then(([acpModule, recovery]) => ({ ...acpModule, applyLiveSnapshot: recovery.applyLiveSnapshot }))
+]).then(([acpModule, recovery]) => ({ ...acpModule, applyLiveSnapshot: recovery.applyLiveSnapshot, readLiveFrom: recovery.readLiveFrom }))
 
 /**
  * How long a row another host owns waits for that conversation before its
@@ -409,14 +409,17 @@ const OWNER_PATIENCE_MS = 1_200
 /** Show the Mako conversation that owns `ref`; false when none took over. */
 async function adoptOwner(ref: ThreadRef, generation: number): Promise<boolean> {
   try {
-    const [owner, { acp, acpStore, applyLiveSnapshot }] = await Promise.all([
-      getMako().resolveOwner(ref.path),
-      liveModules,
-    ])
-    if (!owner || generation !== viewingGeneration) return false
+    const { acp, acpStore, applyLiveSnapshot, readLiveFrom } = await liveModules
     // The row is the Session, whichever of its native records the list shows
-    // for it: it opens where the conversation is now, on its active harness.
-    applyLiveSnapshot(owner.snapshot, null)
+    // for it: it opens where the conversation is now, on its active harness,
+    // read as any snapshot is, and taken only while this view still asks.
+    let taken = false
+    const owner = await readLiveFrom(undefined, () => getMako().resolveOwner(ref.path), (found) => found?.snapshot, (snapshot) => {
+      if (generation !== viewingGeneration) return
+      applyLiveSnapshot(snapshot, null)
+      taken = true
+    })
+    if (!owner || !taken) return false
     if (acpStore.get().activeKey !== owner.snapshot.session.id)
       acp.activate(owner.snapshot.session.id, false)
     openThreadTab(ref.path)

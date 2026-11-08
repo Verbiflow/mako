@@ -15,7 +15,7 @@ import type { LiveBatch, LiveSnapshot, LiveSummary } from "@mako/host/contracts/
 const reads: ((snapshot: LiveSnapshot) => void)[] = []
 let answer: ((id: string) => LiveSnapshot) | undefined
 const read = (id: string) => answer ? Promise.resolve(answer(id)) : new Promise<LiveSnapshot>((done) => reads.push(done))
-const legacy = { liveSnapshot: read, livePermission: async () => {}, liveEarlier: (id: string) => read(id) }
+const legacy = { liveSnapshot: read, livePermission: async () => {}, liveEarlier: (id: string) => read(id), liveTransfer: (id: string) => read(id), liveAcknowledgeAction: async () => {} }
 const framed = {
   ...legacy,
   liveRead: async (id: string) => {
@@ -27,13 +27,18 @@ Object.defineProperty(globalThis, "window", { value: { mako: legacy }, configura
 Object.assign(globalThis, { requestAnimationFrame: (run: () => void) => setTimeout(run, 16), cancelAnimationFrame: clearTimeout })
 const { acpStore, removeAcpConversation, updateAcpConversation } = await import("../src/state/acp-state")
 const recovery = await import("../src/state/live-recovery")
-const { letGoLive, receiveLive, receivingLive } = await import("../src/state/live-door")
+const { letGoLive, readingLive, receiveLive, receivingLive } = await import("../src/state/live-door")
 const { answerLiveApproval } = await import("../src/state/live-approvals")
 const { threadMoveStepped, threadReturnStepped } = await import("../src/state/cloud-moves")
 const { threadContinueStepped } = await import("../src/state/cloud-continues")
-const { watchDoor } = await import("./live-door-watch")
+const { submitTransfer } = await import("../src/state/live-transfers")
+const { acknowledgeLiveAction } = await import("../src/state/live-actions")
+const { watchDoor, watchReads } = await import("./live-door-watch")
 
 const door = watchDoor(acpStore, receivingLive)
+// Every read of a conversation's snapshot on either bridge, made with no read of it out (`readLive`), is caught.
+const bridgeReads = [watchReads(legacy, readingLive), watchReads(framed, readingLive)]
+const bypassed = () => bridgeReads.flatMap((watch) => watch.bypasses.splice(0))
 const settle = async () => { for (let wait = 0; wait < 12; wait += 1) await turn() }
 // SAFETY: an approval as the window reads it.
 const approval = (id: string) => ({ id, observationId: "o", sessionId: "s", title: "Run", options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] }) as never
@@ -51,6 +56,7 @@ async function through(what: string, id: string, act: () => void | Promise<void>
   await settle()
   assert.notEqual(held(id), before, `${what}: changed the conversation`)
   assert.deepEqual(door.strays.splice(0), [], `${what}: went through the door`)
+  assert.deepEqual(bypassed(), [], `${what}: read through the window's one read`)
 }
 
 // The watch itself: what its host said, written around the door, is caught; through it, it isn't.
@@ -72,6 +78,14 @@ async function through(what: string, id: string, act: () => void | Promise<void>
   recovery.applyLiveSnapshot(snapshot(id, "g1.watchroot.a", 3))
   letGoLive(id, () => removeAcpConversation(id))
   assert.deepEqual(door.strays.splice(0), [], "an unlisting through the door, and the window's own let-go, aren't")
+  // And a read: one of a conversation's snapshot made around the window's one read is caught; through it, it isn't.
+  answer = (asked) => snapshot(asked, "g1.watchroot.a", 4)
+  await legacy.liveSnapshot(id)
+  assert.deepEqual(bypassed().map(({ method, asked }) => ({ method, asked })), [{ method: "liveSnapshot", asked: id }], "a read around the window's one read is caught")
+  await recovery.readBackLive(id)
+  assert.deepEqual(bypassed(), [], "and through it, isn't")
+  answer = undefined
+  letGoLive(id, () => removeAcpConversation(id))
 }
 
 // Every way in.
@@ -99,6 +113,13 @@ async function through(what: string, id: string, act: () => void | Promise<void>
   })
   await through("an earlier page", id, () => { updateAcpConversation(id, (current) => ({ ...current, sending: false })); answer = (asked) => snapshot(asked, epoch, 7); return recovery.loadEarlierLive(id) })
   acpStore.set({ activeKey: null })
+  answer = (asked) => snapshot(asked, epoch, 8)
+  // SAFETY: a transfer as the switch sends it; this bridge reads only its id.
+  const transfer = { id: "transfer-1", provider: "claude" } as never
+  await through("a transfer's answer", id, async () => { await submitTransfer(id, transfer) })
+  answer = (asked) => snapshot(asked, epoch, 9)
+  await through("an action acknowledged, read back", id, () => acknowledgeLiveAction(id, "action-1"))
+  answer = undefined
   await through("a reconnect's summary", id, () => recovery.hydrateLiveSummaries([summary(id, epoch, 7, { waitingOn: "Approve" })], true))
   await through("its owner gone", id, () => recovery.markLiveOwnerDisconnected([id]))
   // SAFETY: each step as its host event says it, with only the fields its handler reads for the conversation.
@@ -137,6 +158,24 @@ for (const [name, bridge] of [["legacy", legacy], ["framed", framed]] as const) 
   assert.equal(reads.length, 0, `${name}: with nothing more to read`)
   acpStore.set({ activeKey: null })
 }
+// #524's twelfth review: a read out of a Session when it's unlisted (a recapture, a read-back) never brings it back,
+// on either bridge.
+for (const [name, bridge] of [["legacy", legacy], ["framed", framed]] as const) {
+  Object.assign(globalThis.window, { mako: bridge })
+  for (const kind of ["recapture", "read-back"] as const) {
+    const id = `unlisted-${kind}-${name}`, epoch = "g1.unlistroot.a"
+    recovery.applyLiveSnapshot(snapshot(id, epoch, 1))
+    const reading = kind === "recapture" ? recovery.recaptureLive(id) : recovery.readBackLive(id).then(() => undefined)
+    await settle()
+    assert.equal(reads.length, 1, `${name}: the ${kind} is out`)
+    recovery.unlistLive([id])
+    reads.shift()!(snapshot(id, epoch, 2))
+    await reading
+    await settle()
+    assert.equal(held(id), undefined, `${name}: a ${kind} answered after its Session was unlisted doesn't bring it back`)
+  }
+}
 assert.deepEqual(door.strays, [], "nothing went around the door")
-console.log("Live door: every way in to a conversation's state goes through one door, a write around it is caught, and a listing during a fresh read is read after it on both bridges")
+assert.deepEqual(bypassed(), [], "and nothing read around the window's one read")
+console.log("Live door: every way in to a conversation's state goes through one door and every snapshot read through one read, a write or read around them is caught, a listing during a fresh read is read after it, and a read out when its Session is unlisted doesn't bring it back, on both bridges")
 process.exit(0)
