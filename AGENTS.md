@@ -1550,8 +1550,10 @@ Three rules hold this together, and each has a specific failure it prevents:
   user scrolling may release follow mode; virtualizer size adjustments must not.
   Follow changes only as the reader moves: up leaves the end, down into it
   follows again, and a scroll's end decides nothing. A move counts from 24 px
-  (`LEFT_END`), a wheel's as its net travel over 500 ms, so a trackpad's rest
-  jitter never lets go while a flick up does at once. A wheel taken by a
+  (`LEFT_END`), a wheel's as its travel within 500 ms since it last turned, so
+  a trackpad's rest jitter never lets go while a flick up does at once, and a
+  wheel up then as far back down follows the end again (its net was nothing,
+  which read as rest, and the end went unfollowed). A wheel taken by a
   scroller inside the transcript (the crew card's list, a code block) stays
   with it until it settles, as the browser's own gesture does. Input ends when
   it settles (`INPUT_SETTLE_MS`), for input that moved nothing and a browser
