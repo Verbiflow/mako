@@ -5,6 +5,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { literal } from "./lib/page-code.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * The web app's Settings › Devices (`src/dev/web-devices-check.tsx`: `WebDevices`, the desktop's own `Devices`, on an
@@ -69,12 +70,14 @@ async function check() {
   const base = process.env.MAKO_DEVICES_URL
   const parts = new Set((process.env.MAKO_DEVICES_ONLY || "phone,widths,tablet,laptop,marks").split(","))
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const watchdog = setTimeout(() => {
     console.error("Web devices UI verification exceeded its 480-second limit")
     app.exit(1)
   }, 480_000)
   const window = new BrowserWindow({ width: 390, height: 844, useContentSize: true, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 390, 844)
   const page = window.webContents
   // The debugger answers once the window holds a page.
   await window.loadURL("about:blank")
@@ -154,7 +157,7 @@ async function check() {
     assert.equal(names[0], "Safari on iPhone", "this browser first")
     assert.match(await deviceRow("Safari on iPhone"), /^Safari on iPhone\nThis browser\nBrowser · iOS 26\.0\nOnline now/)
     assert.match(await deviceRow("build-box"), /^build-box\nLinux machine · x64 · Ubuntu 24\.04 · Mako 0\.4\.0\nOnline now · 2 Threads\nJoined .+ from Frankfurt, Germany, with a code you approved/)
-    assert.match(await deviceRow("gpu-rig"), /\nLinux machine · x64 · Debian 13 · Mako 0\.4\.0\nQuiet since \d/)
+    assert.match(await deviceRow("gpu-rig"), /\nLinux machine · x64 · Debian 13 · Mako 0\.4\.0\nQuiet since (?:[A-Z][a-z]{2} \d{1,2}, )?\d{1,2}[:.]\d{2}/)
     assert.match(await deviceRow("nas"), /^nas\nNeeds Mako's update\nLinux machine · arm64 · Alpine 3\.22 · Mako 0\.1\.37\nOnline now/)
     assert.match(await deviceRow("Ada's MacBook Pro"), /\nMac · macOS 26\.0 · Mako 0\.4\.0\nOnline now · 1 Thread\n/)
     // A fact keeps its dot behind it: no line of a row's facts starts with one, however narrow the row.

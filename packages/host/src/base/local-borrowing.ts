@@ -17,6 +17,7 @@ import {
   type Grant,
   type Kind,
   type Lease,
+  type LeaseEnd,
   type LeaseEvent,
   type Need,
   type SourceAnswer,
@@ -147,7 +148,7 @@ export class LocalBorrowing implements Borrowing {
     return standingGrants((await this.#read()).state, this.#now())
   }
 
-  async lease(id: string): Promise<{ lease: Lease; ended?: "revoked" | "expired" | "released" } | undefined> {
+  async lease(id: string): Promise<{ lease: Lease; ended?: LeaseEnd } | undefined> {
     const held = (await this.#read()).state.leases[id]
     if (!held) return undefined
     return held.ended ? { lease: held.lease, ended: held.ended.why } : { lease: held.lease }
@@ -174,7 +175,7 @@ export class LocalBorrowing implements Borrowing {
    * does can fall after the lease's revoke: a revoke takes the same lock, so it comes wholly before `work` or sees
    * everything `work` did.
    */
-  whileLeased<T>(lease: string, work: () => Promise<T>): Promise<{ done: T } | { ended: "revoked" | "expired" | "released" }> {
+  whileLeased<T>(lease: string, work: () => Promise<T>): Promise<{ done: T } | { ended: LeaseEnd }> {
     return this.locked(async () => {
       const held = (await this.#load()).state.leases[lease]
       if (!held) return { ended: "released" as const }

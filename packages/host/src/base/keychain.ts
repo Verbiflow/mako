@@ -2,6 +2,7 @@ import type * as Keyring from "@napi-rs/keyring"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
 import { z } from "zod"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /**
  * One generic password in the login keychain. A read without an account
@@ -115,8 +116,7 @@ function securityCommand(command: string): Promise<number> {
     child.once("error", reject)
     child.once("close", (code) => resolve(code ?? 1))
     // A `security` that exits before reading closes the pipe; its status says what happened.
-    child.stdin.on("error", () => undefined)
-    child.stdin.end(`${command}\n`)
+    endChildInput(child, `${command}\n`)
   })
 }
 
