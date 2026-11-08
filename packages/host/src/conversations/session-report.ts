@@ -82,6 +82,8 @@ export type ReportSources = {
   background?(conversationId: string): number | undefined
   /** What one of a conversation's Fins asks the person, which its row waits on (`finAsking`). */
   asking?(conversationId: string): FinAsking | undefined
+  /** What a conversation's agent asked through Mako's tools, which its row waits on (`LiveConversations.askWaiting`). */
+  asked?(conversationId: string): Waiting | undefined
   /** A conversation's Fins, as its roster lists them for every other device (`listedFins`). */
   fins?(conversationId: string): ReportedSession["fins"]
   now(): number
@@ -138,6 +140,8 @@ export function conversationShown(conversation: {
   background?: number | undefined
   promptedAt?: number | undefined
   asking?: ((conversationId: string) => FinAsking | undefined) | undefined
+  /** What its agent asked through Mako's tools (`LiveConversations.askWaiting`). */
+  asked?: ((conversationId: string) => Waiting | undefined) | undefined
   fins?: ((conversationId: string) => ReportedSession["fins"]) | undefined
 }): ConversationShown {
   const { session, working, execution } = conversation
@@ -159,8 +163,15 @@ export function conversationShown(conversation: {
   }
   // Its own ask goes first; a Fin's waits behind it, and a move says nothing more.
   const under = state === "working" || state === "idle" || state === "failed" ? state : undefined
-  const fin = under && conversation.asking?.(session.id)
-  if (fin) {
+  // What its agent asked through Mako's tools leaves it working or idle, and waits on the person all the same.
+  const asked = under && conversation.asked?.(session.id)
+  const fin = under && !asked && conversation.asking?.(session.id)
+  if (asked) {
+    shown.state = "waiting"
+    shown.waitingOn = asked.line
+    shown.waitingFor = asked.for
+    delete shown.background
+  } else if (fin) {
     shown.state = "waiting"
     shown.waitingOn = fin.waiting.line
     shown.waitingFor = fin.waiting.for

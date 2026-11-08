@@ -16,7 +16,6 @@ import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
 import { refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
-import { applyThreadMoveAsks, loadThreadMoveAsks } from "@/state/thread-move-asks"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
 import { applyAccessChoices, loadAccessChoices } from "@/state/access-choices"
 import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } from "@/state/chat-folders"
@@ -314,10 +313,6 @@ function apply(event: HostEvent) {
   }
   if (event.type === "workspace-moves") {
     applyWorkspaceMoves(event.moves)
-    return
-  }
-  if (event.type === "thread-move-asks") {
-    applyThreadMoveAsks(event.asks)
     return
   }
   if (event.type === "plan-builds") {
@@ -764,7 +759,6 @@ function adoptBoot(boot: BootPayload) {
   void loadGroups()
   void loadWorktrees()
   void loadWorkspaceMoves().catch(() => {})
-  void loadThreadMoveAsks().catch(() => {})
   void loadPlanBuilds().catch(() => {})
   void loadAccessChoices().catch(() => {})
   followChatFolders()

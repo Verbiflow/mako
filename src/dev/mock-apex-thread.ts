@@ -47,11 +47,23 @@ const DECIDED = new Map<string, ChildState>([
 const DECISIONS_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "decisions"
 
 /** The twelve, as the prototype has them: 2 need you, 5 working (one asking its Apex), 2 queued, 3 done. */
+/**
+ * `&ask=fin`: "Dictation fallback"'s agent asked to move its Thread, as its Apex's host builds its row (`askWaiting`,
+ * `LiveAsks.pending` through `waitingOf`): blocked on an approval in the ask's own words, left to the person.
+ */
+const FIN_ASKS = new URLSearchParams(globalThis.location?.search).get("ask") === "fin"
+const FIN_MOVE_ASK: ChildState = {
+  kind: "blocked",
+  on: "approval",
+  question: "Wants to move this Thread to the cloud (yours to answer: its Apex isn't on full access)",
+  ask: { kind: "approval", id: "1ead1ead-7000-4000-8000-0000000000b5", options: [{ label: "Move to the cloud" }, { label: "Keep here" }], named: true },
+}
+
 const CHILDREN: ChildFixture[] = ([
   { name: "push-wording", title: "Quiet-hours push wording", harness: "codex", model: "gpt-5.6-sol", state: { kind: "blocked", on: "person", question: "Which tone for the quiet-hours notice? Plain or friendly?", ask: { kind: "report", id: "report:push-wording:tone", options: [{ label: "Plain", detail: "Pushes are held until 7:00." }, { label: "Friendly", detail: "Quiet hours: we'll tell you at 7:00." }], recommended: 0, action: "Pick the tone the phone ships with." } }, minutes: 14, toolUses: 22, objective: "Write the quiet-hours notice the phone shows when pushes are held, in both tones, and ask which one ships." },
   { name: "sheet-motion", title: "Sheet motion on iPad", harness: "cursor", model: "composer-2.5", state: { kind: "blocked", on: "approval", question: "Approve: npm ci", ask: { kind: "approval", id: "a7c0ffee-0000-4000-8000-00000000a11c", options: [{ label: "Allow once" }, { label: "Always allow" }, { label: "Reject" }] } }, minutes: 22, toolUses: 41, objective: "Make the sheet's open and close motion match the iPad's split view, on the composer branch. Done when the sheet case passes on an iPad in both themes. Report with what you changed and the shots.", said: "The sheet animates from its own height, so in split view it starts off screen. I'll measure the container instead, then run the iPad case." },
   { name: "composer-chips", title: "Composer chips on iPad", harness: "claude", model: "claude-opus-5-5", state: { kind: "working", phase: "Running the iPad cases", step: "Shell npm run test:phone" }, minutes: 18, toolUses: 64, objective: "Make the composer's chips wrap on an iPad the way they do on a Mac." },
-  { name: "dictation", title: "Dictation fallback", harness: "codex", model: "gpt-5.6-sol", state: { kind: "working", step: "Edit src/web-client/dictation.ts" }, minutes: 11, toolUses: 30, objective: "When the recognizer is unavailable, fall back to the keyboard's dictation without an error." },
+  { name: "dictation", title: "Dictation fallback", harness: "codex", model: "gpt-5.6-sol", state: FIN_ASKS ? FIN_MOVE_ASK : { kind: "working", step: "Edit src/web-client/dictation.ts" }, minutes: 11, toolUses: 30, objective: "When the recognizer is unavailable, fall back to the keyboard's dictation without an error." },
   { name: "token-refresh", title: "Push token refresh", harness: "grok", model: "grok-4.7", state: { kind: "blocked", on: "lead", question: "Should an expired token be dropped or retried once?" }, minutes: 9, toolUses: 12, objective: "Refresh a phone's push token when the platform rotates it, without a second registration." },
   { name: "outbox", title: "Offline outbox retry", harness: "opencode", model: "kimi-k3", state: { kind: "working", step: "Read src/web-client/outbox.ts" }, minutes: 6, toolUses: 8, objective: "Retry the outbox once the page is back online, oldest first." },
   { name: "hunks", title: "Review screen hunks", harness: "devin", model: "swe-2", state: { kind: "starting", step: "launching" }, minutes: 0.4, objective: "Read the review screen's hunks from the record instead of the file." },
@@ -66,6 +78,8 @@ const CHILDREN: ChildFixture[] = ([
  * `&fins=limit`: the tree on 2026-11-05, as the host says it. Cursor ran out: three of its Fins moved to Claude Code,
  * one had nowhere to go and stopped with its work unfinished, and the first moved carries the tree's one notice.
  */
+/** `&ask=move`: the Apex's own agent asks, below full access, to move its Thread; `&ask=fin`: its Fin "Dictation fallback" does, which goes to the Apex first (`test-agent-ask-ui.mjs`). */
+const ASK_SCENE = new URLSearchParams(globalThis.location?.search).get("ask")
 const LIMIT_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "limit"
 const LIMIT_UNTIL = "Sun 12:00 AM PST"
 const LIMIT_MOVED = `Moved to Claude Code: Cursor is at its limit until ${LIMIT_UNTIL}`
@@ -421,7 +435,14 @@ export function apexSnapshot(): LiveSnapshot {
       { type: "user", text: request.text, requestId: request.id },
       { type: "text", text: "Reading the digest." },
     ],
-    control: { activeBindingId: APEX_CONVERSATION, bindings: [], merges: [], transfers: [], actions: [] },
+    control: {
+      activeBindingId: APEX_CONVERSATION,
+      bindings: [],
+      merges: [],
+      transfers: [],
+      actions: [],
+      ...(ASK_SCENE === "move" && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a5", at: STARTED, want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a6", handsOff: true } }] }),
+    },
     nativeAgents: { agents: apexFins(), limited: false },
   }
 }
@@ -475,7 +496,14 @@ export function finSnapshot(index: number): LiveSnapshot {
       ...(waits ? [{ type: "tool" as const, id: `apex-fin-ci-${index}`, toolKind: "execute" as const, title: "npm ci", input: "{\"command\":\"npm ci\"}", status: "pending" as const }] : []),
       ...(fixture.state.kind === "ended" && fixture.state.reason ? [{ type: "text" as const, text: fixture.state.reason }] : []),
     ],
-    control: { activeBindingId: childConversation(index), bindings: [], merges: [], transfers: [], actions: [] },
+    control: {
+      activeBindingId: childConversation(index),
+      bindings: [],
+      merges: [],
+      transfers: [],
+      actions: [],
+      ...(ASK_SCENE === "fin" && index === 3 && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000b5", at: STARTED, want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000b6", handsOff: true } }] }),
+    },
   }
 }
 

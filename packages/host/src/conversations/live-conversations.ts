@@ -49,12 +49,14 @@ import type { Relocation } from "../workspaces/index.js"
 import { changedEntryStart, deliverLiveUpdates, queueLiveUpdate, reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { DirectRoute } from "@mako/sessions/events"
 import { bareCommand } from "@mako/sessions/tool-identity"
-import { questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
+import { needsYouWaiting, questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
+import { agentAskLine } from "../contracts/agent-asks.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { steerHeard } from "../harnesses/index.js"
 import { LiveAccounts } from "./live-accounts.js"
 import { LiveActions, type SteerInput, type SteerSender } from "./live-actions.js"
 import { LiveApprovals } from "./live-approvals.js"
+import { LiveAsks } from "./live-asks.js"
 import { LiveAssets, promptFingerprint } from "./live-assets.js"
 import { LiveAutoContinue } from "./live-auto-continue.js"
 import { stoppedWork } from "./interrupted-turn.js"
@@ -135,6 +137,8 @@ export class LiveConversations {
   private readonly turnReview: LiveTurnReview
   private readonly questions: LiveQuestions
   private readonly approvals: LiveApprovals
+  /** What its agents ask the person through Mako's tools (`ThreadMoveTool`). */
+  readonly asks: LiveAsks
   private readonly actions: LiveActions
   private readonly transfers: LiveTransfers
   private readonly bundles: ContextBundles
@@ -317,6 +321,7 @@ export class LiveConversations {
       },
     })
     this.approvals = new LiveApprovals(access)
+    this.asks = new LiveAsks(access)
     this.questions = new LiveQuestions(access, {
       // An answer goes to the session that asked, on the binding it read as active with nothing awaited since: never a switch.
       continue: (id, bindingId, requestId, text, displayText) => {
@@ -607,7 +612,13 @@ export class LiveConversations {
     if (permission) return requestWaiting(permission, bareCommand)
     const question = latestPendingQuestion(conversationControl(resident), resident.snapshot.requests)
     const asked = question?.native.questions.find((item) => !question.answered?.includes(item.id))
-    return asked ? questionWaiting(asked.question) : undefined
+    return asked ? questionWaiting(asked.question) : this.askWaiting(id)
+  }
+
+  /** What its agent asked the person through Mako's tools, as its row says it. */
+  askWaiting(id: string): Waiting | undefined {
+    const ask = this.asks.open(id)[0]
+    return ask && needsYouWaiting(agentAskLine(ask.want))
   }
 
   /** What `waitingOn` names, whole, so an answer can reach it through `permission`. */
@@ -626,7 +637,7 @@ export class LiveConversations {
       }
     const question = latestPendingQuestion(conversationControl(resident), resident.snapshot.requests)
     const open = question?.native.questions.filter((item) => !question.answered?.includes(item.id)) ?? []
-    return question && open.length ? { request: question.id, kind: "question", options: [], questions: open } : undefined
+    return question && open.length ? { request: question.id, kind: "question", options: [], questions: open } : this.asks.pending(id)
   }
 
   /**
@@ -1500,6 +1511,8 @@ export class LiveConversations {
     requestId: string,
     response: LivePermissionResponse
   ): Promise<void> {
+    // An agent's ask through Mako's tools is answered on the path a harness's approval is (`agents_answer`, the person).
+    if (this.asks.open(id).some(ask => ask.id === requestId)) return this.asks.answer(id, requestId, response)
     if (conversationControl(this.records.require(id)).questions?.some(question => question.id === requestId)) {
       await this.questions.answer(id, requestId, response)
       return
