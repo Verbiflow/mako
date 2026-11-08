@@ -92,9 +92,20 @@ interface ResolvedKey {
  * candidate key in its environment, so the key is judged by Cursor, not by
  * its shape.
  */
+/** A check the host's stop ended before Cursor answered. */
+export class CursorProbeStopped extends Error {
+  constructor() {
+    super("Mako stopped before Cursor answered")
+    this.name = "CursorProbeStopped"
+  }
+}
+
 export class CursorSdkAuth {
   private snapshot: CursorSdkAuthSnapshot | null = null
   private inflight: Promise<CursorSdkAuthSnapshot> | null = null
+  /** The children its checks started and haven't closed: `stop` ends them. */
+  private readonly probes = new Set<CursorSdkProbeClient>()
+  private stopped = false
   private readonly listeners = new Set<(snapshot: CursorSdkAuthSnapshot) => void>()
   private readonly options: CursorSdkAuthOptions
 
@@ -109,6 +120,17 @@ export class CursorSdkAuth {
 
   get signedIn(): boolean {
     return this.snapshot?.state.status === "signed-in"
+  }
+
+  /**
+   * The host is stopping: a check under way ends now, its child gone and its
+   * request failed, and none starts. The host waits for the calls it's
+   * answering as it stops, and Cursor's `authStatus` waits up to a minute for
+   * a child that never answers.
+   */
+  stop(): void {
+    this.stopped = true
+    for (const client of this.probes) void client.close(0)
   }
 
   onChange(listener: (snapshot: CursorSdkAuthSnapshot) => void): () => void {
@@ -279,8 +301,20 @@ export class CursorSdkAuth {
   }
 
   private async spawn(env: NodeJS.ProcessEnv, onEvent: (event: SdkEvent) => void): Promise<CursorSdkProbeClient> {
+    if (this.stopped) throw new CursorProbeStopped()
     const spawn = { owner: "cursor-sdk-auth", cwd: process.cwd(), env, onEvent }
-    return this.options.client ? this.options.client(spawn) : new CursorSdkClient(spawn)
+    const client = this.options.client ? this.options.client(spawn) : new CursorSdkClient(spawn)
+    this.probes.add(client)
+    return client
+  }
+
+  /** A check's own child, closed and let go. */
+  private async release(client: CursorSdkProbeClient): Promise<void> {
+    try {
+      await client.close(2_000)
+    } finally {
+      this.probes.delete(client)
+    }
   }
 
   /** Who a key belongs to, by Cursor's answer; throws the SDK's own error when it is refused. */
@@ -291,7 +325,7 @@ export class CursorSdkAuth {
       await client.hello()
       return await client.request("me", undefined)
     } finally {
-      await client.close(2_000)
+      await this.release(client)
     }
   }
 
@@ -334,7 +368,7 @@ export class CursorSdkAuth {
           return this.record(state)
         }
       } finally {
-        if (!running) await client.close(2_000)
+        if (!running) await this.release(client)
       }
       return this.record({ status: "signed-out" })
     } catch (error) {
@@ -345,6 +379,8 @@ export class CursorSdkAuth {
           problem: { source: resolved.source, message: rejectionText(resolved.source, error.message) },
         })
       }
+      // Cut by the host's stop: nothing was learned, and nothing went wrong.
+      if (this.stopped) throw new CursorProbeStopped()
       // A failed probe is not "signed out": the last verified answer stands
       // and the log names the failure; a fresh host reports it as unchecked.
       hostWarn("cursor-sdk", "auth probe failed", { source: resolved.source, error: errorMessage({ error }) })

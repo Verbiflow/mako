@@ -75,6 +75,9 @@ const HELD_WAKES_AFTER_START_MS = 2_000
 const HEAD_ASK_AGAIN_MS = 60_000
 
 /** What the host gives its core: the socket, the method table, and the domains that load on their own. */
+/** When a stop still running says where it is: well before the 15 s a machine's agent or a test waits for it. */
+const STOP_SLOW_MS: readonly number[] = [2_000, 10_000]
+
 export interface CoreShell {
   config: HostConfig
   /** On a cloud machine: asks its agent to make the Thread's folder again, false where it can't be asked. */
@@ -1667,47 +1670,60 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     sessions,
     lifecycleBlocked: () => application.lifecycle.blocked,
     async stop() {
-      jobs.stop()
-      machineTracker?.saves.stop()
-      unwatchSaves?.()
-      unfollowEffects?.()
-      unfollowBounds?.()
-      await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
-      const callsDrained = methods.close()
-      // The native launcher closes its own admission before anything it uses goes.
-      const providersDrained = Promise.all([runs.stop(), harnesses.profiles.stop(), providerHost.discovery.stop()])
-      void providersDrained.catch(() => {})
-      git.close()
-      application.dispose()
-      shell.closeSocket()
-      wake.stop()
-      repositories.stop()
-      sleepHandOff?.stop()
-      keepAwake?.stop()
-      cloudContinues?.close()
-      late.cloud?.stop()
-      shell.terminals.current()?.dispose()
-      plugins?.close()
-      for (const build of builds) build.close()
-      control.stop()
-      files.stop()
-      workspaceAutomations.stop()
-      harnesses.updates.stop()
-      catalog.stop()
-      await Promise.all([callsDrained, providersDrained, telemetry.close(), usage.close()])
-      await opened.stop()
-      cloudConversations?.dispose()
-      late.agentServers?.close()
-      threads.close()
-      workspaces.close()
-      conversationFiles.close()
-      turnMedia.close()
-      void workspaceClients.dispose()
-      // What an owner left running ends with the host rather than outliving it; children that exited while stopping
-      // have left the registry by now.
-      await children.end()
-      for (const stop of unfollow) stop()
-      await Promise.all([unknown.flush(), mismatches.flush()])
+      // A stop that runs long says where it is and what it waits on, so a host killed for it leaves the reason logged.
+      let step = "closing the record of changes"
+      const slow = STOP_SLOW_MS.map((ms) => setTimeout(() => hostWarn("lifecycle", "stopping is slow", { ms, step, on: shell.work.openWork?.().join(", ") || "no named work" }), ms))
+      try {
+        jobs.stop()
+        machineTracker?.saves.stop()
+        unwatchSaves?.()
+        unfollowEffects?.()
+        unfollowBounds?.()
+        await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
+        const callsDrained = methods.close()
+        // A sign-in check under way ends now: the calls drained above may be waiting on one.
+        for (const connection of providerHost.connections.list()) connection.stop?.()
+        // The native launcher closes its own admission before anything it uses goes.
+        const providersDrained = Promise.all([runs.stop(), harnesses.profiles.stop(), providerHost.discovery.stop()])
+        void providersDrained.catch(() => {})
+        git.close()
+        application.dispose()
+        shell.closeSocket()
+        wake.stop()
+        repositories.stop()
+        sleepHandOff?.stop()
+        keepAwake?.stop()
+        cloudContinues?.close()
+        late.cloud?.stop()
+        shell.terminals.current()?.dispose()
+        plugins?.close()
+        for (const build of builds) build.close()
+        control.stop()
+        files.stop()
+        workspaceAutomations.stop()
+        harnesses.updates.stop()
+        catalog.stop()
+        step = "waiting for the calls under way and the providers' drains"
+        await Promise.all([callsDrained, providersDrained, telemetry.close(), usage.close()])
+        step = "closing the conversations"
+        await opened.stop()
+        cloudConversations?.dispose()
+        late.agentServers?.close()
+        threads.close()
+        workspaces.close()
+        conversationFiles.close()
+        turnMedia.close()
+        void workspaceClients.dispose()
+        // What an owner left running ends with the host rather than outliving it; children that exited while stopping
+        // have left the registry by now.
+        step = "ending what providers left running"
+        await children.end()
+        for (const stop of unfollow) stop()
+        step = "writing what it kept"
+        await Promise.all([unknown.flush(), mismatches.flush()])
+      } finally {
+        for (const timer of slow) clearTimeout(timer)
+      }
       hostLog("lifecycle", "stopped")
     },
   }
