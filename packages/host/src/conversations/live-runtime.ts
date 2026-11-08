@@ -249,6 +249,8 @@ export function launchAccount(resident: Resident, harness: string): () => string
   }
 }
 export interface Dependencies {
+  /** The host has begun to stop, though these conversations haven't yet (a stop while the host still starts): reads in slices end. */
+  stopping?(): boolean
   /** This machine's build slots now, for the note a heavy suite started while each is in use hears (`build-slots-full`). */
   builds?(): CallThread["builds"]
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */

@@ -236,6 +236,25 @@ function frames(from: number, to: number): RecordRef {
 }
 
 {
+  // A request that failed, then the same words sent again: each request is its own. Devin, from 3000.12.17, keeps nothing of the
+  // failed turn, its prompt included, so the record's one prompt is the retry's; the failed one stays where it streamed.
+  const said = (entries: readonly Entry[]) => entries.map((entry) => entry.type === "user" ? `user ${entry.requestId ?? "-"} ${entry.text}` : entry.type === "text" ? `text ${entry.text}` : entry.type)
+  const devinRecord: Entry[] = [user("Say hello.", { id: "u-retry" }), text("Hello.", "t-retry")]
+  const devinStream: Entry[] = [user("Say hello.", { requestId: "failed" }), user("Say hello.", { requestId: "retry" }), text("Hello.")]
+  const devin = mergeStream(devinRecord, devinStream, streamDifferences("devin"), new Set(["failed"]))
+  assert.deepEqual(said(devin.entries), ["user failed Say hello.", "user retry Say hello.", "text Hello."], "the retry matches the record's prompt, and the failed one stays")
+  assert.equal(devin.supplied, 1)
+  assert.equal(devin.mismatches.length, 0)
+  // Claude Code keeps a failed turn's prompt, which anchors it; the words it streamed before failing stay where they did.
+  const claudeRecord: Entry[] = [user("Run it.", { id: "u1" }), user("Run it.", { id: "u2" }), text("Starting.", "t2")]
+  const claudeStream: Entry[] = [user("Run it.", { requestId: "failed" }), text("Starting."), user("Run it.", { requestId: "retry" }), text("Starting.")]
+  const claude = mergeStream(claudeRecord, claudeStream, streamDifferences("claude"), new Set(["failed"]))
+  assert.deepEqual(said(claude.entries), ["user failed Run it.", "text Starting.", "user retry Run it.", "text Starting."], "each prompt keeps its own request, and the failed turn's words stay")
+  assert.equal(claude.mismatches.length, 0)
+  console.log("PASS: a failed request and the same words sent again are two requests: the retry matches what its record kept, and the failed one keeps what only its stream said")
+}
+
+{
   // Cursor's SDK keeps a stopped or killed run whole in its own record (index.db's run and run_events, store.db's prompt
   // record), so its reader replays the turn and nothing of it is the stream's alone. A killed run's failure is the one
   // wording that differs: the record knows the run expired, Mako saw how its process exited (flows 82f23d46, 2543fd18).

@@ -1,0 +1,14 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.77"
+  },
+  "about": "The file big.txt in this folder holds about 41,000 characters. Save it as a note with the notes MCP server's save_note tool, title \"big\", body the whole text of big.txt. The arguments are large: write only the arguments object ({\"title\": ..., \"body\": ...}) to a JSON file under /tmp, then call use_tool with tool_name set to the tool and tool_input_file set to that file, as your use_tool instructions describe. Then reply with what the tool answered. A large MCP call's arguments passed through a file: the model writes only the arguments to a JSON file and calls use_tool with the tool's name and that file, which Grok reads, reporting the call it ran inline.",
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1b79c-f7a3-7f11-b8ec-5ee2782fed8b/updates.jsonl",
+      "known": []
+    }
+  ]
+}

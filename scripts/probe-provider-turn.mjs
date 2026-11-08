@@ -7,7 +7,8 @@
 // model, such as `subagent`, recorded the same way.
 // Runs in a scratch home (`scratchHarnessHome`: the harness's sign-in without what renews it, so
 // the person's own stays theirs, and its sessions stay out of their stores), the run's own or, with
-// `--scratch <dir>`, one made there, running the harness build first on PATH. The stream of the wire it heard is
+// `--scratch <dir>`, one made there, running the harness build first on PATH; `--keep` keeps its sessions once the
+// run ends, for keeping them as a decode pair (its sign-ins go either way). The stream of the wire it heard is
 // kept beside report.json for `npm run decode -- <stream> --compare <store>`. Prints what each provider-started turn and marker said
 // and how long it took to come, never a credential.
 import { spawn } from "node:child_process"
@@ -31,9 +32,9 @@ const PROMPTS = {
 }
 
 /** A scratch home's environment, with npm's own variables left out; its PATH has this one first, so its build runs. */
-async function scratchEnvironment(root) {
-  const { assertScratchEnvironment, scratchHarnessHome } = await import("./scratch-harness-home.ts")
-  const { env } = await scratchHarnessHome(root, [])
+async function scratchEnvironment(root, keep) {
+  const { assertScratchEnvironment, readPersonSignIns, seedScratchHome } = await import("./scratch-harness-home.ts")
+  const { env } = seedScratchHome(root, readPersonSignIns(), { keep })
   const scratch = Object.fromEntries(Object.entries(env).filter(([name]) => !/^npm_/i.test(name)))
   assertScratchEnvironment(scratch, "probe-provider-turn")
   return scratch
@@ -42,14 +43,14 @@ async function scratchEnvironment(root) {
 if (!process.versions.electron) {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
-    options: { model: { type: "string" }, "start-only": { type: "boolean" }, out: { type: "string" }, prompt: { type: "string" }, files: { type: "string" }, foreground: { type: "boolean" }, scratch: { type: "string" } },
+    options: { model: { type: "string" }, "start-only": { type: "boolean" }, out: { type: "string" }, prompt: { type: "string" }, files: { type: "string" }, foreground: { type: "boolean" }, scratch: { type: "string" }, keep: { type: "boolean" } },
   })
   const harness = positionals[0]
   if (!harness || !(harness in PROMPTS)) throw new Error(`Name a harness: ${Object.keys(PROMPTS).join(", ")}`)
   const root = mkdtempSync(join(tmpdir(), `mako-live-test-turn-${harness}-`))
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "probe-provider-turn", main: fileURLToPath(import.meta.url) }))
   const env = {
-    ...await scratchEnvironment(values.scratch ? resolve(values.scratch) : root),
+    ...await scratchEnvironment(values.scratch ? resolve(values.scratch) : root, values.keep ?? false),
     PROBE_HARNESS: harness,
     PROBE_ROOT: root,
     PROBE_OUT: resolve(values.out ?? join(tmpdir(), "probe-provider-turns", harness)),

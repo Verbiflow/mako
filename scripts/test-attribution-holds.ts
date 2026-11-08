@@ -8,7 +8,7 @@ import { inSlices } from "@mako/sessions/slices"
 import { contentRef } from "@mako/host/attribution/content"
 import { JournalStore } from "@mako/host/attribution/journal-store"
 import { nodeFileSystem } from "@mako/host/attribution/ports"
-import { countingTurn, storedView, turnChanges } from "@mako/host/attribution/queries"
+import { countingTurn, countTurnInSlices, storedView, turnChanges } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { testScratch } from "./lib/test-scratch.mjs"
 
@@ -23,7 +23,8 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * Each is held to the same work done at once in the same run (the yardstick): the longest hold in slices must stay
  * under a `TIMES`th of the one at once, and what it finds must be exactly what the reading at once finds. And since
  * other work runs between the reading and the letting go, a root a turn began on meanwhile, after the reading or
- * between two roots let go, stays.
+ * between two roots let go, stays. A count or a pass cut by the journal's close (its host stopping) ends at its next
+ * step, under a `TIMES`th of the whole sliced work's time, quietly: nothing counted, nothing let go, nothing failed.
  */
 const TIMES = 4
 const DAY = 86_400_000
@@ -47,6 +48,20 @@ async function longestHold<Value>(work: () => Promise<Value> | Value): Promise<{
   await pause(50)
   running = false
   return { value, holdMs: Math.max(longest, performance.now() - last) }
+}
+
+/** How long `work` takes to end once `stop` runs, a slice into it, against `wholeMs`, the whole of it in slices. */
+async function stoppedMidway<Value>(what: string, work: () => Promise<Value>, stop: () => void, wholeMs: number): Promise<Value> {
+  const running = work()
+  await new Promise((resolve) => setImmediate(resolve))
+  const stopped = performance.now()
+  stop()
+  const value = await running
+  const endMs = performance.now() - stopped
+  const limit = wholeMs / TIMES
+  console.log(`${what}: ended ${Math.round(endMs)} ms after its stop (limit ${Math.round(limit)} ms, a ${TIMES}th of the ${Math.round(wholeMs)} ms it takes whole in slices)`)
+  assert.ok(endMs < limit, `${what} took ${Math.round(endMs)} ms to end after its stop, not under ${Math.round(limit)} ms`)
+  return value
 }
 
 function judge(what: string, atOnce: number, sliced: number): void {
@@ -94,12 +109,15 @@ async function countATurn(): Promise<void> {
   })
   const view = storedView(store)
   const atOnce = await longestHold(() => turnChanges(view, "T1", "R1", "settled", 0))
+  const began = performance.now()
   const sliced = await longestHold(() => inSlices(countingTurn(view, "T1", "R1", "settled", 0)))
+  const wholeMs = performance.now() - began
   assert.equal(atOnce.value.own.files, FILES, "every file the turn wrote is counted")
   assert.ok(atOnce.value.others.files > 0, "and the other Thread's writes meanwhile")
   assert.deepEqual(sliced.value, atOnce.value, "counted in slices, the turn counts exactly as at once")
   judge(`a turn of ${FILES} files written ${VERSIONS} times each`, atOnce.holdMs, sliced.holdMs)
-  store.close()
+  const cut = await stoppedMidway("a count its journal closed under", () => countTurnInSlices(view, "T1", "R1", "settled"), () => store.close(), wholeMs)
+  assert.equal(cut, undefined, "a count its journal closed under counts nothing, and fails nothing")
 }
 
 /** A tracker whose journal holds a day's worth of other roots' entries and other folders' calls, with one root idle past retention. */
@@ -140,7 +158,9 @@ async function letGoOfIdleRoots(): Promise<void> {
   const atOnce = await longestHold(readAtOnce)
 
   // Tracked a moment ago: nobody let go, and where Threads worked isn't read.
+  const began = performance.now()
   const kept = await longestHold(() => tracker.letGoIdle())
+  const wholeMs = performance.now() - began
   assert.deepEqual(kept.value, [], "a root tracked a moment ago stays")
   // Fifteen days on, nothing changed there and nobody worked in or around it: let go.
   clock.advance(15 * DAY)
@@ -149,7 +169,13 @@ async function letGoOfIdleRoots(): Promise<void> {
   judge(`letting go of idle roots, no root idle (${ENTRIES.toLocaleString("en-US")} entries)`, atOnce.holdMs, kept.holdMs)
   judge(`letting go of idle roots, one idle (${ENTRIES.toLocaleString("en-US")} entries, ${CALLS.toLocaleString("en-US")} calls)`, atOnce.holdMs, letGo.holdMs)
   raw.close()
-  await tracker.close()
+  // Cut by the tracker's close, as its host stops.
+  let closed: Promise<void> | undefined
+  const cut = await stoppedMidway("letting go of idle roots, its tracker closed under it", () => tracker.letGoIdle(), () => {
+    closed = tracker.close()
+  }, wholeMs)
+  assert.deepEqual(cut, [], "a pass its tracker closed under lets go of nothing, and fails nothing")
+  await closed
 }
 
 /** Two roots idle past retention; `meanwhile` runs as `letGoIdle` reads and lets go, and says what it began work on. */
