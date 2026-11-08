@@ -190,7 +190,7 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
       const pull = artifacts.success ? artifacts.data.find((artifact) => artifact.kind === "pull-request") : undefined
       const number = pull ? /(?:\/pull\/|#)(\d+)\b/.exec(pull.ref)?.[1] ?? (/^\d+$/.test(pull.ref) ? pull.ref : undefined) : undefined
       const what = `${(status && REPORT_WORDS.get(status)) ?? status ?? "back"}${number ? ` · PR #${number}` : ""}`
-      return { verb: verb("Report", "Reporting", "Reported"), what, ...pull && /^https:\/\//.test(pull.ref) && { link: pull.ref } }
+      return { verb: verb("Report", "Reporting", "Reported"), what, ...pull && pull.ref.startsWith("https://") && { link: pull.ref } }
     },
   }],
   ["agents_answer", {
@@ -229,8 +229,11 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
     say: ({ args, answer }) => {
       const child = text(args["child"])
       const stopped = texts(answer?.["stopped"])
-      if (child === "all") return { verb: STOP, what: "all Fins", ...stopped.length && { done: count(stopped.length, "Fin", "Fins") } }
-      return { verb: STOP, what: fin(child, answer) }
+      // On a device that couldn't be reached: nothing stopped yet, and the stop is kept for when it answers.
+      const pending = Array.isArray(answer?.["pending"]) ? answer["pending"].length : 0
+      const kept = pending > 0 && !stopped.length ? verb("Stop", "Stopping", "Stop kept for") : STOP
+      if (child === "all") return { verb: kept, what: "all Fins", ...(stopped.length || pending) && { done: count(stopped.length || pending, "Fin", "Fins") } }
+      return { verb: kept, what: fin(child, answer) }
     },
   }],
   ["agents_wait", {

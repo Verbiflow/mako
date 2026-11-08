@@ -231,7 +231,7 @@ export async function cloneTracked(git: Git, repoRoot: string, checkout: string,
     ])
     const here = trackedFiles(held)
     const differs = new Set(changed.split("\0").map((entry) => entry.slice(3)))
-    const same = [...trackedFiles(wanted)].flatMap(([path, file]) => here.get(path) === file && !differs.has(path) && /^100/.test(file) && !path.includes("\n") ? [path] : [])
+    const same = [...trackedFiles(wanted)].flatMap(([path, file]) => here.get(path) === file && !differs.has(path) && file.startsWith("100") && !path.includes("\n") ? [path] : [])
     await Promise.all([...new Set(same.map((path) => dirname(path)))].map((folder) => mkdir(join(checkout, folder), { recursive: true })))
     await cloneFiles(same.map((path) => [join(repoRoot, path), join(checkout, path)]), `${checkout}.clones`, background)
     await git.output(checkout, ["read-tree", commit], background)

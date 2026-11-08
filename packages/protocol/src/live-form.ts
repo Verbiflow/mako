@@ -5,6 +5,9 @@
  * - 1, whole: what an update changed, each value in full, with the line's route ahead of it. Every build reads it.
  * - 2, compact: what an update changed relative to the update before it, which an older reader would misread as whole
  *   (`COMPACT_LIVE_FORM`); its line is the update alone, read by its own first characters.
+ * - 3, rosters: form 2, with a roster as the entries that changed (`ROSTER_LIVE_FORM`), which a reader of form 2 would
+ *   miss and go on showing the old one. Only a host's own windows read it, being its own build, so it's no form of the
+ *   gateway's link (`LiveForm`): a window says `WINDOW_LIVE_FORM` on its own stream, and nothing else says it.
  *
  * A client says the form it reads when it connects (`LIVE_FORM_PARAM` on its connection's URL), for every subscription
  * of that connection; one that says nothing reads form 1. From link version 13 (`COMPACT_LIVE_VERSION`), the gateway
@@ -20,9 +23,16 @@ export type LiveForm = 1 | 2
 
 export const WHOLE_LIVE_FORM = 1 satisfies LiveForm
 export const COMPACT_LIVE_FORM = 2 satisfies LiveForm
+export const ROSTER_LIVE_FORM = 3
+
+/** The forms of a host's event stream, which only its own windows read past `LiveForm`. */
+export type WindowLiveForm = LiveForm | typeof ROSTER_LIVE_FORM
 
 /** The newest form this build reads and writes. */
 export const LIVE_FORM: LiveForm = COMPACT_LIVE_FORM
+
+/** The newest form a window reads from its own host. */
+export const WINDOW_LIVE_FORM: WindowLiveForm = ROSTER_LIVE_FORM
 
 /** The query parameter a client's connection says the form it reads in. */
 export const LIVE_FORM_PARAM = "live"
@@ -31,6 +41,11 @@ export const LIVE_FORM_PARAM = "live"
 export function saidLiveForm(said: string | null | undefined): LiveForm {
   const form = Number(said)
   return said && Number.isInteger(form) && form >= COMPACT_LIVE_FORM ? COMPACT_LIVE_FORM : WHOLE_LIVE_FORM
+}
+
+/** The form a reader of a host's event stream says it reads (`saidLiveForm`). */
+export function saidWindowForm(said: string | null | undefined): WindowLiveForm {
+  return said && Number.isInteger(Number(said)) && Number(said) >= ROSTER_LIVE_FORM ? ROSTER_LIVE_FORM : saidLiveForm(said)
 }
 
 /** The form a connection's URL says its client reads (`saidLiveForm`). */
@@ -60,6 +75,6 @@ export function readersForm(readers: Iterable<LiveForm>): ReadersForm {
 }
 
 /** Whether a reader of `reads` reads an update written in `form` (absent: form 1). */
-export function readsLiveForm(reads: LiveForm, form: LiveForm | undefined): boolean {
+export function readsLiveForm(reads: WindowLiveForm, form: LiveForm | undefined): boolean {
   return (form ?? WHOLE_LIVE_FORM) <= reads
 }
