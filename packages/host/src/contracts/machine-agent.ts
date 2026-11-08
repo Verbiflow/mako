@@ -1,4 +1,5 @@
 import { RuntimeIdSchema, type ThreadOutboxStats } from "@mako/protocol"
+import type { BorrowPush } from "@mako/protocol/borrow"
 import { z } from "zod"
 import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall } from "./cloud-sign-ins.js"
 import { GitHubPersonSchema } from "./github-person.js"
@@ -14,10 +15,10 @@ import { GitHubPersonSchema } from "./github-person.js"
  * the agent waits for before it calls the host ready. 5: and takes `prepare`, answering `prepared`. 6: and takes
  * `prefetch`, and sends its start's lines as `log`. 7: and takes `carried-files`, asking for them again as a move
  * arrives (`carried-files-refresh`). 8: and asks `github-person-refresh` before a pull request, answered with
- * `github-person`. 9: and takes `ssh`, where the machine's SSH server listens. An agent sends only what the host's
- * `hello` says it takes.
+ * `github-person`. 9: and takes `ssh`, where the machine's SSH server listens. 10: and passes on the gateway's `borrow`
+ * frames as `borrow`. An agent sends only what the host's `hello` says it takes.
  */
-export const MACHINE_AGENT_PROTOCOL = 9
+export const MACHINE_AGENT_PROTOCOL = 10
 
 /**
  * Set by the agent as it starts the host: the folder in memory that holds the machine's GitHub access, an hour-long
@@ -202,6 +203,11 @@ export type HostMessage =
    * person, keeps the answer where Git and `gh` read it, and answers `github-person` for this `id`.
    */
   | { type: "github-person-refresh"; id: string }
+  /**
+   * What the machine's Thread borrows changed, as the gateway said on the link (`borrow` frames): the agent, which
+   * places what the Thread borrows, acts on it, and asks for the pushes from its last `seq` when it sees a gap.
+   */
+  | { type: "borrow"; threadId: string; seq: number; push: BorrowPush }
   /**
    * One of the host's lines a machine's timeline shows beside the agent's (`npm run timeline`): each launch's phases,
    * what the machine runtime does, a held event loop, and every warning and error. The agent keeps them with its own.

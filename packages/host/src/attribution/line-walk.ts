@@ -1,4 +1,5 @@
 import type { ContentRef } from "@mako/protocol"
+import { atOnce, type Steps } from "@mako/sessions/slices"
 import type { StoredEntry } from "./journal-store.js"
 import { diffLines } from "./line-diff.js"
 
@@ -41,6 +42,11 @@ export interface Walk<T> {
  * Undefined when some version isn't kept or isn't text.
  */
 export function walkLines<T>(chain: readonly StoredEntry[], read: (ref: ContentRef | null) => string[] | undefined, tagOf: (entry: StoredEntry) => T, between: T): Walk<T> | undefined {
+  return atOnce(walkingLines(chain, read, tagOf, between))
+}
+
+/** `walkLines` as `Steps`, stopping after each entry: a file's chain can hold thousands of versions to read and diff. */
+export function* walkingLines<T>(chain: readonly StoredEntry[], read: (ref: ContentRef | null) => string[] | undefined, tagOf: (entry: StoredEntry) => T, between: T): Steps<Walk<T> | undefined> {
   let lines: WalkedLine<T>[] = []
   let at: ContentRef | null | undefined
   const apply = (next: readonly string[], by: T, seq: number) => {
@@ -104,6 +110,7 @@ export function walkLines<T>(chain: readonly StoredEntry[], read: (ref: ContentR
     else apply(after, tagOf(entry), entry.seq)
     versions.set(entry.after, lines)
     at = entry.after
+    yield
   }
   return { lines, before, after: (at ?? null) !== null, at: at ?? null }
 }

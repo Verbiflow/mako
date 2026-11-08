@@ -53,6 +53,10 @@ export const HARNESS_TOOL_SAMPLES: Sample[] = [
   { source: { harness: "grok", name: "spawn_subagent", input: json({ description: "Audit tools", prompt: "…", background: true }) }, expect: { kind: "agent", target: "Audit tools" } },
   { source: { harness: "grok", name: "get_command_or_subagent_output", input: json({ task_ids: ["t1"], timeout_ms: 1 }) }, expect: { kind: "shell-output", target: "t1" } },
   { source: { harness: "grok", name: "search_tool", input: json({ query: "app", limit: 5 }) }, expect: { kind: "tool-search", target: "app" } },
+  // 1.0.77: a call, or its arguments, in a file; Grok reports the call inline once it has read it.
+  { source: { harness: "grok", name: "use_tool", input: json({ file: "/tmp/mcp-call.json" }) }, expect: { kind: "mcp", label: "Tool", target: "arguments in /tmp/mcp-call.json" } },
+  { source: { harness: "grok", name: "use_tool", input: json({ tool_name: "notes__save_note", tool_input_file: "/tmp/args.json" }) }, expect: { kind: "mcp", server: "notes", tool: "save_note", target: "arguments in /tmp/args.json", via: "use_tool" } },
+  { source: { harness: "grok", name: "use_tool", input: json({ variant: "UseTool", tool_name: "notes__save_note", tool_input: { title: "big", body: "…" } }) }, expect: { kind: "mcp", server: "notes", tool: "save_note", via: "use_tool" } },
   { source: { harness: "grok", name: "use_tool", input: json({ tool_name: "mako__app_start", tool_input: { tier: "web" } }) }, expect: { kind: "mcp", label: "Start the app (web)", server: "mako", tool: "app_start", via: "use_tool", target: undefined } },
 
   // Codex

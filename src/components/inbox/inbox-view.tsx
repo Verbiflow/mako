@@ -150,7 +150,7 @@ function InboxPane() {
 function Crumb({ item }: { item: InboxAsk }) {
   const apex = item.kind === "fin" || item.kind === "approval" ? item.apex : undefined
   return (
-    <span className="flex min-w-0 flex-1 items-center gap-1.5 text-label text-faint">
+    <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-label text-faint">
       {apex ? (
         <>
           <ApexMark className="size-3 shrink-0" />
@@ -158,7 +158,7 @@ function Crumb({ item }: { item: InboxAsk }) {
           <ChevronRightIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         </>
       ) : null}
-      <span className="min-w-0 shrink-[0.5] truncate font-medium text-foreground/90">{item.title}</span>
+      <span className="min-w-0 flex-1 truncate font-medium text-foreground/90">{item.title}</span>
       <span aria-hidden className="shrink-0 opacity-60">·</span>
       {item.harness ? <span className="shrink-0">{harnessLabel(item.harness)}</span> : null}
     </span>

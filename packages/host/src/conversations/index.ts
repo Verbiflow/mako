@@ -137,6 +137,8 @@ export interface Conversations {
 
 export interface ConversationsDeps {
   environment: HostEnvironment
+  /** The host has begun to stop: what it takes up as it starts ends at its next step, left for the next host. */
+  stopping?(): boolean
   git: Git
   threads: Threads
   harnesses: Harnesses
@@ -208,6 +210,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   let agents: Agents | undefined
   const live = new LiveConversations({
     agents: () => agents,
+    ...(deps.stopping && { stopping: deps.stopping }),
     ...(deps.builds && { builds: deps.builds }),
     unattended: deps.unattended,
     foreground: deps.foreground,
@@ -283,7 +286,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   // An undo the last host died in the middle of is finished, or put back, from its saved plan.
   await live.resumeUndos().catch((error) => hostWarn("turn-undo", "an undo cut short couldn't be read", { error: error instanceof Error ? error.message : String(error) }))
   // The turns the last host's exit cut short go on, if the person chose so, once their sessions reopen.
-  live.continueRestarted()
+  await live.continueRestartedInSlices()
   // Headless runs report to every window, and claim their session in the ledger while they run.
   const runs = new NativeRuns(host, emit, {
     admission: deps.admission,
@@ -367,7 +370,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       readPull: (target) => readPull(target),
     })
     deps.finCapacity?.subscribe(() => agents?.capacityChanged())
-    agents.resume()
+    await agents.resumeInSlices()
   }
   const native = new NativeRequests(join(dataRoot, "native-requests"), {
     read: (path) => catalog.readRef(path),

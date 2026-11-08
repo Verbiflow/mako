@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * The rail's top rows and the Inbox, against the production components on the Apex scene (`?mock&app=apex`, "Mobile
@@ -66,8 +67,10 @@ async function checkWindow() {
   const root = process.env.MAKO_UI_TEST_ROOT
   const base = process.env.MAKO_UI_TEST_URL
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1440, 900)
   const page = window.webContents
   page.debugger.attach("1.3")
   const guard = guardElectronCheck({ app, page, name: "The Inbox UI check", ms: 120_000 })
