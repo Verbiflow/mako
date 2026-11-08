@@ -45,6 +45,7 @@ const SUITES = [
   "test:fins-fresh-on-return-ui", "test:inbox-ui", "test:moves-ui", "test:opening-send-ui", "test:sync-status-ui",
   "test:thread-app", "test:tool-rows-ui",
   "test:composer-edges-ui",
+  "test:agent-ask-ui",
 ]
 /** Past this a suite has hung: the slowest here takes about 4 minutes on a Mac at load 15. */
 const SUITE_MS = 20 * 60_000
