@@ -13,6 +13,7 @@ import {
   borrowSealContext,
   chooseGrant,
   emptyBroker,
+  needKey,
   grantExpiry,
   inScope,
   liveLeases,
@@ -241,7 +242,7 @@ function walk(seed, steps, tally) {
 
     // 6. Idempotence.
     if (input.type === "borrow" && !result.rejected) {
-      const key = `${input.need.for.account}\0${input.need.for.thread}\0${input.need.correlationId}`
+      const key = needKey(input.need.for, input.need.correlationId)
       const first = leaseByNeed.get(key)
       const firstHeld = first && state.leases[first.lease.id]
       const firstLive = firstHeld && !firstHeld.ended
@@ -250,18 +251,18 @@ function walk(seed, steps, tally) {
       else if (result.answer && "lease" in result.answer) leaseByNeed.set(key, result.answer)
     }
     for (const event of events.filter((line) => line.event === "granted")) {
-      const key = `${event.borrower.account}\0${event.borrower.thread}\0${event.correlationId}`
+      const key = needKey(event.borrower, event.correlationId)
       const earlier = grantedPerNeed.get(key)
       assert.ok(earlier === undefined || !before.leases[earlier], `${where}: one need given two leases`)
       grantedPerNeed.set(key, event.lease)
     }
     if (input.type === "source-answer" && result.answer && "lease" in result.answer) {
       const asked = before.asks[input.ask].need
-      leaseByNeed.set(`${asked.for.account}\0${asked.for.thread}\0${asked.correlationId}`, result.answer)
+      leaseByNeed.set(needKey(asked.for, asked.correlationId), result.answer)
     }
 
     // 7. Offline is typed.
-    if (input.type === "borrow" && !result.rejected && !before.answers[`${input.need.for.account}\0${input.need.for.thread}\0${input.need.correlationId}`]) {
+    if (input.type === "borrow" && !result.rejected && !before.answers[needKey(input.need.for, input.need.correlationId)]) {
       const chosen = chooseGrant(before, input.need, at)
       if ("grant" in chosen && chosen.grant.grant.source.kind === "device" && !before.devices[chosen.grant.grant.source.device]?.online) {
         const answer = result.answer
@@ -455,7 +456,7 @@ function walkCapable(seed, steps, tally) {
       assert.ok(wait.deadline > at, `${where}: a wait outlived its deadline`)
       assert.ok(wait.deadline - wait.since <= WAIT_MAX_MS)
       for (const [, left] of Object.entries(before.waiting))
-        if (!state.waiting[`${left.need.for.account}\0${left.need.for.thread}\0${left.need.correlationId}`] && left.grant === wait.grant && JSON.stringify(left.need.requires ?? []) === JSON.stringify(wait.need.requires ?? []) && JSON.stringify(left.excluded ?? []) === JSON.stringify(wait.excluded ?? []) && left.since > wait.since && state.asks[left.ask])
+        if (!state.waiting[needKey(left.need.for, left.need.correlationId)] && left.grant === wait.grant && JSON.stringify(left.need.requires ?? []) === JSON.stringify(wait.need.requires ?? []) && JSON.stringify(left.excluded ?? []) === JSON.stringify(wait.excluded ?? []) && left.since > wait.since && state.asks[left.ask])
           assert.fail(`${where}: a later need for the same capability went first`)
     }
     // 11. Every wait that left the line ended typed: asked, or decided by a refusal said in words.
@@ -813,6 +814,19 @@ describe("borrowing: exact cases", () => {
     assert.deepEqual(first.state.leases.l1.lease.session.artifacts?.map((each) => each.hash), [sha("same bytes")])
     const last = step(first.state, { type: "release", lease: "l1", at: 7 })
     assert.equal(unreferenced(last.effects).length, 1, "the last one naming it lets it go")
+  })
+
+  test("a need's answer is its whole borrower's: the same Thread and correlation ID from another repository or place is decided afresh", () => {
+    let state = step(emptyBroker(ACCOUNT), { type: "grant", grant: base(), at: 1 }).state
+    const first = step(state, { type: "borrow", need: need(), lease: "l1", ask: "a1", at: 2, content: { version: sha("x"), size: 1 } })
+    assert.ok("lease" in first.answer, JSON.stringify(first.answer))
+    state = first.state
+    const otherRepository = step(state, { type: "borrow", need: need({ for: { ...mac, repository: "acme/other" } }), lease: "l2", ask: "a2", at: 3, content: { version: sha("x"), size: 1 } })
+    assert.equal(otherRepository.answer.refusal?.refused, "out-of-scope", "another repository isn't handed the first one's lease")
+    const otherMachine = step(state, { type: "borrow", need: need({ for: { ...mac, place: { kind: "machine", machine: "m2" } } }), lease: "l3", ask: "a3", at: 4, content: { version: sha("x"), size: 1 } })
+    assert.ok("lease" in otherMachine.answer && otherMachine.answer.lease.id === "l3", "another machine of the project gets a lease of its own, not the first one's")
+    const again = step(state, { type: "borrow", need: need(), lease: "l4", ask: "a4", at: 5, content: { version: sha("x"), size: 1 } })
+    assert.equal(again.answer.lease?.id, "l1", "the same borrower asking again still gets its own")
   })
 
   test("one seal context for every borrowed value", () => {

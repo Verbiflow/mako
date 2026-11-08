@@ -718,8 +718,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   async resumeInSlices(): Promise<void> {
     const store = this.store()
     if (!store) return
-    await this.deps.live.readIn(this.resumeReads(store))
-    if (!this.stopped) this.resume()
+    // A host that stops meanwhile resumes nothing: the next one takes up what this one would have.
+    if ((await this.deps.live.readIn(this.resumeReads(store))) && !this.stopped) this.resume()
   }
 
   /**

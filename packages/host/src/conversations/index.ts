@@ -134,6 +134,8 @@ export interface Conversations {
 
 export interface ConversationsDeps {
   environment: HostEnvironment
+  /** The host has begun to stop: what it takes up as it starts ends at its next step, left for the next host. */
+  stopping?(): boolean
   git: Git
   threads: Threads
   harnesses: Harnesses
@@ -207,6 +209,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   let agents: Agents | undefined
   const live = new LiveConversations({
     agents: () => agents,
+    ...(deps.stopping && { stopping: deps.stopping }),
     ...(deps.builds && { builds: deps.builds }),
     unattended: deps.unattended,
     foreground: deps.foreground,

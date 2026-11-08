@@ -25,7 +25,7 @@ import {
   type TrackerPorts,
 } from "@mako/protocol"
 import { join } from "node:path"
-import { inSlices } from "@mako/sessions/slices"
+import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { HourCounts } from "../base/hour-counts.js"
 import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
@@ -1980,9 +1980,18 @@ export class LaptopTracker implements AttributionTracker {
   async letGoIdle(): Promise<string[]> {
     const before = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
     // Where Threads worked is read only for a root nobody changed lately: on most passes there's none.
-    const read = await inSlices(this.store.recency(this.now(), (changed) => this.idle({ changed, worked: new Map() }, before).length > 0))
+    // The tracker closing (its host stopping) ends it at its next step, letting go of nothing: the next pass looks again.
+    const stopping = () => this.closing || this.store.closed
+    let read: Recency
+    try {
+      read = await inSlices(this.store.recency(this.now(), (changed) => this.idle({ changed, worked: new Map() }, before).length > 0), undefined, stopping)
+    } catch (error) {
+      if (error instanceof StepsStopped) return []
+      throw error
+    }
     const paths: string[] = []
     for (const state of this.idle(read, before)) {
+      if (stopping()) break
       // Other work ran since the reading, and runs while each root is let go: what was journaled or began there since
       // keeps it. Nothing stops between this reading and `untrack` taking the root out of `states`.
       if (this.states.get(state.root.id) !== state || !this.idle(this.store.recencySince(read.mark, this.now()), before).includes(state)) continue
