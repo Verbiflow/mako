@@ -25,9 +25,9 @@ const framed = {
 }
 Object.defineProperty(globalThis, "window", { value: { mako: legacy }, configurable: true, writable: true })
 Object.assign(globalThis, { requestAnimationFrame: (run: () => void) => setTimeout(run, 16), cancelAnimationFrame: clearTimeout })
-const { acpStore, updateAcpConversation } = await import("../src/state/acp-state")
+const { acpStore, removeAcpConversation, updateAcpConversation } = await import("../src/state/acp-state")
 const recovery = await import("../src/state/live-recovery")
-const { receiveLive, receivingLive } = await import("../src/state/live-door")
+const { letGoLive, receiveLive, receivingLive } = await import("../src/state/live-door")
 const { answerLiveApproval } = await import("../src/state/live-approvals")
 const { threadMoveStepped, threadReturnStepped } = await import("../src/state/cloud-moves")
 const { threadContinueStepped } = await import("../src/state/cloud-continues")
@@ -63,6 +63,15 @@ async function through(what: string, id: string, act: () => void | Promise<void>
   assert.deepEqual(door.strays.splice(0).map(({ key, fields }) => ({ key, fields })), [{ key: id, fields: ["permission"] }], "a host's word written around the door is caught")
   receiveLive(id, { from: "answer" }, () => updateAcpConversation(id, (current) => current.kind === "live" ? { ...current, permission: null } : current))
   assert.deepEqual(door.strays.splice(0), [], "and through it, isn't")
+  // A removal counts as a change does: an unlisting around the door is caught, and through it, or as the window's own
+  // let-go (the person closed it), isn't.
+  removeAcpConversation(id)
+  assert.deepEqual(door.strays.splice(0).map(({ key, fields }) => ({ key, fields })), [{ key: id, fields: ["removed"] }], "an unlisting written around the door is caught")
+  recovery.applyLiveSnapshot(snapshot(id, "g1.watchroot.a", 2))
+  recovery.unlistLive([id])
+  recovery.applyLiveSnapshot(snapshot(id, "g1.watchroot.a", 3))
+  letGoLive(id, () => removeAcpConversation(id))
+  assert.deepEqual(door.strays.splice(0), [], "an unlisting through the door, and the window's own let-go, aren't")
 }
 
 // Every way in.

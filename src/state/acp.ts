@@ -28,6 +28,7 @@ import type { SideQuestionCommand } from "@mako/host/contracts/live-side-questio
 import { submitTransfer } from "@/state/live-transfers"
 import { performLiveAction } from "@/state/live-actions"
 import { applyLiveSnapshot, hydrateLive } from "@/state/live-recovery"
+import { letGoLive } from "@/state/live-door"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type {
   ContextBreakdown,
@@ -890,7 +891,7 @@ export const acp = {
       setThreadRunning(active.threadPath, false)
       setThreadAttention(active.threadPath, null)
     }
-    removeAcpConversation(active.key)
+    letGoLive(active.key, () => removeAcpConversation(active.key))
     return true
   },
 }

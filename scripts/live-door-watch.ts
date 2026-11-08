@@ -26,9 +26,10 @@ function writer(): string | undefined {
 }
 
 /**
- * Watches every change to the window's conversations (the store's own subscription, which runs inside each write): a
- * live conversation made, or any field but the window's own changed, while nothing is being taken in through the door
- * for it, is a stray. `strays` lists them as they're made; `stop` ends the watch.
+ * Watches every change to the window's conversations (the store's own subscription, which runs inside each write),
+ * over every key before and after it: a live conversation made or removed, or any field but the window's own changed,
+ * while nothing is being taken in through the door for it (nor let go of by the window, `letGoLive`), is a stray.
+ * `strays` lists them as they're made; `stop` ends the watch.
  */
 export function watchDoor(acpStore: Store<AcpState>, receivingLive: (id: string) => boolean): DoorWatch {
   const strays: Stray[] = []
@@ -36,13 +37,13 @@ export function watchDoor(acpStore: Store<AcpState>, receivingLive: (id: string)
   const stop = acpStore.subscribe(() => {
     const after = acpStore.get().conversations
     if (after === before) return
-    for (const key of Object.keys(after)) {
-      const was: AcpConversation | undefined = before[key], now = after[key]!
-      if (was === now || now.kind !== "live" || receivingLive(key)) continue
-      const [held, taken] = [new Map(Object.entries(was ?? {})), new Map(Object.entries(now))]
-      const fields = was?.kind === "live"
-        ? [...new Set([...held.keys(), ...taken.keys()])].filter((field) => !WINDOW_OWN.has(field) && !Object.is(held.get(field), taken.get(field)))
-        : ["kind"]
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      const was: AcpConversation | undefined = before[key], now: AcpConversation | undefined = after[key]
+      if (was === now || (was?.kind !== "live" && now?.kind !== "live") || receivingLive(key)) continue
+      const [held, taken] = [new Map(Object.entries(was ?? {})), new Map(Object.entries(now ?? {}))]
+      const fields = !now ? ["removed"]
+        : was?.kind !== "live" ? ["kind"]
+        : [...new Set([...held.keys(), ...taken.keys()])].filter((field) => !WINDOW_OWN.has(field) && !Object.is(held.get(field), taken.get(field)))
       if (fields.length) strays.push({ key, fields, by: writer() })
     }
     before = after

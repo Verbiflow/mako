@@ -7,9 +7,10 @@
 
 /**
  * A read of a conversation's snapshot while it's out: the newest revision this window has taken of it since it was
- * asked, whether anything came for it on the stream meanwhile (`moved`), and the newest batch that came (`heard`).
+ * asked, whether anything came for it on the stream meanwhile (`moved`), the newest batch that came (`heard`), and
+ * whether its host has since stopped listing it here (`unlisted`), after which its answer speaks for nothing held.
  */
-export type ReadOut = { revision: number; epoch?: string; moved?: true; heard?: { epoch: string; revision: number } }
+export type ReadOut = { revision: number; epoch?: string; moved?: true; heard?: { epoch: string; revision: number }; unlisted?: true }
 
 /**
  * The reads out of each conversation (`readBackLive`, `hydrateLive`): each answer older than what this window took of
@@ -31,7 +32,7 @@ export const currentStarts = new Map<string, string>()
  * where it names them. `answer`: what this window asked for (a read, an action's answer, a history page, a batch that
  * waited on a snapshot), weighed against what it holds where it's taken.
  */
-export type Received = { from: "said"; epoch?: string; revision?: number } | { from: "answer" }
+export type Received = { from: "said"; epoch?: string; revision?: number; unlisted?: true } | { from: "answer" }
 
 /** Conversations whose news is being taken in now, each by how many doors deep. */
 const taking = new Map<string, number>()
@@ -47,6 +48,7 @@ export function receiveLive<T>(id: string, received: Received, take: () => T): T
     if (received.epoch) currentStarts.set(id, received.epoch)
     for (const read of readsOut.get(id) ?? []) {
       read.moved = true
+      if (received.unlisted) read.unlisted = true
       const { epoch, revision } = received
       if (epoch && revision !== undefined && (read.heard?.epoch !== epoch || read.heard.revision < revision)) read.heard = { epoch, revision }
     }
@@ -61,7 +63,18 @@ export function receiveLive<T>(id: string, received: Received, take: () => T): T
   }
 }
 
-/** Whether what reached this window about `id` is being taken in now, through `receiveLive`: what a test watches by. */
+/**
+ * The window lets a conversation go on its own (the person closed it): no word of its host's, so it goes on no read's
+ * record, but it changes the conversation's state, and only here or through the door (`receiveLive`) does anything.
+ */
+export function letGoLive<T>(id: string, take: () => T): T {
+  return receiveLive(id, { from: "answer" }, take)
+}
+
+/**
+ * Whether the conversation's state is being changed now through the door (`receiveLive`) or by the window letting it go
+ * (`letGoLive`): what a test watches by.
+ */
 export function receivingLive(id: string): boolean {
   return taking.has(id)
 }

@@ -30,8 +30,8 @@ import type { LiveBatch, LiveSnapshot, LiveSummary } from "@mako/host/contracts/
 let readSnapshot: (id: string) => Promise<LiveSnapshot> = async () => { throw new Error("no run") }
 Object.defineProperty(globalThis, "window", { value: { mako: { liveSnapshot: (id: string) => readSnapshot(id), livePermission: async () => {} } }, configurable: true })
 Object.assign(globalThis, { requestAnimationFrame: (run: () => void) => setTimeout(run, 16), cancelAnimationFrame: clearTimeout })
-const { acpStore, removeAcpConversation } = await import("../src/state/acp-state")
-const { applyLiveBatch, applyLiveSnapshot, hydrateLive, hydrateLiveSummaries, listLive, unloadLive } = await import("../src/state/live-recovery")
+const { acpStore } = await import("../src/state/acp-state")
+const { applyLiveBatch, applyLiveSnapshot, hydrateLive, hydrateLiveSummaries, listLive, unlistLive, unloadLive } = await import("../src/state/live-recovery")
 const { installNotificationEnvironment, notificationsStore, reconcileVisible, subjectId } = await import("../src/state/notifications")
 const { applyThreadGroupChange } = await import("../src/state/thread-groups")
 const { applyThreadActivity } = await import("../src/state/threads")
@@ -241,6 +241,8 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
 
   notificationsStore.set({ items: [] })
   acpStore.set({ activeKey: null, conversations: {} })
+  // A run begins holding nothing: letting the last run's Sessions go is the fixture's, not a way in.
+  door.strays.splice(0)
   visible = new Set()
   applyThreadGroupChange({ thread, group: { id: thread, sessions: [ids.older, ids.newest].map((id) => ({ id, origin: "started" as const, started: true })) } })
   for (const session of SESSIONS) {
@@ -365,7 +367,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
       } else {
         counts.removed += 1
         trail.push(`the window loses the ${session} Session`)
-        removeAcpConversation(keys[session])
+        unlistLive([keys[session]])
       }
     } else if (roll < 0.92) {
       // A snapshot no read brought, of a start this window can't place (another data root's), saying what the Session
@@ -625,7 +627,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     await turn()
     for (const revision of [2, 3, 4, 5]) applyLiveBatch({ id: key, revision, epoch: legacy, updates: [] })
     acpStore.set({ activeKey: null })
-    removeAcpConversation(key)
+    unlistLive([key])
     bridgeReads.shift()!(state(key, other, 7, [fin]))
     await first
     bridgeReads.shift()!(state(key, legacy, 2, [fin]))
@@ -637,6 +639,22 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     }
     const now = acpStore.get().conversations[key]
     assert.ok(now === undefined || now.revision === 5, `the window holds nothing, or the stream's newest; it holds ${now?.revision} of ${now?.epoch}`)
+  }
+
+  // A read out of a Session its host stops listing here: its answer, newer than anything the window took, speaks for a
+  // Session no longer listed, and never brings it back with its ask.
+  {
+    const key = "unlisted-while-read", epoch = "g1.unlistroot.a"
+    fresh()
+    applyLiveSnapshot(state(key, epoch, 2, [fin]))
+    const reading = readBackLive(key)
+    await turn()
+    unlistLive([key])
+    bridgeReads.shift()!(state(key, epoch, 3, [fin], [approval]))
+    await reading
+    for (let wait = 0; wait < 6; wait += 1) await turn()
+    assert.equal(acpStore.get().conversations[key], undefined, "the unlisted Session stays gone")
+    assert.equal(unseen(), 0, "and its ask isn't said")
   }
 
   // A listed Session asking the person when the window loses its host, answered while it's away: the reconnect's

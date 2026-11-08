@@ -39,6 +39,8 @@ function readAnswered(id: string, read: ReadOut, snapshot: { revision: number; e
   out?.delete(read)
   if (out && !out.size) readsOut.delete(id)
   if (!snapshot) return false
+  // Of a conversation its host stopped listing here while it was out: nothing the window holds, nor brings back.
+  if (read.unlisted) return true
   // Behind a batch of its own start the stream sent while it was out, taken or not: past.
   if (read.heard && snapshot.epoch === read.heard.epoch && snapshot.revision < read.heard.revision) return true
   if (read.revision < 0) return false
@@ -697,7 +699,7 @@ function notifyCompletion(
 export function unlistLive(ids: readonly string[]): void {
   const active = acpStore.get().activeKey
   for (const id of ids) {
-    receiveLive(id, { from: "said" }, () => {
+    receiveLive(id, { from: "said", unlisted: true }, () => {
       pending.delete(id)
       mergedSince.delete(id)
       stuck.delete(id)
