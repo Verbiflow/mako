@@ -15,7 +15,11 @@ import type { LiveBatch, LiveSnapshot, LiveSummary } from "@mako/host/contracts/
 const reads: ((snapshot: LiveSnapshot) => void)[] = []
 let answer: ((id: string) => LiveSnapshot) | undefined
 const read = (id: string) => answer ? Promise.resolve(answer(id)) : new Promise<LiveSnapshot>((done) => reads.push(done))
-const legacy = { liveSnapshot: read, livePermission: async () => {}, liveEarlier: (id: string) => read(id), liveTransfer: (id: string) => read(id), liveAcknowledgeAction: async () => {} }
+const legacy = { liveSnapshot: read, livePermission: async () => {}, liveEarlier: (id: string) => read(id), liveTransfer: (id: string) => read(id), liveAcknowledgeAction: async () => {},
+  // A rewind answers with the fork it makes; a capture, with the conversation that holds its session, which may be one
+  // already there.
+  liveRewind: (_id: string, input: { id: string }) => read(input.id), liveCapture: (id: string) => read(id),
+  liveFork: (_id: string, input: { id: string }) => read(input.id) }
 const framed = {
   ...legacy,
   liveRead: async (id: string) => {
@@ -32,6 +36,7 @@ const { answerLiveApproval } = await import("../src/state/live-approvals")
 const { threadMoveStepped, threadReturnStepped } = await import("../src/state/cloud-moves")
 const { threadContinueStepped } = await import("../src/state/cloud-continues")
 const { submitTransfer } = await import("../src/state/live-transfers")
+const { acp } = await import("../src/state/acp")
 const { acknowledgeLiveAction } = await import("../src/state/live-actions")
 const { watchDoor, watchReads } = await import("./live-door-watch")
 
@@ -174,6 +179,66 @@ for (const [name, bridge] of [["legacy", legacy], ["framed", framed]] as const) 
     await settle()
     assert.equal(held(id), undefined, `${name}: a ${kind} answered after its Session was unlisted doesn't bring it back`)
   }
+}
+// #524's thirteenth review: a read is of the conversation its answer is about. A rewind answers with the fork it makes,
+// so a fork that appears on the stream and is unlisted while the rewind is out isn't brought back by its answer; and a
+// read whose answer is about a conversation it didn't name (a capture of a session another conversation holds) is
+// weighed by what was unlisted while it was out, as one of the conversation it named is.
+Object.assign(globalThis.window, { mako: legacy })
+{
+  const source = "rewind-source", target = "rewind-target", epoch = "g1.rewindrt.a"
+  recovery.applyLiveSnapshot(snapshot(source, epoch, 1))
+  // SAFETY: a rewind as its card sends it; this bridge reads only the fork's id.
+  const rewinding = acp.rewind(source, { id: target, requestId: "rewind-request", expectedId: "rewind-checkpoint" } as never)
+  await settle()
+  assert.equal(reads.length, 1, "the rewind is out")
+  recovery.applyLiveSnapshot(snapshot(target, epoch, 1))
+  recovery.unlistLive([target])
+  reads.shift()!(snapshot(target, epoch, 2))
+  await rewinding
+  await settle()
+  assert.equal(held(target), undefined, "the unlisted fork isn't brought back by the rewind's answer")
+}
+{
+  const owner = "capture-owner", captured = "capture-asked", epoch = "g1.captureroot.a"
+  recovery.applyLiveSnapshot(snapshot(owner, epoch, 1))
+  const capturing = recovery.readLive(captured, () => legacy.liveCapture(captured))
+  await settle()
+  assert.equal(reads.length, 1, "the capture is out")
+  const beside = recovery.readBackLive("capture-beside")
+  assert.equal(reads.length, 2, "another keyed read is out beside it")
+  recovery.unlistLive([owner])
+  reads.pop()!(snapshot("capture-beside", epoch, 1))
+  await beside
+  // Settling another keyed read must keep the unlisting until this capture is answered too.
+  reads.shift()!(snapshot(owner, epoch, 2))
+  await capturing
+  await settle()
+  assert.equal(held(owner), undefined, "a capture answered with the unlisted conversation that holds its session doesn't bring it back")
+}
+// A normal fork answers with its new id; moving to a worktree can instead keep the source conversation. Both replies
+// must respect an unlisting of the conversation they actually return. A transfer keeps the existing conversation.
+for (const kind of ["fork", "relocated fork", "transfer"] as const) {
+  const source = `identity-${kind}-source`, fork = `identity-${kind}-fork`, epoch = "g1.identityroot.a"
+  const target = kind === "fork" ? fork : source
+  recovery.applyLiveSnapshot(snapshot(source, epoch, 1))
+  const pending = kind === "transfer"
+    ? submitTransfer(source, { id: "identity-transfer", provider: "codex", text: "", attachments: [] })
+    : recovery.readLive(fork, () => legacy.liveFork(source, { id: fork }))
+  await settle()
+  assert.equal(reads.length, 1, `${kind}: the read is out`)
+  if (target === fork) recovery.applyLiveSnapshot(snapshot(target, epoch, 1))
+  recovery.unlistLive([target])
+  reads.shift()!(snapshot(target, epoch, 2))
+  await pending
+  await settle()
+  assert.equal(held(target), undefined, `${kind}: its answer doesn't bring back the unlisted conversation`)
+  // Unlisting only retires reads already out. A later intentional read can take the conversation again.
+  answer = () => snapshot(target, epoch, 3)
+  if (kind === "transfer") await recovery.readBackLive(source)
+  else await recovery.readLive(fork, () => legacy.liveFork(source, { id: fork }))
+  answer = undefined
+  assert.equal(held(target)?.revision, 3, `${kind}: a read begun after unlisting can take the conversation`)
 }
 assert.deepEqual(door.strays, [], "nothing went around the door")
 assert.deepEqual(bypassed(), [], "and nothing read around the window's one read")

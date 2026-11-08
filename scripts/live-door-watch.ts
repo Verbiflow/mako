@@ -73,8 +73,8 @@ export interface ReadWatch { bypasses: Bypass[] }
 /**
  * Instruments a bridge in place: each method of `SNAPSHOT_READS` it has records a call made while no read of the
  * conversation it asks of is out (`readingLive`), so a read that goes around the window's one read fails. A call names
- * the conversation it asks of by its id, a fork's or a start's by the one it makes, and a path's owner or recovered
- * rewinds by none (a read whose answer names it); a `liveRead` of a history page reads no snapshot.
+ * the conversation its answer is about: by its id, a fork's, a rewind's or a start's by the one it makes, and a path's
+ * owner or recovered rewinds by none (a read whose answer names it); a `liveRead` of a history page reads no snapshot.
  */
 export function watchReads(bridge: ReadBridge, readingLive: (id?: string) => boolean): ReadWatch {
   const watch: ReadWatch = { bypasses: [] }
@@ -93,7 +93,7 @@ export function watchReads(bridge: ReadBridge, readingLive: (id?: string) => boo
   if (liveClearQueue) bridge.liveClearQueue = (...args) => (asked("liveClearQueue", args[0]), liveClearQueue(...args))
   if (liveEditQueued) bridge.liveEditQueued = (...args) => (asked("liveEditQueued", args[0]), liveEditQueued(...args))
   if (liveTransfer) bridge.liveTransfer = (...args) => (asked("liveTransfer", args[0]), liveTransfer(...args))
-  if (liveRewind) bridge.liveRewind = (...args) => (asked("liveRewind", args[0]), liveRewind(...args))
+  if (liveRewind) bridge.liveRewind = (...args) => (asked("liveRewind", args[1].id), liveRewind(...args))
   if (liveBind) bridge.liveBind = (...args) => (asked("liveBind", args[0]), liveBind(...args))
   if (liveCapture) bridge.liveCapture = (...args) => (asked("liveCapture", args[0]), liveCapture(...args))
   if (liveFork) bridge.liveFork = (...args) => (asked("liveFork", args[1].id), liveFork(...args))

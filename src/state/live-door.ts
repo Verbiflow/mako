@@ -38,21 +38,33 @@ export type Received = { from: "said"; epoch?: string; revision?: number; unlist
 const taking = new Map<string, number>()
 
 /**
- * Reads out whose conversation the window learns only from their answer (a path's owner, a capture, the rewinds a
- * host recovers): how many, and each conversation unlisted while any is out, by when (`unlistedSince`).
+ * Every conversation unlisted while any read is out, by when (`unlistedSince`), so a read's answer about one it didn't
+ * name (a path's owner, a capture of a session another conversation holds, a start another host took, a move that
+ * kept the conversation, the rewinds a host recovers) is weighed as one about the conversation it was keyed by is. And
+ * how many reads out name no conversation at all.
  */
 const unplaced = { out: 0, said: 0, unlisted: new Map<string, number>() }
 
-/** A read out of no conversation the window names yet: when it went out, by what has been unlisted since. */
+/** When a read goes out, by what has been unlisted since: what `unlistedSince` weighs its answer against. */
+export function readsSince(): number {
+  return unplaced.said
+}
+
+/** A read out of no conversation the window names yet: when it went out (`readsSince`). */
 export function unplacedReadGoesOut(): number {
   unplaced.out += 1
   return unplaced.said
 }
 
-/** That read is answered. With none left out, what was unlisted meanwhile is nobody's to weigh. */
+/** That read is answered. With no read left out, what was unlisted meanwhile is nobody's to weigh. */
 export function unplacedReadAnswered(): void {
   unplaced.out = Math.max(0, unplaced.out - 1)
-  if (!unplaced.out) unplaced.unlisted.clear()
+  readsSettled()
+}
+
+/** With no read of any conversation out, what was unlisted meanwhile is nobody's to weigh. */
+export function readsSettled(): void {
+  if (!unplaced.out && !readsOut.size) unplaced.unlisted.clear()
 }
 
 /** Whether conversation `id` was unlisted after a read that went out at `since`: its answer of it speaks for nothing held. */
@@ -77,7 +89,7 @@ export function readingLive(id?: string): boolean {
 export function receiveLive<T>(id: string, received: Received, take: () => T): T {
   if (received.from === "said") {
     if (received.epoch) currentStarts.set(id, received.epoch)
-    if (received.unlisted && unplaced.out) unplaced.unlisted.set(id, (unplaced.said += 1))
+    if (received.unlisted && (unplaced.out || readsOut.size)) unplaced.unlisted.set(id, (unplaced.said += 1))
     for (const read of readsOut.get(id) ?? []) {
       read.moved = true
       if (received.unlisted) read.unlisted = true

@@ -705,7 +705,8 @@ export const acp = {
   },
 
   async rewind(sourceId: string, input: RewindInput): Promise<void> {
-    const snapshot = await readLive(sourceId, () => getMako().liveRewind(sourceId, input))
+    // Its answer is the fork the rewind makes (`input.id`), which the read is of.
+    const snapshot = await readLive(input.id, () => getMako().liveRewind(sourceId, input))
     if (activeLiveAcp(acpStore.get())?.key === sourceId)
       acp.activate(snapshot.session.id)
   },

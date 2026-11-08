@@ -17,7 +17,7 @@ import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { prependLiveHistory, readLiveSnapshot, readLiveValue, retainLiveDetails } from "@/state/live-history"
 import { isHistoryExpired, type LiveHistoryCursor, type LiveHistoryPage } from "@mako/host/contracts/live-history"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
-import { currentStarts, readsOut, receiveLive, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut, type ReadOut, type Received } from "@/state/live-door"
+import { currentStarts, readsOut, readsSettled, readsSince, receiveLive, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut, type ReadOut, type Received } from "@/state/live-door"
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, HeardLiveBatch[]>()
@@ -46,6 +46,7 @@ function readVerdict(id: string, read: ReadOut, snapshot: { revision: number; ep
   const out = readsOut.get(id)
   out?.delete(read)
   if (out && !out.size) readsOut.delete(id)
+  readsSettled()
   if (!snapshot) return "take"
   // Of a conversation its host stopped listing here while it was out: nothing the window holds, nor brings back.
   if (read.unlisted) return "past"
@@ -82,7 +83,7 @@ const takeWhole = (snapshot: LiveSnapshot) => applyLiveSnapshot(snapshot)
 interface LiveRead { id?: string; out?: ReadOut; since: number }
 
 function openRead(id: string | undefined): LiveRead {
-  return id === undefined ? { since: unplacedReadGoesOut() } : { id, out: readGoesOut(id), since: 0 }
+  return id === undefined ? { since: unplacedReadGoesOut() } : { id, since: readsSince(), out: readGoesOut(id) }
 }
 
 /** The read's answer is `snapshot`: its verdict (`readVerdict`, or past when its conversation was unlisted since). */
