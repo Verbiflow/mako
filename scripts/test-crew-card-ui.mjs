@@ -531,14 +531,30 @@ async function check() {
   )
   assert.ok(forty.scrollable, "the card scrolls inside itself past twenty rows")
   assert.equal(forty.more, false, "no cutoff text, however many Fins there are")
-  const lastTitle = await evaluate("window.apexScene.children().at(-1).title")
+  // The roster's last inserted Fin is a needs-you row, sorted near the top. Check the last queued row in display
+  // order (oldest start first), before the folded settled group, after the virtualizer has painted the scroll.
+  const lastTitle = await evaluate(`(() => {
+    const queued = window.apexScene.children().filter(agent => agent.child.state.kind === 'queued')
+    queued.sort((left, right) => (left.startedAt ?? left.observedAt) - (right.startedAt ?? right.observedAt))
+    return queued.at(-1).title
+  })()`)
   await evaluate(
     "(() => { const scroller = document.querySelector('[data-crew-scroller]'); scroller.scrollTop = scroller.scrollHeight; return true })()"
   )
+  await evaluate("new Promise(done => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))")
   await until(
-    `document.querySelector('[data-crew-scroller]').innerText.includes(${JSON.stringify(lastTitle)})`,
+    `(() => {
+      const scroller = document.querySelector('[data-crew-scroller]')
+      const row = [...scroller.querySelectorAll('[data-crew-row]')].find(row => row.innerText.includes(${JSON.stringify(lastTitle)}))
+      const bounds = row?.getBoundingClientRect(), viewport = scroller.getBoundingClientRect()
+      if (bounds && bounds.top >= viewport.top && bounds.bottom <= viewport.bottom) return true
+      // Measuring newly mounted rows can extend the scroll range. Continue to the end of that measured range.
+      scroller.scrollTop = scroller.scrollHeight
+      return false
+    })()`,
     "the last Fin reachable by scrolling"
   )
+  console.log("SCROLLED LAST", lastTitle)
   await evaluate(
     "document.querySelector('[data-crew]')?.scrollIntoView({ block: 'start' }); true"
   )

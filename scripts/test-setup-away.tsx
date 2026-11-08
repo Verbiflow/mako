@@ -95,7 +95,7 @@ closeSetup()
   const addToSetup = () => setupAskCard("tools", toolAsk, false).choices.find((choice) => choice.answer === "add-to-setup")!
   let opened = 0
   const composed: string[] = []
-  const draft = (open: boolean, take: boolean) => setupDrafter(async () => (opened++, open), async (text) => (take && composed.push(text), take))
+  const draft = (open: boolean, take: boolean) => setupDrafter(async () => (opened++, open), async (text) => { if (take) composed.push(text); return take })
   const steps: boolean[] = []
   setSetupDrafter(draft(false, true))
   assert.equal(await runChoice(addToSetup(), (busy) => steps.push(busy)), false, "a new Thread that couldn't open drafted nothing")

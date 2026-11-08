@@ -29,7 +29,8 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
+      - run: npm run test:ci-downloads
       - run: npm run lint
       - run: npm run typecheck
 
@@ -47,7 +48,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
       - run: npm run build:control-runtime
       # The host call schemas are generated from the handlers' types: one edited by hand drops what a type declares.
       - run: node scripts/generate-host-inputs.mjs --check
@@ -88,9 +89,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       # The web client as the hosted app vendors it: a desk component that only the desk's window can build fails here.
       - run: npm run build -w @mako/web-client
@@ -154,9 +155,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-index.ts
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-kinds.ts
@@ -177,9 +178,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - run: npm run test:start-interleavings
       # A switch against the queue, generated: the rules of `docs/delivery-queue.md` after every step of seeded schedules.
@@ -207,9 +208,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       # The harness definitions, their versions and the pages generated from them (adding-a-harness.md, the descriptors).
       - run: npx tsx --tsconfig tsconfig.app.json scripts/test-harness-definitions.ts
@@ -249,9 +250,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - run: npm run test:background-agents
       - run: npm run test:build-slots
@@ -282,9 +283,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - run: npm run test:fin-move
       # One reading of why a queued message waits and one rule for what goes next; one timer for held times; the
@@ -308,9 +309,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - run: npm run test:orch-answer
       # A message its harness can't take for now (capacity, its service, the network, a stalled start, a session still
@@ -327,6 +328,10 @@ jobs:
       - run: npm run test:thread-move-tool
       - run: npm run test:thread-act-tool
       - run: npm run test:orch-update
+      # A Fin placed on another device: two hosts through the protocol's gateway, its start settled by its op, its
+      # notices kept until its Apex's device takes them (off, restarted, sent twice, from a stale owner), and its Apex's
+      # operations on it routed there.
+      - run: npm run test:fins-placed
 
   # Every harness's decode, live host, projection, recorder, merge and saved-open paths, measured beside the commit
   # this change goes onto, in turns on this runner (`perf-reference.ts`): HEAD^1 is a pull request's base in the merge
@@ -346,9 +351,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       # The rows read `@mako/*` from the packages' builds.
       - run: npm run build:control-runtime
       # How a row is judged, on simulated machines: unchanged code as noisy as this runner is never slower, twice as slow always is.
@@ -378,7 +383,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
       - run: npx tsgo -b packages/host
       - run: npx tsx scripts/ci-update-checks.ts
 
@@ -399,7 +404,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
       - run: npm run build:control-runtime
       - run: npm run test:transcript-send-ui
         env:
@@ -433,7 +438,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
       # Recording needs ffmpeg and ffprobe, which the Mac runner doesn't have.
       - run: brew install ffmpeg
       - run: npm run build:control-runtime
@@ -464,9 +469,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
       - uses: ./.github/actions/codex-sandbox
       # How two runs are judged: a count fails in either, and only a time gets a second try.
       - run: npx tsx scripts/test-sync-bench-judge.ts
@@ -490,9 +493,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - uses: ./.github/actions/codex-sandbox
       - name: Steer latency on Claude Code and Codex
@@ -516,9 +519,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npx tsgo -b packages/host
       - run: npm run bench:host-load -- --scale today --peak-limit-mb 1500 --cpu-prof "$RUNNER_TEMP/host-load-profile"
 

@@ -41,7 +41,7 @@ import { closeSetup, setupOpenStore } from "./setup-open"
 import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
-import { FinOfApexContext, childSession } from "./fin-of-apex"
+import { FinOfApexContext, childSession, placedSessionOf } from "./fin-of-apex"
 import { webHarnessLabel } from "./labels"
 import { StartForm, StartSheet, type AddingTo, type StartIn } from "./new-thread"
 import { CLOUD_PLACE } from "./places"
@@ -52,7 +52,7 @@ import { startingWhere } from "./started"
 import { archiveWithUndo } from "./archive-thread"
 import { ThreadActions, ThreadBody } from "./thread"
 import { TranscriptLoading } from "./transcript-loading"
-import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, type WebThread } from "./threads"
+import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, threadById, type WebThread } from "./threads"
 import { useThread } from "./use-thread"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
@@ -124,6 +124,10 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         threadMenu: (thread) => <DeskThreadMenu thread={thread} />,
         agents: toggleAgents,
         fin: (thread, agent) => {
+          // A Fin placed on another device is a Thread of its own there (decision D6): its own page opens, by the row
+          // its device lists, through the gateway to that device, which answers.
+          const own = placedSessionOf(agent)
+          if (own) return latest.current.open({ kind: "thread", thread: own.row.thread, session: own.row.session })
           const listed = foldThreads(latest.current.list).threads.find((each) => each.id === thread)
           if (listed) openDeskFin(agent, thread, openingSession(listed).row.conversation)
           latest.current.open({ kind: "thread", thread })
@@ -377,7 +381,7 @@ function DeskIdentity({ settings, onSettings }: { settings: boolean; onSettings:
  */
 function DeskThreadMenu({ thread: id }: { thread: string | undefined }) {
   const client = useWebClient()
-  const thread = useAccountList((state) => (id ? foldThreads(state).threads.find((each) => each.id === id) : undefined))
+  const thread = useAccountList((state) => (id ? threadById(foldThreads(state), (each) => each.id === id) : undefined))
   if (!thread) return null
   const reachable = !thread.quietSince && !thread.archived
   const copyLink = async () => {

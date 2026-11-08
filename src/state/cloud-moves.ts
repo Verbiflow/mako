@@ -5,6 +5,7 @@ import type { ThreadHarnessCheck } from "@mako/host/contracts/cloud-harnesses"
 import { providers } from "@/state/providers"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { updateAcpConversation } from "@/state/acp-state"
+import { receiveLive } from "@/state/live-door"
 import { hydrateLive } from "@/state/live-recovery"
 import { createHook, createStore } from "@/state/store"
 
@@ -94,7 +95,7 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
       else if (step.continued) toast.success("Handed off to the cloud", { id: `move:${move}`, description: ["Its turn goes on in a cloud machine, at the same folder, where it left off.", carried].filter(Boolean).join(" ") })
       else toast.success("Moved to the cloud", { id: `move:${move}`, description: ["It goes on in a cloud machine, at the same folder. Its worktree here follows each turn there.", carried].filter(Boolean).join(" ") })
       for (const id of step.conversations) {
-        updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: CLOUD_WHERE } : conversation))
+        receiveLive(id, { from: "said" }, () => updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: CLOUD_WHERE } : conversation)))
         void hydrateLive(id, true)
       }
     } else toast.message("It stayed on this Mac", { id: `move:${move}`, description: step.continued ? `${step.reason} Its turn goes on here.` : step.reason })
@@ -238,7 +239,7 @@ export function threadReturnStepped(conversationId: string, move: string, step: 
       say("Back on this Mac", { id: `return:${move}`, description: landed ?? "It goes on here, with what it did in the cloud in its worktree. The cloud machine is gone.", ...landed && { duration: 12_000 }, ...compare && { action: compare } })
       cloudMovesStore.set((state) => ({ ...state, followStopped: Object.fromEntries(Object.entries(state.followStopped).filter(([id]) => !step.conversations.includes(id))) }))
       for (const id of step.conversations) {
-        updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: undefined } : conversation))
+        receiveLive(id, { from: "said" }, () => updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: undefined } : conversation)))
         void hydrateLive(id, true)
       }
     } else if (step.missing) {
