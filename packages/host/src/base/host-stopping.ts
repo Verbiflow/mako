@@ -1,4 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
+import { withControlProcesses } from "@mako/control-runtime/processes"
+import { withSessionProcesses } from "@mako/sessions/processes"
+import { hostSpawn, hostFork, hostCommand } from "./host-command.js"
 
 /** Expected cancellation, rather than a provider, network or authentication failure. */
 export class HostStoppingError extends Error {
@@ -21,7 +24,9 @@ export class HostStopping {
 
   get signal(): AbortSignal { return this.controller.signal }
 
-  run<T>(operation: () => T): T { return hosts.run(this, operation) }
+  run<T>(operation: () => T): T {
+    return hosts.run(this, () => withControlProcesses({ spawn: hostSpawn, fork: hostFork, command: hostCommand }, () => withSessionProcesses({ fork: hostFork }, operation)))
+  }
 
   /** Register the owner that can actually end a wait, not just abandon its promise. */
   register(name: string, cancel: () => void | Promise<void>): () => void {

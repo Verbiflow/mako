@@ -111,7 +111,14 @@ process groups on macOS and Linux. They keep their stop registration until
 cleanup confirms no live group member remains, even after the parent exits.
 Deliberate daemon, app, installer and editor handoffs keep their independent
 lifetimes at the named launch exceptions. `check-host-children.mjs` (in lint) rejects
-raw Node process starts except its documented owner and handoff boundaries;
+raw Node process starts in the host and every local package it references,
+except its documented owner and handoff boundaries. Git's commands and object
+reader use one independent process runner; `hostGit` injects the host's scoped
+adapter, and `Git.close()` joins child cleanup. `HostStopping.run` also binds
+the control-runtime and sessions adapters per async context, so package code
+cannot start an unregistered child under a host call. Standalone workers keep
+their own lifetime; no process adapter is changed globally. UTF-8 buffered
+commands follow Node's decoded-string slicing at `maxBuffer` overflow;
 borrowed SDK checks cancel their operation without taking the client's
 ownership. An unfinished login reports that Mako quit and asks for a new
 sign-in; a saved result stays saved (`test:stop-provider-checks`). A stop still running at 2 s and 10 s logs

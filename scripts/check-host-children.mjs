@@ -1,5 +1,6 @@
 import { relative, resolve, sep } from "node:path"
 import ts from "typescript"
+import { join } from "node:path"
 
 /**
  * A host child belongs to the stop scope unless it is an explicit handoff.
@@ -9,10 +10,7 @@ import ts from "typescript"
  * Exceptions name one value use in one function, with its lifetime. Adding
  * another raw start even in that function fails; an obsolete exception fails too.
  */
-const approved = [
-  ["base/host-command.ts", "inspect", "execFile", "bounded process-table and taskkill diagnostics used while owned groups are being reaped"],
-  ["base/host-command.ts", "hostSpawn", "spawn", "isolated command group registered until reaped"],
-  ["base/host-command.ts", "hostFork", "fork", "isolated IPC group registered until reaped"],
+const hostApproved = [
   ["application/process-group.ts", "runProcessGroup", "spawn", "combines the host stop signal; kills and reaps the whole build group"],
   ["application/process-group.ts", "run", "execFile", "bounded ps diagnostic used while the cancelled group is being reaped"],
   ["threads/catalog-connection.ts", "connectOnDemandCatalog", "spawn", "shared reader daemon outlives this host; its client is cancelled separately"],
@@ -28,6 +26,35 @@ const approved = [
   ["harnesses/cursor/sdk/fork.ts", "cloneFile", "execFileSync", "synchronous APFS clone is finished before a stop can run"],
   ["terminals/process-groups.ts", "runPs", "execFileSync", "synchronous process-table read is bounded to one second"],
 ]
+const approved = [
+  ...hostApproved.map(([file, ...rest]) => [`packages/host/src/${file}`, ...rest]),
+  ["packages/git/src/process-runner.ts", "inspect", "execFile", "bounded reaping helpers outside the cancelled scope"],
+  ["packages/git/src/process-runner.ts", "spawnOwned", "spawn", "isolated group with confirmed cleanup; host scope injected into Git"],
+  ["packages/git/src/process-runner.ts", "forkOwned", "fork", "isolated IPC group with confirmed cleanup"],
+  ["packages/control-runtime/src/processes.ts", "nodeCommand", "execFile", "standalone CLI/worker default; every embedded host call binds its scoped command adapter"],
+  ["packages/control-runtime/src/processes.ts", "standalone", "spawn", "standalone CLI/worker default; embedded hosts bind their scoped spawn adapter"],
+  ["packages/control-runtime/src/processes.ts", "standalone", "fork", "standalone CLI/worker default; embedded hosts bind their scoped fork adapter"],
+  ["packages/sessions/src/processes.ts", "standalone", "fork", "standalone catalog default; embedded hosts bind their scoped fork adapter"],
+  ["packages/sessions/src/daemon-main.ts", "run", "spawn", "shared reader's backfill process belongs to that independent daemon, not a profile host"],
+  ["packages/control-runtime/src/control-cli.ts", "runControlCli", "spawn", "explicit detached cloud-job handoff survives the CLI that started it"],
+  ["packages/control-runtime/src/cloud-control-main.ts", "main", "fork", "standalone cloud supervisor owns the worker group and confirms its end"],
+  ["packages/control-runtime/src/process-registration.ts", "processRegistrationStartedAt", "execFileSync", "bounded synchronous identity read finishes before stop can run"],
+]
+
+/** Every source in the host's local package dependency graph is checked, including worker/CLI entries. */
+const packages = new Map()
+function includePackage(path) {
+  path = resolve(path)
+  if (packages.has(path)) return
+  const config = ts.getParsedCommandLineOfConfigFile(join(path, "tsconfig.json"), {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} })
+  if (!config) throw new Error(`No TypeScript config for ${path}`)
+  packages.set(path, config)
+  for (const reference of config.projectReferences ?? []) includePackage(reference.path)
+}
+includePackage("packages/host")
+const roots = [...packages.values()].flatMap((config) => config.fileNames)
+const checkedSource = (file) => !file.isDeclarationFile && [...packages.keys()].some((root) => file.fileName.startsWith(`${root}${sep}src${sep}`))
+
 const spawners = new Set(["spawn", "spawnSync", "fork", "exec", "execSync", "execFile", "execFileSync"])
 const config = ts.getParsedCommandLineOfConfigFile("packages/host/tsconfig.json", {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} })
 if (!config) throw new Error("The host's TypeScript config doesn't parse")
@@ -95,6 +122,7 @@ function rawUses(program, file) {
 
 if (process.argv.includes("--test")) {
   const path = resolve("__host_child_fixture.ts")
+  const dependency = resolve("packages/git/src/__host_child_fixture.ts")
   const source = `import {spawn as launch, execFile} from "node:child_process";
 import * as cp from "node:child_process";
 import {promisify} from "node:util";
@@ -118,21 +146,24 @@ function unrelated(){ const app = {spawn(){}}; app.spawn(); }`
   const host = ts.createCompilerHost(options)
   const getSource = host.getSourceFile.bind(host)
   host.getSourceFile = (name, language, ...rest) => name === path ? ts.createSourceFile(name, source, language, true) : getSource(name, language, ...rest)
-  const program = ts.createProgram({ rootNames: [path], options, host })
+  const originalSource = host.getSourceFile.bind(host)
+  host.getSourceFile = (name, language, ...rest) => name === dependency ? ts.createSourceFile(name, 'import {spawn as start} from "node:child_process"; function dependencyStart(){start("child")}', language, true) : originalSource(name, language, ...rest)
+  const program = ts.createProgram({ rootNames: [path, dependency], options, host })
   const uses = rawUses(program, program.getSourceFile(path))
   const found = new Set(uses.map((use) => use.owner))
   for (const name of ["direct", "alias", "namespace", "bound", "computed", "destructured", "promised", "required", "aliasedRequire", "imported", "dynamic"])
     if (!found.has(name)) throw new Error(`The child-process check missed ${name}`)
   for (const name of ["covered", "types", "unrelated"])
     if (found.has(name)) throw new Error(`The child-process check refused ${name}`)
+  if (!checkedSource(program.getSourceFile(dependency)) || !rawUses(program, program.getSourceFile(dependency)).some((use) => use.owner === "dependencyStart")) throw new Error("An unowned start inside a host dependency escaped the child check")
   console.log("host child check: rejects aliases, namespaces, promisify, destructuring and module-load bypasses; permits covered runners and types")
 } else {
-  const program = ts.createProgram({ rootNames: config.fileNames, options })
+  const program = ts.createProgram({ rootNames: roots, options })
   const expected = new Map(approved.map(([file, name, api, why]) => [`${file}:${name}:${api}`, { why, seen: 0 }]))
   const problems = []
   for (const file of program.getSourceFiles()) {
-    const path = relative(resolve("packages/host/src"), file.fileName).split(sep).join("/")
-    if (path.startsWith("../") || file.isDeclarationFile) continue
+    const path = relative(resolve("."), file.fileName).split(sep).join("/")
+    if (!checkedSource(file)) continue
     for (const use of rawUses(program, file)) {
       const entry = expected.get(`${path}:${use.owner}:${use.api}`)
       if (entry && ++entry.seen === 1) continue

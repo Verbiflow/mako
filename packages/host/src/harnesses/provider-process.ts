@@ -1,4 +1,4 @@
-import { hostSpawn, closeHostChild } from "../base/host-command.js"
+import { hostSpawn, closeHostChild, endHostChildWithParent } from "../base/host-command.js"
 import type { ChildProcess, ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process"
 import { statSync } from "node:fs"
 import { hostWarn } from "../base/host-log.js"
@@ -43,6 +43,7 @@ export function spawnProviderProcess(
   if (options.cwd !== undefined && !workingDirectoryExists(options.cwd))
     throw new MissingWorkingDirectoryError(options.cwd)
   const child = hostSpawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] })
+  endHostChildWithParent(child)
   const pid = child.pid
   if (tracked && pid) trackProviderPid({ pid, executable: child.spawnfile, ...tracked })
   // The runner owns the single exit listener, leaving an SDK room for its own.

@@ -22,6 +22,8 @@ import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 import { spawnProviderProcess } from "@mako/host/harnesses/provider-process"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
 import { AppKeySchema } from "@mako/host/contracts/thread-environments"
+import { spawn as controlSpawn, fork as controlFork, command as controlCommand } from "@mako/control-runtime/processes"
+import { fork as sessionFork } from "@mako/sessions/processes"
 import type { SdkMethod, SdkResult } from "@mako/host/harnesses/cursor/sdk/wire"
 
 function deferred<T>() {
@@ -200,7 +202,7 @@ if (process.argv[3] === "exit") {
 }
 setInterval(() => {}, 1000)
 `)
-for (const kind of ["command", "callback", "spawn", "fork", "provider"] as const) {
+for (const kind of ["command", "callback", "spawn", "fork", "provider", "control-command", "control-spawn", "control-fork", "session-fork"] as const) {
   for (const parent of ["running", "exit"] as const) {
     const scope = new HostStopping(), ready = join(runnerFolder, `tree-${kind}-${parent}`)
     const kept = scope.run(() => handoff(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" }))
@@ -208,13 +210,15 @@ for (const kind of ["command", "callback", "spawn", "fork", "provider"] as const
     let child: ReturnType<typeof hostSpawn> | undefined
     try {
       child = scope.run(() => {
-        if (kind === "command") {
-          const result = hostCommand(process.execPath, [treeEntry, ready, parent])
+        if (kind === "command" || kind === "control-command") {
+          const result = (kind === "command" ? hostCommand : controlCommand)(process.execPath, [treeEntry, ready, parent])
           void result.catch(() => {})
           return result.child
         }
         if (kind === "callback") return hostExecFile(process.execPath, [treeEntry, ready, parent], {}, () => {})
         if (kind === "provider") return spawnProviderProcess(process.execPath, [treeEntry, ready, parent], {})
+        if (kind === "control-spawn") return controlSpawn(process.execPath, [treeEntry, ready, parent], { stdio: ["ignore", "pipe", "pipe"] })
+        if (kind === "control-fork" || kind === "session-fork") return (kind === "control-fork" ? controlFork : sessionFork)(treeEntry, [ready, parent], { stdio: ["ignore", "pipe", "pipe", "ipc"] })
         if (kind === "fork") return hostFork(treeEntry, [ready, parent], { stdio: ["ignore", "pipe", "pipe", "ipc"] })
         return hostSpawn(process.execPath, [treeEntry, ready, parent], { detached: true, stdio: ["ignore", "pipe", "pipe"] })
       })
@@ -238,7 +242,7 @@ for (const kind of ["command", "callback", "spawn", "fork", "provider"] as const
     }
   }
 }
-console.log("all four command runners and provider launches reap SIGTERM-ignoring descendants, including after parent exit; deliberate handoffs survive")
+console.log("host, provider, control-runtime and sessions runners reap SIGTERM-ignoring descendants, including after parent exit; deliberate handoffs survive")
 
 // The actual app handoff and readiness shell: stop the pending readiness tree,
 // keep the persisted app running, and never schedule another readiness try.
