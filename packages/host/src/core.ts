@@ -537,6 +537,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           return held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined
         },
         asking: (id) => finAsking(late.conversations?.agents?.personAsk(id)),
+        asked: (id) => live.askWaiting(id),
         fins: (id) => listedFins(late.conversations?.agents?.roster(id)),
         now: Date.now,
       }))
@@ -555,6 +556,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         background: held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined,
         promptedAt: held ? personPromptedAt(held.requests, held.control?.actions) : undefined,
         asking: (conversation) => finAsking(late.conversations?.agents?.personAsk(conversation)),
+        asked: (conversation) => live.askWaiting(conversation),
         fins: (conversation) => listedFins(late.conversations?.agents?.roster(conversation)),
       })
     },
@@ -1064,6 +1066,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     step: (conversationId, op, step) => emit({ type: "thread-continue-step", conversationId, op, step }),
   })
   // The same three moves for an agent's `thread_move` and `mako thread move`: its own Thread, or the person's named one.
+  // An agent's ask is answered on the path a harness's approval is, by whoever answers: one answer for each.
+  live.asks.answering = async (conversation, ask, allow) => late.threadMoves?.answer(conversation, ask, allow)
   late.threadMoves = new ThreadMoveTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
     place: (id) => {
@@ -1077,8 +1081,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       return Boolean(snapshot && (snapshot.session.status === "starting" || snapshot.session.status === "running" || snapshot.requests.some((request) => request.status === "queued" || request.status === "dispatching")))
     },
     ownWorktree: (id) => workspaces.worktrees?.threadCheckout(id) !== undefined,
-    harness: (id) => live.session(id)?.harness,
-    title: (id) => live.session(id)?.title || undefined,
     machine: config.machineAgentFd !== undefined,
     moves: () => cloudMoves && cloudReturns && cloudContinues ? {
       move: (id, move, handOff) => cloudMoves.move(id, move, handOff),
@@ -1086,7 +1088,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       bringBack: (id, move) => cloudReturns.bringBack(id, move),
       continue: (id, op) => cloudContinues.press(id, op),
     } : undefined,
-    announce: (asks) => emit({ type: "thread-move-asks", asks }),
+    asks: live.asks,
   })
   // And archives them, from here, whichever device they came from: the cloud ends them and keeps what they ran.
   const cloudArchives = cloudConversations && new CloudArchives({
@@ -1577,6 +1579,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       if (channel === "mako:thread-move" && cloudMoves) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-move`'s schema before routing it.
         const [conversationId, move, handOff] = args as [string, string, ThreadHandOff | undefined]
+        late.threadMoves?.retire(conversationId)
         return { handled: true, value: encodeRuntimeValue(await cloudMoves.move(conversationId, move, handOff)) }
       }
       if (cloudHandOffs) {

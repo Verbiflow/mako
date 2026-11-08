@@ -15,6 +15,7 @@ import { threadTitlesStore } from "@/state/thread-titles"
 import type { AttentionByPath, ThreadsState } from "@/state/thread-state"
 import { threadsStore } from "@/state/thread-store"
 import { backgroundWork } from "@mako/host/contracts/background-work"
+import { agentAskDetail } from "@/state/agent-asks"
 import { finAskLine } from "@/state/fin-asks"
 
 export type ThreadStatus =
@@ -97,6 +98,9 @@ export function threadStatus(
     // A Fin asking the person: its Apex's Thread needs them, as an ask of its own would, while the Apex works on.
     const finAsk = finAskLine(owned)
     if (finAsk) return { kind: "needs-permission", since: owned.updatedAt, detail: finAsk }
+    // What its agent asked through Mako's tools, while it works on.
+    const agentAsk = agentAskDetail(owned)
+    if (agentAsk) return { kind: "needs-permission", since: owned.updatedAt, detail: agentAsk }
     if (owned.session.status === "running" || owned.session.status === "starting")
       return state.working[owned.threadPath ?? ref.path] ?? { kind: "working", since: owned.createdAt }
     // A failure is an outcome you acknowledge by opening the thread, exactly
@@ -156,6 +160,7 @@ export function threadLiveKey(state: AcpState, ref: ThreadRef): string {
     owned.session.status,
     owned.permission?.id ?? "",
     finAskLine(owned) ?? "",
+    agentAskDetail(owned) ?? "",
     owned.waitingOn ?? "",
     backgroundWork(owned.session, owned.nativeAgents)?.count ?? 0,
   ].join("|")

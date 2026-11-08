@@ -179,6 +179,7 @@ export class LiveHibernation {
         !goalWorking(resident.snapshot.goal) &&
         !resident.sideAnswer &&
         !resident.snapshot.permissions.length &&
+        !resident.snapshot.control?.asks?.length &&
         // A session needs a record to open again from: one a turn here wrote, or the one it resumed.
         (recoverAccount || binding.resumed || resident.snapshot.requests.some(
           (request) =>

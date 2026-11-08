@@ -19,6 +19,8 @@ import { setThreadAttention, setThreadRunning, threadsStore } from "@/state/thre
 import { describeProviderFailure } from "@mako/host/contracts/provider-failure"
 import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
+import { agentAskLine } from "@mako/host/contracts/agent-asks"
+import { agentAskOf } from "@/state/agent-asks"
 import { asks, requestWaiting, type Waiting } from "@mako/host/contracts/notifications"
 import { bareCommand } from "@mako/sessions/tool-identity"
 import { askWords, finAskWaiting, rosterChildren } from "@mako/host/contracts/children"
@@ -110,6 +112,16 @@ function noteLiveOutcome(
   if (busy && !wasBusy)
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id)
   const asked = askedPermissions.get(conversation.key)
+  const agentAsk = agentAskOf(conversation)
+  // Its agent's ask through Mako's tools says so once, on the conversation that asked, as an approval does.
+  // A Fin's is said on its Apex once it's the person's (`noteFinAsks`), as its approvals are.
+  if (agentAsk && !permission && !conversation.parent) {
+    if (asked !== agentAsk.id) {
+      askedPermissions.set(conversation.key, agentAsk.id)
+      noteOutcome({ kind: "needs-you", subject, marker: agentAsk.id, detail: agentAskLine(agentAsk.want), quiet })
+    }
+    return
+  }
   if (permission) {
     // A Fin's ask is said on its Apex once it's the person's (`noteFinAsks`): one its Apex answers is never theirs.
     if (asked !== permission.id && !conversation.parent) {

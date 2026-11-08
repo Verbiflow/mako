@@ -148,7 +148,53 @@ const MERGE = { status: "done" as const, summary: "PR #371 is green: every check
 
 const approve = (world: AgentsWorld, fin: string, heard: LivePermissionResponse[]) => world.ask(fin, "npm test").then((response) => void heard.push(response))
 
+/** A Fin's agent asks, through a Mako tool, to move its Thread: the ask its tools raise below full access. */
+const agentAsk = (answers: Array<{ ask: string; allow: boolean }>) => async (world: AgentsWorld, fin: string) => {
+  world.live.asks.answering = async (conversation, ask, allow) => {
+    answers.push({ ask, allow })
+    world.live.asks.settle(conversation, ask)
+  }
+  world.live.asks.raise(fin, { id: "11111111-1111-4111-8111-111111111111", at: Date.now(), want: { kind: "move", move: "22222222-2222-4222-8222-222222222222", handsOff: true } })
+  await until("the agent's ask to be answered", () => answers.length > 0, 20_000)
+}
+
 try {
+  // A Fin's ask through Mako's tools is an approval on the one path a Fin's asks take: its Apex on full access answers
+  // it with agents_answer, inside its window.
+  {
+    const answered: Array<{ ask: string; allow: boolean }> = []
+    const replies: AgentsAnswerResult[] = []
+    const { world, state, wakes } = await fixture("agent-ask-apex", {
+      access: "full", finHarness: "opencode", asks: agentAsk(answered),
+      onDecision: async (world, caller) => void replies.push(await world.agents.answer(caller, { to: "tests", allow: true, clientKey: "move" })),
+    })
+    await until("the Apex to be asked", () => replies.length === 1)
+    assert.match(wakes[0]!, /Wants to move this Thread to the cloud/, "the Apex hears what the Fin's agent asked")
+    answered.length || (await until("the ask to be answered", () => answered.length === 1))
+    assert.deepEqual(answered, [{ ask: "11111111-1111-4111-8111-111111111111", allow: true }], "the Apex's allow is the ask's")
+    await until("the Fin to go on", () => state()?.kind === "ended")
+    await world.close()
+  }
+  console.log("an agent's ask from a Fin: its full-access Apex answered it with agents_answer")
+
+  // Below full access it's the person's, on the Apex's row, as a harness's approval is.
+  {
+    const answered: Array<{ ask: string; allow: boolean }> = []
+    const { world, apex, thread, state } = await fixture("agent-ask-person", { access: "ask", finHarness: "opencode", asks: agentAsk(answered) })
+    await until("the ask to be the person's", () => { const now = state(); return now?.kind === "blocked" && now.on === "approval" })
+    const blocked = state()
+    assert.ok(blocked?.kind === "blocked" && blocked.ask?.kind === "approval")
+    assert.deepEqual(blocked.ask.options?.map((option) => option.label), ["Move to the cloud", "Keep here"])
+    assert.equal(blocked.ask.named, true, "answered in its own words, not a command's Allow once")
+    const asking = world.agents.personAsk(apex.conversation)
+    assert.equal(asking?.fin, thread(), "the Apex's row carries it, so the Inbox and phone do")
+    await world.agents.respond(apex.conversation, { fin: thread(), ask: blocked.ask.id, allow: false, request: "r-keep" })
+    await until("the person's answer to reach the ask", () => answered.length === 1)
+    assert.deepEqual(answered, [{ ask: "11111111-1111-4111-8111-111111111111", allow: false }])
+    await world.close()
+  }
+  console.log("an agent's ask from a Fin under an Apex on ask: the person's, from the Apex's row")
+
   // A full-access Apex answers each harness's approval, and its Fin goes on.
   for (const finHarness of HARNESSES) {
     const answers: AgentsAnswerResult[] = []
