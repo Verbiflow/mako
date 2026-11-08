@@ -4,6 +4,7 @@ import type { RecordsLink } from "@mako/sessions/record-sync"
 import { z } from "zod"
 import { decodeRuntimeValue, encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { sessionAccessTier } from "./contracts/access.js"
+import { listedUnderApex } from "./contracts/agents.js"
 import { listedFins } from "./contracts/children.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
@@ -56,7 +57,7 @@ import { ControlResidency, controlLine, openControl, declareControlMethods, cont
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { AgentAskGate, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations } from "./conversations/index.js"
+import { AgentAskGate, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -65,6 +66,7 @@ import { declareApplicationMethods, Updates, type Application } from "./applicat
 import { devHostBuildDirectories } from "./base/dev-host-build.js"
 import type { HostOwner } from "./create-host.js"
 import { backgroundWork } from "./contracts/background-work.js"
+import { withChildren } from "./contracts/native-agents.js"
 import { personPromptedAt } from "./contracts/worked-at.js"
 import { projectFolder, worktreeAt } from "./contracts/worktree-paths.js"
 
@@ -506,6 +508,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }
     return undefined
   }
+  // What a conversation's turn left running: its provider's work as memory holds it, and its Thread's Fins as they stand
+  // now. Only its Thread's newest Session hears them move (`finReaders`), so an older one's roster keeps them as they were.
+  const heldWork = (id: string) => {
+    const held = late.conversations?.live.held(id)
+    if (!held) return undefined
+    const agents = late.conversations?.agents
+    return backgroundWork(held.session, agents ? withChildren(held.nativeAgents, agents.roster(id)) : held.nativeAgents)?.count
+  }
   const sessions = new SessionPublisher({
     rows: () => {
       const live = late.conversations?.live
@@ -523,7 +533,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         hidden: () => new Set(threads.archives.snapshot().keys),
         lastMoved: (id, revision) => live.lastMoved(id, revision),
         placement: (id) => store.journalPlacement(id),
-        childThread: (thread) => store.edges().of(thread) !== undefined,
+        sessionOrder: (placed) => sessionOrderIn(store.thread(placed.thread)?.sessions, placed.session),
+        childThread: (thread) => listedUnderApex(store.edges().of(thread)),
         executions: (ids) => store.executionsOf(ids),
         titles: (ids) => store.titlesOf(ids),
         forks: (ids) => store.forksOf(ids),
@@ -535,10 +546,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         },
         head: listedHead,
         repository: (folder) => repositories.of(folder),
-        background: (id) => {
-          const held = live.held(id)
-          return held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined
-        },
+        background: heldWork,
         asking: (id) => finAsking(late.conversations?.agents?.personAsk(id)),
         asked: (id) => live.askWaiting(id),
         fins: (id) => listedFins(late.conversations?.agents?.roster(id)),
@@ -556,7 +564,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         session,
         working: live.workOf(id)?.status,
         waitingOn: (conversation) => live.waitingOn(conversation),
-        background: held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined,
+        background: heldWork(id),
         promptedAt: held ? personPromptedAt(held.requests, held.control?.actions) : undefined,
         asking: (conversation) => finAsking(late.conversations?.agents?.personAsk(conversation)),
         asked: (conversation) => live.askWaiting(conversation),
@@ -854,8 +862,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     notice: (message) => emit({ type: "notice", level: "error", message }),
   })
   const opened = await openConversations({
+    ...(owner.start && { start: owner.start }),
     stopping: () => shell.closing(),
     streams,
+    // A person's own device reaches their others through the account; a fixture desk reaches none.
+    ...(!fixtureDesk && { account: () => late.cloud }),
     finDefaults,
     finCapacity,
     builds: () => buildSlots.reading(),
@@ -939,6 +950,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     admission,
   })
   late.conversations = opened
+  // Reachable again (its runtime's link is back), this device asks the places holding its Fins how they stand, which
+  // tells them it hears: the notices they kept for it come now, not at their next retry.
+  late.cloud?.onRuntimeLinked?.(() => opened.agents?.knock())
   const { live, runs, native } = opened
   // A message held until a time (a usage limit's reset) sends itself within a tick of it, across restarts.
   // Held messages' times: one timer, armed for the soonest (`LiveConversations.armWakes`), once the host has started.

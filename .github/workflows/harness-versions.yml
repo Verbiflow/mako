@@ -40,9 +40,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       # The scripts read Mako's own packages (@mako/sessions, @mako/git, …) from
       # their built output, as the host does; a fresh checkout has none.
       - run: npm run build:control-runtime
@@ -114,10 +114,10 @@ jobs:
           if [ -n "$(gh pr list --head "$BRANCH" --state all --json number --jq '.[0].number')" ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           fi
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
         if: steps.open.outputs.exists != 'true'
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
         if: steps.open.outputs.exists != 'true'
       # Without it each Codex pair recorded its sandbox failing every shell call, not Codex at work. `checks.yml`'s
@@ -190,7 +190,7 @@ jobs:
         id: install
         if: steps.reported.outputs.done != 'true'
         continue-on-error: true
-        run: npm ci
+        uses: ./.github/actions/install-dependencies
       - name: Build
         id: build
         if: steps.reported.outputs.done != 'true' && steps.install.outcome == 'success'

@@ -3,7 +3,8 @@ import { HourglassIcon } from "lucide-react"
 import { acp, useAcp } from "@/state/acp"
 import { stage } from "@/state/stage"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
-import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
+import { backgroundWorkText } from "@mako/host/contracts/background-work"
+import { conversationWork } from "@/state/acp-state"
 import { readableStep } from "@mako/host/contracts/children"
 import { WorkGlyph } from "@/components/inspector/agents-panel"
 import { Elapsed } from "@/components/inspector/elapsed"
@@ -41,7 +42,7 @@ export function BackgroundWorkLine() {
   const showAgents = useContext(ShowAgentsContext)
   const work = useAcp((state): Waiting | null => {
     const live = scopedLiveAcp(state, scope)
-    const found = live ? backgroundWork(live.session, live.nativeAgents) : null
+    const found = live ? conversationWork(state, live) : null
     return found && live
       ? { key: live.key, text: backgroundWorkText(found), named: found.named, unnamed: found.unnamed, stopping: live.canceling }
       : null

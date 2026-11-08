@@ -112,7 +112,7 @@ try {
   }
   same("held starts included")
   assert.deepEqual({ ...rollup(owner()) }, { total: 4, needs: 0, working: 2, queued: 2, idle: 0, failed: 0, done: 0 })
-  // A Fin's progress reaches only its Apex's newest Session (`progressReaders`), so the Fins drawn are that Session's,
+  // A Fin's moves reach only its Apex's newest Session (`finReaders`), so the Fins drawn are that Session's,
   // by its Thread's order of Sessions, whichever of its conversations a window holds first. Stamps are the host's own:
   // a queued Fin keeps its edge's time as its place moves, and a step may land in the same millisecond as the last.
   const before = owner().filter((entry) => entry.child)

@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - .github/actions/install-dependencies/**
       - .github/workflows/local-control-linux-x64.yml
       - electron/**
       - packages/control/**
@@ -53,7 +54,7 @@ jobs:
           assert.match(cpu.find(row=>row.field==='Vendor ID:')?.data ?? '', /^(GenuineIntel|AuthenticAMD)$/);
           assert.match(readFileSync('evidence/docker-architecture.txt','utf8').trim(), /^(x86_64|amd64)$/);
           JS
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
       - name: Install the media tools recordings encode with
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Verify acceptance payload boundaries

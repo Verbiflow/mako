@@ -1,6 +1,7 @@
 import { createContext } from "react"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import type { WebSession } from "./threads"
+import { accountListStore } from "./account-list"
+import { sessionOf, type WebSession } from "./threads"
 
 /** The Apex whose Fin the phone shows, for the line over its composer: what's said there, the Apex hears too. */
 export const FinOfApexContext = createContext<string | undefined>(undefined)
@@ -27,4 +28,14 @@ export function childSession(apex: WebSession, agent: NativeAgent): WebSession |
     },
     waiting: [],
   }
+}
+
+/**
+ * A Fin placed on another device, as that device lists it: the row the account holds for its Thread, which is that
+ * device's own Session of it. Undefined for a Fin of its Apex's own device, whose conversation is its Apex's to open.
+ */
+export function placedSessionOf(agent: NativeAgent): WebSession | undefined {
+  const list = accountListStore.get()
+  const row = list.rows.find((each) => each.thread === agent.child?.thread && each.conversation === agent.child?.conversation)
+  return row && sessionOf(row, list)
 }
