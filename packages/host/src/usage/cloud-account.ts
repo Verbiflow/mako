@@ -17,7 +17,7 @@ import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveH
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
-import { ArtifactSchema, BORROW_PATHS, BorrowAnswerSchema, GrantSchema, type Artifact, LeaseEventSchema, LeaseSchema, SourceAnswerSchema, SourceAskSchema, type BorrowAnswer, type Lease, type Progress, type SourceAnswer, type Stream } from "@mako/protocol/borrow"
+import { ArtifactSchema, BORROW_PATHS, BorrowAnswerSchema, GrantSchema, type Artifact, LeaseEventSchema, LeaseSchema, SourceAnswerSchema, SourceAskSchema, type BorrowAnswer, type Grant, type Lease, type Progress, type SourceAnswer, type Stream } from "@mako/protocol/borrow"
 import type { BorrowSnapshot } from "../contracts/setup.js"
 import {
   LIVE_FORM,
@@ -682,6 +682,12 @@ export class CloudAccounts {
   async putBorrowArtifact(lease: string, name: string, file: string, bytes: number): Promise<BorrowArtifact> {
     const response = await this.#call("borrow.artifact", "POST", `${BORROW_PATHS.lease(lease)}/artifacts?name=${encodeURIComponent(name)}`, new FileBody(file, bytes))
     return BorrowArtifactSchema.parse(await response.json())
+  }
+
+  /** The grants that stand at the account's broker; null from a cloud that has none. */
+  async borrowGrants(): Promise<Grant[] | null> {
+    const response = await this.#call("borrow.read", "GET", BORROW_PATHS.grants, undefined, false, [404])
+    return response.status === 404 ? null : z.object({ grants: z.array(GrantSchema) }).parse(await response.json()).grants
   }
 
   /** The person's revoke of a grant the account's broker holds: every lease under it ends. */

@@ -46,7 +46,7 @@ import { LentHere } from "./base/lent.js"
 import { operationWords } from "@mako/protocol/borrow-words"
 import { setupStep } from "./contracts/simulator-setup.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice, Lending, LEND_BEAT_MS } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, CliReadings, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import type { GitHubPerson } from "./contracts/github-person.js"
@@ -993,8 +993,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   late.conversations = opened
   const { live, runs, native } = opened
   // What this Mac can serve another place (its OS, Xcode, simulators, emulators, GPU, CLIs) and its room, said to the
-  // account's broker on its runtime link and to its own: on a change, as the link enrols, and hourly. A cloud machine
-  // and a fixture desk lend nothing.
+  // account's broker on its runtime link and to its own: on a change, as the link enrols, and hourly. Only what the
+  // person lends is said, by the grants that stand here and at the account. A cloud machine and a fixture desk lend nothing.
   if (config.machineAgentFd === undefined && !fixtureDesk) {
     const simulatorFacts = async (): Promise<SimulatorFacts | undefined> => {
       const [listed, setup] = await Promise.all([control.simulators.list({ kind: "person" }), control.simulatorSetup.read()])
@@ -1004,8 +1004,24 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const xcode = setupStep(setup, "xcode")?.xcode?.version
       return { ios: here.platforms.ios, simulators: listed.simulators.filter((simulator) => simulator.hostId === here.id), ...(xcode && { xcode }) }
     }
+    const brokers = async () => {
+      const saved = await secrets.borrowing()
+      return [workspaces.worktrees?.borrowing.borrowing, saved].filter((broker) => broker !== undefined)
+    }
+    const clis = new CliReadings({ installed: () => harnesses.updates.snapshot(), processes: providerHost.discovery })
     const advertiser = new Advertiser({
-      probe: () => probeCapabilities(deviceProbe(simulatorFacts)),
+      probe: () => probeCapabilities(deviceProbe(simulatorFacts, () => clis.read())),
+      lending: async () => {
+        const [here, account] = await Promise.all([
+          brokers().then((found) => Promise.all(found.map((broker) => broker.grants()))),
+          late.cloud?.borrow?.grants().catch(() => null),
+        ])
+        return [...here.flat(), ...(account ?? [])]
+      },
+      devices: async () => {
+        const [found, account] = await Promise.all([brokers(), late.cloud?.deviceId().catch(() => undefined)])
+        return [...found.map((broker) => broker.device), ...(account ? [account] : [])]
+      },
       room: () => {
         const capacity = finCapacity.reading()
         return { slots: { used: opened.agents?.workingHere() ?? 0, of: capacity.atOnce }, load: capacity.why }
@@ -1013,8 +1029,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       sinks: [
         (advertisement) => late.cloud?.advertise?.(advertisement) ?? false,
         async ({ capabilities, slots }) => {
-          const brokers = [workspaces.worktrees?.borrowing.borrowing, fixtureDesk ? undefined : await secrets.borrowing()]
-          await Promise.all(brokers.map((broker) => broker?.advertise(capabilities, slots)))
+          await Promise.all((await brokers()).map((broker) => broker.advertise(capabilities, slots)))
         },
       ],
       log: (message, fields) => hostLog("borrowing", message, fields),

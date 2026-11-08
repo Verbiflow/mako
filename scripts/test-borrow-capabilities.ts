@@ -4,10 +4,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { serveRuntime, type Advertisement } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
-import { CapabilitySchema, type Grant, type Need } from "@mako/protocol/borrow"
+import { CapabilitySchema, satisfies, type Capability, type CapabilityQuery, type Grant, type Need } from "@mako/protocol/borrow"
 import { ADVERTISE_EVERY_MS, Advertiser } from "@mako/host/base/advertiser"
 import { ADVERTISED_CLIS, MAX_CAPABILITIES, probeCapabilities, simulatorCapabilities, type CapabilityProbeDeps, type SimulatorFacts } from "@mako/host/base/capabilities"
 import { LentHere } from "@mako/host/base/lent"
+import { CliReadings } from "@mako/host/harnesses/cli-readings"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 import { LocalBorrowing } from "@mako/host/base/local-borrowing"
 import { readSetupFacts, type Run } from "@mako/host/control/simulators/setup"
 import { setupFromFacts } from "@mako/host/control/simulators/setup-facts"
@@ -30,12 +32,23 @@ function mac(overrides: Partial<CapabilityProbeDeps> = {}): CapabilityProbeDeps 
     platform: "darwin",
     arch: "arm64",
     run: async (file) => (file.endsWith("sw_vers") ? "26.1\n" : file.endsWith("sysctl") ? "Apple M3 Max\n" : undefined),
-    onPath: async (command) => ["git", "gh", "node", "xcodebuild"].includes(command),
+    onPath: async () => false,
+    clis: async () => [{ command: "git", version: "2.51.0" }, { command: "gh", version: "2.83.1" }, { command: "node", version: "24.19.0" }, { command: "xcodebuild", version: "26.1" }],
     simulators: async () => ready,
     androidEmulators: async () => [{ avd: "Pixel_9", api: "35" }],
     ...overrides,
   }
 }
+
+/** A grant over capable devices that wants each of `requires`: what the person lends. */
+function lend(requires: [CapabilityQuery, ...CapabilityQuery[]], devices?: string[]): Grant {
+  return {
+    id: `g-${JSON.stringify(requires)}-${devices?.join() ?? ""}`, resource: { kind: "operation", ref: "ios-simulator" }, source: { kind: "capable", requires, ...(devices && { devices }) },
+    scope: { level: "account", account: "acct" }, mode: "relay", access: "run", lifetime: { until: "revoked" }, ask: "never", secret: false,
+    grantedBy: { kind: "person", account: "acct" }, grantedAt: 1, version: 1,
+  }
+}
+const lendsMacs = { lending: async () => [lend([{ capability: "macos" }, { capability: "xcode" }])], devices: async () => ["d-mac"] }
 
 {
   // A Mac with Xcode, Mako's simulators, an emulator and a few CLIs: each a fact, in a stable order.
@@ -45,16 +58,71 @@ function mac(overrides: Partial<CapabilityProbeDeps> = {}): CapabilityProbeDeps 
     { capability: "macos", version: "26.1", attributes: { arch: "arm64" } },
     { capability: "xcode", version: "26.1" },
     { capability: "gpu", attributes: { api: "metal", chip: "Apple M3 Max" } },
-    { capability: "cli", attributes: { command: "git" } },
-    { capability: "cli", attributes: { command: "gh" } },
-    { capability: "cli", attributes: { command: "node" } },
-    { capability: "cli", attributes: { command: "xcodebuild" } },
+    { capability: "cli", version: "2.51.0", attributes: { command: "git" } },
+    { capability: "cli", version: "2.83.1", attributes: { command: "gh" } },
+    { capability: "cli", version: "24.19.0", attributes: { command: "node" } },
+    { capability: "cli", version: "26.1", attributes: { command: "xcodebuild" } },
     { capability: "android-emulator", version: "35", attributes: { avd: "Pixel_9", api: "35" } },
     { capability: "ios-simulator", version: "26.1", attributes: { runtime: "iOS 26.1", device: "iPad Air", form: "tablet" } },
     { capability: "ios-simulator", version: "26.1", attributes: { runtime: "iOS 26.1", device: "iPhone 17 Pro", form: "phone" } },
   ])
-  // A CLI is there or not: nothing it's signed in as is read, so nothing of it can be sent.
+  // A CLI is its name and version: nothing it's signed in as is read, so nothing of it can be sent.
   assert.ok(found.filter((capability) => capability.capability === "cli").every((capability) => Object.keys(capability.attributes ?? {}).join() === "command"))
+}
+
+{
+  // A CLI is advertised by name and the version Mako reads of it, so a need for "git 2.*" can be matched.
+  const found = await probeCapabilities(mac({ clis: async () => [{ command: "git", version: "2.51.0" }, { command: "node", version: "24.19.0" }] }))
+  const git = found.find((capability) => capability.capability === "cli" && capability.attributes?.command === "git")
+  assert.deepEqual(git, { capability: "cli", version: "2.51.0", attributes: { command: "git" } })
+  assert.ok(satisfies(found, [{ capability: "cli", version: "2.*", where: { command: "git" } }]), "a versioned need for git matches")
+  assert.equal(found.some((capability) => capability.capability === "cli" && capability.attributes?.command === "gh"), false, "a tool Mako read no version of isn't advertised")
+}
+
+{
+  // A place advertises only what the person lends: nothing lent, nothing advertised; a grant over capable devices
+  // that wants a simulator, and names this device or none, lends its simulators and nothing else.
+  const probed: Capability[] = [
+    { capability: "macos", version: "26.1", attributes: { arch: "arm64" } },
+    { capability: "cli", version: "2.51.0", attributes: { command: "git" } },
+    { capability: "ios-simulator", version: "26.1", attributes: { runtime: "iOS 26.1", device: "iPhone 17 Pro", form: "phone" } },
+  ]
+  const told = async (grants: Grant[]) => {
+    const heard: Advertisement[] = []
+    const advertiser = new Advertiser({ probe: async () => probed, lending: async () => grants, devices: async () => ["mac-1"], room: () => ({ slots: { used: 0, of: 4 } }), sinks: [(advertisement) => void heard.push(advertisement)] })
+    await advertiser.probe()
+    return heard.at(-1)?.capabilities ?? []
+  }
+  assert.deepEqual(await told([]), [], "nothing lent, nothing advertised")
+  assert.deepEqual((await told([lend([{ capability: "ios-simulator" }])])).map((capability) => capability.capability), ["ios-simulator"], "a simulator lent, and only that")
+  assert.deepEqual(await told([lend([{ capability: "ios-simulator" }], ["mac-2"])]), [], "a grant that names another device lends nothing here")
+  assert.deepEqual((await told([lend([{ capability: "ios-simulator" }], ["mac-1"])])).length, 1, "one naming this device does")
+}
+
+{
+  // CLI readings: what RuntimeUpdates already read is taken as it is, and each other advertised tool has its version
+  // read once, again only when its binary changed. A tool that isn't here, or says no version, is left out.
+  const here = new Map([["git", "/usr/bin/git"], ["node", "/opt/node/bin/node"], ["docker", "/usr/local/bin/docker"]])
+  const signatures = new Map([["/usr/bin/git", "git-1"], ["/opt/node/bin/node", "node-1"], ["/usr/local/bin/docker", "docker-1"]])
+  const spawned: string[] = []
+  const readings = new CliReadings({
+    installed: () => ({ "claude-code": { binary: "/Users/me/.local/bin/claude", installed: "2.1.3" }, codex: { binary: "/opt/node/bin/codex" }, git: { binary: "/usr/bin/git", installed: "2.51.0" } }),
+    processes: new DiscoveryProcesses(),
+    resolve: (command) => here.get(command) ?? null,
+    signature: async (binary) => signatures.get(binary) ?? "",
+    version: async (binary, args) => {
+      spawned.push(`${binary} ${args.join(" ")}`)
+      if (binary.endsWith("docker")) throw new Error("the daemon isn't running")
+      return "v24.19.0\n"
+    },
+  })
+  assert.deepEqual(await readings.read(), [{ command: "claude", version: "2.1.3" }, { command: "git", version: "2.51.0" }, { command: "node", version: "24.19.0" }])
+  assert.deepEqual(spawned, ["/opt/node/bin/node --version", "/usr/local/bin/docker --version"], "git came from RuntimeUpdates' reading, with no second read")
+  await readings.read()
+  assert.equal(spawned.length, 2, "an unchanged binary isn't read again, even one that said no version")
+  signatures.set("/opt/node/bin/node", "node-2")
+  await readings.read()
+  assert.deepEqual(spawned.slice(2), ["/opt/node/bin/node --version"], "a changed binary is read again")
 }
 
 {
@@ -72,7 +140,7 @@ function mac(overrides: Partial<CapabilityProbeDeps> = {}): CapabilityProbeDeps 
   assert.deepEqual(linux, [{ capability: "linux", attributes: { arch: "x64" } }, { capability: "gpu", attributes: { api: "cuda", chip: "NVIDIA L4" } }])
   // However many simulators, one advertisement holds at most its bound, the newest runtimes kept.
   const many: SimulatorFacts = { ios: { ready: true }, simulators: Array.from({ length: 80 }, (_, at) => ios(`iPhone ${at}`, at < 40 ? "iOS 18.4" : "iOS 26.1")) }
-  const bounded = await probeCapabilities(mac({ simulators: async () => many, onPath: async () => true }))
+  const bounded = await probeCapabilities(mac({ simulators: async () => many, clis: async () => ADVERTISED_CLIS.map((command) => ({ command, version: "1.0.0" })) }))
   assert.equal(bounded.length, MAX_CAPABILITIES)
   const simulators = bounded.filter((capability) => capability.capability === "ios-simulator")
   assert.equal(simulators.filter((capability) => capability.version === "26.1").length, 40, "every simulator of the newest runtime stays")
@@ -137,6 +205,7 @@ function mac(overrides: Partial<CapabilityProbeDeps> = {}): CapabilityProbeDeps 
   const heard: Advertisement[] = []
   const advertiser = new Advertiser({
     probe: async () => capabilities,
+    ...lendsMacs,
     room: () => room,
     now: () => now,
     sinks: [
@@ -170,7 +239,7 @@ function mac(overrides: Partial<CapabilityProbeDeps> = {}): CapabilityProbeDeps 
   // Over the runtime link: said as it enrols, then on change, as the gateway hears it.
   const gateway = createFakeGateway()
   const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-mac", build: "test", handle: async () => { throw new Error("no calls") } })
-  const advertiser = new Advertiser({ probe: async () => [{ capability: "macos", version: "26.1" }], room: () => ({ slots: { used: 2, of: 6 } }), sinks: [(advertisement) => runtime.advertise(advertisement)] })
+  const advertiser = new Advertiser({ probe: async () => [{ capability: "macos", version: "26.1" }], ...lendsMacs, room: () => ({ slots: { used: 2, of: 6 } }), sinks: [(advertisement) => runtime.advertise(advertisement)] })
   await advertiser.probe()
   await new Promise((resolve) => setTimeout(resolve, 10))
   assert.deepEqual(gateway.advertisements("d-mac").map((advertisement) => advertisement.slots), [{ used: 2, of: 6 }])
