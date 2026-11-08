@@ -1,11 +1,10 @@
 import { SESSION_HEARTBEAT_MS, type Artifact, type BorrowAnswer, type Lease, type LeaseEnd, type Progress, type SourceAnswer, type SourceAsk, type Stream } from "@mako/protocol/borrow"
+import { HeldLeases } from "../base/held-leases.js"
 import type { LentHere } from "../base/lent.js"
 import type { SimulatorVia } from "../contracts/simulators.js"
 
 /** How often a served session says it's alive: well inside its lease's window, so one late beat never loses it. */
 export const LEND_BEAT_MS = SESSION_HEARTBEAT_MS / 2
-/** How many ended leases are remembered against late word of their issue. */
-const ENDED_KEPT = 256
 
 export interface LendingDeps {
   /** This device in the account, as leases name it; undefined while signed out. */
@@ -34,19 +33,21 @@ export interface LendingDeps {
 /**
  * What this device lends under borrowing's session leases, as their source. It answers the asks it can answer itself
  * (an ask that needs its person waits for them in Setup), serves each lease the broker issues it from the moment it
- * hears it, beats for it on its runtime link, and lets go of it however it ends: told by the broker, or found ended
- * when it reads the account's leases again on connecting. Every call another place makes to it under a lease is
+ * hears it, beats for it on its runtime link, and lets go of it however it ends: told by the broker, found ended when
+ * it reads the account's leases again on connecting, or at its own expiry, link or no link. A renewal the broker makes
+ * is taken wherever it's heard (its word again, the account's list, or asked as the lease nears its end). Every call another place makes to it under a lease is
  * checked here first (`leaseOf`): a live lease of that caller's Thread, from the place the gateway says it came from.
  */
 export class Lending {
   readonly #deps: LendingDeps
-  readonly #served = new Map<string, Lease>()
+  /** The leases served, under borrowing's lifecycle rules (`HeldLeases`): ended stays ended, a renewal is taken. */
+  readonly #served = new HeldLeases()
   /** Progress said since the last beat, sent with the next one. */
   readonly #progress = new Map<string, Progress>()
-  /** Leases already ended here, so word of one issued that arrives after its end serves nothing. */
-  readonly #ended = new Set<string>()
   /** The phase each served session was last said to be in. */
   readonly #phases = new Map<string, Progress["phase"]>()
+  /** The broker being asked for leases near their end; one ask at a time. */
+  #renewing: Promise<void> | undefined
 
   constructor(deps: LendingDeps) {
     this.#deps = deps
@@ -64,12 +65,16 @@ export class Lending {
     if (decided && "lease" in decided) await this.lent(decided.lease)
   }
 
-  /** A lease this device serves: held from now, one of its slots, and alive at once. The same lease again changes nothing. */
+  /**
+   * A lease this device serves: held from now, one of its slots, and alive at once. The same lease again takes no
+   * other slot; it only adopts a later expiry, the broker's renewal, and never an earlier one.
+   */
   async lent(lease: Lease): Promise<void> {
-    if (!lease.session || this.#ended.has(lease.id)) return
+    if (!lease.session || this.#served.ended(lease.id)) return
     if (lease.device !== (await this.#deps.device())) return
-    if (this.#served.has(lease.id) || this.#ended.has(lease.id)) return
-    this.#served.set(lease.id, lease)
+    const taken = this.#served.take(lease, this.#now())
+    if (taken === "renewed") this.#deps.log?.("a served lease was renewed", { lease: lease.id, expiresAt: lease.expiresAt })
+    if (taken !== "held") return
     const words = this.#deps.words(lease)
     this.#deps.lent.add({ lease: lease.id, what: words.what, for: words.for, since: this.#now() })
     this.#deps.log?.("serving a lease", { lease: lease.id, ref: lease.resource.ref, thread: lease.borrower.thread })
@@ -79,28 +84,31 @@ export class Lending {
 
   /** A served lease ended, however it ended: its slot is free, and what it held here lets go. */
   ended(lease: string, why: LeaseEnd): void {
-    this.#ended.add(lease)
-    if (this.#ended.size > ENDED_KEPT) this.#ended.delete(this.#ended.values().next().value!)
-    const held = this.#served.get(lease)
-    if (!held) return
-    this.#served.delete(lease)
-    this.#progress.delete(lease)
-    this.#phases.delete(lease)
-    this.#deps.lent.remove(lease)
-    this.#deps.log?.("a served lease ended", { lease, why })
+    const held = this.#served.end(lease)
+    if (held) this.#let(held, why)
+  }
+
+  /** What a served lease held here lets go, once it has ended. */
+  #let(held: Lease, why: LeaseEnd): void {
+    this.#progress.delete(held.id)
+    this.#phases.delete(held.id)
+    this.#deps.lent.remove(held.id)
+    this.#deps.log?.("a served lease ended", { lease: held.id, why })
     this.#deps.ended?.(held, why)
   }
 
   /**
    * As the runtime link enrols: the account's live leases are the truth. One this device serves that's still live is
-   * served; one it held that isn't listed ended while it was away, and lets go as lost.
+   * served, at the expiry listed when that's later; one it served when the read began that isn't listed ended while it
+   * was away, and lets go as lost. One issued while the list was read is newer than the list, and stays.
    */
   async sync(): Promise<void> {
+    const since = this.#served.begin()
     const live = await this.#deps.leases().catch(() => null)
     if (!live) return
     const device = await this.#deps.device()
     const mine = live.filter((lease) => lease.device === device && lease.session)
-    for (const id of this.#served.keys()) if (!mine.some((lease) => lease.id === id)) this.ended(id, "lost")
+    for (const held of this.#served.heldBefore(since)) if (!mine.some((lease) => lease.id === held.id)) this.ended(held.id, "lost")
     for (const lease of mine) await this.lent(lease)
   }
 
@@ -127,12 +135,19 @@ export class Lending {
     this.progress(lease, { phase })
   }
 
-  /** Every served session beats: the job that runs it runs every `LEND_BEAT_MS`. */
+  /**
+   * Every served session beats: the job that runs it runs every `LEND_BEAT_MS`. One past its expiry ends here, as
+   * expired, whether or not the link is up to say so; one within two beats of it is asked of the broker, which may have
+   * renewed it.
+   */
   beat(): void {
-    for (const id of this.#served.keys()) {
+    const now = this.#now()
+    for (const lease of this.#served.expired(now)) this.#let(lease, "expired")
+    for (const { id } of this.#served.leases()) {
       const progress = this.#progress.get(id)
       if (this.#deps.beat(id, progress) && progress) this.#progress.delete(id)
     }
+    if (this.#served.leases().some((lease) => lease.expiresAt - 2 * LEND_BEAT_MS <= now)) void this.#renew()
   }
 
   /**
@@ -140,7 +155,7 @@ export class Lending {
    * names, from the place the gateway stamped it as coming from. Undefined for any other call, which is refused.
    */
   leaseOf(via: SimulatorVia, thread: string, resource: string): Lease | undefined {
-    for (const lease of this.#served.values()) {
+    for (const lease of this.#served.leases()) {
       if (lease.resource.ref !== resource || lease.borrower.thread !== thread || lease.expiresAt <= this.#now()) continue
       if (fromPlace(via, lease)) return lease
     }
@@ -148,8 +163,20 @@ export class Lending {
   }
 
   served(): Lease[] {
-    return [...this.#served.values()]
+    return this.#served.leases()
   }
+
+  /** The broker's list asked for renewals of leases near their end; a lease it no longer lists is left to expire or sync. */
+  #renew(): Promise<void> {
+    this.#renewing ??= (async () => {
+      const live = await this.#deps.leases().catch(() => null)
+      for (const lease of live ?? []) if (this.#served.has(lease.id) && this.#served.take(lease, this.#now()) === "renewed") this.#deps.log?.("a served lease was renewed", { lease: lease.id, expiresAt: lease.expiresAt })
+    })().finally(() => {
+      this.#renewing = undefined
+    })
+    return this.#renewing
+  }
+
 
   #now(): number {
     return this.#deps.now?.() ?? Date.now()

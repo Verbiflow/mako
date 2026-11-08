@@ -11,8 +11,8 @@ import { nodePlatform } from "./platform.js"
 /**
  * What this device can serve another place, as borrowing's advertisement names it (`borrow.ts`): its OS and
  * architecture, Xcode by version, each simulator it can run (runtime and device), its Android emulators, its GPU, and
- * the command-line tools on its PATH. Each is a fact read from the device, never a value: a CLI is advertised by its
- * presence alone, so nothing a tool is signed in with is read or sent.
+ * its command-line tools by name and installed version, as Mako's readings have them (`CliReadings`). Each is a fact
+ * read from the device, never a value: nothing a tool is signed in with is read or sent.
  */
 export const ADVERTISED_CLIS = ["git", "gh", "node", "npm", "bun", "python3", "docker", "kubectl", "terraform", "aws", "gcloud", "az", "fastlane", "xcodebuild", "adb"] as const
 
@@ -32,8 +32,10 @@ export interface CapabilityProbeDeps {
   arch: string
   /** Runs a read-only command, its output or undefined when it fails or isn't there. */
   run(file: string, args: readonly string[]): Promise<string | undefined>
-  /** Whether `command` is an executable on the PATH. */
+  /** Whether `command` is an executable on the PATH (for a GPU's own tool). */
   onPath(command: string): Promise<boolean>
+  /** The command-line tools here with the version Mako read of each (`CliReadings`); one with no version read is left out. */
+  clis?(): Promise<ReadonlyArray<{ command: string; version: string }>>
   simulators?(): Promise<SimulatorFacts | undefined>
   /** This device's Android virtual devices: each AVD's name and its API level when its config says. */
   androidEmulators?(): Promise<Array<{ avd: string; api?: string }>>
@@ -44,7 +46,7 @@ export async function probeCapabilities(deps: CapabilityProbeDeps): Promise<Capa
   const [system, gpu, clis, simulators, android] = await Promise.all([
     systemCapability(deps),
     gpuCapability(deps),
-    Promise.all(ADVERTISED_CLIS.map(async (command) => ((await deps.onPath(command).catch(() => false)) ? command : undefined))),
+    deps.clis?.().catch(() => []) ?? [],
     deps.simulators?.().catch(() => undefined),
     deps.androidEmulators?.().catch(() => []) ?? [],
   ])
@@ -52,7 +54,7 @@ export async function probeCapabilities(deps: CapabilityProbeDeps): Promise<Capa
   if (system) found.push(system)
   if (simulators?.xcode) found.push({ capability: "xcode", version: simulators.xcode })
   if (gpu) found.push(gpu)
-  for (const command of clis) if (command) found.push({ capability: "cli", attributes: { command } })
+  for (const { command, version } of clis) found.push({ capability: "cli", version: clip(version), attributes: { command: clip(command) } })
   for (const emulator of android) found.push({ capability: "android-emulator", ...(emulator.api && { version: emulator.api }), attributes: { avd: clip(emulator.avd), ...(emulator.api && { api: emulator.api }) } })
   const room = MAX_CAPABILITIES - found.length
   return [...found, ...simulatorCapabilities(simulators).slice(0, Math.max(0, room))]
@@ -123,13 +125,14 @@ function compareVersions(left: string, right: string): number {
 const exec = promisify(execFile)
 
 /** This device's own reads for the probe: commands with a short timeout, the PATH as the host has it. */
-export function deviceProbe(simulators?: () => Promise<SimulatorFacts | undefined>): CapabilityProbeDeps {
+export function deviceProbe(simulators?: () => Promise<SimulatorFacts | undefined>, clis?: CapabilityProbeDeps["clis"]): CapabilityProbeDeps {
   return {
     platform: nodePlatform(),
     arch: process.arch,
     run: (file, args) => exec(file, [...args], { timeout: 3_000 }).then((out) => out.stdout, () => undefined),
     onPath: (command) => onPath(command),
     ...(simulators && { simulators }),
+    ...(clis && { clis }),
     androidEmulators: () => androidEmulators(),
   }
 }

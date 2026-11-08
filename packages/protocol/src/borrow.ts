@@ -728,12 +728,15 @@ function endLease(state: BrokerState, effects: BrokerEffect[], id: string, why: 
   effects.push(leaseEvent(why, at, held, by ? { by } : {}))
   if (why !== "released") effects.push({ effect: "push", borrower: held.lease.borrower, push: { push: "ended", lease: id, why } })
   if (held.lease.device) effects.push({ effect: "tell", device: held.lease.device, push: { push: "ended", lease: id, why } })
-  // A session's files go with it: listed only while it lives, and let go once no lease names them.
+  // A session's files go with it: listed only while it lives, and let go once no live lease of its grant names them.
+  // Files are kept by grant and hash, so two sessions that made the same bytes share one, kept for the last of them.
   const session = held.lease.session
   if (session?.artifacts?.length) {
     const { artifacts, ...kept } = session
     state.leases[id] = { ...state.leases[id]!, lease: { ...held.lease, session: kept } }
-    for (const artifact of artifacts) effects.push({ effect: "unreferenced", grant: held.lease.grant, version: artifact.hash })
+    const named = (hash: string) =>
+      Object.values(state.leases).some((other) => !other.ended && other.lease.grant === held.lease.grant && other.lease.session?.artifacts?.some((each) => each.hash === hash))
+    for (const artifact of artifacts) if (!named(artifact.hash)) effects.push({ effect: "unreferenced", grant: held.lease.grant, version: artifact.hash })
   }
   const { grant, version } = held.lease
   if (held.lease.mode === "copy" && !Object.values(state.leases).some((other) => !other.ended && other.lease.grant === grant && other.lease.version === version))

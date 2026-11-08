@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, test } from "node:test"
+import { z } from "zod"
 import { decodeControlVideo, decodeControlVideoBatch, type ControlVideoPacket } from "@mako/control-runtime/contracts"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
@@ -29,6 +30,9 @@ import { SimulatorStreams } from "@mako/host/control/simulators/stream"
 import { unwatchedWork } from "@mako/host/base/event-loop"
 import { hostCallSchema } from "@mako/host/contracts/host-call-inputs"
 import { HostMethods } from "@mako/host/transport/methods"
+import { declareAgentMethods } from "@mako/host/conversations/agent-tools"
+import { declareThreadMoveMethods } from "@mako/host/conversations/thread-move-tool"
+import type { AgentOperations } from "@mako/host/contracts/agent-tools"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-simulators-remote-"))
 after(() => rm(scratch, { recursive: true, force: true }))
@@ -385,5 +389,58 @@ test("a Thread on this Mac drives a simulator on another through the gateway, as
   served.close()
   await here.close()
   await otherSimulators.close()
+  await methods.close()
+})
+
+/** A refusal's answer, as every door that refuses says it. */
+const Refused = z.object({ refused: z.string(), why: z.string() })
+
+test("a machine runtime can't name itself the person to skip a simulator's lease", async () => {
+  // pr-review's control on #415: through the fake gateway, serveHostThroughGateway, HostMethods and the declared methods.
+  const host = fakeHost()
+  const simulators = new Simulators({ hosts: [host], consent: async () => [], agent: () => undefined, leases: { leaseOf: () => undefined } })
+  const gateway = createFakeGateway()
+  const target = "d-11111111-1111-4111-8111-111111111111"
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
+  const setup = { phase: "unavailable" as const, checkedAt: 0, mac: "test", steps: [] }
+  declareSimulatorMethods(methods, { read: async () => setup, press: async () => setup }, simulators)
+  const served = await serveHostThroughGateway(await gateway.connectRuntime(), { runtimeId: target, build: "test", invoke: methods.invoke.bind(methods) })
+  const actor = { kind: "runtime" as const, runtimeId: "m-unleased.g1" }
+  const calls = gatewayHostCalls(await gateway.connectClient(actor), { runtimeId: target, actor })
+  try {
+    const input = { host: LOCAL_HOST, simulator: "MAKO-PHONE" }
+    const open = async (caller: SimulatorCaller) => decodeRuntimeValue(await sendWithRepeats("mako:simulators-open", calls.call("mako:simulators-open", [caller, input]), { runtime: target }))
+    const leaseless = await open({ kind: "agent", session: "s-t1", agent: { thread: "t1", session: "s-t1", folder: "/project" } })
+    assert.equal(Refused.parse(leaseless).refused, "not-offered")
+    const forged = await open({ kind: "person" })
+    assert.ok(Refused.safeParse(forged).success, "a machine naming its payload's caller the person is refused")
+    assert.deepEqual(host.done, [], "and nothing is booted")
+  } finally {
+    served.close()
+    await gateway.close()
+    await simulators.close()
+  }
+})
+
+test("a machine runtime is never the person at any door that names its caller: agents_* and threads-move", async () => {
+  const heard: string[] = []
+  const engine = new Proxy({}, { get: (_target, verb: string) => async () => (heard.push(verb), { refused: "unknown-thread", why: "heard" }) })
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
+  // SAFETY: every verb the declared methods call is a function on the proxy, answering as a refusal does.
+  declareAgentMethods(methods, () => engine as AgentOperations)
+  declareThreadMoveMethods(methods, () => ({ move: async () => (heard.push("threads-move"), { refused: "no-thread", why: "heard" }), asks: () => [], answer: () => {} }))
+  const call = async (channel: string, args: unknown[], client: string) => decodeRuntimeValue(await methods.invoke(channel, args, client))
+  const person = { kind: "person" }
+  const machine = "gateway:runtime:m-1.g1"
+  for (const [channel, input] of [["mako:agents-list", {}], ["mako:agents-answer", { to: "fin", answer: "Continue", clientKey: "k" }], ["mako:agents-start", { brief: { objective: "y" }, clientKey: "k" }], ["mako:threads-move", { to: "cloud", clientKey: "k" }]] as const) {
+    const answer = await call(channel, [person, input], machine)
+    const refusal = Refused.safeParse(answer)
+    assert.ok(refusal.success && refusal.data.why !== "heard", `${channel}: a machine's person claim is refused before the engine hears it`)
+  }
+  assert.deepEqual(heard, [])
+  await call("mako:agents-list", [person, {}], "gateway:web:phone-device")
+  await call("mako:agents-list", [{ kind: "agent", session: "s-1" }, {}], machine)
+  await call("mako:threads-move", [person, { to: "cloud", clientKey: "k" }], "gateway:desktop:d-1")
+  assert.deepEqual(heard, ["list", "list", "threads-move"], "the person's own device, and a machine as its agent, are heard")
   await methods.close()
 })

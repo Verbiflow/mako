@@ -406,6 +406,9 @@ function walkCapable(seed, steps, tally) {
       for (const named of [...(held.lease.session?.artifacts ?? []), ...(held.lease.session?.streams ?? [])]) assert.ok(!named.name.includes("CANARY"), `${where}: a name holds a value`)
     }
     tally.told = (tally.told ?? 0) + tells.length
+    // A session's file is let go only when no live lease of its grant names it.
+    for (const effect of result.effects.filter((effect) => effect.effect === "unreferenced"))
+      assert.ok(!Object.values(state.leases).some((other) => !other.ended && other.lease.grant === effect.grant && other.lease.session?.artifacts?.some((each) => each.hash === effect.version)), `${where}: a file let go that a live session still names`)
     if (input.type === "artifact" && !result.rejected) tally.artifacts = (tally.artifacts ?? 0) + 1
     tally[input.type] = (tally[input.type] ?? 0) + 1
     const events = result.effects.filter((effect) => effect.effect === "log").map((effect) => effect.event)
@@ -788,6 +791,28 @@ describe("borrowing: exact cases", () => {
     const moved = step(lent.state, { type: "grant", grant: { ...named, version: 3, devices: ["studio"] }, at: 5 })
     assert.equal(moved.state.leases.l2.ended?.why, "revoked")
     assert.equal(step(moved.state, { type: "borrow", need: need({ for: atMac }), lease: "l3", ask: "a3", at: 6, content: { version: sha("x"), size: 1 } }).answer.refusal?.refused, "revoked")
+  })
+
+  test("a session's file shared with another live session stays until the last one naming it ends", () => {
+    const simulators = GrantSchema.parse({
+      id: "sims", resource: { kind: "operation", ref: "ios-simulator.*" }, source: { kind: "capable", requires: [{ capability: "ios-simulator" }] },
+      scope: { level: "project", account: ACCOUNT, repository: "acme/web" }, mode: "relay", access: "run", lifetime: { until: "revoked" }, ask: "never", secret: false,
+      grantedBy: { kind: "person", account: ACCOUNT }, grantedAt: 1, version: 1,
+    })
+    let state = step(emptyBroker(ACCOUNT), { type: "grant", grant: simulators, at: 1 }).state
+    state = step(state, { type: "advertise", device: "mac", capabilities: [{ capability: "ios-simulator", version: "27.2" }], slots: { used: 0, of: 4 }, at: 2 }).state
+    for (const [index, thread] of ["t1", "t2"].entries()) {
+      const need = { kind: "operation", ref: "ios-simulator.session", for: { ...mac, thread }, why: "drive it", correlationId: `s${index}` }
+      state = step(state, { type: "borrow", need, at: 3, lease: `l${index}`, ask: `a${index}` }).state
+      state = step(state, { type: "source-answer", ask: `a${index}`, answer: { answer: "yes", version: "v1" }, at: 4 }).state
+      state = step(state, { type: "artifact", lease: `l${index}`, device: "mac", artifact: { name: "shot.png", hash: sha("same bytes"), size: 10 }, at: 5 }).state
+    }
+    const unreferenced = (effects) => effects.filter((effect) => effect.effect === "unreferenced" && effect.version === sha("same bytes"))
+    const first = step(state, { type: "release", lease: "l0", at: 6 })
+    assert.deepEqual(unreferenced(first.effects), [], "the other live session still names the file")
+    assert.deepEqual(first.state.leases.l1.lease.session.artifacts?.map((each) => each.hash), [sha("same bytes")])
+    const last = step(first.state, { type: "release", lease: "l1", at: 7 })
+    assert.equal(unreferenced(last.effects).length, 1, "the last one naming it lets it go")
   })
 
   test("one seal context for every borrowed value", () => {
