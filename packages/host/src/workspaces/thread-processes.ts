@@ -1,9 +1,9 @@
-import { execFile, spawn } from "node:child_process"
+import { hostCommand, hostSpawn } from "../base/host-command.js"
+import { spawn } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import { inside, workingDirectories } from "./app-probe.js"
 import { STEPS_FOLDER_VARIABLE, stepsOf, type StepRecord } from "./check-steps.js"
@@ -14,7 +14,7 @@ import { ContainerEngine, containersBy, type Container, type ContainerLook } fro
 import { onLinux, onMac } from "../base/platform.js"
 import { childInput } from "@mako/sessions/child-input"
 
-const run = promisify(execFile)
+const run = hostCommand
 
 /** Stop asks nicely this long before it kills. */
 /**
@@ -1207,7 +1207,7 @@ export class ThreadProcesses {
     const ours = async () => alive() && (await this.runs(app))[key]?.pid === pid
     while (await ours()) {
       const tried = await new Promise<ReadyFailure | undefined>((done) => {
-        const child = spawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: ["ignore", "pipe", "pipe"], detached: true })
+        const child = hostSpawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: ["ignore", "pipe", "pipe"], detached: true })
         let output = ""
         const keep = (chunk: Buffer) => {
           output = (output + chunk.toString()).slice(-READY_OUTPUT_CHARS)

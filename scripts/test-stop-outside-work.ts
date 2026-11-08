@@ -1,4 +1,9 @@
-import { hostCommand } from "@mako/host/base/host-command"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+import { setTimeout as delay } from "node:timers/promises"
+import { CuaDriverVersions } from "@mako/host/control/cua-driver-version"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { hostCommand, hostExecFile, hostSpawn, hostFork } from "@mako/host/base/host-command"
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { z } from "zod"
@@ -133,6 +138,76 @@ const git = new Git({ signal: commands.signal })
 await assert.rejects(git.run({ cwd: process.cwd(), args: ["--version"] }), HostStoppingError)
 git.close()
 console.log("commands are reaped before drain, new Git commands are refused, and another host remains independent")
+
+// Streaming, callback and IPC starts use the same scope, preserving their Node child handles.
+const runnerFolder = testScratch("mako-child-runners-")
+const runnerEntry = join(runnerFolder, "child with spaces.cjs")
+await writeFile(runnerEntry, 'require("node:fs").writeFileSync(process.argv[2], String(process.pid)); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)')
+for (const kind of ["spawn", "fork", "callback"] as const) {
+  const scope = new HostStopping(), calls = new HostCallLifetime(scope), ready = join(runnerFolder, kind)
+  const child = scope.run(() => kind === "spawn"
+    ? hostSpawn(process.execPath, [runnerEntry, ready], { stdio: ["ignore", "pipe", "pipe"] })
+    : kind === "fork"
+      ? hostFork(runnerEntry, [ready], { stdio: ["ignore", "pipe", "pipe", "ipc"] })
+      : hostExecFile(process.execPath, [runnerEntry, ready], {}, () => {}))
+  const exited = new Promise<void>((resolve) => child.once("close", () => resolve()))
+  const work = assert.rejects(calls.run(() => exited), HostStoppingError)
+  for (const deadline = Date.now() + 5_000; ; await delay(10)) {
+    if (await readFile(ready, "utf8").catch(() => undefined)) break
+    assert.ok(Date.now() < deadline, `${kind} child started`)
+  }
+  const pid = child.pid
+  assert.ok(pid)
+  const drained = calls.close()
+  await scope.stop()
+  await Promise.all([work, drained])
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
+}
+console.log("streaming, callback and IPC child runners are cancelled and reaped before calls drain")
+
+// Review control: the actual CUA version and updater runners, with no injected command stub.
+const cuaFolder = testScratch("mako-cua-stop-")
+for (const phase of ["version", "update"] as const) {
+  const folder = join(cuaFolder, phase)
+  await mkdir(folder)
+  const executable = join(folder, "cua-driver"), readyFile = join(folder, "ready")
+  await writeFile(executable, `#!${process.execPath}
+import {writeFileSync} from "node:fs"
+if (${JSON.stringify(phase)} === "update" && process.argv.includes("--version")) {
+  process.stdout.write("cua-driver 0.28.0\\n")
+} else {
+  writeFileSync(${JSON.stringify(readyFile)}, String(process.pid))
+  process.on("SIGTERM", () => {})
+  setInterval(() => {}, 1_000)
+}
+`, { mode: 0o700 })
+  const scope = new HostStopping(), lifetime = new HostCallLifetime(scope), versions = new CuaDriverVersions()
+  const work = lifetime.run(async () => {
+    if (phase === "version") await versions.status(executable)
+    else await versions.update(executable)
+  })
+  const ended = assert.rejects(work, HostStoppingError)
+  let pid: number | undefined
+  for (const deadline = Date.now() + 5_000; ; await delay(10)) {
+    const text = await readFile(readyFile, "utf8").catch(() => undefined)
+    if (text) { pid = Number(text); break }
+    assert.ok(Date.now() < deadline, `CUA ${phase} child started`)
+  }
+  const childPid = pid
+  assert.ok(childPid)
+  const drained = lifetime.close()
+  let deadline: ReturnType<typeof setTimeout> | undefined
+  try {
+    // The stop must finish before either command's own multi-second timeout.
+    await Promise.race([Promise.all([scope.stop(), ended, drained]), new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error(`CUA ${phase} held stop`)), 5_000) })])
+    assert.throws(() => process.kill(childPid, 0), { code: "ESRCH" }, `CUA ${phase} child is reaped`)
+  } finally {
+    clearTimeout(deadline)
+    try { process.kill(childPid, "SIGKILL") } catch { /* Already gone. */ }
+    await work.catch(() => {})
+  }
+}
+console.log("CUA's real version and updater commands end before the call drain, with no surviving child")
 
 // A network body that never ends is aborted, not merely raced and abandoned.
 const headers = deferred<void>(), disconnected = deferred<void>()

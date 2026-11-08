@@ -279,7 +279,7 @@ export class AccountLogins {
       clearTimeout(timer)
       try {
         if (cancelled || expired || stopped) {
-          await this.accounts.discardLogin(harness, target)
+          await this.accounts.discardLogin(harness, target).catch((error: Error) => { if (!stopped) throw error })
           if (stopped) throw stopped
           if (expired) throw new Error(`${name} sign-in timed out. ${again} when you're ready.`)
           return { status: "cancelled" }

@@ -1,3 +1,4 @@
+import { hostSpawn } from "../base/host-command.js"
 /**
  * Continue a thread with its own harness.
  *
@@ -24,7 +25,7 @@
 import type { Admission } from "../base/admission.js"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 import { randomUUID } from "node:crypto"
-import { spawn, type ChildProcess } from "node:child_process"
+import type { ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import type { ThreadRef } from "@mako/sessions"
@@ -331,7 +332,7 @@ export class NativeRuns {
       if (!executable) throw new Error(`${harness} is not installed`)
       await this.host.accounts.assertLaunch(harness, accountLaunch)
       assertPreparation()
-      child = spawn(executable, args, {
+      child = hostSpawn(executable, args, {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
         env: environmentForExecutable(executable, env),

@@ -104,7 +104,10 @@ then listens on the socket; its `stop()` releases everything in one fixed
 order. Before draining host calls, `HostStopping` cancels outside work: the
 owners registered together in `core.ts`, provider children, commands and
 HTTP requests (including response bodies). Keep local commits and stores
-open through that drain. Register new outside waiters with that scope;
+open through that drain. Register new outside waiters with that scope. Start commands through
+`hostCommand`/`hostExecFile`, streaming children through `hostSpawn`, and
+IPC children through `hostFork`. `check-host-children.mjs` (in lint) rejects
+raw Node process starts except its documented owner and handoff boundaries;
 borrowed SDK checks cancel their operation without taking the client's
 ownership. An unfinished login reports that Mako quit and asks for a new
 sign-in; a saved result stays saved (`test:stop-provider-checks`). A stop still running at 2 s and 10 s logs

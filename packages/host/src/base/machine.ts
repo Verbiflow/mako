@@ -1,5 +1,4 @@
-import { stoppingSignal } from "./host-stopping.js"
-import { execFile } from "node:child_process"
+import { hostExecFile } from "./host-command.js"
 import { constants } from "node:fs"
 import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -74,7 +73,7 @@ export type FindCommand = (command: string) => Promise<boolean>
 
 const runCommand: RunCommand = (command, args, options = {}) =>
   new Promise((resolve, reject) => {
-    const child = execFile(command, args, { signal: stoppingSignal(), timeout: options.timeoutMs ?? 15_000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+    const child = hostExecFile(command, args, { timeout: options.timeoutMs ?? 15_000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
       if (error && !Number.isInteger(error.code)) reject(error)
       else resolve({ code: error ? Number(error.code) : 0, stdout })
     })
