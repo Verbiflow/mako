@@ -321,6 +321,7 @@
     "probe:steer-lands": "tsx --tsconfig tsconfig.app.json scripts/probe-steer-semantics.ts --lands",
     "test:background-work-ui": "node scripts/test-background-work-ui.mjs",
     "test:test-scratch": "node scripts/test-test-scratch.mjs",
+    "test:ci-downloads": "node scripts/test-ci-downloads.mjs",
     "test:run-suite": "node scripts/test-run-suite.mjs",
     "test:crew-card-ui": "node scripts/test-crew-card-ui.mjs",
     "test:transcript-send-ui": "node scripts/test-transcript-send-ui.mjs",
