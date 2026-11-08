@@ -10,6 +10,7 @@ import { closeProviderProcess, endProviderProcess, providerProcessGone, spawnPro
 import { ProviderStartupWatch } from "../provider-startup.js"
 import { grokSessionSource } from "./session-source.js"
 import { heavy } from "../../base/heavy-packages.js"
+import { childInput } from "@mako/sessions/child-input"
 
 /** A cold start and one request that copies the session's files. */
 const FORK_MS = 30_000
@@ -169,7 +170,7 @@ export async function grokFork(input: AcpForkInput): Promise<string> {
   input.signal.addEventListener("abort", kill, { once: true })
   if (input.signal.aborted) kill()
   const watch = new ProviderStartupWatch(child, { harness: "Grok fork", stderr: () => stderr })
-  const connection = new ClientSideConnection(() => client, ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)))
+  const connection = new ClientSideConnection(() => client, ndJsonStream(acpWritable(childInput(child)), acpReadable(child.stdout)))
   let failed = false
   try {
     await watch.step("initialize", connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: input.clientCapabilities }))

@@ -29,6 +29,7 @@ import {
   type RuntimeUpdateSource,
 } from "./update-source.js"
 import type { HostJobs } from "../base/host-jobs.js"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /**
  * The runtimes behind every provider: what is installed, what is current,
@@ -1226,7 +1227,7 @@ export async function readRuntimeVersion(
       }
       child.stdout.on("data", collect)
       child.stderr.on("data", collect)
-      child.stdin.end()
+      endChildInput(child)
       const result = await exited
       const output = Buffer.concat(chunks).toString("utf8")
       if (result.code !== 0 && !parseVersion(output))

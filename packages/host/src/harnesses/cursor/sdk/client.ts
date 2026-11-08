@@ -5,6 +5,7 @@ import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { LineAssembler } from "@mako/sessions"
+import { writeChildInput } from "@mako/sessions/child-input"
 import { hostLog, hostWarn } from "../../../base/host-log.js"
 import { closeProviderProcess, endProviderProcess, spawnProviderProcess } from "../../provider-process.js"
 import { headlessNodeExecutable } from "../../../base/headless-node.js"
@@ -304,8 +305,7 @@ export class CursorSdkClient {
         reject,
         timer,
       })
-      this.child.stdin?.write(`${JSON.stringify(line)}\n`, (error) => {
-        if (!error) return
+      writeChildInput(this.child, `${JSON.stringify(line)}\n`).catch((error: Error) => {
         const entry = this.pending.get(id)
         if (!entry) return
         this.pending.delete(id)
