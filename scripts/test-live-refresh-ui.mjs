@@ -4,6 +4,7 @@ import { writeFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 if (!process.versions.electron) {
   const { createServer } = await import('vite')
@@ -24,8 +25,10 @@ if (!process.versions.electron) {
 async function check() {
   const {app,BrowserWindow}=await import('electron')
   app.setPath('userData',join(process.env.MAKO_REFRESH_ROOT,'profile'))
+  withMotion(app)
   await app.whenReady()
   const w=new BrowserWindow({show:false,width:1200,height:850,webPreferences:{contextIsolation:true,nodeIntegration:false}})
+  atSize(w, 1200, 850)
   const page=w.webContents
   const evaluate=s=>page.executeJavaScript(s)
   const until=async(s)=>{const end=Date.now()+15000;while(!await evaluate(s)){if(Date.now()>end)throw Error(s);await new Promise(r=>setTimeout(r,40))}}

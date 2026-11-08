@@ -5,6 +5,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { literal } from "./lib/page-code.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * The web app's Settings › Devices (`src/dev/web-devices-check.tsx`: `WebDevices`, the desktop's own `Devices`, on an
@@ -69,12 +70,14 @@ async function check() {
   const base = process.env.MAKO_DEVICES_URL
   const parts = new Set((process.env.MAKO_DEVICES_ONLY || "phone,widths,tablet,laptop,marks").split(","))
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const watchdog = setTimeout(() => {
     console.error("Web devices UI verification exceeded its 480-second limit")
     app.exit(1)
   }, 480_000)
   const window = new BrowserWindow({ width: 390, height: 844, useContentSize: true, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 390, 844)
   const page = window.webContents
   // The debugger answers once the window holds a page.
   await window.loadURL("about:blank")

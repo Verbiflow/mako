@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { literal } from "./lib/page-code.mjs"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * Settings › Devices and Settings › Account against the production components
@@ -61,8 +62,10 @@ async function checkWindow() {
   const evidence = process.env.MAKO_UI_TEST_EVIDENCE
   const base = process.env.MAKO_UI_TEST_URL
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1280, height: 1240, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1280, 1240)
   const page = window.webContents
   page.debugger.attach("1.3")
   const watchdog = setTimeout(() => {
