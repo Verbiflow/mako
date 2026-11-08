@@ -469,8 +469,6 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
-        with:
-          electron: "false"
       - uses: ./.github/actions/codex-sandbox
       # How two runs are judged: a count fails in either, and only a time gets a second try.
       - run: npx tsx scripts/test-sync-bench-judge.ts
