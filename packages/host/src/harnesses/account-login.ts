@@ -26,6 +26,7 @@ import type { AccountLoginCommand, AccountLoginTarget, AccountLoginTask } from "
 import { spawnProviderProcess } from "./provider-process.js"
 import { onLinux, onMac, onWindows } from "../base/platform.js"
 import type { HostJobs } from "../base/host-jobs.js"
+import { writeChildInput } from "@mako/sessions/child-input"
 
 const run = promisify(execFile)
 
@@ -140,7 +141,7 @@ function commandSession(
     const text = chunk.toString("utf8")
     if (output.length < OUTPUT_LIMIT) output += text
     if (launch.terminal)
-      for (const [query, answer] of TERMINAL_ANSWERS) if (text.includes(query)) child.stdin.write(answer)
+      for (const [query, answer] of TERMINAL_ANSWERS) if (text.includes(query)) writeChildInput(child, answer).catch(() => {})
     const url = signInUrl(output)
     if (url) announce(url)
     if (pastedAt !== undefined && launch.refusedCode?.test(output.slice(pastedAt).replace(TERMINAL_STYLING, ""))) {
@@ -150,7 +151,6 @@ function commandSession(
   }
   child.stdout.on("data", listen)
   child.stderr.on("data", listen)
-  child.stdin.on("error", () => {})
 
   const ended = new Promise<Ending>((resolve) => {
     child.once("error", () => resolve({ kind: "failed" }))
@@ -171,7 +171,8 @@ function commandSession(
   if (launch.paste)
     session.paste = (text) => {
       pastedAt = output.length
-      child.stdin.write(`${text}${launch.terminal ? "\r" : "\n"}`)
+      // A sign-in gone as it's pasted to ends as its `close` says.
+      writeChildInput(child, `${text}${launch.terminal ? "\r" : "\n"}`).catch(() => {})
       // A CLI with no status command may keep running after it signs in;
       // the profile itself says when it has.
       if (!launch.statusArgs && stopPolling === undefined)

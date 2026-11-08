@@ -31,7 +31,7 @@ import { ChildCalls } from "./child-calls.js"
 import { LiveActivity, reportedEffect } from "./live-activity.js"
 import { within } from "./paths.js"
 import { gitRepository, nodeFileSystem, watcherEvents, type SystemHistory, type TreeWatcher } from "./ports.js"
-import { changes, hunks, partition, restorable, shares, storedView, turnChanges, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
+import { changes, countTurnInSlices, hunks, partition, restorable, shares, storedView, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
 import { lostVersions, restoreVersion } from "./recovery.js"
 import { threadTrees, type ThreadTree } from "./thread-tree.js"
 import { runningIn, turnOnlyPair, turnWriters, undoPlan, type ShownPair, type UndoPlan } from "./turn-lines.js"
@@ -248,10 +248,10 @@ export interface Attribution {
   threadChanges(thread: string): ThreadChangeSummary
   /**
    * Count what a Thread's turn changed, from the journal as it stands
-   * (`turnChanges`); `settling` while its entries may still be given
-   * another author. Undefined while the journal isn't open.
+   * (`countingTurn`, a slice at a time); `settling` while its entries may
+   * still be given another author. Undefined while the journal isn't open.
    */
-  countTurn(thread: string, turn: string, state: TurnChanges["state"]): TurnChanges | undefined
+  countTurn(thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined>
   /** Whether every change by `at` has its author for good, so a turn that ended then can be counted once and for all. */
   settledThrough(at: number): boolean
   /** Keep a turn's summary beside the entries, for "changes made" to sum. */
@@ -839,9 +839,9 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       const current = view()
       return threadTotals(current.store.turnChangesOf(thread), changes(current, thread))
     },
-    countTurn: (thread, turn, state) => {
+    countTurn: async (thread, turn, state) => {
       if (!local && !reader) return undefined
-      return turnChanges(view(), thread, turn, state)
+      return countTurnInSlices(view(), thread, turn, state)
     },
     settledThrough: (at) => !view().store.unsettledThrough(at + TRAIL_MS),
     counted: (summary, session) => journal.writes.counted(summary, session),

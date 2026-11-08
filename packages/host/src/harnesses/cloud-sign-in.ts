@@ -6,6 +6,7 @@ import { z } from "zod"
 import type { CloudSignIn, CloudSignInChain } from "../contracts/cloud-sign-ins.js"
 import type { JsonValue } from "../contracts/json.js"
 import { publishFile } from "../base/published-files.js"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /** A harness's sign-in as its adapter reads it for the cloud: everything but which harness it is. */
 export type CloudSignInExport = Omit<CloudSignIn, "harness">
@@ -145,7 +146,7 @@ export async function withFlock<T>(path: string, work: () => Promise<T>, waitMs 
     if (!held) return undefined
     return await work()
   } finally {
-    holder.stdin.end()
+    endChildInput(holder)
     await released
   }
 }

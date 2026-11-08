@@ -6,6 +6,7 @@ import { basename, delimiter, dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import type { MachineOffer } from "../contracts/machine-offer.js"
 import { nodePlatform } from "./platform.js"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /**
  * What a person sitting at the host's machine sees: its file manager, its
@@ -76,7 +77,7 @@ const runCommand: RunCommand = (command, args, options = {}) =>
       if (error && !Number.isInteger(error.code)) reject(error)
       else resolve({ code: error ? Number(error.code) : 0, stdout })
     })
-    if (options.input !== undefined) child.stdin?.end(options.input)
+    if (options.input !== undefined) endChildInput(child, options.input)
   })
 
 export function commandsOnPath(env: NodeJS.ProcessEnv): FindCommand {

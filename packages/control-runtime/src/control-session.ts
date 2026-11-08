@@ -641,7 +641,11 @@ function runCommand(
         })
       }
     )
-    if (options.input !== undefined) child.stdin?.end(options.input)
+    if (options.input !== undefined) {
+      // A command that exits before reading its input fails the write; its own result says how it ended.
+      child.stdin?.on("error", () => {})
+      child.stdin?.end(options.input)
+    }
   })
 }
 

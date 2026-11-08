@@ -133,5 +133,5 @@ List what no other harness has in the definition's `unique`: its name, what carr
 - Codex, versions: tested 0.167.0, oldest 0.142.0
 - Cursor, versions: tested 1.2.0, no oldest proven, bundled @cursor/sdk
 - OpenCode, versions: tested 2.2.6, oldest 2.0.0
-- Grok, versions: tested 1.0.70, oldest 0.2.97
-- Devin, versions: tested 3000.11.234, no oldest proven
+- Grok, versions: tested 1.0.77, oldest 0.2.97
+- Devin, versions: tested 3000.12.28, no oldest proven
