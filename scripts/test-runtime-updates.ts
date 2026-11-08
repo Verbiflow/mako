@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -528,6 +529,34 @@ try {
   assert.equal(unsupported.result?.outcome, "failed")
   assert.match(unsupported.result?.message ?? "", /does not support this installed version/)
   retiredService.stop()
+
+  // A pinned build its vendor withdrew: the install says which harness and version, and what to do, never the
+  // installer's bare HTTP error. A failure that names no withdrawn build keeps the installer's words.
+  const withdrawn = (output: string, version = "3000.12.17") => new RuntimeUpdates({
+    processes,
+    sources: () => [{
+      ...devin, label: "Devin",
+      versions: { tested: version, feed: { manifest: "https://static.devin.ai/cli/current/manifest.json" }, checked: { on: "2026-11-07", how: "a stub" } },
+      install: [scriptInstall(`https://static.devin.ai/cli/${version}/setup.sh`)],
+    }],
+    path: join(dir, `withdrawn-${randomUUID()}.json`),
+    env: () => ({ PATH: "/usr/bin:/bin" }),
+    emit: () => undefined,
+    version: async () => Promise.reject(new Error("missing")),
+    run: async () => ({ code: 22, output }),
+    stat: async () => Promise.reject(new Error("ENOENT")),
+    realpath: async (path) => path,
+  })
+  const gone = withdrawn("  % Total    % Received\ncurl: (22) The requested URL returned error: 403\n")
+  await gone.refresh()
+  const refused = await gone.install("devin")
+  assert.equal(refused.result?.outcome, "failed")
+  assert.equal(refused.result?.message, "Devin 3000.12.17, which this Mako is tested with, is no longer published. Update Mako, or move the pin.")
+  gone.stop()
+  const offline = withdrawn("curl: (6) Could not resolve host: static.devin.ai\n")
+  await offline.refresh()
+  assert.match((await offline.install("devin")).result?.message ?? "", /Could not resolve host/, "a network failure is said as it is")
+  offline.stop()
 
   // Two updates on one channel run one after the other; a second update of one runtime is refused.
   let release!: () => void

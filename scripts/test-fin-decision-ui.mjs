@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 // Done · needs you, on the production components and the mock bridge's Apex scene with two Fins that finished with a
 // decision (`?mock&app=apex&fins=decisions`): Thread list swipe leaves the person "Merge #371 into main?", Pull to
@@ -47,9 +48,11 @@ async function check() {
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const base = process.env.MAKO_DECISION_UI_URL
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false, contextIsolation: true } })
+  atSize(window, 1440, 900)
   const page = window.webContents
   const errors = []
   page.on("console-message", (event) => {

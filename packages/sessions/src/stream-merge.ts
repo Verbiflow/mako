@@ -184,7 +184,14 @@ export function* mergeStreamSteps(record: readonly Entry[], stream: readonly Ent
   const cut = cutOffEntries(stream, cutOff)
   const left = yield* units(record)
   const right = yield* units(stream)
-  const same = (a: number, b: number) => sameUnit(record, left[a]!, stream, right[b]!)
+  // A prompt of a request Mako's log cut off, which its harness declares its record never keeps, is no record prompt's
+  // other side, however its words read: a retry saying the same is the request the record holds (Devin 3000.12.17's
+  // failed turn, then the same message sent again).
+  const unkept = (b: number) => {
+    const unit = right[b]!
+    return unit.type === "user" && cut.has(unit.from) && declared(differences, "stream-only", stream[unit.from]!, true)
+  }
+  const same = (a: number, b: number) => !unkept(b) && sameUnit(record, left[a]!, stream, right[b]!)
   const steps = yield* align(left.length, right.length, same)
   if (!steps) {
     return {

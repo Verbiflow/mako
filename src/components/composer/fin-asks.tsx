@@ -151,7 +151,10 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
               data-fin-answer="refuse"
               disabled={sending}
               onClick={() => send({ allow: false })}
-              className="pressable flex items-center gap-1.5 border border-hairline px-2 py-1 text-label text-negative/80 hover:bg-negative/10 hover:text-negative disabled:opacity-50"
+              className={cn(
+                "pressable flex items-center gap-1.5 border border-hairline px-2 py-1 text-label disabled:opacity-50",
+                ask.ask.named ? "text-foreground hover:bg-fill-hover" : "text-negative/80 hover:bg-negative/10 hover:text-negative"
+              )}
             >
               <XIcon className="size-3" />
               {approvalWords(ask.ask).refuse}

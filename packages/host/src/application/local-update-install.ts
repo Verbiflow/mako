@@ -18,6 +18,7 @@ import {
   desktopLaunchEnvironment,
   unregisterBundle,
 } from "./local-update-installer.js"
+import { sendToChild } from "@mako/sessions/child-input"
 
 export async function prepareLocalInstall(
   candidate: { app: string; identity: string },
@@ -96,7 +97,8 @@ export function installerControls(child: ChildProcess, abandon?: () => Promise<v
       if (dispatched) return
       if (!child.connected)
         throw new Error("The prepared installer is no longer running.")
-      child.send("install")
+      // A send the channel refuses means the installer exited, which `exit` reports.
+      sendToChild(child, "install").catch(() => {})
       dispatched = true
       child.unref()
     },

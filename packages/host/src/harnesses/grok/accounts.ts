@@ -30,6 +30,7 @@ import type { DiscoveryProcesses } from "../discovery-process.js"
 import { chainFingerprint, instant, objectValue, placeSecret, removeSecret, replaceFile, withFlock, without, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
 import { grokHome } from "@mako/sessions"
 import { heavy } from "../../base/heavy-packages.js"
+import { childInput } from "@mako/sessions/child-input"
 
 /** Grok rotates an entry's `key`, `refresh_token` and `expires_at` in place; a key with no refresh token is the login itself. */
 const GrokPrincipal = z.record(z.string(), z.object({
@@ -151,7 +152,7 @@ async function readGrokBilling(processes: DiscoveryProcesses, env: NodeJS.Proces
           }),
           sessionUpdate: async () => {},
         }),
-        ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout))
+        ndJsonStream(acpWritable(childInput(child)), acpReadable(child.stdout))
       )
       await connection.initialize({
         protocolVersion: PROTOCOL_VERSION,

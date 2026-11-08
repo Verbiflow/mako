@@ -5,6 +5,7 @@ import { SLOW_DELIVERY_MS, WatcherReplySchema, type DropReason, type HistoryMark
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { onMac } from "../base/platform.js"
 import { WatchReadings, type ChildStart } from "./watch-readings.js"
+import { sendToChild } from "@mako/sessions/child-input"
 
 export interface WatchListener {
   events(events: readonly WatchEvent[]): void
@@ -92,7 +93,8 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
   const ended = new WeakMap<ChildProcess, "idle" | "silence" | "recovery">()
 
   const post = (request: WatcherRequest) => {
-    if (child?.connected) child.send(request)
+    // A child gone as it's told ends as its `exit` says, and the next watch starts another.
+    if (child) sendToChild(child, request).catch(() => {})
   }
 
   // Like a watch in this process, a watch keeps the process alive; an idle child doesn't.
@@ -360,7 +362,7 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
       current.channel?.ref()
       const timer = setTimeout(() => end(current, new Error(`The file system's history didn't answer within ${Math.round(ms / 1000)} seconds`)), ms)
       pending.set(request.id, { child: current, settle, fail, timer })
-      current.send(request)
+      sendToChild(current, request).catch((error: Error) => end(current, error))
     })
 
   const failed = (reply: WatcherReply) => new Error(reply.t === "failed" ? reply.message : `Unexpected reply ${reply.t}`)
@@ -417,7 +419,7 @@ export function probeDelivery(script = defaultChildScript(), beats = 5): Promise
     })
     child.once("exit", () => done([]))
     child.once("error", () => done([]))
-    child.send({ t: "probe", id: 1, beats } satisfies WatcherRequest)
+    sendToChild(child, { t: "probe", id: 1, beats } satisfies WatcherRequest).catch(() => done([]))
   })
 }
 

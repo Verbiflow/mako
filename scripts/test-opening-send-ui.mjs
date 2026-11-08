@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 // Sending to a conversation while it opens, against the mock bridge's kept
 // scene (`?mock&app=kept`) with its page reads held by the check. A
@@ -49,8 +50,10 @@ async function check() {
   const { app, BrowserWindow } = await import("electron")
   const root = process.env.MAKO_OPENING_CHECK_ROOT
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1280, height: 860, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1280, 860)
   const guard = guardElectronCheck({ app, page: window.webContents, name: "The opening send UI check", ms: 150_000 })
   const page = window.webContents
   page.debugger.attach("1.3")
