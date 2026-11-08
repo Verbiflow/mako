@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import type { MethodTable } from "../base/methods.js"
+import { machineCall, NOT_THE_PERSON } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
@@ -194,7 +195,8 @@ function continued(outcome: ThreadContinueOutcome): ThreadsMoveResult {
 
 /** `mako:threads-move`, and the person's answers to agents' asks. */
 export function declareThreadMoveMethods(methods: MethodTable, tool: () => ThreadMoveTool | undefined): void {
-  methods.handle("mako:threads-move", (caller: AgentCaller, input: ThreadsMoveInput) => tool()?.move(caller, input) ?? refused("unavailable", "This host doesn't move Threads."))
+  methods.handle("mako:threads-move", (caller: AgentCaller, input: ThreadsMoveInput) =>
+    caller.kind === "person" && machineCall() ? refused("not-yours", NOT_THE_PERSON) : (tool()?.move(caller, input) ?? refused("unavailable", "This host doesn't move Threads.")))
   methods.handle("mako:thread-move-asks", () => tool()?.asks() ?? [])
   methods.handle("mako:thread-move-ask-answer", (id: string, allow: boolean) => tool()?.answer(id, allow))
 }

@@ -32,8 +32,9 @@ export interface LendingDeps {
 /**
  * What this device lends under borrowing's session leases, as their source. It answers the asks it can answer itself
  * (an ask that needs its person waits for them in Setup), serves each lease the broker issues it from the moment it
- * hears it, beats for it on its runtime link, and lets go of it however it ends: told by the broker, or found ended
- * when it reads the account's leases again on connecting. Every call another place makes to it under a lease is
+ * hears it, beats for it on its runtime link, and lets go of it however it ends: told by the broker, found ended when
+ * it reads the account's leases again on connecting, or at its own expiry, link or no link. A renewal the broker makes
+ * is taken wherever it's heard (its word again, the account's list, or asked as the lease nears its end). Every call another place makes to it under a lease is
  * checked here first (`leaseOf`): a live lease of that caller's Thread, from the place the gateway says it came from.
  */
 export class Lending {
@@ -45,6 +46,8 @@ export class Lending {
   readonly #ended = new Set<string>()
   /** The phase each served session was last said to be in. */
   readonly #phases = new Map<string, Progress["phase"]>()
+  /** The broker being asked for leases near their end; one ask at a time. */
+  #renewing: Promise<void> | undefined
 
   constructor(deps: LendingDeps) {
     this.#deps = deps
@@ -62,11 +65,17 @@ export class Lending {
     if (decided && "lease" in decided) await this.lent(decided.lease)
   }
 
-  /** A lease this device serves: held from now, one of its slots, and alive at once. The same lease again changes nothing. */
+  /**
+   * A lease this device serves: held from now, one of its slots, and alive at once. The same lease again takes no
+   * other slot; it only adopts a later expiry, the broker's renewal, and never an earlier one.
+   */
   async lent(lease: Lease): Promise<void> {
     if (!lease.session || this.#ended.has(lease.id)) return
     if (lease.device !== (await this.#deps.device())) return
-    if (this.#served.has(lease.id) || this.#ended.has(lease.id)) return
+    if (this.#ended.has(lease.id)) return
+    const held = this.#served.get(lease.id)
+    if (held) return this.#renewed(held, lease)
+    if (lease.expiresAt <= this.#now()) return
     this.#served.set(lease.id, lease)
     const words = this.#deps.words(lease)
     this.#deps.lent.add({ lease: lease.id, what: words.what, for: words.for, since: this.#now() })
@@ -91,14 +100,16 @@ export class Lending {
 
   /**
    * As the runtime link enrols: the account's live leases are the truth. One this device serves that's still live is
-   * served; one it held that isn't listed ended while it was away, and lets go as lost.
+   * served, at the expiry listed when that's later; one it served when the read began that isn't listed ended while it
+   * was away, and lets go as lost. One issued while the list was read is newer than the list, and stays.
    */
   async sync(): Promise<void> {
+    const before = new Set(this.#served.keys())
     const live = await this.#deps.leases().catch(() => null)
     if (!live) return
     const device = await this.#deps.device()
     const mine = live.filter((lease) => lease.device === device && lease.session)
-    for (const id of this.#served.keys()) if (!mine.some((lease) => lease.id === id)) this.ended(id, "lost")
+    for (const id of before) if (this.#served.has(id) && !mine.some((lease) => lease.id === id)) this.ended(id, "lost")
     for (const lease of mine) await this.lent(lease)
   }
 
@@ -117,12 +128,19 @@ export class Lending {
     this.progress(lease, { phase })
   }
 
-  /** Every served session beats: the job that runs it runs every `LEND_BEAT_MS`. */
+  /**
+   * Every served session beats: the job that runs it runs every `LEND_BEAT_MS`. One past its expiry ends here, as
+   * expired, whether or not the link is up to say so; one within two beats of it is asked of the broker, which may have
+   * renewed it.
+   */
   beat(): void {
+    const now = this.#now()
+    for (const [id, lease] of this.#served) if (lease.expiresAt <= now) this.ended(id, "expired")
     for (const id of this.#served.keys()) {
       const progress = this.#progress.get(id)
       if (this.#deps.beat(id, progress) && progress) this.#progress.delete(id)
     }
+    if ([...this.#served.values()].some((lease) => lease.expiresAt - 2 * LEND_BEAT_MS <= now)) void this.#renew()
   }
 
   /**
@@ -139,6 +157,27 @@ export class Lending {
 
   served(): Lease[] {
     return [...this.#served.values()]
+  }
+
+  /** The broker's list asked for renewals of leases near their end; a lease it no longer lists is left to expire or sync. */
+  #renew(): Promise<void> {
+    this.#renewing ??= (async () => {
+      const live = await this.#deps.leases().catch(() => null)
+      for (const lease of live ?? []) {
+        const held = this.#served.get(lease.id)
+        if (held) this.#renewed(held, lease)
+      }
+    })().finally(() => {
+      this.#renewing = undefined
+    })
+    return this.#renewing
+  }
+
+  /** A served lease's newer word: a later expiry is the broker's renewal, taken; anything else changes nothing. */
+  #renewed(held: Lease, lease: Lease): void {
+    if (lease.expiresAt <= held.expiresAt) return
+    this.#served.set(held.id, lease)
+    this.#deps.log?.("a served lease was renewed", { lease: lease.id, expiresAt: lease.expiresAt })
   }
 
   #now(): number {

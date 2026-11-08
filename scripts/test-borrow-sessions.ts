@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { serveRuntime } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
-import type { BorrowAnswer, Lease, Progress, SourceAnswer, SourceAsk } from "@mako/protocol/borrow"
+import { emptyBroker, GrantSchema, liveLeases, step, type BorrowAnswer, type Lease, type Progress, type SourceAnswer, type SourceAsk } from "@mako/protocol/borrow"
 import { LentHere } from "@mako/host/base/lent"
 import { Lending } from "@mako/host/usage/lending"
 
@@ -178,4 +178,75 @@ function world(options: { serve?: SourceAnswer; live?: Lease[] } = {}) {
   assert.deepEqual(said, [{ id: "l1", streams: [{ name: "screen", kind: "video" }] }, { id: "l1" }])
 }
 
+
+{
+  // pr-review's lifecycle controls on #415. A sync whose read began before a lease was issued doesn't end that lease:
+  // only what was served when the read began can have ended while away.
+  let reply!: (leases: Lease[]) => void
+  const lent = new LentHere()
+  const endedHere: string[] = []
+  const lending = new Lending({ device: async () => DEVICE, answer: async () => undefined, leases: () => new Promise<Lease[]>((resolve) => (reply = resolve)), serve: async () => ({ answer: "yes", version: "ready" }), beat: () => true, lent, words: () => ({ what: "an iOS simulator", for: "a cloud Thread" }), ended: (held) => void endedHere.push(held.id) })
+  const sync = lending.sync()
+  await lending.lent(lease("new"))
+  reply([])
+  await sync
+  assert.equal(lent.count(), 1, "a lease issued during the read is still served")
+  assert.deepEqual(endedHere, [])
+}
+
+{
+  // A renewal at the broker is taken here, from the broker's own core: heartbeats kept current and a renew before the
+  // first hour is up move its expiry, and a call after the first expiry is still answered, on the same one slot.
+  let now = 1
+  let live: Lease[] = []
+  const lent = new LentHere()
+  const lending = new Lending({ device: async () => DEVICE, answer: async () => undefined, leases: async () => live, serve: async () => ({ answer: "yes", version: "ready" }), beat: () => true, lent, words: () => ({ what: "an iOS simulator", for: "a cloud Thread" }), now: () => now })
+  const grant = GrantSchema.parse({ id: "simulators", resource: { kind: "operation", ref: "ios-simulator" }, source: { kind: "capable", requires: [{ capability: "ios-simulator" }] }, scope: { level: "account", account: "acct" }, mode: "relay", access: "run", lifetime: { until: "revoked" }, ask: "never", secret: false, grantedBy: { kind: "person", account: "acct" }, grantedAt: 1, version: 1 })
+  let state = step(emptyBroker("acct"), { type: "grant", grant, at: 1 }).state
+  state = step(state, { type: "advertise", device: DEVICE, capabilities: [{ capability: "ios-simulator" }], slots: { used: 0, of: 4 }, at: 2 }).state
+  state = step(state, { type: "borrow", need: { kind: "operation", ref: "ios-simulator", for: borrower, why: "check the sign-in page", correlationId: "one" }, at: 3, lease: "renewed", ask: "ask" }).state
+  state = step(state, { type: "source-answer", ask: "ask", answer: { answer: "yes", version: "ready" }, at: 4 }).state
+  const issued = liveLeases(state)[0]!
+  await lending.lent(issued)
+  for (now = 30_000; now < issued.expiresAt - 10_000; now += 30_000) state = step(state, { type: "heartbeat", lease: issued.id, device: DEVICE, at: now }).state
+  now = issued.expiresAt - 10_000
+  const renewed = step(state, { type: "renew", lease: issued.id, at: now })
+  state = renewed.state
+  assert.ok(renewed.answer && "lease" in renewed.answer)
+  live = liveLeases(state)
+  await lending.sync()
+  now = issued.expiresAt + 1
+  assert.equal(lending.served()[0]?.expiresAt, live[0]?.expiresAt, "the broker's renewed expiry is the one held here")
+  assert.ok(lending.leaseOf({ from: `runtime:${MACHINE}.g1` }, "t1", "ios-simulator"), "a call after the first expiry is still under the lease")
+  assert.equal(lent.count(), 1, "a renewal takes no second slot")
+  // Heard as the broker's word again (a `lent` frame with the renewed lease), the same.
+  const again = { ...live[0]!, expiresAt: live[0]!.expiresAt + 60_000 }
+  await lending.lent(again)
+  assert.equal(lending.served()[0]?.expiresAt, again.expiresAt)
+  assert.equal(lent.count(), 1)
+  // An older word of it never shortens it.
+  await lending.lent(issued)
+  assert.equal(lending.served()[0]?.expiresAt, again.expiresAt)
+  // A lease near its end is asked of the broker as it beats, and a renewal there is taken before it lapses.
+  live = [{ ...again, expiresAt: again.expiresAt + 3_600_000 }]
+  now = again.expiresAt - 1_000
+  lending.beat()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(lending.served()[0]?.expiresAt, live[0]!.expiresAt, "renewed before it lapsed")
+}
+
+{
+  // A lease that expires while the link is down ends here at its expiry: its slot is free and what it held lets go.
+  let now = 1
+  const lent = new LentHere()
+  const endedHere: string[] = []
+  const lending = new Lending({ device: async () => DEVICE, answer: async () => undefined, leases: async () => null, serve: async () => ({ answer: "yes", version: "ready" }), beat: () => false, lent, words: () => ({ what: "an iOS simulator", for: "a cloud Thread" }), ended: (held, why) => void endedHere.push(`${held.id} ${why}`), now: () => now })
+  await lending.lent(lease("offline", { expiresAt: 1_000 }))
+  assert.equal(lent.count(), 1)
+  now = 1_001
+  lending.beat()
+  assert.equal(lent.count(), 0, "no Fin slot or keep-awake is held for it")
+  assert.deepEqual(endedHere, ["offline expired"])
+  assert.equal(lending.served().length, 0)
+}
 console.log("borrow sessions: ok")

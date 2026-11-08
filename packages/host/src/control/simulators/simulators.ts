@@ -33,6 +33,7 @@ import {
   type SimulatorVia,
 } from "../../contracts/simulators.js"
 import { hostLog, hostWarn } from "../../base/host-log.js"
+import { MACHINE_CLIENT, NOT_THE_PERSON } from "../../base/host-client.js"
 import { SimulatorUnsupported, type RemoteSimulatorHost, type SimulatorHost } from "./host.js"
 import { SimulatorStreams, type ViewerOwner } from "./stream.js"
 
@@ -350,6 +351,11 @@ export class Simulators {
    */
   #who(caller: SimulatorCaller, verb: string): Who | SimulatorRefused {
     if (caller.via) {
+      // A machine runtime is never the person, whatever its payload says; it reaches a simulator as its Thread, leased.
+      if (caller.kind === "person" && `gateway:${caller.via.from}`.startsWith(MACHINE_CLIENT)) {
+        hostLog("simulators", "refused", { verb, reason: "machine-as-person", via: caller.via.from })
+        return { refused: "not-offered", why: NOT_THE_PERSON }
+      }
       if (caller.kind === "person") return { kind: "person" }
       if (caller.agent) return { kind: "agent", ...caller.agent }
       hostLog("simulators", "refused", { verb, session: caller.session, reason: "no-thread", via: caller.via.from })

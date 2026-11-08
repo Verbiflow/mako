@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
+import { machineCall, NOT_THE_PERSON } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
 import type { AgentCaller, AgentRefused } from "../contracts/agents.js"
 import {
@@ -22,18 +23,25 @@ import { hostCallSchema } from "../contracts/host-call-inputs.js"
 
 const UNAVAILABLE: AgentRefused = { refused: "unavailable", why: "Children need the Thread store, which didn't open on this host." }
 
-/** `mako:agents-<verb>`: every door's one way in, each the engine's operation of the same name. */
+const MACHINE_AS_PERSON: AgentRefused = { refused: "access", why: NOT_THE_PERSON }
+
+/**
+ * `mako:agents-<verb>`: every door's one way in, each the engine's operation of the same name. A machine runtime's call
+ * that names the person as its caller is refused before the engine hears it (`machineCall`).
+ */
 export function declareAgentMethods(methods: MethodTable, agents: () => AgentOperations | undefined): void {
-  methods.handle("mako:agents-start", (caller: AgentCaller, input: AgentsStartInput) => agents()?.start(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-move", (caller: AgentCaller, input: AgentsMoveInput) => agents()?.move(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-link", (caller: AgentCaller, input: AgentsLinkInput) => agents()?.link(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-list", (caller: AgentCaller, input: AgentsListInput) => agents()?.list(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-read", (caller: AgentCaller, input: AgentsReadInput) => agents()?.read(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-report", (caller: AgentCaller, input: AgentsReportInput) => agents()?.report(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-send", (caller: AgentCaller, input: AgentsSendInput) => agents()?.send(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-answer", (caller: AgentCaller, input: AgentsAnswerInput) => agents()?.answer(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-stop", (caller: AgentCaller, input: AgentsStopInput) => agents()?.stop(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-wait", (caller: AgentCaller, input: AgentsWaitInput) => agents()?.wait(caller, input) ?? UNAVAILABLE)
+  const engine = (caller: AgentCaller) => (caller.kind === "person" && machineCall() ? undefined : agents())
+  const refusal = (caller: AgentCaller) => (caller.kind === "person" && machineCall() ? MACHINE_AS_PERSON : UNAVAILABLE)
+  methods.handle("mako:agents-start", (caller: AgentCaller, input: AgentsStartInput) => engine(caller)?.start(caller, input) ?? refusal(caller))
+  methods.handle("mako:agents-move", (caller: AgentCaller, input: AgentsMoveInput) => engine(caller)?.move(caller, input) ?? refusal(caller))
+  methods.handle("mako:agents-link", (caller: AgentCaller, input: AgentsLinkInput) => engine(caller)?.link(caller, input) ?? refusal(caller))
+  methods.handle("mako:agents-list", (caller: AgentCaller, input: AgentsListInput) => engine(caller)?.list(caller, input) ?? refusal(caller))
+  methods.handle("mako:agents-read", (caller: AgentCaller, input: AgentsReadInput) => engine(caller)?.read(caller, input) ?? refusal(caller))
+  methods.handle("mako:agents-report", (caller: AgentCaller, input: AgentsReportInput) => engine(caller)?.report(caller, input) ?? refusal(caller))
+  methods.handle("mako:agents-send", (caller: AgentCaller, input: AgentsSendInput) => engine(caller)?.send(caller, input) ?? refusal(caller))
+  methods.handle("mako:agents-answer", (caller: AgentCaller, input: AgentsAnswerInput) => engine(caller)?.answer(caller, input) ?? refusal(caller))
+  methods.handle("mako:agents-stop", (caller: AgentCaller, input: AgentsStopInput) => engine(caller)?.stop(caller, input) ?? refusal(caller))
+  methods.handle("mako:agents-wait", (caller: AgentCaller, input: AgentsWaitInput) => engine(caller)?.wait(caller, input) ?? refusal(caller))
 }
 
 /**
