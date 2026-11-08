@@ -596,7 +596,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   }
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, wakeDue: () => [], snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, pinnedAccount: () => undefined, submit: none,
-    act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
+    act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, workOf: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
     turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {},
   }
 }

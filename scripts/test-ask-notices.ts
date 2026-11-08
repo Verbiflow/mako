@@ -4,6 +4,7 @@ import { setImmediate as turn } from "node:timers/promises"
 import { childEntry, ThreadParentSchema } from "@mako/host/contracts/agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { NativeAgentSchema, type NativeAgent } from "@mako/host/contracts/native-agents"
+import { limitNoticeId } from "@mako/host/contracts/fin-fallback"
 import type { LiveBatch, LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
 
 /**
@@ -36,6 +37,11 @@ const { applyThreadGroupChange } = await import("../src/state/thread-groups")
 const { applyThreadActivity } = await import("../src/state/threads")
 const { answerLiveApproval } = await import("../src/state/live-approvals")
 const { readBackLive } = await import("../src/state/live-recovery")
+const { receivingLive } = await import("../src/state/live-door")
+const { watchDoor } = await import("./live-door-watch")
+// Every change to what a host said of a conversation, in every case and run, goes through the door.
+const door = watchDoor(acpStore, receivingLive)
+const throughTheDoor = (what: string) => assert.deepEqual(door.strays.splice(0), [], `${what}: changed a conversation's state without going through the door`)
 
 /** mulberry32: the same run from the same seed. */
 function random(seed: number): () => number {
@@ -48,7 +54,8 @@ function random(seed: number): () => number {
   }
 }
 
-type Kind = "approval" | "question"
+/** What an ask asks for, by the protocol's own kinds (`asks`): needs-you is a Fin's limit notice or a remote one's wait. */
+type Kind = "approval" | "question" | "needs-you"
 type Ask = { id: string; kind: Kind }
 /** One Session of the Apex Thread, as its host has it at one revision. */
 type SessionState = { own?: Ask; signIn?: number; running: boolean }
@@ -85,7 +92,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   }), { source: "live" }, {})
   let counter = 0
   const next = (prefix: string) => `${prefix}${(counter += 1)}`
-  const counts = { asked: 0, answered: 0, replaced: 0, turns: 0, lateReads: 0, staleReads: 0, oldStartReads: 0, restarts: 0, legacyStarts: 0, batchesDuringReads: 0, strays: 0, opened: 0, letGo: 0, removed: 0, looked: 0, several: 0 }
+  const counts = { asked: 0, answered: 0, replaced: 0, turns: 0, lateReads: 0, staleReads: 0, oldStartReads: 0, restarts: 0, legacyStarts: 0, needsYou: 0, batchesDuringReads: 0, listings: 0, listingsDuringReads: 0, strays: 0, opened: 0, letGo: 0, removed: 0, looked: 0, several: 0 }
 
   // The host: each Session's state by its start and revision, the Fins (told to the newest alone), the remote Session,
   // the outside app. A restart is a new start (`E<n>`), its numbers begun again, what it holds carried over.
@@ -121,6 +128,8 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     agents: FINS.map((fin): NativeAgent => {
       const ask = fins[fin]
       const entry = quiet(fin)
+      // Needs-you of a Fin: its tree's limit notice, which asks nothing but that it's seen.
+      if (ask?.kind === "needs-you") return NativeAgentSchema.parse({ ...entry, child: { ...entry.child!, limitNotice: { id: ask.id, line: `Out of usage ${ask.id}`, harness: "claude" } } })
       return ask ? NativeAgentSchema.parse({ ...entry, child: { ...entry.child!, state: { kind: "blocked", question: `Fin ${fin} asks ${ask.id}`, on: "person", ask: { kind: ask.kind, id: ask.id, options: [{ label: "Yes" }, { label: "No" }] } } } }) : entry
     }),
   })
@@ -246,7 +255,11 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     if (roll < 0.3) {
       // An ask opens, or one replaces another: a Session's own, a sign-out, a Fin's, the remote Session's, the outside app's.
       const source = choose(["own", "own", "sign-in", "fin", "fin", "remote", "outside"] as const)
-      const ask: Ask = { id: next("q"), kind: choose(["approval", "question"] as const) }
+      // A Session's own asks are its permissions, approvals and questions; its needs-you is a sign-out.
+      const kind = choose(source === "own" ? ["approval", "question"] as const : ["approval", "question", "needs-you"] as const)
+      const id = next("q")
+      const ask: Ask = { id: kind === "needs-you" && source === "fin" ? limitNoticeId({ harness: "claude", account: id, until: 1 }, 0) : id, kind }
+      if (kind === "needs-you" && (source === "fin" || source === "remote")) counts.needsYou += 1
       if (source === "own") {
         if (now(session).own) counts.replaced += 1
         else counts.asked += 1
@@ -362,7 +375,19 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
       const state = snapshot(session, epochOf(0), 1)
       trail.push(`a stray answer of another data root says the ${session} Session as it began`)
       applyLiveSnapshot({ ...state, epoch: `g1.stray${seed}x.${counter}` })
-    } else if (roll < 0.95) {
+    } else if (roll < 0.94) {
+      // The host lists a Session the window holds as it stands (a listing, or a reconnect's summaries): its start and
+      // revision now, which a read out no longer speaks alone against. One it doesn't hold is listed without its asks,
+      // which only its batches and snapshots say.
+      if (!held(session)) continue
+      counts.listings += 1
+      if (reads.some((read) => read.session === session)) counts.listingsDuringReads += 1
+      const state = now(session)
+      const summary: LiveSummary = { session: sessionOf(session, state), threadId: thread, sessionId: ids[session], epoch: epochOf(host.start), revision: host.revision[session], createdAt: session === "older" ? 1 : 2 }
+      trail.push(`the host lists the ${session} Session at ${host.revision[session]} of ${epochOf(host.start)}`)
+      if (pick() < 0.5) listLive([summary])
+      else hydrateLiveSummaries([summary], true)
+    } else if (roll < 0.96) {
       // The host restarts: a new start, its numbers begun again, holding what it held. It tells the window by what it sends
       // from then on; reads the last start had out are answered late, as that start had it.
       counts.restarts += 1
@@ -385,6 +410,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     }
     await settle()
     check(trail.at(-1)!)
+    throughTheDoor(`seed ${seed}, after ${trail.at(-1)!}`)
   }
   // Every read answered, and every Session held again as it stands: everything open has its notice, nothing more.
   // Reads it asks again after a while (`hydrateLive`'s backoff) are waited for, and answered too.
@@ -410,6 +436,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   for (const session of SESSIONS) if (!held(session)) applyLiveSnapshot(snapshot(session))
   await settle()
   check("the end")
+  throughTheDoor(`seed ${seed}, at the end`)
   return counts
 }
 
@@ -612,6 +639,24 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     assert.ok(now === undefined || now.revision === 5, `the window holds nothing, or the stream's newest; it holds ${now?.revision} of ${now?.epoch}`)
   }
 
+  // A listed Session asking the person when the window loses its host, answered while it's away: the reconnect's
+  // summary carries no permission, so the window keeps the one it held and reads the Session again, whose answer says
+  // it's answered, and its notice goes.
+  {
+    const key = "reconnect-answered-away", epoch = "g1.awayroot0.a"
+    fresh()
+    applyLiveSnapshot(state(key, epoch, 3, [fin], [approval]))
+    unloadLive(key)
+    assert.equal(unseen(), 1, "its approval is said")
+    hydrateLiveSummaries([{ session: state(key, epoch, 5, [fin]).session, epoch, revision: 5, createdAt: 1 }], true)
+    assert.equal(approvalShown(key), "approve", "the reconnect doesn't take it for answered")
+    assert.equal(bridgeReads.length, 1, "it's read again")
+    bridgeReads.shift()!(state(key, epoch, 5, [fin]))
+    for (let wait = 0; wait < 6; wait += 1) await turn()
+    assert.equal(approvalShown(key), undefined, "the read says it's answered")
+    assert.equal(unseen(), 0, "and its notice goes")
+  }
+
   // Starts with no generation, the newer said by this window's own stream: what it says of that start is taken, and a
   // late reply of the start before is refused and read afresh.
   {
@@ -675,6 +720,7 @@ const seeds = only ? [Number(only)] : Array.from({ length: Number(process.env.SE
 const totals: Record<string, number> = {}
 for (const seed of seeds) for (const [name, count] of Object.entries(await run(seed, 120))) totals[name] = (totals[name] ?? 0) + count
 // The runs have to have tried what they're for.
+throughTheDoor("the cases")
 if (!only) for (const [name, count] of Object.entries(totals)) assert.ok(count >= seeds.length / 10, `too few ${name}: ${JSON.stringify(totals)}`)
 console.log(`Ask notices: over ${seeds.length} generated runs, every ask open had its notice and none the person hadn't seen stood for one answered, after every step (${Object.entries(totals).map(([name, count]) => `${count} ${name}`).join(", ")})`)
 process.exit(0)

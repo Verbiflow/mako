@@ -1417,6 +1417,52 @@ async function anySessionAsks(): Promise<void> {
   }
 }
 
+/**
+ * A Fin's older Session waiting on the person for something that's neither an approval nor a question (its subagent
+ * waits, with nothing more to say: needs-you, by the protocol's `asks`) is what the Fin stands on, beside a newer one
+ * idle, and it's the person's, never its Apex's to answer. An approval in the older Session beside a newer one that
+ * needs the person still reaches its Apex, and its answer the Session that asked.
+ */
+async function aSessionNeedsYou(): Promise<void> {
+  const w = world("needs-you", (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : "Started it."))
+  try {
+    const apex = await w.apex("codex")
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Finish." }, harness: "claude", name: "needing", clientKey: "k-needing", cwd: w.root })
+    assert.ok(!("refused" in started) && started.conversation && started.child, JSON.stringify(started))
+    const older = started.conversation
+    await waitFor(() => w.live.held(older)?.requests[0]?.status === "completed", "the Fin's first turn ends")
+    const tab = w.store.createSession({ operationId: randomUUID(), thread: ThreadIdSchema.parse(started.child), actor: w.store.person() })
+    const newer = randomUUID()
+    await w.live.start("claude", w.root, { conversationId: newer, session: tab.session, initialRequest: { id: randomUUID(), text: "Anything else?", attachments: [] } })
+    await waitFor(() => w.live.held(newer)?.requests[0]?.status === "completed", "the new tab's first turn ends")
+    const entry = () => w.agents.roster(apex.conversation).find((agent) => agent.child?.thread === started.child)
+    const waits = (conversation: string, kind: "waiting" | "completed") =>
+      w.live.observe({ type: "live-agent", id: conversation, agent: { nativeId: "sub", title: "Explore", work: "agent", stoppable: true, state: { kind } } })
+    waits(older, "waiting")
+    assert.equal(w.live.workOf(older)?.status, "waiting", "the older Session waits on the person")
+    assert.equal(w.live.waitingOn(older), undefined, "for nothing it names")
+    await waitFor(() => entry()?.child?.state?.kind === "blocked", "its Apex's roster says the Fin waits, not that its newer Session is idle")
+    const state = entry()?.child?.state
+    assert.equal(state?.kind === "blocked" ? state.on : undefined, "person", "on the person, not its Apex")
+    assert.equal(entry()?.child?.conversation, older, "read from the Session that waits")
+    waits(older, "completed")
+    await waitFor(() => entry()?.child?.state?.kind !== "blocked", "and no longer, once it doesn't")
+
+    // The older Session asks for an approval while the newer one needs the person: the approval is its Apex's to hear,
+    // and its answer reaches the older Session.
+    waits(newer, "waiting")
+    const answered = w.ask(older, "Run the migration?")
+    await waitFor(() => w.agents.personAsk(apex.conversation)?.ask.kind === "approval", "the approval is asked")
+    const ask = w.agents.personAsk(apex.conversation)!
+    const respond = await w.agents.respond(apex.conversation, { fin: ask.fin, ask: ask.ask.id, request: randomUUID(), allow: true })
+    assert.ok(!("refused" in respond), JSON.stringify(respond))
+    await answered
+    assert.equal(w.live.waitingOn(older), undefined, "the answer reached the Session that asked")
+  } finally {
+    await w.close()
+  }
+}
+
 /** A list reads what the listing and the store hold, never a journal: one Fin's search once read 74 back at once. */
 async function listsReadNoJournal(): Promise<void> {
   const rows: ThreadRef[] = []
@@ -2162,6 +2208,7 @@ try {
   await progressGoesWhereItsRead()
   await finsMoveInTheNewestSession()
   await anySessionAsks()
+  await aSessionNeedsYou()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()

@@ -17,20 +17,10 @@ import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { prependLiveHistory, readLiveSnapshot, readLiveValue, retainLiveDetails } from "@/state/live-history"
 import { isHistoryExpired, type LiveHistoryCursor, type LiveHistoryPage } from "@mako/host/contracts/live-history"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
+import { currentStarts, readsOut, receiveLive, type ReadOut, type Received } from "@/state/live-door"
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, HeardLiveBatch[]>()
-/**
- * A read of a conversation's snapshot while it's out: the newest revision this window has taken of it since it was
- * asked, whether anything came for it on the stream meanwhile (`moved`), and the newest batch that came (`heard`).
- */
-type ReadOut = { revision: number; epoch?: string; moved?: true; heard?: { epoch: string; revision: number } }
-/**
- * The reads out of each conversation (`readBackLive`, `hydrateLive`): each answer older than what this window took of
- * its conversation while it was out is past, whatever this window holds of it by then (it may have let it go, or no
- * longer list it). Kept only while each read is out.
- */
-const readsOut = new Map<string, Set<ReadOut>>()
 
 function readGoesOut(id: string): ReadOut {
   const asked = acpStore.get().conversations[id]
@@ -132,12 +122,6 @@ function olderThan(said: { epoch?: string; revision: number }, held: { epoch?: s
   return saidStart.generation < heldStart.generation
 }
 
-/**
- * The host start this window last learned each conversation is of now: from its own stream (a batch, the host's list)
- * or a snapshot it took. A reply of that start is the current host's, whatever its order against what's held; one of
- * any other it can't order is past or unknown.
- */
-const currentStarts = new Map<string, string>()
 /** Conversations whose next read is the current host's word, asked for when a reply couldn't be placed. */
 const freshReads = new Set<string>()
 
@@ -181,7 +165,12 @@ function steerTaken(action: LiveAction): boolean {
   return action.state.kind !== "dispatching" && action.state.kind !== "not-accepted"
 }
 
+/** A snapshot taken in (a read's, or an action's answer), through the door (`receiveLive`). */
 export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: string | null, covers?: LiveHistoryCursor, fresh = false): void {
+  receiveLive(snapshot.session.id, { from: "answer" }, () => takeSnapshot(snapshot, replyBindingId, covers, fresh))
+}
+
+function takeSnapshot(snapshot: LiveSnapshot, replyBindingId?: string | null, covers?: LiveHistoryCursor, fresh = false): void {
   restoredLive(snapshot.session.id)
   for (const request of snapshot.requests) settleMessage(request.id, true)
   for (const transfer of snapshot.control?.transfers ?? []) settleMessage(transfer.input.id, true)
@@ -489,15 +478,11 @@ function batchHistoryFailure(batch: LiveBatch, current: { historyFailure?: strin
  * when it's next in line, so a snapshot taken meanwhile is what it's read against.
  */
 export function applyLiveBatch(heard: HeardLiveBatch, replayed = false): void {
-  // Heard on the stream (not one that waited on a snapshot, replayed after it), it says the start the conversation is
-  // of now, and whatever it is (taken, waiting on a read, of another start), a read out of it no longer speaks alone.
-  if (!replayed) {
-    if (heard.epoch) currentStarts.set(heard.id, heard.epoch)
-    for (const read of readsOut.get(heard.id) ?? []) {
-      read.moved = true
-      if (heard.epoch && (read.heard?.epoch !== heard.epoch || read.heard.revision < heard.revision)) read.heard = { epoch: heard.epoch, revision: heard.revision }
-    }
-  }
+  // Heard on the stream, it's its host's own word; one that waited on a snapshot, replayed after it, was heard already.
+  receiveLive(heard.id, replayed ? { from: "answer" } : { from: "said", revision: heard.revision, ...(heard.epoch && { epoch: heard.epoch }) }, () => takeBatch(heard))
+}
+
+function takeBatch(heard: HeardLiveBatch): void {
   if (!isCompactBatch(heard)) applyBatch(heard, heard, false)
   else {
     const current = acpStore.get().conversations[heard.id]
@@ -711,10 +696,12 @@ function notifyCompletion(
 export function unlistLive(ids: readonly string[]): void {
   const active = acpStore.get().activeKey
   for (const id of ids) {
-    pending.delete(id)
-    mergedSince.delete(id)
-    stuck.delete(id)
-    removeAcpConversation(id)
+    receiveLive(id, { from: "said" }, () => {
+      pending.delete(id)
+      mergedSince.delete(id)
+      stuck.delete(id)
+      removeAcpConversation(id)
+    })
   }
   if (active && ids.includes(active))
     toast.info("That conversation left the cloud", { description: "It went back to the computer it came from, or it ended.", duration: ACTION_TOAST_MS })
@@ -771,95 +758,103 @@ export function hydrateLiveSummaries(
  */
 function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void {
   for (const summary of summaries) {
-    if (summary.epoch) currentStarts.set(summary.session.id, summary.epoch)
-    const previous = acpStore.get().conversations[summary.session.id]
-    if (previous?.hydrated && !reconnect) {
-      // Opened here, it reads its owner's stream; its Fins still come from the list while this window holds no roster of them.
-      if (previous.kind === "live" && summary.elsewhere !== undefined && previous.fins !== summary.fins)
-        replaceAcpConversation(summary.session.id, { ...previous, fins: summary.fins, children: summary.children ?? previous.children })
-      continue
-    }
-    if (reconnect && previous?.kind === "live") {
-      replaceAcpConversation(summary.session.id, {
-        ...previous,
-        session: summary.session,
-        hasSessionQuestions: summary.hasSessionQuestions,
-        hydrated: false,
-        nativePaths: summary.nativePaths,
-        elsewhere: summary.elsewhere ?? previous.elsewhere,
-        waitingOn: summary.waitingOn,
-        threadTitle: summary.threadTitle,
-        quietSince: summary.quietSince,
-        cloudContinue: summary.cloudContinue,
-        movedAt: summary.movedAt ?? previous.movedAt,
-        rail: summary.rail,
-        promptedAt: laterPrompt(summary.promptedAt, previous.promptedAt),
-        threadId: summary.threadId ?? previous.threadId,
-        sessionId: summary.sessionId ?? previous.sessionId,
-        parent: summary.parent ?? previous.parent,
-        children: summary.children,
-        fins: summary.fins,
-        permission: null,
-        failureSeen: carriedFailureSeen(previous, summary.session),
-      })
-      // A turn that ended while this renderer was away is still an outcome:
-      // the summary is the only word it gets, so the transition is read here
-      // as a replay — recorded for the mark and the badge, never announced.
-      // Only a turn's end is read this way; a permission the summary cannot
-      // carry must not be taken for one that was answered.
-      const restored = acpStore.get().conversations[summary.session.id]
-      if (
-        restored?.kind === "live" &&
-        previous.session.status === "running" &&
-        summary.session.status !== "running"
-      )
-        syncThreadStatus(restored, previous.session.status, previous.threadPath, "hydrate")
-      // Another device's Session changed: what the change says (the account's own rule, read by the host) is told
-      // here as it would be on any device, and an ask answered anywhere goes.
-      if (restored?.kind === "live" && summary.elsewhere !== undefined) noteListedOutcome(previous, restored, summary.attention)
-      continue
-    }
+    const said: Received = { from: "said", revision: summary.revision, ...(summary.epoch && { epoch: summary.epoch }) }
+    receiveLive(summary.session.id, said, () => admitSummary(summary, reconnect))
+  }
+}
+
+/** One summary of the host's, listed (`admitLiveSummaries`). */
+function admitSummary(summary: LiveSummary, reconnect: boolean): void {
+  const previous = acpStore.get().conversations[summary.session.id]
+  if (previous?.hydrated && !reconnect) {
+    // Opened here, it reads its owner's stream; its Fins still come from the list while this window holds no roster of them.
+    if (previous.kind === "live" && summary.elsewhere !== undefined && previous.fins !== summary.fins)
+      replaceAcpConversation(summary.session.id, { ...previous, fins: summary.fins, children: summary.children ?? previous.children })
+    return
+  }
+  if (reconnect && previous?.kind === "live") {
     replaceAcpConversation(summary.session.id, {
-      kind: "live",
-      key: summary.session.id,
-      draftKey: summary.session.id,
+      ...previous,
       session: summary.session,
       hasSessionQuestions: summary.hasSessionQuestions,
-      harness: summary.session.harness,
-      cwd: summary.session.cwd,
-      title: summary.session.title,
+      hydrated: false,
       nativePaths: summary.nativePaths,
-      threadPath: summary.threadPath,
-      elsewhere: summary.elsewhere,
+      elsewhere: summary.elsewhere ?? previous.elsewhere,
       waitingOn: summary.waitingOn,
       threadTitle: summary.threadTitle,
       quietSince: summary.quietSince,
       cloudContinue: summary.cloudContinue,
-      movedAt: summary.movedAt,
+      movedAt: summary.movedAt ?? previous.movedAt,
       rail: summary.rail,
-      promptedAt: summary.promptedAt,
-      threadId: summary.threadId,
-      sessionId: summary.sessionId,
-      parent: summary.parent,
+      promptedAt: laterPrompt(summary.promptedAt, previous.promptedAt),
+      threadId: summary.threadId ?? previous.threadId,
+      sessionId: summary.sessionId ?? previous.sessionId,
+      parent: summary.parent ?? previous.parent,
       children: summary.children,
       fins: summary.fins,
-      revision: summary.revision,
-      // Its numbers are its host start's: without the start, a newer one's would be read as the same.
-      ...(summary.epoch && { epoch: summary.epoch }),
-      hydrated: false,
-      createdAt: summary.createdAt,
-      updatedAt: summary.createdAt,
-      blocks: [],
-      queued: [],
-      hiddenUserPrompt: null,
-      permission: null,
-      sending: false,
-      canceling: false,
+      // A summary carries no permission. Another device's asks come with its listing; this host's stays as this window
+      // held it, and is read again below, since only a batch or a snapshot says whether it's still asked.
+      permission: summary.elsewhere === undefined ? previous.permission : null,
+      failureSeen: carriedFailureSeen(previous, summary.session),
     })
+    // A turn that ended while this renderer was away is still an outcome:
+    // the summary is the only word it gets, so the transition is read here
+    // as a replay — recorded for the mark and the badge, never announced.
+    // Only a turn's end is read this way; a permission the summary cannot
+    // carry must not be taken for one that was answered.
     const restored = acpStore.get().conversations[summary.session.id]
-    if (restored?.kind === "live")
-      syncThreadStatus(restored, "starting", undefined, "hydrate")
+    if (
+      restored?.kind === "live" &&
+      previous.session.status === "running" &&
+      summary.session.status !== "running"
+    )
+      syncThreadStatus(restored, previous.session.status, previous.threadPath, "hydrate")
+    // Another device's Session changed: what the change says (the account's own rule, read by the host) is told
+    // here as it would be on any device, and an ask answered anywhere goes.
+    if (restored?.kind === "live" && summary.elsewhere !== undefined) noteListedOutcome(previous, restored, summary.attention)
+    else if (previous.permission) refreshListed(summary.session.id)
+    return
   }
+  replaceAcpConversation(summary.session.id, {
+    kind: "live",
+    key: summary.session.id,
+    draftKey: summary.session.id,
+    session: summary.session,
+    hasSessionQuestions: summary.hasSessionQuestions,
+    harness: summary.session.harness,
+    cwd: summary.session.cwd,
+    title: summary.session.title,
+    nativePaths: summary.nativePaths,
+    threadPath: summary.threadPath,
+    elsewhere: summary.elsewhere,
+    waitingOn: summary.waitingOn,
+    threadTitle: summary.threadTitle,
+    quietSince: summary.quietSince,
+    cloudContinue: summary.cloudContinue,
+    movedAt: summary.movedAt,
+    rail: summary.rail,
+    promptedAt: summary.promptedAt,
+    threadId: summary.threadId,
+    sessionId: summary.sessionId,
+    parent: summary.parent,
+    children: summary.children,
+    fins: summary.fins,
+    revision: summary.revision,
+    // Its numbers are its host start's: without the start, a newer one's would be read as the same.
+    ...(summary.epoch && { epoch: summary.epoch }),
+    hydrated: false,
+    createdAt: summary.createdAt,
+    updatedAt: summary.createdAt,
+    blocks: [],
+    queued: [],
+    hiddenUserPrompt: null,
+    permission: null,
+    sending: false,
+    canceling: false,
+  })
+  const restored = acpStore.get().conversations[summary.session.id]
+  if (restored?.kind === "live")
+    syncThreadStatus(restored, "starting", undefined, "hydrate")
 }
 
 export async function loadEarlierLive(id: string): Promise<void> {
@@ -913,7 +908,8 @@ async function readEarlierLive(id: string): Promise<void> {
     if (current?.kind !== "live" || current.history?.token !== held.history.token ||
         current.history.before?.blocks !== before.blocks || current.history.before?.base !== before.base) return
     const next = prependLiveHistory({ ...current, base: current.base ?? null }, page)
-    replaceAcpConversation(id, { ...next, projection: projectLive({ ...next, base: next.base ?? null }, undefined, next.pendingPrompts) })
+    receiveLive(id, { from: "answer" }, () =>
+      replaceAcpConversation(id, { ...next, projection: projectLive({ ...next, base: next.base ?? null }, undefined, next.pendingPrompts) }))
     return
   }
   const snapshot = await getMako().liveEarlier(id)
@@ -925,9 +921,9 @@ export function markLiveOwnerDisconnected(ids: string[]): void {
   for (const id of ids) {
     const current = acpStore.get().conversations[id]
     if (current?.kind !== "live") continue
-    replaceAcpConversation(id, {
+    receiveLive(id, { from: "said" }, () => replaceAcpConversation(id, {
       ...current,
       session: { ...current.session, connection: "disconnected" },
-    })
+    }))
   }
 }

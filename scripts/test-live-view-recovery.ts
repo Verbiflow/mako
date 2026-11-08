@@ -15,6 +15,9 @@ Object.assign(globalThis, { requestAnimationFrame: (run: () => void) => setTimeo
 const { installMockBridge } = await import("../src/dev/mock-bridge")
 const { getMako } = await import("../src/lib/bridge")
 const { acpStore } = await import("../src/state/acp-state")
+// What the window's own code writes of a conversation goes through the door (`receiveLive`), or the suite fails.
+const { failAroundTheDoor } = await import("./live-door-watch")
+failAroundTheDoor(acpStore, (await import("../src/state/live-door")).receivingLive)
 const { applyLiveSnapshot, applyLiveBatch, hydrateLive, loadEarlierLive } = await import("../src/state/live-recovery")
 const { loadLiveHistoryDetail } = await import("../src/state/live-history")
 installMockBridge()

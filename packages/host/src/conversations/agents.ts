@@ -7,6 +7,8 @@ import type { HostJobs } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { branchSince, checkoutSince } from "../base/checkout-since.js"
 import { cutAccount } from "./cut-account.js"
+import { personWaiting } from "./session-report.js"
+import type { Waiting } from "../contracts/notifications.js"
 import { finMovedText, finResumedText } from "../contracts/resume-account.js"
 import { usageLimitWords } from "../contracts/provider-failure.js"
 import { isLimitAsk, limitNoticeId, limitNoticeLine, limitNoticeWords, movedLine, movedWords, outOfAccountsLine, placeKey, stepKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep, type FinMove } from "../contracts/fin-fallback.js"
@@ -260,7 +262,7 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching"
+  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching"
 >
 
 export interface AgentsDeps {
@@ -1639,7 +1641,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!first) return undefined
     // A harness's own ask in its words; the reason it's the person's is the Agents panel's to say.
     const finConversation = first.ask.kind === "report" ? undefined : this.askingConversation(first.edge.child)
-    const line = (finConversation && this.deps.live.waitingOn(finConversation)?.line) || first.question
+    const line = (finConversation && this.personWaiting(finConversation)?.line) || first.question
     return { fin: first.edge.child, name: first.edge.name, line, ask: first.ask, more: asks.length - 1 }
   }
 
@@ -1737,7 +1739,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const tier = by.kind === "apex" ? this.tierOf(by.apex) : "full"
     if (ask.kind === "approval" && tier !== "full")
       return { refused: "access", why: `${edge.name}'s approval is the person's: this Thread is on ${tier}, and only an ${APEX_WORD} on full access answers its ${FIN_WORD}s' approvals. Leave it to them with person: true.` }
-    const conversation = this.askingConversation(edge.child)
+    const conversation = this.answeringConversation(edge.child, ask.id)
     const pending = conversation ? this.deps.live.pendingAsk(conversation) : undefined
     if (!conversation || !pending || pending.request !== ask.id) return { refused: "conflict", why: `${edge.name} no longer waits on that: it was answered.` }
     if (pending.gone) return { refused: "unavailable", why: `${edge.name}'s harness exited while it waited, so no answer reaches it: agents_send gives it a message to go on.` }
@@ -3256,7 +3258,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const session = live.session(conversation)
     if (!session) return { source: "live" }
     const held = live.held(conversation)
-    const waiting = live.waitingOn(conversation)
+    const waiting = this.personWaiting(conversation)
     // A request sent and not yet answered is work, before its harness says it runs; one nothing will send isn't.
     const busy = live.atWork(conversation)
     const last = held?.requests.filter((request) => request.status !== "queued" && request.status !== "held").at(-1)
@@ -3298,7 +3300,9 @@ export class Agents implements AgentOperations, ConversationChildren {
   private waitingOf(edge: ThreadParent, line: string, pending: PendingAsk | undefined): NonNullable<ChildThread["waiting"]> {
     const ask = pending ? nativeAsk(pending) : undefined
     const why = this.personsBecause(edge, ask, line)
-    return { question: why ? `${line} (yours to answer: ${why})` : line, on: !why ? "lead" : ask?.kind === "approval" ? "approval" : "person", ...(ask && { ask }) }
+    // What waits on the person for something no answer of its Apex's gives (needs-you: a sign-in, say) is theirs.
+    const on = !ask ? "person" : !why ? "lead" : ask.kind === "approval" ? "approval" : "person"
+    return { question: why ? `${line} (yours to answer: ${why})` : line, on, ...(ask && { ask }) }
   }
 
   /**
@@ -3399,7 +3403,9 @@ export class Agents implements AgentOperations, ConversationChildren {
    * (`escalate`), so no ask sits on an Apex busy with a long turn of its own.
    */
   private askApex(edge: ThreadParent): void {
-    const conversation = this.askingConversation(edge.child)
+    // Its harness's own ask, which an answer reaches: what only waits on the person (needs-you) no Apex answers, and its
+    // row says it's theirs (`waitingOf`).
+    const conversation = this.answeringConversation(edge.child)
     const waiting = conversation ? this.deps.live.waitingOn(conversation) : undefined
     if (!conversation || !waiting) {
       this.asked.delete(edge.child)
@@ -4605,18 +4611,40 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * The conversation a Fin's standing is read from and its ask answered in: of its Thread's Sessions, the newest one
-   * waiting on the person (a question or an approval), else its newest (`conversationOf`). A Fin read its newest Session
-   * alone, so an approval in an older tab, beside a newer one left idle, was never its Apex's or the person's to see. What
-   * waits is held in memory (`waitingOn`), so nothing is read in to find it.
+   * The conversation a Fin's standing is read from: of its Thread's Sessions, the newest one whose harness asks (an
+   * approval or a question, which an answer reaches), else the newest otherwise waiting on the person (needs-you, by
+   * `personWaiting`), else its newest (`conversationOf`). A Fin read its newest Session alone, so an approval in an older
+   * tab, beside a newer one left idle, was never its Apex's or the person's to see. What waits is held in memory
+   * (`waitingOn`, `workOf`), so nothing is read in to find it.
    */
   private askingConversation(thread: string): string | undefined {
+    return this.answeringConversation(thread) ?? this.newestOf(thread, (conversation) => this.personWaiting(conversation) !== undefined) ?? this.conversationOf(thread)
+  }
+
+  /**
+   * The conversation a Fin's harness's own ask waits in for its answer (`request`, or any): the newest of its Thread's
+   * Sessions holding one. What only waits on the person (a sign-in) holds none, so it never hides an older one's ask.
+   */
+  private answeringConversation(thread: string, request?: string): string | undefined {
+    return this.newestOf(thread, (conversation) => {
+      const pending = this.deps.live.pendingAsk(conversation)
+      return pending !== undefined && (request === undefined || pending.request === request)
+    })
+  }
+
+  /** Of a Thread's Sessions, newest first, the first conversation `picked` takes. */
+  private newestOf(thread: string, picked: (conversation: string) => boolean): string | undefined {
     const store = this.store()
     const sessions = store?.thread(ThreadIdSchema.parse(thread))?.sessions ?? []
     for (let index = sessions.length - 1; index >= 0; index -= 1)
       for (const conversation of store?.conversationsOf(sessions[index]!) ?? [])
-        if (this.deps.live.waitingOn(conversation)) return conversation
-    return this.conversationOf(thread)
+        if (picked(conversation)) return conversation
+    return undefined
+  }
+
+  /** What a conversation waits on the person for, by the rule its row says it with (`personWaiting`). */
+  private personWaiting(conversation: string): Waiting | undefined {
+    return personWaiting(this.deps.live.waitingOn(conversation), this.deps.live.workOf(conversation)?.status)
   }
 
   /**

@@ -48,6 +48,9 @@ Object.defineProperty(globalThis, "window", { value: { addEventListener() {}, re
 const { installMockBridge } = await import("../src/dev/mock-bridge")
 const { getMako } = await import("../src/lib/bridge")
 const { acpStore } = await import("../src/state/acp-state")
+// What the window's own code writes of a conversation goes through the door (`receiveLive`), or the suite fails.
+const { failAroundTheDoor } = await import("./live-door-watch")
+failAroundTheDoor(acpStore, (await import("../src/state/live-door")).receivingLive)
 const { applyLiveSnapshot } = await import("../src/state/live-recovery")
 const { restorePendingMessages, steerTo } = await import("../src/state/acp-queue")
 const { pendingMessages } = await import("../src/state/message-outbox")
