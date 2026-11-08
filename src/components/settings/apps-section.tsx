@@ -86,6 +86,7 @@ export function AppsSection() {
 
 function ProjectList({ onOpen }: { onOpen: (root: string) => void }) {
   const roots = useProjects()
+  const tab = useAppSetup((state) => state.tab)
   const [setups, setSetups] = useState<Record<string, ProjectAppSetup | null>>({})
   const key = roots.join("\n")
   useEffect(() => {
@@ -103,9 +104,9 @@ function ProjectList({ onOpen }: { onOpen: (root: string) => void }) {
   return (
     <div>
       <p className="pb-4 text-ui leading-relaxed text-muted-foreground">
-        How each project’s Threads install, start and check their own copy of
-        its app. An agent works this out once and Mako keeps it as the
-        project’s recipe, for every branch.
+        {tab === "setup"
+          ? "Choose a project to see its files, accounts, tools and services on this Mac, your devices and the cloud."
+          : "How each project’s Threads install, start and check their own copy of its app. An agent works this out once and Mako keeps it as the project’s recipe, for every branch."}
       </p>
       {roots.length ? (
         <ListCard className="px-0">

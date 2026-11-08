@@ -119,12 +119,27 @@ async function checkWindow() {
 
   // 1. The fixed top rows, in order, each 28px, and no Projects / Recent / Status switch under them.
   const rows = await evaluate(`[...document.querySelectorAll('[data-rail-top-row]')].map((node) => ({ id: node.dataset.railTopRow, text: node.innerText.split('\\n')[0], height: Math.round(node.getBoundingClientRect().height) }))`)
-  assert.deepEqual(rows.map((row) => row.text), ["New thread", "Search", "Inbox", "Pull requests", "Automations"])
+  assert.deepEqual(rows.map((row) => row.text), ["New thread", "Search", "Inbox", "Pull requests", "Setup", "Automations"])
   assert.ok(rows.every((row) => row.height === 28), `the top rows are 28px: ${JSON.stringify(rows)}`)
   assert.equal(await evaluate(`document.querySelector('[aria-label="Thread view"]')`), null, "no view switch")
   assert.equal(await evaluate(`document.querySelector('[data-rail-threads-heading]')?.textContent`), "Threads")
   assert.equal(await evaluate(`[...document.querySelectorAll('.thread-jump-scope button')].some((node) => ['Projects', 'Recent', 'Status'].includes(node.innerText.trim()))`), false, "no Projects, Recent or Status button in the rail")
-  console.log("PASS: five top rows, then Threads, no view switch")
+  console.log("PASS: six top rows, then Threads, no view switch")
+
+  // Setup is reachable without opening Settings or the right rail first.
+  await click('[data-rail-top-row="setup"]')
+  await until(`Boolean(document.querySelector('[data-project-tab="setup"][aria-selected="true"], [data-app-project]'))`, "Setup from the left rail")
+  if (await evaluate(`!document.querySelector('[data-project-tab="setup"][aria-selected="true"]')`))
+    await click('[data-app-project]')
+  await until(`Boolean(document.querySelector('[data-project-tab="setup"][aria-selected="true"]'))`, "the chosen project's Setup, not its recipe")
+  await capture("setup-from-rail.png")
+  await evaluate(`window.dispatchEvent(new CustomEvent('mako:close-settings'))`)
+  await until(`document.querySelector('[data-project-tab="setup"]') === null`, "Setup closed")
+  await evaluate(`import('/src/extend/commands.ts').then(({runCommand}) => runCommand('view.project-setup'))`)
+  await until(`Boolean(document.querySelector('[data-project-tab="setup"][aria-selected="true"], [data-app-project]'))`, "Project setup command")
+  await evaluate(`window.dispatchEvent(new CustomEvent('mako:close-settings'))`)
+  await until(`document.querySelector('[data-project-tab="setup"]') === null`, "Setup command closed")
+  console.log("PASS: Setup rail entry and command reuse the project's Setup page")
 
   // 2. The Inbox's count is the needs-you facts.
   // The facts as the Inbox's count reads them: a Setup ask arrives once its folder's Setup is read.
