@@ -10,11 +10,9 @@ import ts from "typescript"
  * another raw start even in that function fails; an obsolete exception fails too.
  */
 const approved = [
-  ["base/host-command.ts", "execute", "execFile", "hostCommand registers the original child until close"],
-  ["base/host-command.ts", "hostExecFile", "execFile", "callback command registered until close"],
-  ["base/host-command.ts", "hostSpawn", "spawn", "streaming command registered until close"],
-  ["base/host-command.ts", "hostFork", "fork", "IPC child registered until close"],
-  ["harnesses/provider-process.ts", "spawnProviderProcess", "spawn", "registers closeProviderProcess with the stop scope; ends the provider's group"],
+  ["base/host-command.ts", "inspect", "execFile", "bounded process-table and taskkill diagnostics used while owned groups are being reaped"],
+  ["base/host-command.ts", "hostSpawn", "spawn", "isolated command group registered until reaped"],
+  ["base/host-command.ts", "hostFork", "fork", "isolated IPC group registered until reaped"],
   ["application/process-group.ts", "runProcessGroup", "spawn", "combines the host stop signal; kills and reaps the whole build group"],
   ["application/process-group.ts", "run", "execFile", "bounded ps diagnostic used while the cancelled group is being reaped"],
   ["threads/catalog-connection.ts", "connectOnDemandCatalog", "spawn", "shared reader daemon outlives this host; its client is cancelled separately"],

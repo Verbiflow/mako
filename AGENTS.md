@@ -106,7 +106,11 @@ owners registered together in `core.ts`, provider children, commands and
 HTTP requests (including response bodies). Keep local commits and stores
 open through that drain. Register new outside waiters with that scope. Start commands through
 `hostCommand`/`hostExecFile`, streaming children through `hostSpawn`, and
-IPC children through `hostFork`. `check-host-children.mjs` (in lint) rejects
+IPC children through `hostFork`. These runners and provider launches own isolated
+process groups on macOS and Linux. They keep their stop registration until
+cleanup confirms no live group member remains, even after the parent exits.
+Deliberate daemon, app, installer and editor handoffs keep their independent
+lifetimes at the named launch exceptions. `check-host-children.mjs` (in lint) rejects
 raw Node process starts except its documented owner and handoff boundaries;
 borrowed SDK checks cancel their operation without taking the client's
 ownership. An unfinished login reports that Mako quit and asks for a new

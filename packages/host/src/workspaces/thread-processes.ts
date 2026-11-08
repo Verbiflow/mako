@@ -1,4 +1,6 @@
 import { hostCommand, hostSpawn } from "../base/host-command.js"
+import { hostStopping } from "../base/host-stopping.js"
+import { setTimeout as wait } from "node:timers/promises"
 import { spawn } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises"
@@ -1158,7 +1160,10 @@ export class ThreadProcesses {
         child.once("error", reject)
       })
       let saved: Run | undefined
-      child.once("exit", () => void this.heardEnd(app, key, pid, saved))
+      const signal = hostStopping()?.signal
+      child.once("exit", () => {
+        if (!signal?.aborted) void this.heardEnd(app, key, pid, saved).catch((error) => { if (!signal?.aborted) throw error })
+      })
       child.unref()
       const release = childInput(child)!
       try {
@@ -1195,6 +1200,7 @@ export class ThreadProcesses {
    * ending stays "starting" until the app is restarted.
    */
   private async watchReady(app: AppKey, key: string, ready: string, spec: RunSpec, pid: number): Promise<void> {
+    const signal = hostStopping()?.signal
     const alive = () => {
       try {
         process.kill(pid, 0)
@@ -1206,6 +1212,7 @@ export class ThreadProcesses {
     const began = this.now()
     const ours = async () => alive() && (await this.runs(app))[key]?.pid === pid
     while (await ours()) {
+      if (signal?.aborted) return
       const tried = await new Promise<ReadyFailure | undefined>((done) => {
         const child = hostSpawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: ["ignore", "pipe", "pipe"], detached: true })
         let output = ""
@@ -1230,6 +1237,7 @@ export class ThreadProcesses {
           done(code === 0 ? undefined : { code, output })
         })
       })
+      if (signal?.aborted) return
       if (!tried) {
         if (await ours()) {
           await writeFile(this.file(app, key, "ready"), String(this.now()), { mode: 0o600 })
@@ -1238,7 +1246,7 @@ export class ThreadProcesses {
         return
       }
       if (await ours()) await writeFile(this.file(app, key, "unready"), JSON.stringify(tried), { mode: 0o600 })
-      await sleep(readyWait(this.now() - began))
+      await wait(readyWait(this.now() - began), undefined, { signal }).catch((error) => { if (!signal?.aborted) throw error })
     }
   }
 

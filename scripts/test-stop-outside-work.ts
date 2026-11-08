@@ -1,4 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { spawn as handoff } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { CuaDriverVersions } from "@mako/host/control/cua-driver-version"
@@ -17,6 +19,9 @@ import { memorySecrets } from "@mako/host/base/secrets"
 import { AccountLogins } from "@mako/host/harnesses/account-login"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { spawnProviderProcess } from "@mako/host/harnesses/provider-process"
+import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
+import { AppKeySchema } from "@mako/host/contracts/thread-environments"
 import type { SdkMethod, SdkResult } from "@mako/host/harnesses/cursor/sdk/wire"
 
 function deferred<T>() {
@@ -142,6 +147,22 @@ console.log("commands are reaped before drain, new Git commands are refused, and
 // Streaming, callback and IPC starts use the same scope, preserving their Node child handles.
 const runnerFolder = testScratch("mako-child-runners-")
 const runnerEntry = join(runnerFolder, "child with spaces.cjs")
+assert.deepEqual(await hostCommand(process.execPath, ["-e", 'process.stdout.write(process.argv[1]); process.stderr.write("diagnostic")', "a spaced λ argument"], { cwd: runnerFolder }), { stdout: "a spaced λ argument", stderr: "diagnostic" })
+await new Promise<void>((resolve, reject) => hostExecFile(process.execPath, ["-e", 'process.stdout.write("partial"); process.stderr.write("why"); process.exitCode = 7'], {}, (error, stdout, stderr) => {
+  try { assert.equal(error?.code, 7); assert.equal(stdout, "partial"); assert.equal(stderr, "why"); resolve() } catch (error) { reject(error) }
+}))
+await assert.rejects(hostCommand(join(runnerFolder, "missing-executable"), []), { code: "ENOENT" })
+await assert.rejects(hostCommand(process.execPath, ["-e", 'process.stdout.write("too much output")'], { maxBuffer: 4 }), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", stdout: "too " })
+await assert.rejects(hostCommand(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { timeout: 200 }), { killed: true })
+const abort = new AbortController(), abortReady = deferred<void>()
+const aborted = hostCommand(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000)'], { signal: abort.signal })
+aborted.child.stdout?.once("data", () => abortReady.resolve())
+const abortResult = assert.rejects(aborted, { name: "AbortError", code: "ABORT_ERR" })
+await abortReady.promise
+abort.abort()
+await abortResult
+assert.ok(aborted.child.pid)
+assert.throws(() => process.kill(aborted.child.pid!, 0), { code: "ESRCH" })
 await writeFile(runnerEntry, 'require("node:fs").writeFileSync(process.argv[2], String(process.pid)); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)')
 for (const kind of ["spawn", "fork", "callback"] as const) {
   const scope = new HostStopping(), calls = new HostCallLifetime(scope), ready = join(runnerFolder, kind)
@@ -164,6 +185,99 @@ for (const kind of ["spawn", "fork", "callback"] as const) {
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
 }
 console.log("streaming, callback and IPC child runners are cancelled and reaped before calls drain")
+
+// A parent's exit or closed pipes cannot release its owned descendants. A raw,
+// deliberate handoff in the same ambient scope has an independent lifetime.
+const treeEntry = join(runnerFolder, "parent with descendants.cjs")
+await writeFile(treeEntry, `
+const {spawn} = require("node:child_process")
+require("node:fs").writeFileSync(process.argv[2] + ".parent", String(process.pid))
+const grandchild = spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)', process.argv[2]], {stdio: ["ignore", "inherit", "inherit"]})
+if (process.argv[3] === "exit") {
+  const ready = setInterval(() => {
+    if (require("node:fs").existsSync(process.argv[2])) { clearInterval(ready); process.exit(0) }
+  }, 10)
+}
+setInterval(() => {}, 1000)
+`)
+for (const kind of ["command", "callback", "spawn", "fork", "provider"] as const) {
+  for (const parent of ["running", "exit"] as const) {
+    const scope = new HostStopping(), ready = join(runnerFolder, `tree-${kind}-${parent}`)
+    const kept = scope.run(() => handoff(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" }))
+    const keptClosed = new Promise<void>((resolve) => kept.once("close", () => resolve()))
+    let child: ReturnType<typeof hostSpawn> | undefined
+    try {
+      child = scope.run(() => {
+        if (kind === "command") {
+          const result = hostCommand(process.execPath, [treeEntry, ready, parent])
+          void result.catch(() => {})
+          return result.child
+        }
+        if (kind === "callback") return hostExecFile(process.execPath, [treeEntry, ready, parent], {}, () => {})
+        if (kind === "provider") return spawnProviderProcess(process.execPath, [treeEntry, ready, parent], {})
+        if (kind === "fork") return hostFork(treeEntry, [ready, parent], { stdio: ["ignore", "pipe", "pipe", "ipc"] })
+        return hostSpawn(process.execPath, [treeEntry, ready, parent], { detached: true, stdio: ["ignore", "pipe", "pipe"] })
+      })
+      for (const deadline = Date.now() + 5_000; ; await delay(10)) {
+        if (await readFile(ready, "utf8").catch(() => undefined)) break
+        assert.ok(Date.now() < deadline, `${kind} grandchild started`)
+      }
+      const grandchild = Number(await readFile(ready, "utf8"))
+      if (parent === "exit") await delay(100)
+      await scope.stop()
+      for (const pid of [child.pid, grandchild]) {
+        assert.ok(pid)
+        assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, `${kind}: ${parent} parent and its SIGTERM-ignoring descendant are gone when stop returns`)
+      }
+      assert.ok(kept.pid)
+      assert.doesNotThrow(() => process.kill(kept.pid!, 0), "the named handoff survives the host stop")
+    } finally {
+      if (child?.pid) try { process.kill(-child.pid, "SIGKILL") } catch { /* already reaped */ }
+      if (kept.pid) process.kill(-kept.pid, "SIGKILL")
+      await keptClosed
+    }
+  }
+}
+console.log("all four command runners and provider launches reap SIGTERM-ignoring descendants, including after parent exit; deliberate handoffs survive")
+
+// The actual app handoff and readiness shell: stop the pending readiness tree,
+// keep the persisted app running, and never schedule another readiness try.
+const appScope = new HostStopping(), app = AppKeySchema.parse(randomUUID())
+const processes = new ThreadProcesses({ root: join(runnerFolder, "persisted"), listening: async () => false, containers: async () => undefined, stopGraceMs: 100 })
+const appReady = join(runnerFolder, "persisted-app"), probeReady = join(runnerFolder, "readiness-tree"), appEntry = join(runnerFolder, "app.cjs")
+await writeFile(appEntry, `require("node:fs").writeFileSync(${JSON.stringify(appReady)}, String(process.pid)); setInterval(() => {}, 1000)`)
+const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
+try {
+  await appScope.run(() => processes.start(app, [{ kind: "process", name: "app", command: `exec ${quote(process.execPath)} ${quote(appEntry)}`, ready: `exec ${quote(process.execPath)} ${quote(treeEntry)} ${quote(probeReady)}`, cwd: runnerFolder, env: process.env }]))
+  for (const deadline = Date.now() + 5_000; ; await delay(10)) {
+    if (await readFile(probeReady, "utf8").catch(() => undefined)) break
+    assert.ok(Date.now() < deadline, "the actual readiness descendant started")
+  }
+  const appPid = Number(await readFile(appReady, "utf8"))
+  const probePid = Number(await readFile(`${probeReady}.parent`, "utf8")), probeChild = Number(await readFile(probeReady, "utf8"))
+  await appScope.stop()
+  for (const pid of [probePid, probeChild]) assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
+  assert.doesNotThrow(() => process.kill(appPid, 0), "the real persisted app survives stop")
+  await delay(600)
+  assert.equal(Number(await readFile(probeReady, "utf8")), probeChild, "readiness never retries after host stop")
+} finally { await processes.stop(app) }
+console.log("the real readiness process tree is reaped without stopping its persisted app or retrying after host stop")
+
+// A signal that did nothing is not successful cleanup: the process-table
+// check must keep the stop open and eventually reject, rather than close pipes.
+const deniedScope = new HostStopping(), deniedReady = join(runnerFolder, "denied")
+const deniedChild = deniedScope.run(() => hostSpawn(process.execPath, [runnerEntry, deniedReady], { stdio: "ignore" }))
+const deniedClosed = new Promise<void>((resolve) => deniedChild.once("close", () => resolve()))
+for (const deadline = Date.now() + 5_000; ; await delay(10)) {
+  if (await readFile(deniedReady, "utf8").catch(() => undefined)) break
+  assert.ok(Date.now() < deadline, "the denied-stop child started")
+}
+const realKill = process.kill, deniedPid = deniedChild.pid
+assert.ok(deniedPid)
+process.kill = (pid, signal) => pid === -deniedPid && signal !== 0 ? true : realKill(pid, signal)
+try { await assert.rejects(deniedScope.stop(), /Outside work did not stop cleanly/) }
+finally { process.kill = realKill; process.kill(-deniedPid, "SIGKILL"); await deniedClosed }
+console.log("stop rejects when an owned process group remains alive after its signals")
 
 // Review control: the actual CUA version and updater runners, with no injected command stub.
 const cuaFolder = testScratch("mako-cua-stop-")
