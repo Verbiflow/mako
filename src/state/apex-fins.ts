@@ -15,6 +15,7 @@ import { currentOnScreen } from "@/state/thread-sessions"
 import { threads } from "@/state/threads"
 import { threadsStore, useThreads } from "@/state/thread-store"
 import { threadGroupsStore } from "@/state/thread-groups"
+import { asks as waitsOnThePerson } from "@mako/protocol/attention"
 
 const NO_CHILDREN: readonly NativeAgent[] = []
 const byThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, readonly NativeAgent[]> }>()
@@ -34,8 +35,8 @@ type Standing = { asks: boolean; place: number; fullness: number }
 
 /**
  * Whether `next` outranks `held`: an open ask always surfaces (the rule #524 writes on the host's `askingConversation`,
- * here on the rows a placed Fin's device writes), then the Session's place in its Thread, newest highest, then of one
- * Session the fullest saying.
+ * here on the rows a placed Fin's device writes, both by the protocol's `asks`), then the Session's place in its
+ * Thread, newest highest, then of one Session the fullest saying.
  */
 function outranks(next: Standing, held: Standing): boolean {
   if (next.asks !== held.asks) return next.asks
@@ -88,8 +89,9 @@ function finSources(state: AcpState): Map<string, FinSource> {
   let held = finByThread.get(state.conversations)
   if (!held || held.order !== state.threadSessions) {
     const index = newestSaid<FinSource>(state, (conversation) => {
-      // A row with an open ask, an approval or a question the person hasn't answered, surfaces above the Fin's other rows.
-      if (conversation.elsewhere !== undefined) return [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: { kind: "device", listed: conversation }, fullness: 1, asks: conversation.waitingFor === "approval" || conversation.waitingFor === "question" }]
+      // A row with an open ask surfaces above the Fin's other rows: what waits on the person by the protocol's one word
+      // (`asks`: an approval, a question, or needs-you, the owner's fallback for any other wait on them).
+      if (conversation.elsewhere !== undefined) return [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: { kind: "device", listed: conversation }, fullness: 1, asks: conversation.waitingFor !== undefined && waitsOnThePerson(conversation.waitingFor) }]
       const children = rosterChildren(conversation.nativeAgents)
       return (children.length ? children : conversation.fins ? finsAsChildren(conversation.fins) : [])
         .filter((agent) => agent.child?.thread && !agent.child.conversation)

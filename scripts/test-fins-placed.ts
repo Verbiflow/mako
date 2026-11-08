@@ -920,6 +920,16 @@ async function aPlacedFinsNewestSessionOnItsDevice(): Promise<void> {
       assert.deepEqual(childStateOf(children[0]!), { kind: "blocked", question: "Approve: echo INDIA", on: "approval" }, `${order}: standing on its ask`)
       assert.deepEqual(finOpening(acpStore.get(), children[0]!), { kind: "conversation", key: continued }, `${order}: from under the Apex it opens the ask`)
     }
+    // The older Session waiting on the person for something else, by the owner's own fallback (`conversationShown`
+    // with work waiting and nothing more specific to say): needs-you, which surfaces as an approval or a question would.
+    const needingOlder = rowOf(thread.sessions[0]!, continued, studio.world, { session: { ...studio.world.live.snapshot(continued)!.session, title: "probe" }, working: "waiting", waitingOn: () => undefined })
+    assert.equal(needingOlder.waitingFor, "needs-you", "the owner's fallback says needs-you")
+    for (const order of ["older first", "newest first"] as const) {
+      const children = listedOn(order === "older first" ? [needingOlder, idleNewer] : [idleNewer, needingOlder])
+      assert.equal(children[0]?.child?.conversation, continued, `${order}: the waiting Session's conversation, though older`)
+      assert.deepEqual(childStateOf(children[0]!), { kind: "blocked", question: needingOlder.waitingOn, on: "person" }, `${order}: standing on its wait`)
+      assert.deepEqual(finOpening(acpStore.get(), children[0]!), { kind: "conversation", key: continued }, `${order}: from under the Apex it opens the wait`)
+    }
     // Rows from a host before link version 22 say no order: they rank as they arrive, as every device did before.
     // Neither row asks anything, so nothing but arrival ranks them.
     const without = (row: ListedSession): ListedSession => ({ ...row, order: undefined, state: "idle", waitingOn: undefined, waitingFor: undefined })

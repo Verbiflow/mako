@@ -171,6 +171,23 @@ test("a placed Fin whose older Session asks while its newer one is idle: the ask
   }
 })
 
+// An older Session waiting on the person for something other than an approval or a question (its owner's needs-you
+// fallback, `conversationShown` with nothing more specific) outranks a newer idle one too: every kind the protocol's `asks` names.
+test("a placed Fin whose older Session needs you, by its owner's fallback, while its newer one is idle: the wait is what opens and stands, whichever is listed first", () => {
+  const apex = { thread: APEX_THREAD, session: APEX_SESSION }
+  const needing = row({ ...oldFinRow, state: "waiting", waitingOn: "Waiting for you", waitingFor: "needs-you" })
+  const idle = row({ ...finRow, state: "idle", waitingOn: undefined, waitingFor: undefined })
+  for (const [order, rows] of [["older first", [needing, idle]], ["newest first", [idle, needing]]] as const) {
+    acpStore.set({ activeKey: null, conversations: {}, threadSessions: {} })
+    listLive([listedSummary(apexRow, "MacBook", undefined), ...rows.map((each) => listedSummary(each, "Loft", undefined, undefined, apex))])
+    const children = threadChildren(acpStore.get(), APEX_THREAD)
+    assert.equal(children[0]?.child?.conversation, "c-fin-old", `${order}: the waiting Session's conversation`)
+    assert.deepEqual(childStateOf(children[0]!), { kind: "blocked", question: "Waiting for you", on: "person" }, `${order}: standing on its wait`)
+    assert.deepEqual(finOpening(acpStore.get(), children[0]!), { kind: "conversation", key: "c-fin-old" }, `${order}: from under the Apex`)
+    assert.deepEqual(finOpening(acpStore.get(), placedChild()), { kind: "conversation", key: "c-fin-old" }, `${order}: and from the Apex's own roster entry`)
+  }
+})
+
 // A host before link version 22 writes no `order`: its rows rank where they arrive, as every device did before.
 test("rows from a host that says no order rank as they arrive: the first listed stands, whichever it is", () => {
   const apex = { thread: APEX_THREAD, session: APEX_SESSION }
