@@ -93,6 +93,8 @@ export function refusalText(entry: string, refusal: Refusal): string {
       return `${entry}: it's larger than a lease carries`
     case "thread-ended":
       return `${entry}: this Thread has ended`
+    case "no-capable-device":
+      return `${entry}: no device that can serve it had room`
     case "unavailable":
       return `${entry}: ${refusal.reason === "not-found" ? "it isn't in the main checkout" : refusal.reason === "outside" ? "it points outside the main checkout" : "the main checkout couldn't give it"}`
   }

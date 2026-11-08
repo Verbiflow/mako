@@ -48,7 +48,11 @@ const NEAR_BOTTOM = 96
  * end; a flick passes this in a few events, a wheel's notch in one. Short of the 60 px a slow move up is kept at.
  */
 const LEFT_END = 24
-/** What a wheel adds up over: its net, so jitter cancels and only a move in one direction reaches `LEFT_END`. */
+/**
+ * What a wheel adds up over: its travel in the direction it's going now, since it last turned, so jitter starts over
+ * at each turn and only a move in one direction reaches `LEFT_END`. Not its net: a reader who wheeled up and then
+ * the same way back down had a net of nothing, read as fingers at rest, and the end they came back to wasn't followed.
+ */
 const WHEEL_WINDOW_MS = 500
 /** A reader's input has ended this long after it last moved anything, for what no `scrollend` follows: input that moved nothing, or a browser without it. */
 const INPUT_SETTLE_MS = 160
@@ -325,19 +329,30 @@ function leftEnd(node: HTMLDivElement, from: number): boolean {
   return Math.min(node.scrollTop, end) < Math.min(from, end) - 0.5
 }
 
-/** `event` added to a wheel's `travel`, what went past `WHEEL_WINDOW_MS` dropped, and its net in pixels. */
+/** How far `travel` went in the direction of its last step, back to the step before it that went the other way. */
+function wheelRun(travel: readonly { by: number }[]): number {
+  let run = 0
+  for (let index = travel.length - 1; index >= 0; index -= 1) {
+    const { by } = travel[index]!
+    if (run !== 0 && Math.sign(by) === -Math.sign(run)) break
+    run += by
+  }
+  return run
+}
+
+/** `event` added to a wheel's `travel`, what went past `WHEEL_WINDOW_MS` dropped, and how far it has gone since it last turned, in pixels. */
 function wheelNet(travel: { at: number; by: number }[], event: ReactWheelEvent, pageHeight: number): number {
   const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? pageHeight : 1
   const at = performance.now()
   travel.push({ at, by: event.deltaY * unit })
   while (travel[0]!.at < at - WHEEL_WINDOW_MS) travel.shift()
-  return travel.reduce((net, step) => net + step.by, 0)
+  return wheelRun(travel)
 }
 
 /** Whether the wheel's last half second came to nothing a reader meant, as fingers at rest do. */
 function wheelResting(travel: readonly { at: number; by: number }[], now: number): boolean {
   const recent = travel.filter((step) => step.at >= now - WHEEL_WINDOW_MS)
-  return recent.length > 0 && Math.abs(recent.reduce((net, step) => net + step.by, 0)) < LEFT_END
+  return recent.length > 0 && Math.abs(wheelRun(recent)) < LEFT_END
 }
 
 /** Whether a wheel over `target` moves a scroller inside the transcript rather than the transcript. */

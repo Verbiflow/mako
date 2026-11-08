@@ -86,6 +86,7 @@ import { acpMcpServers } from "../tools/index.js"
 import type { McpTransport } from "../contracts/mcp-skills-integrations.js"
 import type { LiveInputQuestion, LivePermissionRequest, LivePermissionResponse, PromptAttachment, LiveSessionState } from "../contracts/providers-acp.js"
 import type { LiveDriverEvent } from "../contracts/live-conversations.js"
+import { childInput } from "@mako/sessions/child-input"
 
 interface OpenedAcpSession {
   sessionId: string
@@ -719,7 +720,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
 
     const connection = new ClientSideConnection(
       () => client,
-      inWireOrder(await screenSessionUpdates(ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)), refusedUpdate, lossyUpdate))
+      inWireOrder(await screenSessionUpdates(ndJsonStream(acpWritable(childInput(child)), acpReadable(child.stdout)), refusedUpdate, lossyUpdate))
     )
     live.connection = connection
 

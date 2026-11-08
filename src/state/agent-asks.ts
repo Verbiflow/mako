@@ -47,7 +47,7 @@ export async function answerAgentAsk(conversationId: string, ask: AgentAsk, allo
     await getMako().answerAgentAsk(conversationId, ask.id, allow)
     return true
   } catch (error) {
-    toast.error("That didn't go through", { description: error instanceof Error ? error.message : String(error) })
+    toast.error("Mako couldn't record that answer", { description: error instanceof Error ? error.message : String(error) })
     return false
   }
 }

@@ -4,6 +4,7 @@ import { basename } from "node:path"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { trackProviderPid, untrackProviderPid } from "../base/provider-children.js"
 import { onWindows } from "../base/platform.js"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /**
  * A provider was asked to start in a folder that is gone. Node reports that
@@ -107,7 +108,7 @@ export function endProviderProcess(child: ChildProcess, first: "input" | "SIGTER
     const signal = (name: NodeJS.Signals) => {
       if (!providerProcessGone(child)) child.kill(name)
     }
-    if (first === "input") child.stdin?.end()
+    if (first === "input") endChildInput(child)
     else signal("SIGTERM")
     const harder: NodeJS.Signals[] = first === "input" ? ["SIGTERM", "SIGKILL"] : ["SIGKILL"]
     harder.forEach((name, step) => timers.push(setTimeout(() => signal(name), graceMs * (step + 1))))

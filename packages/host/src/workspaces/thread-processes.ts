@@ -12,6 +12,7 @@ import { FIT_RUNS } from "../contracts/thread-app.js"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
 import { ContainerEngine, containersBy, type Container, type ContainerLook } from "./container-runtime.js"
 import { onLinux, onMac } from "../base/platform.js"
+import { childInput } from "@mako/sessions/child-input"
 
 const run = promisify(execFile)
 
@@ -1159,8 +1160,7 @@ export class ThreadProcesses {
       let saved: Run | undefined
       child.once("exit", () => void this.heardEnd(app, key, pid, saved))
       child.unref()
-      const release = child.stdin!
-      release.on("error", () => {})
+      const release = childInput(child)!
       try {
         const row = (await processTable()).find((candidate) => candidate.pid === pid)
         if (!row) throw new Error(`${spec.name} ended before it started, stopped by something outside Mako; see ${log}`)

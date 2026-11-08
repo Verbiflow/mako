@@ -1,14 +1,15 @@
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises"
+import { cp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 import { build } from "esbuild"
 import { invokeRuntime } from "@mako/host/transport/connection"
 import { ensureRuntime } from "@mako/host/transport/service"
-import { testScratch } from "./lib/test-scratch.mjs"
+import { endHost } from "./lib/host-end.mjs"
+import { KEPT, testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * The real host, as `ensureRuntime` runs it under Electron's Helper in Node
@@ -87,14 +88,35 @@ try {
 
   console.log("Node-mode host secrets: the real host under Electron's Helper in Node mode, with no keychain of its own, reads a saved connection as unavailable, then opens it once an Electron process unwraps the data key through the keychain and hands it over the host's socket")
 } finally {
-  if (host) {
-    await invokeRuntime(host.socket, crypto.randomUUID(), "mako:lifecycle-command", [{ kind: "wait", action: "quit" }]).catch(() => undefined)
-    const end = Date.now() + 15_000
-    while (Date.now() < end && alive(host.info.pid)) await delay(100)
-    assert.equal(alive(host.info.pid), false, "the host quits through its lifecycle")
-  }
-  await run("security", ["delete-generic-password", "-s", `${NAME} Safe Storage`]).catch(() => undefined)
-  await rm(root, { recursive: true, force: true })
+  const quit = await endHost({
+    quit: async () => {
+      if (!host) return true
+      await invokeRuntime(host.socket, crypto.randomUUID(), "mako:lifecycle-command", [{ kind: "wait", action: "quit" }]).catch(() => undefined)
+      const end = Date.now() + 15_000
+      while (Date.now() < end && alive(host.info.pid)) await delay(100)
+      return !alive(host.info.pid)
+    },
+    // What held it is in its own log, which goes with the scratch folder: kept first, for the job's artifacts.
+    keep: () => keepHostLogs(host.info.pid),
+    kill: () => process.kill(host.info.pid, "SIGKILL"),
+    cleanup: [
+      ["deleting the keychain item", () => run("security", ["delete-generic-password", "-s", `${NAME} Safe Storage`]).catch(() => undefined)],
+      ["removing the scratch folder", () => rm(root, { recursive: true, force: true })],
+    ],
+  })
+  assert.ok(quit, "the host quits through its lifecycle")
+}
+
+/**
+ * A host that didn't quit: its logs copied to `MAKO_TEST_EVIDENCE` (the job's artifacts) or the kept test folder, and
+ * the end of its log printed, so the next hang says what it waited on.
+ */
+async function keepHostLogs(pid) {
+  const into = join(process.env.MAKO_TEST_EVIDENCE ?? KEPT, `node-host-secrets-${pid}`)
+  await mkdir(into, { recursive: true })
+  await cp(join(dataRoot, "logs"), into, { recursive: true }).catch((error) => console.error(`the host's logs weren't copied: ${error.message}`))
+  const log = await readFile(join(dataRoot, "logs", "host.log"), "utf8").catch(() => "")
+  console.error(`The host (pid ${pid}) was still running 15 s after its quit; its logs are in ${into}. The end of its log:\n${log.split("\n").slice(-80).join("\n")}`)
 }
 
 function alive(pid) {
