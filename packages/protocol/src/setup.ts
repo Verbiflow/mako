@@ -317,6 +317,8 @@ export function askLine(ask: SetupAsk): AskLine {
       return { verb: "wants to run", thing: ref }
     case "port":
       return { verb: "wants to reach", thing: ref }
+    case "operation":
+      return { verb: "wants to use", thing: ref }
   }
 }
 
@@ -456,6 +458,7 @@ function kindPart(kind: Kind, ref: string): SetupListPart {
     case "credential":
       return "access"
     case "command":
+    case "operation":
       return "tools"
     case "port":
       return "services"
@@ -464,7 +467,7 @@ function kindPart(kind: Kind, ref: string): SetupListPart {
 
 function kindIcon(kind: Kind, ref: string): RowIcon {
   if (githubRef(kind, ref)) return "repository"
-  return ({ file: "file", tree: "folder", env: "key", credential: "key", command: "command", port: "service" } as const)[kind]
+  return ({ file: "file", tree: "folder", env: "key", credential: "key", command: "command", port: "service", operation: "tool" } as const)[kind]
 }
 
 /** Whether a borrower runs at a place. */
@@ -482,6 +485,10 @@ function day(at: number): string {
 function sourceName(source: Grant["source"], broker: BrokerReading): string {
   if (source.kind === "vault") return "your account"
   if (source.kind === "mint") return source.service === "github" ? "Mako's GitHub app" : `the ${source.service} service`
+  if (source.kind === "capable") {
+    const named = source.devices?.map((device) => broker.devices[device]?.name ?? "another device")
+    return named?.length ? named.join(" or ") : `any of your devices with ${source.requires.map((query) => query.capability).join(" and ")}`
+  }
   return broker.devices[source.device]?.name ?? "another device"
 }
 

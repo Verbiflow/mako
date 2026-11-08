@@ -24,7 +24,7 @@ import { ChunkHashSchema } from "./records.js"
 
 export const BORROW_VERSION = 1
 
-export const KINDS = ["file", "tree", "env", "credential", "command", "port"] as const
+export const KINDS = ["file", "tree", "env", "credential", "command", "port", "operation"] as const
 export const KindSchema = z.enum(KINDS)
 export type Kind = z.infer<typeof KindSchema>
 
@@ -40,6 +40,7 @@ export const KIND_MODES = {
   credential: ["copy", "minted", "proxy"],
   command: ["relay"],
   port: ["relay"],
+  operation: ["relay"],
 } as const satisfies Record<Kind, readonly Mode[]>
 
 /** What a borrower may do with it: `write` sends a borrowed file's changes back to its source; `run` is for commands and ports. */
@@ -52,6 +53,7 @@ export const KIND_ACCESS = {
   credential: ["read"],
   command: ["run"],
   port: ["run"],
+  operation: ["run"],
 } as const satisfies Record<Kind, readonly Access[]>
 
 /** Whether a kind can be borrowed in a mode, and given an access. */
@@ -100,10 +102,34 @@ export type Scope = z.infer<typeof ScopeSchema>
 const SCOPE_RANK = { thread: 0, project: 1, account: 2 } as const satisfies Record<Scope["level"], number>
 
 /** Where a resource is: a device of the account's, the account's vault in the cloud, or a service that mints short-lived values. */
+/**
+ * What a device can serve, as it probed it: a name (`ios-simulator`, `xcode`, `android-emulator`, `gpu`, `cli`,
+ * `reach`, `macos`), a version, and attributes (a simulator's runtime and device type, a CLI's command and the
+ * profile it's signed in as). Never a value: a CLI's sign-in is the profile it answers as, never its token.
+ */
+const CapabilityName = z.string().regex(/^[a-z][a-z0-9-]{0,47}$/)
+const Attribute = z.string().min(1).max(128)
+export const CapabilitySchema = z
+  .object({ capability: CapabilityName, version: z.string().min(1).max(64).optional(), attributes: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), Attribute).optional() })
+  .strict()
+export type Capability = z.infer<typeof CapabilitySchema>
+
+/** What a need or grant requires of a device: a capability, and its version and attributes, each a value or a pattern with `*`. */
+export const CapabilityQuerySchema = z
+  .object({ capability: CapabilityName, version: z.string().min(1).max(64).optional(), where: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), Attribute).optional() })
+  .strict()
+export type CapabilityQuery = z.infer<typeof CapabilityQuerySchema>
+
+/** A device's slots: what its own work holds (its Fins), out of what it runs at once. Borrowed operations take the rest. */
+export const SlotsSchema = z.object({ used: z.number().int().nonnegative(), of: z.number().int().nonnegative() }).strict()
+export type Slots = z.infer<typeof SlotsSchema>
+
 export const SourceRefSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("device"), device: Id }).strict(),
   z.object({ kind: z.literal("vault") }).strict(),
   z.object({ kind: z.literal("mint"), service: Id }).strict(),
+  /** Whichever of the account's devices (or of those listed) advertise every requirement: the broker picks one. */
+  z.object({ kind: z.literal("capable"), requires: z.array(CapabilityQuerySchema).min(1).max(8), devices: z.array(Id).max(32).optional() }).strict(),
 ])
 export type SourceRef = z.infer<typeof SourceRefSchema>
 
@@ -142,6 +168,14 @@ export const GrantSchema = z
     secret: z.boolean(),
     /** Only for borrowers on the source device itself (a worktree reading its own Mac's main checkout), never another place. */
     within: z.literal("source-device").optional(),
+    /**
+     * The person's devices a borrower there may borrow under it. A borrower at a device is reached only by a grant
+     * naming that device, or by one that keeps to it (`within`): nothing held on one device or in the account reaches
+     * another of the person's devices unless the person said so for that device. The cloud's machines aren't devices;
+     * this list doesn't touch them. Which Threads run on a device is the account's listing, checked by whatever serves
+     * the device's credential before it asks the broker.
+     */
+    devices: z.array(Id).min(1).max(64).optional(),
     /** The name the person gave it or knows it by ("Cloudflare for parley"); the ref when absent. */
     label: z.string().max(200).optional(),
     grantedBy: ActorSchema,
@@ -155,14 +189,16 @@ export const GrantSchema = z
       context.addIssue({ code: "custom", message: `A ${grant.resource.kind} can't be borrowed as ${grant.mode}` })
     if (!allowsAccess(grant.resource.kind, grant.access))
       context.addIssue({ code: "custom", message: `A ${grant.resource.kind} can't be given ${grant.access} access` })
-    if (grant.source.kind !== "device" && grant.ask !== "never")
+    if (grant.source.kind !== "device" && grant.source.kind !== "capable" && grant.ask !== "never")
       context.addIssue({ code: "custom", message: "Only a device asks its person; the vault and a mint are asked at the grant" })
     if (grant.mode === "minted" && grant.source.kind !== "mint" && grant.source.kind !== "vault")
       context.addIssue({ code: "custom", message: "Only a mint or the vault mints" })
-    if (grant.mode === "relay" && grant.source.kind !== "device") context.addIssue({ code: "custom", message: "Only a device relays" })
+    if (grant.mode === "relay" && grant.source.kind !== "device" && grant.source.kind !== "capable") context.addIssue({ code: "custom", message: "Only a device relays" })
+    if (grant.source.kind === "capable" && grant.mode !== "relay") context.addIssue({ code: "custom", message: "Capable devices only relay: the value stays where it runs" })
     if (grant.lifetime.until === "thread-ends" && grant.scope.level !== "thread")
       context.addIssue({ code: "custom", message: "A grant that ends with its Thread is scoped to that Thread" })
     if (grant.within && grant.source.kind !== "device") context.addIssue({ code: "custom", message: "Only a device's grant keeps to the device" })
+    if (grant.within && grant.devices) context.addIssue({ code: "custom", message: "A grant that keeps to its device names no other devices" })
     if (grant.scope.account !== accountOf(grant.grantedBy, grant.scope.account))
       context.addIssue({ code: "custom", message: "A grant is given within its own account" })
   })
@@ -188,6 +224,10 @@ export const NeedSchema = z
     why: z.string().min(1).max(500),
     correlationId: Id,
     holding: HoldingSchema.optional(),
+    /** What the device must have, beyond what the grant requires. */
+    requires: z.array(CapabilityQuerySchema).max(8).optional(),
+    /** How long it may wait for a capable device (ms since the epoch); 30 minutes when absent, never past 24 hours. */
+    deadline: Ms.optional(),
     /** The mode the borrower needs, when it needs one (a link where it would otherwise get a copy); a grant in another mode doesn't answer it. */
     mode: ModeSchema.optional(),
   })
@@ -213,6 +253,20 @@ export const DeliverySchema = z
   .strict()
 export type Delivery = z.infer<typeof DeliverySchema>
 
+/** What an operation's device says of its progress: a phase and how far, never its output's words. */
+export const PROGRESS_PHASES = ["preparing", "booting", "building", "testing", "running", "uploading", "stopping"] as const
+export const ProgressSchema = z.object({ phase: z.enum(PROGRESS_PHASES), percent: z.number().min(0).max(100).optional() }).strict()
+export type Progress = z.infer<typeof ProgressSchema>
+export const SessionSchema = z
+  .object({
+    state: z.enum(["starting", "running"]),
+    heartbeatMs: z.number().int().positive(),
+    lastBeat: Ms,
+    progress: ProgressSchema.optional(),
+  })
+  .strict()
+export type Session = z.infer<typeof SessionSchema>
+
 export const LeaseSchema = z
   .object({
     id: Id,
@@ -230,6 +284,10 @@ export const LeaseSchema = z
     delivery: DeliverySchema,
     /** A copy served while its source is offline: how old it is, and when the source was last seen. */
     stale: z.object({ heldSince: Ms, sourceLastSeen: Ms }).strict().optional(),
+    /** The device the broker chose, for a grant over capable devices. */
+    device: Id.optional(),
+    /** An operation's session: starting until its device says it runs, kept by heartbeats. */
+    session: SessionSchema.optional(),
   })
   .strict()
 export type Lease = z.infer<typeof LeaseSchema>
@@ -254,6 +312,10 @@ export type AskOffer = z.infer<typeof AskOfferSchema>
 export const UNAVAILABLE_REASONS = ["not-found", "outside", "unreadable", "changed", "no-value", "error"] as const
 export type UnavailableReason = (typeof UNAVAILABLE_REASONS)[number]
 
+/** Why a need waits for a capable device: none has the capability, none of those is online, or each has no slot free. */
+export const WAIT_REASONS = ["none-capable", "no-device-online", "all-busy"] as const
+export type WaitReason = (typeof WAIT_REASONS)[number]
+
 export const RefusalSchema = z.discriminatedUnion("refused", [
   z.object({ refused: z.literal("no-grant"), ask: AskOfferSchema }).strict(),
   z.object({ refused: z.literal("out-of-scope") }).strict(),
@@ -272,11 +334,17 @@ export const RefusalSchema = z.discriminatedUnion("refused", [
   z.object({ refused: z.literal("unavailable"), reason: z.enum(UNAVAILABLE_REASONS) }).strict(),
   /** The borrower's Thread has ended: nothing more is lent to it. */
   z.object({ refused: z.literal("thread-ended") }).strict(),
+  /** A need waited for a capable device until its deadline: how long, and why none could take it. */
+  z.object({ refused: z.literal("no-capable-device"), why: z.enum(WAIT_REASONS), waited: Ms }).strict(),
 ])
 export type Refusal = z.infer<typeof RefusalSchema>
 
 /** A need its source is still deciding: the device was asked (`ask`); the answer is pushed, and the same need asked again answers it. */
-export const PendingSchema = z.object({ pending: z.literal("source"), ask: Id, source: SourceRefSchema }).strict()
+export const PendingSchema = z.union([
+  z.object({ pending: z.literal("source"), ask: Id, source: SourceRefSchema }).strict(),
+  /** Waiting for a capable device with a slot: why, its place in line, since when, and until when. */
+  z.object({ pending: z.literal("capacity"), why: z.enum(WAIT_REASONS), position: z.number().int().positive(), since: Ms, deadline: Ms }).strict(),
+])
 export type Pending = z.infer<typeof PendingSchema>
 
 export const BorrowAnswerSchema = z.union([
@@ -286,7 +354,7 @@ export const BorrowAnswerSchema = z.union([
 ])
 export type BorrowAnswer = z.infer<typeof BorrowAnswerSchema>
 
-export const LEASE_EVENT_KINDS = ["granted", "renewed", "refused", "revoked", "expired", "released", "asked"] as const
+export const LEASE_EVENT_KINDS = ["granted", "renewed", "refused", "revoked", "expired", "released", "asked", "queued", "cancelled", "lost"] as const
 /**
  * One line of the lease log: who, what (the resource's name and version), from where, and why, never a value. The
  * same for every kind, in the cloud's log and a device's own.
@@ -313,9 +381,13 @@ export type LeaseEvent = z.infer<typeof LeaseEventSchema>
  * a lease ended (remove every materialization of it before acknowledging), or a newer version of a copy (refresh at the
  * next safe point: a turn's start, never mid-turn).
  */
+/** How a lease ends: revoked, lapsed, released by its borrower, cancelled (an operation stopped), or lost (its device stopped answering). */
+export const LEASE_ENDS = ["revoked", "expired", "released", "cancelled", "lost"] as const
+export type LeaseEnd = (typeof LEASE_ENDS)[number]
+
 export const BorrowPushSchema = z.discriminatedUnion("push", [
   z.object({ push: z.literal("decided"), correlationId: Id, answer: BorrowAnswerSchema }).strict(),
-  z.object({ push: z.literal("ended"), lease: Id, why: z.enum(["revoked", "expired", "released"]) }).strict(),
+  z.object({ push: z.literal("ended"), lease: Id, why: z.enum(LEASE_ENDS) }).strict(),
   z.object({ push: z.literal("version"), lease: Id, version: z.string().max(80), grantVersion: z.number().int().positive() }).strict(),
 ])
 export type BorrowPush = z.infer<typeof BorrowPushSchema>
@@ -426,8 +498,14 @@ export function selects(selector: ResourceSelector, kind: Kind, ref: string): bo
 /** Whether a grant reaches a borrower: inside its scope, and on its source device when it keeps to it. */
 export function reachesBorrower(grant: Grant, borrower: Borrower): boolean {
   if (!inScope(grant.scope, borrower)) return false
-  if (!grant.within) return true
-  return grant.source.kind === "device" && borrower.place.kind === "device" && borrower.place.device === grant.source.device
+  if (grant.within) return grant.source.kind === "device" && borrower.place.kind === "device" && borrower.place.device === grant.source.device
+  if (borrower.place.kind === "device") return grant.devices?.includes(borrower.place.device) ?? false
+  return true
+}
+
+/** Whether a grant, as it stands, still decides a need: it reaches the borrower and selects what's asked, in its mode. */
+function serves(grant: Grant, need: Need): boolean {
+  return reachesBorrower(grant, need.for) && selects(grant.resource, need.kind, need.ref) && (!need.mode || grant.mode === need.mode)
 }
 
 /** Whether a borrower is inside a scope. */
@@ -447,9 +525,13 @@ export function grantExpiry(grant: Grant): number | undefined {
 
 export type GrantEnd = { at: number; why: "revoked" | "expired" | "spent" | "thread-ended"; by: Actor }
 export type GrantState = { grant: Grant; ended?: GrantEnd; consented: string[] }
-export type LeaseState = { lease: Lease; correlation: string; ended?: { at: number; why: "revoked" | "expired" | "released" } }
-export type AskState = { ask: string; need: Need; grant: string; leaseId: string; at: number }
-export type DeviceState = { online: boolean; lastSeen: number | null }
+export type LeaseState = { lease: Lease; correlation: string; ended?: { at: number; why: LeaseEnd } }
+/** An ask out to a device; for a grant over capable devices, the device the broker chose, and those that already said they couldn't. */
+export type AskState = { ask: string; need: Need; grant: string; leaseId: string; at: number; device?: string; excluded?: string[] }
+/** A device as the broker last heard it: online, and for a device that advertises, what it can serve and its slots. */
+export type DeviceState = { online: boolean; lastSeen: number | null; capabilities?: Capability[]; slots?: Slots }
+/** A need waiting for a capable device: what and under which grant, the IDs it will be decided under, and its line. */
+export type WaitState = { need: Need; grant: string; lease: string; ask: string; since: number; deadline: number; why: WaitReason; excluded?: string[] }
 
 export type BrokerState = {
   account: string
@@ -461,10 +543,12 @@ export type BrokerState = {
   devices: Record<string, DeviceState>
   /** The Threads that have ended, by account and Thread, with when: nothing is lent to them after. */
   endedThreads: Record<string, number>
+  /** Needs waiting for a capable device, by their borrower's Thread and correlation ID. */
+  waiting: Record<string, WaitState>
 }
 
 export function emptyBroker(account: string): BrokerState {
-  return { account, grants: {}, leases: {}, answers: {}, asks: {}, devices: {}, endedThreads: {} }
+  return { account, grants: {}, leases: {}, answers: {}, asks: {}, devices: {}, endedThreads: {}, waiting: {} }
 }
 
 /**
@@ -483,6 +567,11 @@ export type BrokerInput =
   | { type: "device"; device: string; online: boolean; at: number }
   | { type: "source-version"; grant: string; version: string; at: number }
   | { type: "tick"; at: number }
+  /** A device's capabilities and slots, as it probed them: it's online, and what it can serve is this. */
+  | { type: "advertise"; device: string; capabilities: Capability[]; slots: Slots; at: number }
+  | { type: "heartbeat"; lease: string; at: number }
+  | { type: "progress"; lease: string; progress: Progress; at: number }
+  | { type: "cancel"; lease: string; by: Actor; at: number }
 
 /** What a step asks its adapter to do: log, ask a device, push to a borrower, or let go of a sealed value no lease names. */
 export type BrokerEffect =
@@ -516,6 +605,7 @@ function clone(state: BrokerState): BrokerState {
     asks: { ...state.asks },
     devices: { ...state.devices },
     endedThreads: { ...state.endedThreads },
+    waiting: { ...state.waiting },
   }
 }
 
@@ -602,7 +692,7 @@ function delivery(grant: Grant, size: number | undefined, held: boolean): Delive
 }
 
 /** Ends a lease (revoked, expired, released), pushes it to its borrower, and lets go of its version when no live lease names it. */
-function endLease(state: BrokerState, effects: BrokerEffect[], id: string, why: "revoked" | "expired" | "released", at: number, by?: Actor): void {
+function endLease(state: BrokerState, effects: BrokerEffect[], id: string, why: LeaseEnd, at: number, by?: Actor): void {
   const held = state.leases[id]
   if (!held || held.ended) return
   state.leases[id] = { ...held, ended: { at, why } }
@@ -624,6 +714,11 @@ function endGrant(state: BrokerState, effects: BrokerEffect[], id: string, end: 
       delete state.asks[ask.ask]
       decide(state, effects, ask.need, { refusal: { refused: leaseWhy } }, end.at)
     }
+  for (const [key, wait] of Object.entries(state.waiting))
+    if (wait.grant === id) {
+      delete state.waiting[key]
+      decide(state, effects, wait.need, { refusal: { refused: leaseWhy } }, end.at)
+    }
 }
 
 /** A lease, and the person's no, answer a need for good; any other refusal is decided afresh when it's asked again. */
@@ -636,7 +731,7 @@ function decide(state: BrokerState, effects: BrokerEffect[], need: Need, answer:
   return answer
 }
 
-function issue(state: BrokerState, effects: BrokerEffect[], need: Need, held: GrantState, id: string, version: string, size: number | undefined, at: number, stale?: Lease["stale"]): BorrowAnswer {
+function issue(state: BrokerState, effects: BrokerEffect[], need: Need, held: GrantState, id: string, version: string, size: number | undefined, at: number, stale?: Lease["stale"], device?: string): BorrowAnswer {
   const { grant } = held
   const lease: Lease = {
     id,
@@ -653,6 +748,8 @@ function issue(state: BrokerState, effects: BrokerEffect[], need: Need, held: Gr
     delivery: delivery(grant, size, need.holding?.version === version),
   }
   if (stale) lease.stale = stale
+  if (device) lease.device = device
+  if (need.kind === "operation") lease.session = { state: "starting", heartbeatMs: SESSION_HEARTBEAT_MS, lastBeat: at }
   state.leases[id] = { lease, correlation: need.correlationId }
   effects.push(leaseEvent("granted", at, state.leases[id]!))
   if (grant.lifetime.until === "once") endSpent(state, held, at)
@@ -667,7 +764,14 @@ function endSpent(state: BrokerState, held: GrantState, at: number): void {
 export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
   const state = clone(previous)
   const effects: BrokerEffect[] = []
-  const done = (extra: Omit<BrokerResult, "state" | "effects"> = {}): BrokerResult => ({ state, effects, ...extra })
+  const done = (extra: Omit<BrokerResult, "state" | "effects"> = {}): BrokerResult => {
+    wake(state, effects, input.at)
+    if (extra.answer && "pending" in extra.answer && extra.answer.pending === "capacity" && input.type === "borrow") {
+      const key = needKey(input.need.for, input.need.correlationId)
+      extra.answer = state.waiting[key] ? waitingAnswer(state, key) : (state.answers[key] ?? extra.answer)
+    }
+    return { state, effects, ...extra }
+  }
   expire(state, effects, input.at)
   retire(state, input.at)
   switch (input.type) {
@@ -699,6 +803,12 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
           delete state.asks[ask.ask]
           decide(state, effects, ask.need, { refusal: { refused: reachesBorrower(grant, ask.need.for) ? "revoked" : "out-of-scope" } }, input.at)
         }
+      if (known)
+        for (const [key, wait] of Object.entries(state.waiting)) {
+          if (wait.grant !== grant.id || serves(grant, wait.need)) continue
+          delete state.waiting[key]
+          decide(state, effects, wait.need, { refusal: { refused: reachesBorrower(grant, wait.need.for) ? "revoked" : "out-of-scope" } }, input.at)
+        }
       if (lapsed(grant, input.at)) endGrant(state, effects, grant.id, { at: input.at, why: "expired", by: { kind: "mako" } })
       return done()
     }
@@ -719,10 +829,13 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
         if (ended) return done({ answer: { refusal: { refused: ended.why === "expired" ? "expired" : "revoked" } } })
       }
       if (answered) return done({ answer: answered })
+      const waitingKey = needKey(need.for, need.correlationId)
+      if (state.waiting[waitingKey]) return done({ answer: waitingAnswer(state, waitingKey) })
       const chosen = chooseGrant(state, need, input.at)
       if ("refusal" in chosen) return done({ answer: decide(state, effects, need, chosen, input.at, false) })
       const held = chosen.grant
       const { grant } = held
+      if (grant.source.kind === "capable") return done({ answer: routeOrWait(state, effects, need, held, input.lease, input.ask, input.at, [], input.at) })
       if (grant.source.kind === "device") {
         const device = state.devices[grant.source.device]
         if (!device?.online) {
@@ -734,7 +847,7 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
         }
         const askPerson = grant.ask === "each-use" || (grant.ask === "first-use" && !held.consented.includes(borrowerKey(need.for)))
         const ask: SourceAsk = { ask: input.ask, grant: grant.id, resource: grant.resource, ref: need.ref, mode: grant.mode, borrower: need.for, why: need.why, askPerson }
-        state.asks[input.ask] = { ask: input.ask, need, grant: grant.id, leaseId: input.lease, at: input.at }
+        state.asks[input.ask] = { ask: input.ask, need, grant: grant.id, leaseId: input.lease, at: input.at, device: grant.source.device }
         const pending: Pending = { pending: "source", ask: input.ask, source: grant.source }
         state.answers[needKey(need.for, need.correlationId)] = pending
         effects.push(event("asked", input.at, need, { grant: grant.id, source: grant.source }))
@@ -760,6 +873,10 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
       }
       const { answer } = input
       if (answer.answer === "no") return done({ answer: decide(state, effects, need, { refusal: { refused: "declined", by: answer.by } }, input.at) })
+      if (answer.answer === "unavailable" && held.grant.source.kind === "capable" && asked.device) {
+        const excluded = [...(asked.excluded ?? []), asked.device]
+        return done({ answer: routeOrWait(state, effects, need, held, asked.leaseId, asked.ask, asked.at, excluded, input.at) })
+      }
       if (answer.answer === "unavailable") return done({ answer: decide(state, effects, need, { refusal: { refused: "unavailable", reason: answer.reason } }, input.at) })
       if (answer.size !== undefined && answer.size > BORROW_COPY_MAX_BYTES)
         return done({ answer: decide(state, effects, need, { refusal: { refused: "too-large", limit: BORROW_COPY_MAX_BYTES } }, input.at) })
@@ -767,7 +884,8 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
       const granted = state.grants[held.grant.id]!
       if (held.grant.ask === "first-use" && !granted.consented.includes(key)) state.grants[held.grant.id] = { ...granted, consented: [...granted.consented, key] }
       const version = held.grant.mode === "copy" ? answer.version : `g${held.grant.version}`
-      return done({ answer: decide(state, effects, need, issue(state, effects, need, state.grants[held.grant.id]!, asked.leaseId, version, answer.size, input.at), input.at) })
+      const device = held.grant.source.kind === "capable" ? asked.device : undefined
+      return done({ answer: decide(state, effects, need, issue(state, effects, need, state.grants[held.grant.id]!, asked.leaseId, version, answer.size, input.at, undefined, device), input.at) })
     }
     case "renew": {
       const held = state.leases[input.lease]
@@ -788,6 +906,11 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
     }
     case "thread-ended": {
       state.endedThreads[threadKey(input.account, input.thread)] = input.at
+      for (const [key, wait] of Object.entries(state.waiting))
+        if (wait.need.for.account === input.account && wait.need.for.thread === input.thread) {
+          delete state.waiting[key]
+          decide(state, effects, wait.need, { refusal: { refused: "thread-ended" } }, input.at)
+        }
       for (const ask of Object.values(state.asks))
         if (ask.need.for.account === input.account && ask.need.for.thread === input.thread) {
           delete state.asks[ask.ask]
@@ -802,14 +925,18 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
     }
     case "device": {
       const known = state.devices[input.device]
-      state.devices[input.device] = { online: input.online, lastSeen: input.online ? input.at : (known?.lastSeen ?? null) }
-      if (!input.online)
+      const seen: DeviceState = { ...known, online: input.online, lastSeen: input.online ? input.at : (known?.lastSeen ?? null) }
+      state.devices[input.device] = seen
+      if (!input.online) {
         for (const ask of Object.values(state.asks)) {
-          const grant = state.grants[ask.grant]?.grant
-          if (grant?.source.kind !== "device" || grant.source.device !== input.device) continue
+          const held = state.grants[ask.grant]
+          if (!held || ask.device !== input.device) continue
           delete state.asks[ask.ask]
-          decide(state, effects, ask.need, { refusal: offline(grant.source, state.devices[input.device]!.lastSeen, ask.need) }, input.at)
+          if (held.grant.source.kind === "capable") routeOrWait(state, effects, ask.need, held, ask.leaseId, ask.ask, ask.at, ask.excluded ?? [], input.at)
+          else if (held.grant.source.kind === "device") decide(state, effects, ask.need, { refusal: offline(held.grant.source, seen.lastSeen, ask.need) }, input.at)
         }
+        for (const held of Object.values(state.leases)) if (!held.ended && held.lease.session && held.lease.device === input.device) endLease(state, effects, held.lease.id, "lost", input.at)
+      }
       return done()
     }
     case "source-version": {
@@ -822,6 +949,32 @@ export function step(previous: BrokerState, input: BrokerInput): BrokerResult {
     }
     case "tick":
       return done()
+    case "advertise": {
+      const capabilities = z.array(CapabilitySchema).max(64).safeParse(input.capabilities)
+      const slots = SlotsSchema.safeParse(input.slots)
+      if (!capabilities.success || !slots.success) return done({ rejected: "Not an advertisement" })
+      state.devices[input.device] = { online: true, lastSeen: input.at, capabilities: capabilities.data, slots: slots.data }
+      return done()
+    }
+    case "heartbeat":
+    case "progress": {
+      const held = state.leases[input.lease]
+      if (!held || held.ended || !held.lease.session) return done({ rejected: "No such live session" })
+      const session: Session = { ...held.lease.session, state: "running", lastBeat: input.at }
+      if (input.type === "progress") {
+        const progress = ProgressSchema.safeParse(input.progress)
+        if (!progress.success) return done({ rejected: "Not a progress" })
+        session.progress = progress.data
+      }
+      state.leases[input.lease] = { ...held, lease: { ...held.lease, session } }
+      return done()
+    }
+    case "cancel": {
+      const held = state.leases[input.lease]
+      if (!held) return done({ rejected: "No such lease" })
+      endLease(state, effects, input.lease, "cancelled", input.at, input.by)
+      return done()
+    }
   }
 }
 
@@ -843,6 +996,132 @@ function sameReach(left: Grant, right: Grant): boolean {
 function expire(state: BrokerState, effects: BrokerEffect[], at: number): void {
   for (const held of Object.values(state.grants)) if (!held.ended && lapsed(held.grant, at)) endGrant(state, effects, held.grant.id, { at, why: "expired", by: { kind: "mako" } })
   for (const held of Object.values(state.leases)) if (!held.ended && at >= held.lease.expiresAt) endLease(state, effects, held.lease.id, "expired", at)
+  for (const held of Object.values(state.leases))
+    if (!held.ended && held.lease.session && at - held.lease.session.lastBeat > SESSION_LOST_BEATS * held.lease.session.heartbeatMs) endLease(state, effects, held.lease.id, "lost", at)
+}
+
+// ---- Capable devices: routing, waiting and waking ----
+
+/** How long a need waits for a capable device unless it says, and the most it may. */
+export const WAIT_DEFAULT_MS = 30 * 60_000
+export const WAIT_MAX_MS = 24 * 60 * 60_000
+/** How often an operation's device says it's alive, and how many beats it may miss before its session is lost. */
+export const SESSION_HEARTBEAT_MS = 60_000
+export const SESSION_LOST_BEATS = 3
+
+function glob(pattern: string, value: string): boolean {
+  return new RegExp(`^${pattern.split("*").map((part) => part.replace(/[.+^${}()|[\]\\?]/g, "\\$&")).join(".*")}$`).test(value)
+}
+
+/** Whether a device's capabilities satisfy every requirement. */
+export function satisfies(capabilities: readonly Capability[], requires: readonly CapabilityQuery[]): boolean {
+  return requires.every((query) =>
+    capabilities.some(
+      (capability) =>
+        capability.capability === query.capability &&
+        (query.version === undefined || (capability.version !== undefined && glob(query.version, capability.version))) &&
+        Object.entries(query.where ?? {}).every(([key, want]) => capability.attributes?.[key] !== undefined && glob(want, capability.attributes[key]!))
+    )
+  )
+}
+
+/** Slots a device has free: what it advertised less its own work, less the sessions and asks the broker has on it. */
+export function freeSlots(state: BrokerState, device: string): number {
+  const known = state.devices[device]
+  if (!known?.slots) return 0
+  const leased = Object.values(state.leases).filter((held) => !held.ended && held.lease.device === device).length
+  const asked = Object.values(state.asks).filter((ask) => ask.device === device && state.grants[ask.grant]?.grant.source.kind === "capable").length
+  return known.slots.of - known.slots.used - leased - asked
+}
+
+/**
+ * The device a need under a grant over capable devices goes to, by one rule: allowed (the grant's devices), able
+ * (it advertises every requirement), available (online, a slot free); then the borrower's own device, one already
+ * serving this borrower, the most slots free, and the lowest ID. Or why none.
+ */
+export function route(state: BrokerState, grant: Grant, need: Need, excluded: readonly string[] = []): { device: string } | { why: WaitReason } {
+  if (grant.source.kind !== "capable") return { why: "none-capable" }
+  const source = grant.source
+  const requires = [...source.requires, ...(need.requires ?? [])]
+  const able = Object.entries(state.devices).filter(
+    ([id, known]) => (!source.devices || source.devices.includes(id)) && !excluded.includes(id) && satisfies(known.capabilities ?? [], requires)
+  )
+  if (!able.length) return { why: "none-capable" }
+  const online = able.filter(([, known]) => known.online)
+  if (!online.length) return { why: "no-device-online" }
+  const free = online.filter(([id]) => freeSlots(state, id) > 0)
+  if (!free.length) return { why: "all-busy" }
+  const own = need.for.place.kind === "device" ? need.for.place.device : undefined
+  const warm = (id: string) => Object.values(state.leases).some((held) => !held.ended && held.lease.device === id && held.lease.borrower.thread === need.for.thread)
+  free.sort(([left], [right]) => Number(right === own) - Number(left === own) || Number(warm(right)) - Number(warm(left)) || freeSlots(state, right) - freeSlots(state, left) || (left < right ? -1 : 1))
+  return { device: free[0]![0] }
+}
+
+function askCapable(state: BrokerState, effects: BrokerEffect[], need: Need, held: GrantState, device: string, leaseId: string, askId: string, at: number, excluded: readonly string[]): Pending {
+  const { grant } = held
+  const askPerson = grant.ask === "each-use" || (grant.ask === "first-use" && !held.consented.includes(borrowerKey(need.for)))
+  const ask: SourceAsk = { ask: askId, grant: grant.id, resource: grant.resource, ref: need.ref, mode: grant.mode, borrower: need.for, why: need.why, askPerson }
+  const asked: AskState = { ask: askId, need, grant: grant.id, leaseId, at, device }
+  if (excluded.length) asked.excluded = [...excluded]
+  state.asks[askId] = asked
+  const pending: Pending = { pending: "source", ask: askId, source: { kind: "device", device } }
+  state.answers[needKey(need.for, need.correlationId)] = pending
+  effects.push(event("asked", at, need, { grant: grant.id, source: { kind: "device", device } }))
+  effects.push({ effect: "ask", device, ask })
+  return pending
+}
+
+/** Routes a need to a capable device and asks it, or puts it in line. */
+function routeOrWait(state: BrokerState, effects: BrokerEffect[], need: Need, held: GrantState, leaseId: string, askId: string, since: number, excluded: readonly string[], at: number): BorrowAnswer {
+  const routed = route(state, held.grant, need, excluded)
+  if ("device" in routed) return askCapable(state, effects, need, held, routed.device, leaseId, askId, at, excluded)
+  const key = needKey(need.for, need.correlationId)
+  delete state.answers[key]
+  const wanted = need.deadline ?? since + WAIT_DEFAULT_MS
+  const wait: WaitState = { need, grant: held.grant.id, lease: leaseId, ask: askId, since, deadline: Math.min(Math.max(wanted, at), since + WAIT_MAX_MS), why: routed.why }
+  if (excluded.length) wait.excluded = [...excluded]
+  const known = state.waiting[key]
+  state.waiting[key] = wait
+  if (!known) effects.push(event("queued", at, need, { grant: held.grant.id }))
+  return waitingAnswer(state, key)
+}
+
+function waitingAnswer(state: BrokerState, key: string): Pending {
+  const wait = state.waiting[key]!
+  const ahead = Object.values(state.waiting).filter((other) => other.grant === wait.grant && (other.since < wait.since || (other.since === wait.since && other.ask < wait.ask))).length
+  return { pending: "capacity", why: wait.why, position: ahead + 1, since: wait.since, deadline: wait.deadline }
+}
+
+/** Every waiting need, oldest first: ended with its deadline, or routed the moment a capable device has room. */
+function wake(state: BrokerState, effects: BrokerEffect[], at: number): void {
+  const line = Object.entries(state.waiting).sort(([, left], [, right]) => left.since - right.since || (left.ask < right.ask ? -1 : 1))
+  for (const [key, wait] of line) {
+    const held = state.grants[wait.grant]
+    if (!held || held.ended || lapsed(held.grant, at)) {
+      delete state.waiting[key]
+      decide(state, effects, wait.need, { refusal: { refused: held?.ended?.why === "revoked" ? "revoked" : "expired" } }, at)
+      continue
+    }
+    // Past its deadline a need is refused, whatever room has come: never served late.
+    if (at >= wait.deadline) {
+      delete state.waiting[key]
+      decide(state, effects, wait.need, { refusal: { refused: "no-capable-device", why: wait.why, waited: at - wait.since } }, at)
+      continue
+    }
+    // Issued only under the grant as it stands now: one changed since the need queued may no longer reach it.
+    if (!serves(held.grant, wait.need)) {
+      delete state.waiting[key]
+      decide(state, effects, wait.need, { refusal: { refused: reachesBorrower(held.grant, wait.need.for) ? "revoked" : "out-of-scope" } }, at)
+      continue
+    }
+    const routed = route(state, held.grant, wait.need, wait.excluded ?? [])
+    if ("device" in routed) {
+      delete state.waiting[key]
+      askCapable(state, effects, wait.need, held, routed.device, wait.lease, wait.ask, at, wait.excluded ?? [])
+      continue
+    }
+    if (routed.why !== wait.why) state.waiting[key] = { ...wait, why: routed.why }
+  }
 }
 
 /** The live leases, as Settings and the Setup view list them: names, versions, expiries, never values. */

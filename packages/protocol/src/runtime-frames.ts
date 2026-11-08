@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { BorrowPushSchema } from "./borrow.js"
 import {
   type Operation,
   OperationEnvelopeSchema,
@@ -277,6 +278,12 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
    * not said is written in form 1.
    */
   z.object({ type: z.literal("live-form"), threadId: ThreadIdSchema, form: LiveFormSchema }).strict(),
+  /**
+   * What a Thread this runtime runs borrows changed (version 21 on, `borrow.ts`): a lease decided after it waited, a
+   * lease ended, or a newer version of a copy. `seq` is the Thread's push sequence, the one asking for its pushes
+   * answers from, so a runtime that sees a gap asks from the last it had. Never a value.
+   */
+  z.object({ type: z.literal("borrow"), threadId: ThreadIdSchema, seq: SeqSchema, push: BorrowPushSchema }).strict(),
 ])
 
 export type RuntimeFrameEnvelope = z.infer<typeof RuntimeFrameEnvelopeSchema>

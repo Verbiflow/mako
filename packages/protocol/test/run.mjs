@@ -111,7 +111,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 20)
+    assert.equal(SUPPORTED_VERSIONS.max, 21)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -279,8 +279,10 @@ describe("wire", () => {
     for (const frame of [
       { type: "operation", generation: 2, operation: withInput },
       { type: "fence", threadId: "th-1", generation: 2 },
+      { type: "borrow", threadId: "th-1", seq: 3, push: { push: "ended", lease: "l-1", why: "revoked" } },
     ])
       assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame(frame)), frame)
+    assert.throws(() => decodeGatewayFrame(encodeGatewayFrame({ type: "borrow", threadId: "th-1", seq: 3, push: { push: "ended", lease: "l-1", why: "revoked", value: "x" } })), "a borrow frame holds no value")
     const event = {
       v: PROTOCOL_VERSION,
       stream: "thread:th-1",
@@ -2344,7 +2346,7 @@ describe("a Session continued in the cloud while its device is off", () => {
   test("an Apex's row says its Fins from link 19, names and states only; an older link goes without; a reader passes over Fins it can't read, never the row", () => {
     assert.equal(FINS_VERSION, 19)
     assert.equal(FIN_STATES_VERSION, 20)
-    assert.equal(LINK_VERSION, FIN_STATES_VERSION)
+    assert.ok(LINK_VERSION >= FIN_STATES_VERSION)
     const { runsOn: _runsOn, listedAt: _listedAt, ...reported } = row
     const fin = (name, state) => ({ thread: "2b3c4d5e-6f70-4182-9a3b-4c5d6e7f8091", name, harness: "cursor", state, startedAt: "2026-11-04T21:46:08.000Z" })
     const apex = { ...reported, fins: [fin("li-openoutreach", { kind: "queued", reason: "place-full", ahead: 2 }), fin("li-protocol", { kind: "working", step: "Reading README.md" }), fin("li-flage", { kind: "ended", outcome: "done" })] }

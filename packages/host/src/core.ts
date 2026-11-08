@@ -851,6 +851,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     notice: (message) => emit({ type: "notice", level: "error", message }),
   })
   const opened = await openConversations({
+    stopping: () => shell.closing(),
     streams,
     finDefaults,
     finCapacity,

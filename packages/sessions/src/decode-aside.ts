@@ -9,6 +9,7 @@ import { fork, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
+import { sendToChild } from "./child-input.js"
 
 /** Records from this size decode aside. */
 export const DECODE_ASIDE_BYTES = 32 * 1024 ** 2
@@ -83,7 +84,8 @@ export class DecodeAside {
       })
       child.once("spawn", () => {
         spawned = true
-        child.send(job)
+        // A child gone before it reads the job ends as its `exit` says.
+        sendToChild(child, job).catch(() => {})
       })
       child.on("message", (message) => {
         reply = AsideReplySchema.safeParse(message).data ?? { ok: false, error: "the decode's reply doesn't parse" }

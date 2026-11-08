@@ -23,10 +23,13 @@ import { registryJson } from "./registry-fetch.js"
 import {
   npmUpdate,
   pinnedPolicy,
+  unpublishedBuild,
+  unpublishedWords,
   type ProviderUpdateSource,
   type RuntimeUpdateSource,
 } from "./update-source.js"
 import type { HostJobs } from "../base/host-jobs.js"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /**
  * The runtimes behind every provider: what is installed, what is current,
@@ -953,6 +956,11 @@ export class RuntimeUpdates {
         this.options.updateTimeoutMs
       )
       if (outcome.code !== 0) {
+        // A pinned build its vendor withdrew: say which, never the installer's bare HTTP error.
+        const versions = this.sources().find((entry) => entry.key === provider)?.versions
+        const pinned = versions && !versions.bundled ? versions.tested : undefined
+        if (pinned && [plan.command, ...plan.args].join(" ").includes(pinned) && unpublishedBuild(outcome.output))
+          throw new Error(unpublishedWords(current.label ?? provider, pinned))
         const tail = outcome.output
           .trim()
           .split("\n")
@@ -1219,7 +1227,7 @@ export async function readRuntimeVersion(
       }
       child.stdout.on("data", collect)
       child.stderr.on("data", collect)
-      child.stdin.end()
+      endChildInput(child)
       const result = await exited
       const output = Buffer.concat(chunks).toString("utf8")
       if (result.code !== 0 && !parseVersion(output))

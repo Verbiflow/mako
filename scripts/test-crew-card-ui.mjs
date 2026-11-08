@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 // The crew card (`crew-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
 // its own turn settles and its Fins still work, on the mock bridge's Apex scene (`?mock&app=apex`): every Fin
@@ -106,6 +107,7 @@ async function check() {
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const base = process.env.MAKO_CREW_UI_URL
   const preload = join(root, "commit-counter.cjs")
@@ -122,6 +124,7 @@ async function check() {
       sandbox: false,
     },
   })
+  atSize(window, 1440, 900)
   const page = window.webContents
   const errors = []
   page.on("console-message", (event) => {
