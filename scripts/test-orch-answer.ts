@@ -148,7 +148,53 @@ const MERGE = { status: "done" as const, summary: "PR #371 is green: every check
 
 const approve = (world: AgentsWorld, fin: string, heard: LivePermissionResponse[]) => world.ask(fin, "npm test").then((response) => void heard.push(response))
 
+/** A Fin's agent asks, through a Mako tool, to move its Thread: the ask its tools raise below full access. */
+const agentAsk = (answers: Array<{ ask: string; allow: boolean }>) => async (world: AgentsWorld, fin: string) => {
+  world.live.asks.answering = async (conversation, ask, allow) => {
+    answers.push({ ask, allow })
+    world.live.asks.settle(conversation, ask)
+  }
+  world.live.asks.raise(fin, { id: "11111111-1111-4111-8111-111111111111", at: Date.now(), want: { kind: "move", move: "22222222-2222-4222-8222-222222222222", handsOff: true } })
+  await until("the agent's ask to be answered", () => answers.length > 0, 20_000)
+}
+
 try {
+  // A Fin's ask through Mako's tools is an approval on the one path a Fin's asks take: its Apex on full access answers
+  // it with agents_answer, inside its window.
+  {
+    const answered: Array<{ ask: string; allow: boolean }> = []
+    const replies: AgentsAnswerResult[] = []
+    const { world, state, wakes } = await fixture("agent-ask-apex", {
+      access: "full", finHarness: "opencode", asks: agentAsk(answered),
+      onDecision: async (world, caller) => void replies.push(await world.agents.answer(caller, { to: "tests", allow: true, clientKey: "move" })),
+    })
+    await until("the Apex to be asked", () => replies.length === 1)
+    assert.match(wakes[0]!, /Wants to move this Thread to the cloud/, "the Apex hears what the Fin's agent asked")
+    if (!answered.length) await until("the ask to be answered", () => answered.length === 1)
+    assert.deepEqual(answered, [{ ask: "11111111-1111-4111-8111-111111111111", allow: true }], "the Apex's allow is the ask's")
+    await until("the Fin to go on", () => state()?.kind === "ended")
+    await world.close()
+  }
+  console.log("an agent's ask from a Fin: its full-access Apex answered it with agents_answer")
+
+  // Below full access it's the person's, on the Apex's row, as a harness's approval is.
+  {
+    const answered: Array<{ ask: string; allow: boolean }> = []
+    const { world, apex, thread, state } = await fixture("agent-ask-person", { access: "ask", finHarness: "opencode", asks: agentAsk(answered) })
+    await until("the ask to be the person's", () => { const now = state(); return now?.kind === "blocked" && now.on === "approval" })
+    const blocked = state()
+    assert.ok(blocked?.kind === "blocked" && blocked.ask?.kind === "approval")
+    assert.deepEqual(blocked.ask.options?.map((option) => option.label), ["Move to the cloud", "Keep here"])
+    assert.equal(blocked.ask.named, true, "answered in its own words, not a command's Allow once")
+    const asking = world.agents.personAsk(apex.conversation)
+    assert.equal(asking?.fin, thread(), "the Apex's row carries it, so the Inbox and phone do")
+    await world.agents.respond(apex.conversation, { fin: thread(), ask: blocked.ask.id, allow: false, request: "r-keep" })
+    await until("the person's answer to reach the ask", () => answered.length === 1)
+    assert.deepEqual(answered, [{ ask: "11111111-1111-4111-8111-111111111111", allow: false }])
+    await world.close()
+  }
+  console.log("an agent's ask from a Fin under an Apex on ask: the person's, from the Apex's row")
+
   // A full-access Apex answers each harness's approval, and its Fin goes on.
   for (const finHarness of HARNESSES) {
     const answers: AgentsAnswerResult[] = []
@@ -209,6 +255,35 @@ try {
     await world.close()
   }
   console.log("ask: the Apex was told the approval was the person's, refused it, and the person's answer from its Thread let the Fin go on, once")
+
+  // A progress report before an approval suppresses the inferred end report. The stored notice that the Apex
+  // couldn't answer must still stop blocking the Fin once the person answers, even before it reports anything else.
+  {
+    const { world, apex, fin, thread, state, heard } = await fixture("answered-after-progress", {
+      access: "ask", finHarness: "codex",
+      asks: async (world, conversation, heard) => {
+        await world.agents.report(world.caller(conversation), { status: "progress", summary: "Checking the change.", clientKey: "checking" })
+        await approve(world, conversation, heard)
+      },
+    })
+    await until("the approval", () => state()?.kind === "blocked")
+    const blocked = state()
+    assert.ok(blocked?.kind === "blocked" && blocked.ask)
+    assert.equal(answered(await world.agents.respond(apex.conversation, { fin: thread(), ask: blocked.ask.id, allow: true, request: "r-progress-allow" })).answered, "approval")
+    await until("the answered turn to end", () => heard.length === 1 && world.live.session(fin)?.status === "ready")
+    assert.equal(state()?.kind, "idle", "the stored approval notice no longer blocks the Fin after the person's answer")
+    assert.equal(world.agents.personAsk(apex.conversation), undefined)
+    const read = await world.agents.read(apex.caller, { child: "tests" })
+    assert.ok("text" in read)
+    assert.doesNotMatch(read.text, /asked them in their Inbox|^blocked/, "agents_read cannot repeat the stale notice as its current report")
+    const listed = await world.agents.list(apex.caller, {})
+    assert.ok("children" in listed)
+    assert.equal(listed.children[0]?.report, undefined, "the strip cannot keep it as a blocked report either")
+    await world.restart()
+    assert.equal(state()?.kind, "idle", "a restart cannot revive that notice from the journal")
+    await world.close()
+  }
+  console.log("an answered approval's stored notice no longer blocks its idle Fin, including after restart")
 
   // What stalled two Fins for 45 minutes: an Apex on full access, mid-turn on a harness that hears a digest only at its
   // turn's end, leaves an approval it may answer. Past the window the person is asked; their answer lets the Fin go on,

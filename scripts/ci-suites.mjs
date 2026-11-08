@@ -30,12 +30,13 @@ const SUITES = [
   "test:control-driver-install", "test:control-media-sources", "test:control-packages", "test:control-preview",
   "test:control-recording-continuous", "test:cursor-child", "test:desktop-answers", "test:desktop-crashes",
   "test:dev-updates", "test:execution-ownership", "test:file-previews", "test:fin-pips-ui", "test:git",
+  "test:placed-fin-ui",
   "test:git-remote", "test:host", "test:host-shutdown", "test:host-signals", "test:host-single", "test:lazy",
   "test:listed-repositories", "test:live-actions", "test:live-approvals", "test:live-context-children",
   "test:local-signing", "test:mcp", "test:message-queue", "test:mobile-behavior", "test:model-connections-ui",
   "test:moves", "test:native-authoring", "test:node-host-secrets", "test:opencode-agents", "test:opencode-api",
   "test:owner-check", "test:plugins", "test:proposed-plans", "test:provider-launch-options", "test:provider-ui",
-  "test:host-load-memory", "test:queued-steering", "test:zod-patch", "test:rail-list", "test:recovery-admission", "test:scripted-model", "test:secrets-keychain", "test:side-rail-ui", "test:fin-transitions-ui",
+  "test:host-load-memory", "test:queued-steering", "test:zod-patch", "test:rail-list", "test:roster-delta", "test:recovery-admission", "test:scripted-model", "test:secrets-keychain", "test:side-rail-ui", "test:fin-transitions-ui",
   "test:simulators-remote", "test:skills", "test:telemetry", "test:terminal", "test:terminal-ui",
   "test:run-suite", "test:test-scratch", "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees", "test:transfer-scheduling",
   "test:tree-watcher", "test:update-local", "test:usage-worker", "test:web-delivery", "test:window-boot",
@@ -45,6 +46,7 @@ const SUITES = [
   "test:fins-fresh-on-return-ui", "test:inbox-ui", "test:moves-ui", "test:opening-send-ui", "test:sync-status-ui",
   "test:thread-app", "test:tool-rows-ui",
   "test:composer-edges-ui",
+  "test:agent-ask-ui",
   "test:ci-downloads",
 ]
 /** Past this a suite has hung: the slowest here takes about 4 minutes on a Mac at load 15. */

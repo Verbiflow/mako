@@ -92,7 +92,7 @@ import {
 } from "./mock-runtime-fixtures"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
 import { openAsk } from "@mako/host/contracts/children"
-import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
+import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -372,6 +372,8 @@ export function installMockBridge() {
   let apexPrewarms = 0
   let wakeApex: (() => void) | undefined
   const respondCalls: Array<AgentsRespondInput & { conversation: string }> = []
+  const agentAskAnswers: Array<{ conversationId: string; ask: string; allow: boolean }> = []
+  let refuseNextAgentAnswer = false
   const continueCalls: string[] = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
@@ -473,6 +475,9 @@ export function installMockBridge() {
       acpSessions.set(snapshot.session.id, snapshot.session)
     }
     boot.live.push(...apexSummaries(), ...benchScene.summaries)
+    // The placed Fin's conversation, as Loft would answer it when opened from here.
+    const placed = placedSnapshot()
+    if (placed) liveSnapshots.set(placed.session.id, placed)
     const setChildren = (agents: NativeAgent[]) => {
       const snapshot = liveSnapshots.get(APEX_CONVERSATION)
       if (!snapshot) return
@@ -517,6 +522,18 @@ export function installMockBridge() {
       directs: () => [...directCalls],
       /** The person's answers to Fins' asks, as the Apex's host heard them. */
       responds: () => [...respondCalls],
+      agentAsks: () => [...agentAskAnswers],
+      /** The host refuses the next answer to an agent's ask, as one whose allowed action failed. */
+      refuseNextAgentAnswer: () => void (refuseNextAgentAnswer = true),
+      /** The Apex's own agent asks now, as the host's control-only batch says it. */
+      raiseAgentAsk: () => {
+        const snapshot = liveSnapshots.get(APEX_CONVERSATION)
+        if (!snapshot?.control) return
+        const control = { ...snapshot.control, asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a7", at: Date.now(), want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a8", handsOff: true } }] }
+        const next = { ...snapshot, revision: snapshot.revision + 1, control }
+        liveSnapshots.set(APEX_CONVERSATION, next)
+        emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], control })) })
+      },
       continues: () => [...continueCalls],
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
@@ -1050,8 +1067,19 @@ export function installMockBridge() {
     bringStayedChanges: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
     putBackMovedFiles: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
     workspaceMoveOutcome: async () => null,
-    threadMoveAsks: async () => [],
-    answerThreadMoveAsk: async () => {},
+    answerAgentAsk: async (conversationId: string, ask: string, allow: boolean) => {
+      if (refuseNextAgentAnswer) {
+        refuseNextAgentAnswer = false
+        throw new Error("The host refused that answer.")
+      }
+      agentAskAnswers.push({ conversationId, ask, allow })
+      const snapshot = liveSnapshots.get(conversationId)
+      if (!snapshot?.control) return
+      const control = { ...snapshot.control, asks: snapshot.control.asks?.filter((each) => each.id !== ask) }
+      const next = { ...snapshot, revision: snapshot.revision + 1, control }
+      liveSnapshots.set(conversationId, next)
+      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversationId, revision: next.revision, updates: [], control })) })
+    },
     threadChanges: async () => null,
     changeUsage: async () => null,
     resolveFileReferences: async () => null,

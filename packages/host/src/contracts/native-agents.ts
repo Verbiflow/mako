@@ -44,6 +44,11 @@ export const FinAskSchema = z.object({
   recommended: z.number().int().nonnegative().optional(),
   /** What whoever answers does, in one sentence. */
   action: z.string().max(400).optional(),
+  /**
+   * An approval answered in its own words: its first option allows and its second keeps things as they are, as an
+   * agent's ask through Mako's tools does ("Move to the cloud", "Keep here"), where a harness's says "Allow once".
+   */
+  named: z.literal(true).optional(),
 })
 export type FinAsk = z.infer<typeof FinAskSchema>
 
@@ -165,6 +170,8 @@ export const NativeAgentObservationSchema = z.object({
       state: ChildStateSchema.optional(),
       /** Where it went on when its harness's account ran out, and why: "Moved to Claude (work): personal is at its limit until 3:10 PM PST". */
       moved: z.string().max(512).optional(),
+      /** Where it runs when that isn't its Apex's device (`place: device:<name>`): its row says the device. */
+      place: z.string().max(220).optional(),
       /** The one notice of a limit its tree hit, on the first Fin it touched, until the person has seen it (`limitNoticeLine`). */
       limitNotice: z.object({ id: z.string().min(1).max(600), line: z.string().max(512), harness: z.string().min(1).max(100) }).optional(),
     })

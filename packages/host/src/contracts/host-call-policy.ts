@@ -28,8 +28,6 @@ const reads = [
   "mako:launch-prewarm",
   /** The Threads at work here a handoff would take, and the person's choice for sleep, as they stand. */
   "mako:handoff-candidates",
-  /** Agents' asks to move their Thread, as they stand. */
-  "mako:thread-move-asks",
   "mako:handoff-settings",
   "mako:conversation-settings",
   /** Where keeping this Mac awake stands; reads what `KeepAwake` holds. */
@@ -130,6 +128,8 @@ const reads = [
   "mako:agents-list",
   "mako:agents-read",
   "mako:agents-wait",
+  /** What this host offers as a place for Fins, as it stands. */
+  "mako:agents-capabilities",
   /** Simulators' setup line as it stands, re-read when asked; changes nothing on this Mac. */
   "mako:simulator-setup",
   /** What the hosts run, who holds each simulator, a page or console read, and a screenshot (`contracts/simulators.ts`). */
@@ -264,6 +264,12 @@ const replays = [
   "mako:agents-send",
   "mako:agents-answer",
   "mako:agents-stop",
+  /** A start for an Apex on another device is settled by its op: a repeat answers the same Fin. */
+  "mako:agents-place",
+  /** A placed Fin's notice is kept once by its report's ID: a repeat is heard as the same one. */
+  "mako:agents-notice",
+  /** A stop of a placed start is kept by the start's op: a repeat stops nothing more and answers the same. */
+  "mako:agents-cancel",
   /** The moved message's id names the one it becomes; a message already moved is withdrawn once. */
   "mako:agents-redirect",
   /** The person's message to a Fin is settled by its request id: a repeat answers the first delivery. */
@@ -295,7 +301,7 @@ const replays = [
   /** `ThreadMoveTool.move`: the move is named by the caller's key, so a repeat joins it or answers how it went. */
   "mako:threads-move",
   /** `ThreadMoveTool.answer`: the ask's id; an answered ask ignores a repeat. */
-  "mako:thread-move-ask-answer",
+  "mako:agent-ask-answer",
   /** Whether a machine has its folder for a move only reads. */
   "mako:move-ready",
   /** A move staged again stages the same, or what the device sent since: nothing of it is the machine's own yet. */

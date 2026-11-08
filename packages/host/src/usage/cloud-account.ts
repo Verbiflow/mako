@@ -303,6 +303,8 @@ export type CloudAccountOptions = {
    * stream, with nothing to say when that's all of it, so what must know the list as it stands reads it whole.
    */
   onAccountLinked?: () => void
+  /** This device's runtime is enrolled on a new link: from now its account's other devices' calls reach it again. */
+  onRuntimeLinked?: () => void
 }
 
 export class CloudAccountError extends Error {
@@ -1550,6 +1552,7 @@ export class CloudAccounts {
           this.#served = { link, served: started }
           this.#options.sessions?.linked(this.#served)
           this.#options.log?.("cloud runtime enrolled", { runtimeId, claims: this.#claims.length })
+          this.#options.onRuntimeLinked?.()
           void started.ended.then((problem) => {
             this.#claims = started.claims()
             if (this.#served?.served === started) this.#served = undefined

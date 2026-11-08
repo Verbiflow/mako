@@ -90,6 +90,8 @@ export interface WorldOptions {
   root: string
   script: Script
   budget?: TreeBudget
+  /** Each event the host sends its windows, as it sends it. */
+  events?: (event: HostEvent) => void
   /** What the host keeps of conversations in memory (`LiveDependencies.conversationMemory`); the host's own without it. */
   conversationMemory?: ConstructorParameters<typeof LiveConversations>[0]["conversationMemory"]
   /** How long a harness at rest stays connected before it hibernates (`LiveDependencies.providerIdleMs`). */
@@ -195,6 +197,14 @@ export interface WorldOptions {
   readingAccounts?: (harness: string, all: boolean) => Promise<void> | void
   /** A pull request as GitHub would say it stands (`AgentsDeps.readPull`): a stub, never the network. */
   readPull?: AgentsDeps["readPull"]
+  /** How this host reaches the person's other devices (`AgentsDeps.away`): with it, a Fin can be placed on one. */
+  away?: AgentsDeps["away"]
+  /** The Git remote a folder is a checkout of (`AgentsDeps.remoteOf`). */
+  remoteOf?: AgentsDeps["remoteOf"]
+  /** This host's checkout of a remote, for a Fin placed here (`AgentsDeps.checkoutOf`). */
+  checkoutOf?: AgentsDeps["checkoutOf"]
+  /** The most access a Fin placed here from another device may have (`AgentsDeps.placedCeiling`). */
+  placedCeiling?: AgentsDeps["placedCeiling"]
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -278,6 +288,7 @@ export class AgentsWorld {
         return { ref: { harness: "claude", nativeId: path, path }, entries, start: 0, total: entries.length, hasEarlier: false }
       },
       emit: (event) => {
+        this.options.events?.(event)
         this.events.push(event)
         this.eventAt.push(Date.now())
       },
@@ -354,6 +365,10 @@ export class AgentsWorld {
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
       ...(this.options.readPull && { readPull: this.options.readPull }),
       ...(this.options.now && { now: this.options.now }),
+      ...(this.options.away && { away: this.options.away }),
+      ...(this.options.remoteOf && { remoteOf: this.options.remoteOf }),
+      ...(this.options.checkoutOf && { checkoutOf: this.options.checkoutOf }),
+      ...(this.options.placedCeiling && { placedCeiling: this.options.placedCeiling }),
       archived: (conversation) => this.archived.has(conversation),
     }
     const agents = new Agents(deps)
@@ -615,7 +630,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   }
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, wakeDue: () => [], snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, pinnedAccount: () => undefined, submit: none,
-    act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
+    act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, workOf: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
     turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {}, readIn: async () => true,
   }
 }

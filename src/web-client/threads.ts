@@ -1,7 +1,7 @@
 import type { ArchivedThread, ListedSession, ListedState } from "@mako/protocol/thread-listing"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import type { WaitingFor } from "@mako/protocol/attention"
-import { CLOUD_FOLDER_WHERE, listedOwner, listedPromptedAt, listedSummary, type ListedOwner } from "@mako/host/contracts/listed-conversations"
+import { CLOUD_FOLDER_WHERE, listedApexOf, listedOwner, listedPromptedAt, listedSummary, type ListedOwner } from "@mako/host/contracts/listed-conversations"
 import { byLastWorked, staleTarget, type OpenedBy, type SessionFacts } from "@mako/host/contracts/session-choice"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { runPlace, type RunPlace } from "@mako/host/contracts/account-devices"
@@ -53,6 +53,11 @@ export interface WebThread {
   /** Messages waiting in the account for a Session of it whose device is off. */
   waitingMessages: number
   archived?: { move: string; archivedAt: string }
+  /**
+   * It's a Fin of another Thread, placed on the device that lists it (`listedApexOf`): shown under that Apex, never as
+   * a Thread of its own, and opened from there, its own device answering.
+   */
+  apex?: { thread: string; title: string }
 }
 
 /**
@@ -91,14 +96,14 @@ export function projectOf(folder: string | undefined): string | undefined {
 }
 
 /** One listed row as the browser holds it: who answers it, where it runs, and how a window lists it. */
-export function sessionOf(row: ListedSession, list: Pick<AccountListState, "devices" | "quiet" | "waiting">): WebSession {
+export function sessionOf(row: ListedSession, list: Pick<AccountListState, "rows" | "devices" | "quiet" | "waiting">): WebSession {
   const where = whereOf(row, list.devices)
   const quietSince = row.runsOn.kind === "device" ? list.quiet.get(row.runsOn.deviceId) : undefined
   const deviceKind = row.runsOn.kind === "device" ? list.devices.get(row.runsOn.deviceId)?.kind : undefined
   const session: WebSession = {
     row,
     owner: listedOwner(row),
-    summary: listedSummary(row, row.runsOn.kind === "cloud" ? CLOUD_FOLDER_WHERE : where, quietSince, deviceKind),
+    summary: listedSummary(row, row.runsOn.kind === "cloud" ? CLOUD_FOLDER_WHERE : where, quietSince, deviceKind, listedApexOf(row, list.rows)),
     where,
     waiting: list.waiting.get(row.session) ?? [],
     facts: listedFacts(row, quietSince !== undefined),
@@ -169,10 +174,24 @@ function fold(id: string, sessions: WebSession[], archived?: ArchivedThread): We
   return thread
 }
 
-/** The account's Threads as the list shows them: the ones it follows, and the archived cloud Threads apart. */
+/**
+ * The account's Threads as the list shows them: the ones it follows, the archived cloud Threads apart, and the Fins
+ * placed on other devices, each under its Apex (`WebThread.apex`), never among the Threads.
+ */
 export interface FoldedThreads {
   threads: WebThread[]
   archived: WebThread[]
+  placed: WebThread[]
+}
+
+/** The Thread a route or a row names, among the Threads, the Fins placed elsewhere and the archived. */
+export function threadById(folded: FoldedThreads, named: (thread: WebThread) => boolean): WebThread | undefined {
+  return folded.threads.find(named) ?? folded.placed.find(named) ?? folded.archived.find(named)
+}
+
+/** The Fins placed elsewhere under one Apex, waiting on the person first. */
+export function placedUnder(folded: Pick<FoldedThreads, "placed">, apex: string): WebThread[] {
+  return folded.placed.filter((thread) => thread.apex?.thread === apex)
 }
 
 /**
@@ -187,13 +206,23 @@ export function foldThreads(list: Pick<AccountListState, "rows" | "devices" | "q
     if (sessions) sessions.push(session)
     else byThread.set(row.thread, [session])
   }
-  const threads = [...byThread].map(([id, sessions]) => fold(id, sessions))
-  threads.sort((left, right) => STANDING_ORDER[left.standing] - STANDING_ORDER[right.standing] || (left.standing === "waiting" ? waitingRank(left) - waitingRank(right) : 0) || right.activityAt - left.activityAt)
+  const folded = [...byThread].map(([id, sessions]) => fold(id, sessions))
+  folded.sort((left, right) => STANDING_ORDER[left.standing] - STANDING_ORDER[right.standing] || (left.standing === "waiting" ? waitingRank(left) - waitingRank(right) : 0) || right.activityAt - left.activityAt)
+  // A Fin placed on another device goes under its Apex, by the Apex's row that names it among its Fins; one no row
+  // names stands on its own, since there's nothing to put it under.
+  const titles = new Map(folded.map((thread) => [thread.id, thread.title]))
+  const threads: WebThread[] = []
+  const placed: WebThread[] = []
+  for (const thread of folded) {
+    const apex = thread.sessions.find((session) => session.summary.parent)?.summary.parent?.thread
+    if (apex === undefined || apex === thread.id) threads.push(thread)
+    else placed.push({ ...thread, apex: { thread: apex, title: titles.get(apex) ?? "its Apex" } })
+  }
   const archived = list.archived.flatMap((entry) => {
     const sessions = entry.sessions.map((row) => sessionOf(row, list))
     return sessions.length ? [fold(entry.sessions[0]!.thread, sessions, entry)] : []
   })
-  return { threads, archived }
+  return { threads, archived, placed }
 }
 
 /** The conversation a Thread opens on: one waiting on the person first, then the newest at work, then its first. */
