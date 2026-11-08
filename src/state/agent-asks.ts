@@ -1,5 +1,4 @@
 import { toast } from "sonner"
-import { readBackLive } from "@/state/live-recovery"
 import { agentAskLine, agentAskWords, type AgentAsk } from "@mako/host/contracts/agent-asks"
 import type { AskCard } from "@/lib/ask-card"
 import { getMako, hasBridge } from "@/lib/bridge"
@@ -37,6 +36,8 @@ export function agentAskCard(conversationId: string, ask: AgentAsk, harness: str
 
 export async function answerAgentAsk(conversationId: string, ask: AgentAsk, allow: boolean): Promise<boolean> {
   if (!hasBridge()) return false
+  // Ask selectors also load while threads initialize; recovery is an action dependency, loaded before the RPC.
+  const { readBackLive } = await import("@/state/live-recovery")
   let failure: unknown
   try { await getMako().answerAgentAsk(conversationId, ask.id, allow) } catch (error) { failure = error }
   // The accepted answer may arrive without its event. Read it through the same lifecycle as an approval's receipt;
