@@ -1,10 +1,7 @@
 import { useMemo, useState } from "react"
 import { CheckIcon, XIcon } from "lucide-react"
-import {
-  childGroup,
-  childStateOf,
-  childWord,
-} from "@mako/host/contracts/children"
+import { approvalWords, childGroup, childStateOf, childWord, DONE_NEEDS_YOU } from "@mako/host/contracts/children"
+import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import { FinMark } from "@/components/stage/child-tabs"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { LiveMark } from "@/components/ui/live-mark"
@@ -37,9 +34,13 @@ export function FinsNeedYou({
       children.filter((agent) => childGroup(childStateOf(agent)) === "needs"),
     [children]
   )
-  if (visible !== false || !needs.length) return null
-  const word =
-    needs.length === 1 ? "1 Fin needs you" : `${needs.length} Fins need you`
+  const notice = useThreadAsks(thread).some((ask) => isLimitAsk(ask.ask.id))
+  if (visible !== false || (!needs.length && !notice)) return null
+  const word = !needs.length
+    ? "Usage needs you"
+    : needs.length === 1
+      ? "1 Fin needs you"
+      : `${needs.length} Fins need you`
   return (
     <div className={cn(!compact && "bg-surface/60")}>
       <button
@@ -82,7 +83,7 @@ export function FinAsks() {
   if (card !== null) return <FinsNeedYou thread={thread} />
   if (!key || !asks.length) return null
   return (
-    <div data-fin-asks={asks.length} className="flex shrink-0 flex-col gap-2.5 bg-surface/60 px-4 py-2.5">
+    <div data-fin-asks={asks.length} className="mx-3 flex shrink-0 flex-col gap-2.5 bg-surface/60 py-2.5">
       {asks.map((ask) => (
         <FinAskRow key={`${ask.fin}:${ask.ask.id}`} apex={key} ask={ask} />
       ))}
@@ -117,11 +118,13 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
           {ask.title}
         </span>
         <span className="shrink-0 text-attention">
-          {childWord({
-            kind: "blocked",
-            question: ask.question,
-            on: approval ? "approval" : "person",
-          })}
+          {ask.done
+            ? DONE_NEEDS_YOU
+            : childWord({
+                kind: "blocked",
+                question: ask.question,
+                on: approval ? "approval" : "person",
+              })}
         </span>
       </p>
       <p className="max-w-prose text-ui text-foreground/90">{ask.question}</p>
@@ -141,17 +144,20 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
               className="pressable flex items-center gap-1.5 border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50"
             >
               <CheckIcon className="size-3" />
-              Allow once
+              {approvalWords(ask.ask).allow}
             </button>
             <button
               type="button"
               data-fin-answer="refuse"
               disabled={sending}
               onClick={() => send({ allow: false })}
-              className="pressable flex items-center gap-1.5 border border-hairline px-2 py-1 text-label text-negative/80 hover:bg-negative/10 hover:text-negative disabled:opacity-50"
+              className={cn(
+                "pressable flex items-center gap-1.5 border border-hairline px-2 py-1 text-label disabled:opacity-50",
+                ask.ask.named ? "text-foreground hover:bg-fill-hover" : "text-negative/80 hover:bg-negative/10 hover:text-negative"
+              )}
             >
               <XIcon className="size-3" />
-              Refuse
+              {approvalWords(ask.ask).refuse}
             </button>
           </>
         ) : (

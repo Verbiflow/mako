@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
 import { build } from "esbuild"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * The host's secrets against the real macOS keychain, through Electron's
@@ -28,7 +28,7 @@ if (process.platform !== "darwin") {
 }
 const NAME = "mako-secrets-proof"
 const run = promisify(execFile)
-const root = await mkdtemp(join(tmpdir(), "mako-secrets-keychain-"))
+const root = testScratch("mako-secrets-keychain-")
 const app = join(root, "app")
 const value = randomBytes(24).toString("base64url")
 const electron = resolve("node_modules/.bin/electron")

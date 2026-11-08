@@ -7,7 +7,7 @@ import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 import type { ArchivedThread, ListedSession } from "@mako/protocol/thread-listing"
 import { attentionFact } from "@mako/protocol/attention"
-import { CLOUD_FOLDER_WHERE, listedContinueChoice, listedOwner, listedPromptedAt, listedSummary } from "../contracts/listed-conversations.js"
+import { CLOUD_FOLDER_WHERE, listedContinueChoice, listedOwner, listedPromptedAt, listedSummary, listedApexOf } from "../contracts/listed-conversations.js"
 import { laterPrompt, promptedAfter } from "../contracts/worked-at.js"
 import type { FollowRecorder, SyncRecorder } from "../contracts/sync-readings.js"
 import { listedArchiveInputs, type ArchiveInputs } from "../contracts/cloud-archive.js"
@@ -401,6 +401,8 @@ export class CloudConversations {
   /** This Mac's device, whose own Sessions are its own, and the names of the account's devices, for where a Session runs. */
   #device: string | undefined
   readonly #deviceNames = new Map<string, string>()
+  /** Each device's kind as the account lists it, so a row on a machine of the person's own is marked apart from a Mac's. */
+  readonly #deviceKinds = new Map<string, string>()
   /** Devices the list named that this Mac hadn't heard of, each asked the account about once (`#nameDevice`). */
   readonly #askedNames = new Set<string>()
   #unlisten: (() => void) | undefined
@@ -1783,7 +1785,7 @@ export class CloudConversations {
         try {
           this.#device = await account.deviceId()
           const [listings, devices, blocked] = await Promise.all([account.sessionListings(), account.devices?.().catch(() => undefined), account.cloudBlocked?.()])
-          for (const device of devices?.devices ?? []) this.#deviceNames.set(device.id, device.name)
+          for (const device of devices?.devices ?? []) this.#heardDevice(device)
           this.#accountId = accountId
           this.#continuable = blocked === undefined
           if (this.#list.listed(listings)) this.#reconcile()
@@ -1881,7 +1883,7 @@ export class CloudConversations {
         }
         continue
       }
-      const summary = listedSummary(row, where, quietSince)
+      const summary = listedSummary(row, where, quietSince, row.runsOn.kind === "device" ? this.#deviceKinds.get(row.runsOn.deviceId) : undefined, listedApexOf(row, everyRow))
       if (quietSince !== undefined) summary.cloudContinue = listedContinueChoice(row, everyRow, quiet)
       // What its change says, by the rule the account's notices use: only of a row heard here before (the first
       // listing is where things stand, which a window marks without announcing), never of an archive's rows (listed
@@ -1966,6 +1968,12 @@ export class CloudConversations {
     return this.#options.keepsNative(row.harness, row.nativeId, row.folder)
   }
 
+  /** One of the account's devices as its list says it: its name, and its kind where the list says one. */
+  #heardDevice(device: { id: string; name: string; kind?: string }): void {
+    this.#deviceNames.set(device.id, device.name)
+    if (device.kind) this.#deviceKinds.set(device.id, device.kind)
+  }
+
   /**
    * A device enrolled since the list was first read (another profile signed in, a new Mac) runs Sessions the list names:
    * the account's devices are read again, once for each such device, and its rows say its name.
@@ -1976,7 +1984,7 @@ export class CloudConversations {
     this.#askedNames.add(device)
     void account.devices().then((devices) => {
       const unheard = devices.devices.filter((known) => this.#deviceNames.get(known.id) !== known.name)
-      for (const known of unheard) this.#deviceNames.set(known.id, known.name)
+      for (const known of devices.devices) this.#heardDevice(known)
       if (unheard.length && !this.#closed) this.#reconcile()
     }, () => {})
   }
@@ -2067,9 +2075,15 @@ const ENDED_KEPT = 64
 /** A native session of a harness, as `nativeChanged` names it. */
 const nativeKey = (harness: string, nativeId: string) => `${harness}\n${nativeId}`
 
-/** A snapshot's summary fields, which are all a window needs to list the conversation before it opens it. */
+/**
+ * A snapshot's summary fields, which are all a window needs to list the conversation before it opens it. Where it runs
+ * stays what the summary said: a device's name and kind for one the account's list put on a device, so a batch of its
+ * never turns a machine's or a Mac's conversation into a cloud machine's for a window that lists after it. A machine's
+ * own answer names no place, and is the cloud's.
+ */
 function summaryOf(snapshot: LiveSummary): LiveSummary {
-  const summary: LiveSummary = { session: snapshot.session, revision: snapshot.revision, createdAt: snapshot.createdAt, elsewhere: CLOUD_FOLDER_WHERE }
+  const summary: LiveSummary = { session: snapshot.session, revision: snapshot.revision, createdAt: snapshot.createdAt, elsewhere: snapshot.elsewhere ?? CLOUD_FOLDER_WHERE }
+  if (snapshot.elsewhereKind) summary.elsewhereKind = snapshot.elsewhereKind
   // A Thread moved from this Mac has the same IDs in both stores: a window places its tabs by them.
   if (snapshot.threadId) summary.threadId = snapshot.threadId
   if (snapshot.sessionId) summary.sessionId = snapshot.sessionId

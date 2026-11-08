@@ -190,7 +190,7 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
       const pull = artifacts.success ? artifacts.data.find((artifact) => artifact.kind === "pull-request") : undefined
       const number = pull ? /(?:\/pull\/|#)(\d+)\b/.exec(pull.ref)?.[1] ?? (/^\d+$/.test(pull.ref) ? pull.ref : undefined) : undefined
       const what = `${(status && REPORT_WORDS.get(status)) ?? status ?? "back"}${number ? ` · PR #${number}` : ""}`
-      return { verb: verb("Report", "Reporting", "Reported"), what, ...pull && /^https:\/\//.test(pull.ref) && { link: pull.ref } }
+      return { verb: verb("Report", "Reporting", "Reported"), what, ...pull && pull.ref.startsWith("https://") && { link: pull.ref } }
     },
   }],
   ["agents_answer", {
@@ -212,13 +212,28 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
       return { verb: verb("Message", "Messaging", "Messaged"), what: apex ?? fin(to, answer) }
     },
   }],
+  ["agents_move", {
+    group: "agents",
+    say: ({ args, answer, harness }) => {
+      const to = text(args["harness"])
+      const where = to ? ` to ${harness(to)}` : ""
+      if (args["all"] === true) {
+        const moved = Array.isArray(answer?.["moved"]) ? answer["moved"].length : 0
+        return { verb: MOVE, what: `all Fins${where}`, ...moved > 0 && { done: `${count(moved, "Fin", "Fins")}${where}` } }
+      }
+      return { verb: MOVE, what: `${fin(text(args["child"]), undefined)}${where}` }
+    },
+  }],
   ["agents_stop", {
     group: "agents",
     say: ({ args, answer }) => {
       const child = text(args["child"])
       const stopped = texts(answer?.["stopped"])
-      if (child === "all") return { verb: STOP, what: "all Fins", ...stopped.length && { done: count(stopped.length, "Fin", "Fins") } }
-      return { verb: STOP, what: fin(child, answer) }
+      // On a device that couldn't be reached: nothing stopped yet, and the stop is kept for when it answers.
+      const pending = Array.isArray(answer?.["pending"]) ? answer["pending"].length : 0
+      const kept = pending > 0 && !stopped.length ? verb("Stop", "Stopping", "Stop kept for") : STOP
+      if (child === "all") return { verb: kept, what: "all Fins", ...(stopped.length || pending) && { done: count(stopped.length || pending, "Fin", "Fins") } }
+      return { verb: kept, what: fin(child, answer) }
     },
   }],
   ["agents_wait", {
@@ -262,9 +277,10 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
   ["thread_history", {
     group: "history",
     say: ({ args }) => {
-      const other = text(args["thread"]) ? "a referenced thread" : undefined
+      const other = text(args["thread"]) === "tree" ? "the whole tree" : text(args["thread"]) ? "a referenced thread" : undefined
       const turns = text(args["turns"])
       const query = text(args["query"])
+      if (text(args["action"]) === "export") return { verb: verb("Export", "Exporting", "Exported"), what: other ?? "this Thread" }
       if (text(args["action"]) === "search") return { verb: verb("Search", "Searching", "Searched"), what: `${other ?? "earlier turns"}${query ? ` for ${query}` : ""}` }
       return { verb: READ, what: other ?? (turns ? `turns ${turns}` : "earlier turns") }
     },

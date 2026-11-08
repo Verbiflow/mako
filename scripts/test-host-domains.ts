@@ -61,8 +61,9 @@ async function initializeRepo(path: string) {
   await git(path, "config", "user.email", "mako@example.test")
 }
 
+/** A hang guard, not a limit: 2.5 s ran out on a Mac at load 15 with the watch working. An event that never comes still fails. */
 async function waitFor(predicate: () => boolean) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 600; attempt += 1) {
     if (predicate()) return
     await new Promise((resolve) => setTimeout(resolve, 50))
   }

@@ -17,6 +17,8 @@ import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveH
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
+import { BORROW_PATHS, GrantSchema, LeaseEventSchema, LeaseSchema, SourceAnswerSchema, SourceAskSchema, type SourceAnswer } from "@mako/protocol/borrow"
+import type { BorrowSnapshot } from "../contracts/setup.js"
 import {
   LIVE_FORM,
   clientEndpointPath,
@@ -71,6 +73,7 @@ import { clipReason, CloudRepositorySchema, type CloudRepository } from "../cont
 import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import { CloudCarriedFileSchema, type CloudCarriedFile } from "../contracts/cloud-carried-files.js"
 import { GitHubTokenAnswerSchema, GitHubTokenListingSchema, type GitHubTokenListing } from "../contracts/github-person.js"
+import { GitHubAuthorshipSchema, type CommitAuthor, type GitHubAuthorship } from "../contracts/github-authorship.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { CloudHarnessesSchema, type CloudHarnesses } from "../contracts/cloud-harnesses.js"
@@ -299,6 +302,8 @@ export type CloudAccountOptions = {
    * stream, with nothing to say when that's all of it, so what must know the list as it stands reads it whole.
    */
   onAccountLinked?: () => void
+  /** This device's runtime is enrolled on a new link: from now its account's other devices' calls reach it again. */
+  onRuntimeLinked?: () => void
 }
 
 export class CloudAccountError extends Error {
@@ -452,6 +457,7 @@ export class CloudAccounts {
           return true
         },
         (error) => {
+          this.#options.log?.("cloud sign-in didn't finish", { error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) })
           this.#endSignIn({ kind: "failed", message: messageOf(error, "Signing in didn't finish. Try again.") }, { graceful: true })
           finish()
           return false
@@ -624,6 +630,36 @@ export class CloudAccounts {
     return response.status === 404 ? null : CloudHarnessesSchema.parse(await response.json())
   }
 
+  /**
+   * What the account's broker holds for this person: its standing grants, live leases, lease log since `since`, and the
+   * asks waiting on this device as a source, each parsed by the open contract. Null from a cloud without a broker yet.
+   */
+  async borrowSnapshot(since: number): Promise<BorrowSnapshot | null> {
+    const read = async <Answer extends z.ZodType>(path: string, answer: Answer): Promise<z.infer<Answer> | null> => {
+      const response = await this.#call("borrow.read", "GET", path, undefined, false, [404])
+      return response.status === 404 ? null : answer.parse(await response.json())
+    }
+    const [grants, leases, events, asks] = await Promise.all([
+      read(BORROW_PATHS.grants, z.object({ grants: z.array(GrantSchema) })),
+      read("/v1/borrow/leases", z.object({ leases: z.array(LeaseSchema) })),
+      read(`${BORROW_PATHS.events}?since=${since}`, z.object({ events: z.array(LeaseEventSchema) })),
+      read("/v1/borrow/asks", z.object({ asks: z.array(SourceAskSchema) })),
+    ])
+    if (!grants || !leases || !events) return null
+    const at = Date.now()
+    return { grants: grants.grants, leases: leases.leases, events: events.events, asks: (asks?.asks ?? []).map((ask) => ({ ask, at })) }
+  }
+
+  /** This device's answer, as a source, to an ask the account's broker holds for it. */
+  async answerBorrowAsk(ask: string, answer: SourceAnswer): Promise<void> {
+    await this.#call("borrow.answer", "POST", `/v1/borrow/asks/${encodeURIComponent(ask)}`, SourceAnswerSchema.parse(answer))
+  }
+
+  /** The person's revoke of a grant the account's broker holds: every lease under it ends. */
+  async revokeBorrowGrant(grant: string): Promise<void> {
+    await this.#call("borrow.revoke", "DELETE", `${BORROW_PATHS.grants}/${encodeURIComponent(grant)}`)
+  }
+
   /** The person's access choice per harness, as the account keeps them; null from a cloud that doesn't keep them yet. */
   async accessChoices(): Promise<AccessChoicesAnswer | null> {
     const response = await this.#call("access.read", "GET", ACCESS_CHOICES_PATH, undefined, false, [404])
@@ -705,6 +741,21 @@ export class CloudAccounts {
   /** Turns it off: the account removes the token, and each cloud machine its copy before its next pull request. */
   async removeGitHubToken(): Promise<void> {
     await this.#call("github-token.remove", "DELETE", `${this.#accountPath()}/github-token`)
+  }
+
+  /**
+   * Who the account's cloud commits and pull requests are authored as (`github-authorship.ts`), and what that means for
+   * pull requests now; null from a cloud that doesn't keep it yet.
+   */
+  async githubAuthorship(): Promise<GitHubAuthorship | null> {
+    const response = await this.#call("github-authorship.read", "GET", `${this.#accountPath()}/github-authorship`, undefined, false, [404])
+    return response.status === 404 ? null : GitHubAuthorshipSchema.parse(await response.json())
+  }
+
+  /** Chooses it for the account; running cloud machines hear it within their minute. */
+  async saveGitHubAuthorship(as: CommitAuthor): Promise<GitHubAuthorship> {
+    const response = await this.#call("github-authorship.save", "PUT", `${this.#accountPath()}/github-authorship`, { as })
+    return GitHubAuthorshipSchema.parse(await response.json())
   }
 
   /** A project's carried files the account's store keeps (`?repository=`), listed without their values. */
@@ -1500,6 +1551,7 @@ export class CloudAccounts {
           this.#served = { link, served: started }
           this.#options.sessions?.linked(this.#served)
           this.#options.log?.("cloud runtime enrolled", { runtimeId, claims: this.#claims.length })
+          this.#options.onRuntimeLinked?.()
           void started.ended.then((problem) => {
             this.#claims = started.claims()
             if (this.#served?.served === started) this.#served = undefined

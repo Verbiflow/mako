@@ -51,6 +51,10 @@ Object.defineProperty(globalThis, "window", { value: { addEventListener() {}, re
 const { installMockBridge } = await import("../src/dev/mock-bridge")
 const { getMako } = await import("../src/lib/bridge")
 const { acpStore, updateAcpConversation } = await import("../src/state/acp-state")
+// What the window's own code writes of a conversation goes through the door (`receiveLive`), or the suite fails.
+const { failAroundTheDoor } = await import("./live-door-watch")
+const { receivingLive: receivingThroughTheDoor, readingLive: readingThroughTheDoor } = await import("../src/state/live-door")
+failAroundTheDoor(acpStore, receivingThroughTheDoor, readingThroughTheDoor)
 const { applyLiveSnapshot } = await import("../src/state/live-recovery")
 const { restorePendingMessages, sendTo, sendWaitingNow, steerTo } = await import("../src/state/acp-queue")
 const { pendingMessages } = await import("../src/state/message-outbox")
@@ -179,11 +183,10 @@ if (!reloaded) {
     reset()
     host.stallMs = 5_000
     const slow = crypto.randomUUID(), next = crypto.randomUUID()
-    const sentAt = Date.now()
     const slowSend = sendTo(conversation, "slow", [], slow)
     const nextSend = sendTo(conversation, "next", [], next)
     assert.deepEqual(pending().map((prompt) => prompt.id), [slow, next], "both show at once, in order")
-    assert.ok(Date.now() - sentAt < 200)
+    assert.equal(host.took.length, 0, "while the stalled host has taken neither")
     assert.deepEqual(await Promise.all([slowSend, nextSend]), [true, true])
     assert.deepEqual(host.took.map((each) => each.id), [slow, next])
     assert.equal(host.asked, 2)

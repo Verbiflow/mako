@@ -1,9 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 // Every mark of work in progress moves for as long as its work runs, in
 // production components on the isolated live workflow fixture: the sweep
@@ -21,7 +22,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-animations-ui-"))
+  const root = testScratch("mako-animations-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-animations-ui", main: fileURLToPath(import.meta.url) }))
   const given = process.argv[2]
   let server
@@ -48,8 +49,10 @@ async function check() {
   const root = process.env.MAKO_ANIMATIONS_UI_ROOT
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
+  atSize(window, 1440, 900)
   const page = window.webContents
   const evaluate = (code) => page.executeJavaScript(code)
   const pause = (ms) => new Promise((done) => setTimeout(done, ms))

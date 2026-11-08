@@ -27,7 +27,7 @@ const links = (markdown: string) => elements(parseProse(markdown), "a").map((nod
 assert.deepEqual(plainMediaPaths("Saved to /tmp/shots/home.png."), [{ index: 9, path: "/tmp/shots/home.png" }])
 assert.deepEqual(plainMediaPaths("See ~/Desktop/flow.mp4, ./out/report.html and ../site/index.htm!").map((found) => found.path), ["~/Desktop/flow.mp4", "./out/report.html", "../site/index.htm"])
 assert.deepEqual(plainMediaPaths("Edit /etc/hosts and /src/app.ts, then open https://example.test/a.png or a/b.png"), [])
-assert.deepEqual(plainMediaPaths("(/var/folders/x/rec.webm)").map((found) => found.path), ["/var/folders/x/rec.webm"])
+assert.deepEqual(plainMediaPaths("(/private/tmp/x/rec.webm)").map((found) => found.path), ["/private/tmp/x/rec.webm"])
 assert.deepEqual(plainMediaPaths("no paths here"), [])
 assert.deepEqual(links("The screenshot is at /tmp/shots/home.png and the run at ~/runs/flow.mp4."), ["/tmp/shots/home.png", "~/runs/flow.mp4"])
 assert.deepEqual(links("Code keeps it: `/tmp/a.png`, and\n\n```\n/tmp/b.png\n```"), ["/tmp/a.png"], "a backticked path links as before; a code block stays code")

@@ -109,7 +109,6 @@ export type HostEventBody =
   /** Agents' requests to move onto their Thread's own branch, and the projects that always allow it. */
   | { type: "workspace-moves"; moves: WorkspaceMoves }
   /** Agents' asks to move their Thread to the cloud (`thread_move` below full access), which the person answers above its composer. */
-  | { type: "thread-move-asks"; asks: import("./thread-tools.js").ThreadMoveAsk[] }
   /** The host's record of built plans changed; window-wide. */
   | { type: "plan-builds"; builds: PlanBuilds }
   /** The person's access choices changed, here or on another device (`contracts/access-choices.ts`); window-wide. */
@@ -127,9 +126,10 @@ export type HostEventBody =
   /**
    * A conversation's batch, and as its host emits it, the same in the compact live form (`compact`), which a reader that
    * said it reads that form hears in its place: each is encoded apart (`encodeRuntimeEvent`), never together. A window
-   * that reads the compact form may hear `batch` itself so (`HeardLiveBatch`, read by `expandLiveBatch`).
+   * that reads the compact form may hear `batch` itself so (`HeardLiveBatch`, read by `expandLiveBatch`). `rostered`: the
+   * same again for a host's own windows, its roster as what changed, where it has one (`rosteredLiveBatch`).
    */
-  | { type: "live-batch"; batch: LiveBatch; compact?: CompactLiveBatch }
+  | { type: "live-batch"; batch: LiveBatch; compact?: CompactLiveBatch; rostered?: CompactLiveBatch }
   /**
    * Conversations the account lists that this host doesn't run (another device's in the cloud): each listed as one is
    * at boot, unopened, or listed again as it changed. Opening one reads it where it runs.
@@ -163,6 +163,8 @@ export type HostEventBody =
   | { type: "simulator-setup"; setup: import("./simulator-setup.js").SimulatorSetup }
   /** The person's choice about handing agents to the cloud as this Mac sleeps changed. */
   | { type: "handoff-settings"; settings: import("./cloud-threads.js").HandOffSettings }
+  /** Keeping this Mac awake while agents work: the person's choice, or what's held, changed (`KeepAwake`). */
+  | { type: "keep-awake"; state: import("./keep-awake.js").KeepAwakeState }
   /** The person's conversation settings changed (`ConversationSettings`). */
   | { type: "conversation-settings"; settings: import("./turn-continuation.js").ConversationSettings }
   /** Something happened to the account's devices (`@mako/protocol/account-events`); `mine` when it's about this Mac. */

@@ -1,8 +1,9 @@
 import type { PendingPrompt } from "@/state/prompt-delivery"
 import type { ComposerTarget } from "@/state/composer-settings"
-import type { LiveSnapshot, LiveStartOptions, ThreadRef } from "@/lib/types"
+import type { LiveSnapshot, LiveStartOptions, LiveSummary, ThreadRef } from "@/lib/types"
 import type { LiveProjection } from "@/state/live-projection"
 import type { Entry } from "@mako/sessions/entries"
+import { asks as waitsOnThePerson, type WaitingFor } from "@mako/protocol/attention"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import type { CloudStartStep } from "@mako/host/contracts/cloud-threads"
 import type { ListedContinueChoice } from "@mako/host/contracts/live-conversations"
@@ -14,6 +15,10 @@ import type {
   LiveSessionState,
 } from "@/lib/types"
 import { createHook, createStore } from "@/state/store"
+import { backgroundWork, type BackgroundWork } from "@mako/host/contracts/background-work"
+import { entryState, type ChildState } from "@mako/host/contracts/agents"
+import { finsAsChildren, rosterChildren } from "@mako/host/contracts/children"
+import { withChildren, type NativeAgent, type NativeAgentRoster } from "@mako/host/contracts/native-agents"
 
 export interface AcpQueuedPrompt {
   text: string
@@ -44,8 +49,14 @@ interface AcpConversationBase {
   threadPath?: string
   /** Where its folder is when it isn't on this Mac, in words (`a cloud machine`): its files and Git are read there. */
   elsewhere?: string
+  /** `LiveSummary.elsewhereKind`: the kind of device `elsewhere` names, for its mark. */
+  elsewhereKind?: string
+  /** `LiveSummary.order`: its Session's place in its Thread as its owner keeps it, which ranks a Thread's rows this window holds no group of. */
+  order?: number
   /** What a conversation listed from another device waits on there, while it waits on a person ("Approve: npm test"). */
   waitingOn?: string
+  /** What it waits on the person for, as its owner says it (`LiveSummary.waitingFor`): an approval, a question, or anything else. */
+  waitingFor?: WaitingFor
   /** Its Thread's name as the device it runs on has it, for a conversation listed from another device. */
   threadTitle?: string
   /** Listed from a device the account hasn't heard from since then: none of it at work, and the rail says when it was last seen. */
@@ -67,6 +78,8 @@ interface AcpConversationBase {
   parent?: LiveSnapshot["parent"]
   /** `LiveSummary.children`: an Apex's Fins counted, until its roster arrives. */
   children?: LiveSnapshot["children"]
+  /** `LiveSummary.fins`: an Apex's Fins as another device's row lists them, while this window holds no roster of it. */
+  fins?: LiveSummary["fins"]
   control?: LiveSnapshot["control"]
   requests?: LiveSnapshot["requests"]
   harnessTurns?: LiveSnapshot["harnessTurns"]
@@ -134,6 +147,11 @@ export type AcpConversation = StartingAcpConversation | LiveAcpConversation
 export interface AcpState {
   activeKey: string | null
   conversations: Record<string, AcpConversation>
+  /**
+   * Each Thread of several Sessions, its Sessions in its store's order (`ThreadGroup.sessions`), as `thread-groups.ts`
+   * keeps them: the last is the newest, whose Fins every surface draws (`threadChildren`).
+   */
+  threadSessions?: Readonly<Record<string, readonly string[]>>
 }
 
 export const acpStore = createStore<AcpState>({
@@ -285,6 +303,160 @@ export function acpForThread(
       found = conversation
   }
   return found
+}
+
+const NO_CHILDREN: readonly NativeAgent[] = []
+const finByThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, FinSource> }>()
+const byThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, readonly NativeAgent[]> }>()
+
+/**
+ * What a conversation says of a Thread's Fins: which Thread, from which of its Sessions (none for a word from outside
+ * it), that Session's place in its Thread as its owner's row says it (`order`, from a row listed from elsewhere), how
+ * fully, and whether it asks the person something open (approval, question or needs-you), which no other saying
+ * of the Thread may hide.
+ */
+type Saying<Value> = { thread: string; session: string | undefined; order: number | undefined; value: Value; fullness: number; asks?: boolean }
+
+/** A saying's standing for its Thread: an open ask above all, then the Session's place, then fullness (`outranks`). */
+type Standing = { asks: boolean; place: number; fullness: number }
+
+/**
+ * Whether `next` outranks `held`: an open ask always surfaces, as the host's `askingConversation` does,
+ * both by the protocol's `asks`, then the Session's place in its
+ * Thread, newest highest, then of one Session the fullest saying.
+ */
+function outranks(next: Standing, held: Standing): boolean {
+  if (next.asks !== held.asks) return next.asks
+  if (next.place !== held.place) return next.place > held.place
+  return next.fullness > held.fullness
+}
+
+/**
+ * Of each Thread's conversations that say something of its Fins (`said`, with how fully, higher the fuller), the
+ * newest Session's: the last of its Thread's Sessions in the store's order (`AcpState.threadSessions`) that this window
+ * holds, and of one Session the fullest. A Fin's moves, its progress and its start, end or change of state alike, reach
+ * only its Apex's newest Session (`finReaders`), so every surface takes its Fins by this one rule, from a roster this
+ * window holds or a row the account lists alike, as what a Session waits on does (`conversationWork`). A Thread with no
+ * group has one Session. These are copies of the Fins, current only in the newest, so an ask in an older copy isn't
+ * ranked first: it's one answered since. An ask a Session makes itself always surfaces where it's read: a Fin's
+ * standing is read from whichever of its Sessions waits on the person (`askingConversation` on its host), and a ranking
+ * of a Session's own standing ranks one with an open ask above one without, then by this order. Each saying names
+ * its Thread and Session: an Apex may say of a placed Fin whose Thread is elsewhere. Without a local group, its
+ * owner's reported `order` ranks the Sessions; older hosts without it keep arrival order.
+ */
+export function newestSaid<Value>(state: AcpState, said: (conversation: Extract<AcpConversation, { kind: "live" }>) => readonly Saying<Value>[]): Map<string, Value> {
+  const index = new Map<string, Value>()
+  const rank = new Map<string, Standing>()
+  for (const conversation of Object.values(state.conversations)) {
+    if (conversation.kind !== "live" || !conversation.threadId) continue
+    for (const saying of said(conversation)) {
+      const sessions = state.threadSessions?.[saying.thread]
+      const inGroup = sessions && saying.session ? sessions.indexOf(saying.session) : -1
+      const standing: Standing = { asks: saying.asks ?? false, place: inGroup >= 0 ? inGroup : (saying.order ?? -1), fullness: saying.fullness }
+      const held = rank.get(saying.thread)
+      if (held && !outranks(standing, held)) continue
+      index.set(saying.thread, saying.value)
+      rank.set(saying.thread, standing)
+    }
+  }
+  return index
+}
+
+/** Where a placed Fin's standing comes from: its Apex's word of it, or the row its own device writes, listed here. */
+type FinSource = { kind: "apex" } | { kind: "device"; listed: LiveAcpConversation }
+
+/**
+ * Where each Fin placed on another device stands from, by the one ranking (`newestSaid`) over every source that says
+ * of it: its Apex's word, a word from outside the Fin's Thread, and the rows that Fin's own device writes, each from
+ * one of the Fin's Sessions there, at the place that device keeps it (`order`). A row with an open ask surfaces above
+ * the rest, as `askingConversation` does on the host, then the newest Session on its device wins, whichever order
+ * its rows were listed in; a quiet device's row still names what opens, while its
+ * standing is its Apex's word (`placedEntry`).
+ */
+export function finSources(state: AcpState): Map<string, FinSource> {
+  let held = finByThread.get(state.conversations)
+  if (!held || held.order !== state.threadSessions) {
+    const index = newestSaid<FinSource>(state, (conversation) => {
+      // A row with an open ask surfaces above the Fin's other rows: what waits on the person by the protocol's one word
+      // (`asks`: an approval, a question, or needs-you, the owner's fallback for any other wait on them).
+      if (conversation.elsewhere !== undefined) return [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: { kind: "device", listed: conversation }, fullness: 1, asks: conversation.waitingFor !== undefined && waitsOnThePerson(conversation.waitingFor) }]
+      const children = rosterChildren(conversation.nativeAgents)
+      return (children.length ? children : conversation.fins ? finsAsChildren(conversation.fins) : [])
+        .filter((agent) => agent.child?.thread && !agent.child.conversation)
+        .map((agent) => ({ thread: agent.child!.thread, session: undefined, order: undefined, value: { kind: "apex" }, fullness: 0 }))
+    })
+    held = { order: state.threadSessions, index }
+    finByThread.set(state.conversations, held)
+  }
+  return held.index
+}
+
+/**
+ * A Thread's Fins, as its conversations' rosters carry them (`childEntry`, never a harness's roster), in
+ * `orderedChildren`' order, or as the account lists them where this window holds no roster of that Session (another
+ * device's, or one asleep), from its newest Session (`newestSaid`). The array is the roster's own while that roster is
+ * unchanged, so a row reading it repaints only when they change.
+ */
+export function threadChildren(state: AcpState, thread: string | undefined): readonly NativeAgent[] {
+  if (!thread) return NO_CHILDREN
+  let held = byThread.get(state.conversations)
+  if (!held || held.order !== state.threadSessions) {
+    const index = newestSaid(state, (conversation) => {
+      const children = rosterChildren(conversation.nativeAgents)
+      if (children.length) return [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: children, fullness: 1 }]
+      return conversation.fins ? [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: finsAsChildren(conversation.fins), fullness: 0 }] : []
+    })
+    const sources = finSources(state)
+    for (const [apex, children] of index) index.set(apex, fromSources(children, sources))
+    held = { order: state.threadSessions, index }
+    byThread.set(state.conversations, held)
+  }
+  return held.index.get(thread) ?? NO_CHILDREN
+}
+
+/** A roster with each Fin on another device as its winning source says it (`finSources`): the same array while every source is its Apex's. */
+function fromSources(children: readonly NativeAgent[], sources: Map<string, FinSource>): readonly NativeAgent[] {
+  let over: NativeAgent[] | undefined
+  children.forEach((agent, index) => {
+    const thread = agent.child?.thread
+    if (!thread || agent.child?.conversation) return
+    const source = sources.get(thread)
+    if (source?.kind !== "device") return
+    over ??= [...children]
+    over[index] = placedEntry(agent, source.listed)
+  })
+  return over ?? children
+}
+
+/** The entry with the Fin's own conversation and, while its device is heard, how it stands there (`placedState`). */
+function placedEntry(agent: NativeAgent, listed: LiveAcpConversation): NativeAgent {
+  const state = listed.quietSince === undefined ? placedState(agent.child?.state, listed) : agent.child?.state
+  return { ...agent, ...(state && { state: entryState(state) }), child: { ...agent.child!, conversation: listed.key, ...(state && { state }) } }
+}
+
+/** How a placed Fin stands, from the row its device writes: what it waits on, at work, failed, or as its Apex last said. */
+function placedState(said: ChildState | undefined, listed: LiveAcpConversation): ChildState | undefined {
+  if (listed.waitingOn) return { kind: "blocked", question: listed.waitingOn, on: listed.waitingFor === "approval" ? "approval" : "person" }
+  const status = listed.session.status
+  if (status === "running" || status === "starting") return said?.kind === "working" ? said : { kind: "working" }
+  if (status === "failed") return { kind: "ended", outcome: "failed" }
+  if (said?.kind === "ended" || said?.kind === "idle" || said?.kind === "queued") return said
+  return status === "ready" ? { kind: "idle" } : said
+}
+
+/**
+ * The conversation's roster with its Thread's Fins as every surface draws them (`threadChildren`): its own provider's
+ * work, and its Thread's Fins from its newest Session. Only that Session hears them move (`finReaders`): an older one's
+ * own roster keeps them as they stood when it last heard, and read from there its Fins would wait on work long ended or
+ * on a question long answered, and miss a new one. Whatever a window says of a Session's Fins reads them here.
+ */
+export function conversationRoster(state: AcpState, conversation: Pick<LiveAcpConversation, "threadId" | "nativeAgents">): NativeAgentRoster | undefined {
+  return conversation.threadId ? withChildren(conversation.nativeAgents, threadChildren(state, conversation.threadId)) : conversation.nativeAgents
+}
+
+/** What the conversation waits on between turns (`backgroundWork`), its Thread's Fins as they stand (`conversationRoster`). */
+export function conversationWork(state: AcpState, conversation: LiveAcpConversation): BackgroundWork | null {
+  return backgroundWork(conversation.session, conversationRoster(state, conversation))
 }
 
 export function liveAcpForThread(

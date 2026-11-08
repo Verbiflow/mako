@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
-import { useAccountLimitNotice, useAccountSwitchNotice } from "../src/components/composer/account-notice"
+import { useAccountLimitNotice, useAccountSwitchNotice, limitContinueNotice } from "../src/components/composer/account-notice"
 import { ProducedNotice } from "../src/components/composer/composer-notices"
 import { accountReading, stopSwitches, waitText } from "../src/lib/account-switch"
+import type { FinChoicesReading } from "@mako/host/contracts/fin-tuning"
+import { finDefaultsStore } from "@/state/fin-defaults"
 import { accountsStore, type ProviderAccount } from "../src/state/accounts"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp-state"
 import type { ExecutionContext } from "@mako/host/contracts/execution-context"
@@ -140,6 +142,24 @@ assert.match(mismatch, /data-notice-tone="caution"/)
   assert.match(near, /codex@example\.com is at 96% of its weekly limit · personal@work\.dev is at 12%/)
   assert.match(near, /title="Every Codex session switches to personal@work\.dev"[^>]*>Switch to personal@work\.dev</)
   assert.match(near, />Not now</)
+  // One account near its limit: warned, with nothing to press but Not now.
+  const offered = accountsStore.get().limitOffers.codex!
+  const { to: _to, ...sole } = offered
+  accountsStore.set({ limitOffers: { codex: sole } })
+  const switched = (moveOnLimit: boolean | undefined) => {
+    // SAFETY: the notice reads `moveOnLimit` alone of the reading.
+    finDefaultsStore.set({ reading: moveOnLimit === undefined ? undefined : ({ moveOnLimit } as FinChoicesReading) })
+    return limit(live(session(onDefault)))
+  }
+  const alone = switched(true)
+  assert.match(alone, /codex@example\.com is at 96% of its weekly limit · When it runs out, Fins go on with your next harness/)
+  assert.match(switched(false), /codex@example\.com is at 96% of its weekly limit · When it runs out, Fins wait until it resets/, "Settings' switch off: they don't go on")
+  assert.doesNotMatch(switched(undefined), /When it runs out/, "the switch unread: it says neither")
+  const card = limitContinueNotice({ harness: "claude", to: "Claude Code", busy: false, go: () => {}, notNow: () => {} })
+  assert.equal(card.title, "Claude Code can take this", "only the choice, and only what's known: its queue row says what holds it")
+  assert.deepEqual(card.actions?.map((action) => [action.label, action.primary]), [["Continue on Claude Code", true], ["Not now", undefined]], "one press, or stay")
+  assert.doesNotMatch(alone, /Switch to/)
+  accountsStore.set({ limitOffers: { codex: offered } })
   accountsStore.set((state) => ({ limitOffers: { codex: { ...state.limitOffers.codex!, because: "refused" } } }))
   assert.match(limit(live(session(onDefault))), /Codex stopped the last turn on codex@example\.com&#x27;s limits · personal@work\.dev is at 12%/)
   accountsStore.set((state) => ({ accounts: state.accounts.map((account) => ({ ...account, active: account.name === "personal" })) }))

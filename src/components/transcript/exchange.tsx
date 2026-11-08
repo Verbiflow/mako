@@ -70,7 +70,7 @@ import type { SavedContinuation } from "@mako/host/contracts/turn-continuation"
 import { EventNotes } from "./event-notes"
 import { EventLine } from "./event-line"
 import { ShowOriginal } from "./show-original"
-import { causeWords, eventWords, type EventWords } from "@/lib/transcript-events"
+import { causeWords, eventWords, limitFailure, type EventWords } from "@/lib/transcript-events"
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
@@ -102,6 +102,7 @@ import {
   FileTextIcon,
   GitBranchIcon,
   GitForkIcon,
+  GitPullRequestIcon,
   HistoryIcon,
   LayersIcon,
   PencilLineIcon,
@@ -299,6 +300,8 @@ function TurnExchange({
             <GoalNote step={mako.step} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "review" ? (
             <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
+          ) : mako?.kind === "pull" ? (
+            <PullWakeNote line={mako.line} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : fromAgent && promptText ? (
             <AgentWordsCard words={fromAgent} raw={promptText} timestamp={exchange.prompt.timestamp} />
           ) : (
@@ -518,6 +521,11 @@ function MovedNote({ timestamp, origin }: { timestamp?: number; origin?: Message
   )
 }
 
+/** Mako woke this Fin with an outcome of the pull request its report said it waits on: the note's own words. */
+function PullWakeNote({ line, timestamp, origin }: { line: string; timestamp?: number; origin?: MessageOrigin }) {
+  return <EventLine align="end" icon={GitPullRequestIcon} time={timestamp} data-pull-wake words={{ title: line }} action={<ShowOriginal origins={[origin]} />} />
+}
+
 const GOAL_NOTES = {
   continue: "Mako continued toward the goal",
   clear: "Mako cleared the unfinished goal to set the new one",
@@ -565,7 +573,7 @@ function ProviderTurn({ message, provider }: { message: ChatMessage; provider?: 
     : note
       ? eventWords(note)
       : { glyph: "notice", title: said }
-  if (note?.tone && !words.tone) words.tone = note.tone
+  if (note?.tone && !words.tone && !limitFailure(note)) words.tone = note.tone
   const quoted = !note?.cause && !note?.body && said.length > LONG_CAUSE
   return (
     <EventLine align="end" words={words} time={message.timestamp} data-provider-turn={note?.cause?.kind ?? "said"} action={<ShowOriginal origins={[message.origin]} />}>

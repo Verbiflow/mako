@@ -246,11 +246,12 @@ test("a late viewer paints from the poster and the current key frame; a slow one
   host.push(delta(3))
   host.push(delta(4))
 
-  // An already-painting viewer doesn't get the poster again; a late one does, with the current GOP.
+  // A poster starts the stream again: every viewer gets it, then the new key (one whose decoder draws ignores it), and a
+  // late one gets it with the current GOP.
   const panel = await streams.read(screen, "panel", start, { waitMs: 50 })
   assert.deepEqual(
     panel.packets.map((packet) => decodeControlVideo(packet).kind),
-    ["key", "delta", "delta"]
+    ["poster", "key", "delta", "delta"]
   )
 
   const late = await streams.read(screen, "phone", start, { box: { width: 800, height: 1600 }, waitMs: 50 })

@@ -1,55 +1,22 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.234"
+    "version": "3000.12.28"
   },
   "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#vigorous-month",
-      "known": [
-        {
-          "side": "-",
-          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
-          "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
-        },
-        {
-          "side": "+",
-          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> Canceled due to user interrupt",
-          "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
-        }
-      ]
+      "path": ".local/share/devin/cli/sessions.db#courageous-espadrille",
+      "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/902cec75-8200-4fc4-9439-ad99e26e628d.db",
-      "known": [
-        {
-          "side": "-",
-          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
-          "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
-        },
-        {
-          "side": "+",
-          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> Canceled due to user interrupt",
-          "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
-        }
-      ]
+      "path": "Library/Application Support/Devin/User/acp-messages/1cf10510-b2e8-4c86-9d0b-3fb95afed990.db",
+      "known": []
     }
   ],
   "replay": {
-    "known": [
-      {
-        "side": "-",
-        "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
-        "reason": "Devin 3000.11.205 replays a call the person stopped, when the session loads again, with the result it recorded, \"Canceled due to user interrupt\", not the output it had streamed live (the file's two lines)."
-      },
-      {
-        "side": "+",
-        "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> Canceled due to user interrupt",
-        "reason": "Devin 3000.11.205 replays a call the person stopped, when the session loads again, with the result it recorded, \"Canceled due to user interrupt\", not the output it had streamed live (the file's two lines)."
-      }
-    ]
+    "known": []
   }
 }

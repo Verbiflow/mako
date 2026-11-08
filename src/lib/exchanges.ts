@@ -1,7 +1,7 @@
 import type { Block, ChatMessage } from "@/lib/types"
 import { mergeMedia, type MediaCandidate } from "@mako/sessions/turn-media"
 import { textOf } from "@/lib/format"
-import { causeWords, eventLabel } from "@/lib/transcript-events"
+import { causeWords, eventLabel, foldLimitMoves } from "@/lib/transcript-events"
 import { foldUsageLimits } from "@/lib/usage-limit-folds"
 import { opensContinuation, savedContinuation, type SavedContinuation } from "@mako/host/contracts/turn-continuation"
 import { savedResumeAccount } from "@mako/host/contracts/resume-account"
@@ -446,7 +446,7 @@ export function toExchanges(
   }
 
   const byId = new Map(previous.map((exchange) => [exchange.id, exchange]))
-  return foldUsageLimits(exchanges).map((exchange) => {
+  return foldLimitMoves(foldUsageLimits(exchanges)).map((exchange) => {
     const old = byId.get(exchange.id)
     return old &&
       old.prompt === exchange.prompt &&
@@ -579,7 +579,16 @@ export function turnExchange(exchanges: readonly Exchange[]): Exchange | undefin
   return exchanges.findLast((exchange) => !exchange.direct)
 }
 
+/** Each turn's label, by the turn: a stream renders the navigator again every batch, and its turns are kept as they were. */
+const labels = new WeakMap<Exchange, string>()
+
 export function promptLabel(exchange: Exchange): string {
+  let label = labels.get(exchange)
+  if (label === undefined) labels.set(exchange, (label = labelOf(exchange)))
+  return label
+}
+
+function labelOf(exchange: Exchange): string {
   if (exchange.unloaded !== undefined) return exchange.unloaded
   const direct = exchange.direct?.note
   if (direct?.direct) return `To ${direct.direct.to}: ${(direct.body ?? "").replace(/\s+/g, " ").trim()}`

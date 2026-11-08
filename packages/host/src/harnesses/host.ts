@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import type { ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpEditing, ProviderMcpSource, ProviderSkillSource } from "../tools/index.js"
 import type { ProviderArtifactPreview } from "../workspaces/index.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
@@ -113,7 +114,8 @@ export function createProviderHost({ userRoot, secrets = detachedSecrets(), work
   accounts.routeLaunches(async (provider, env) => {
     const adapter = liveDrivers.get(provider)?.modelRoutes
     if (adapter?.kind !== "accepts") return env
-    const launch = await modelConnections.routes(adapter)
+    const thread = env.MAKO_THREAD_ID
+    const launch = await modelConnections.routes(adapter, thread ? { thread, repository: env.PWD || "this-device", correlationId: `${thread}:${env.MAKO_SESSION_ID ?? provider}:${randomUUID()}` } : undefined)
     return launch.routes.length ? adapter.apply(env, launch) : env
   })
   return {

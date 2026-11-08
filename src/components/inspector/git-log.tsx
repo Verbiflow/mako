@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { Action, Blank, IconAction } from "@/components/ui/kit"
 import { Collapse } from "@/components/ui/collapse"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { LineCounts, StatusLetter } from "@/components/inspector/change-marks"
 import { PathLabel } from "@/components/ui/path-label"
 import { GitLoading } from "@/components/inspector/git-loading"
@@ -165,7 +165,7 @@ function WorkspaceGitLog({
                           onPickFile && "hover:bg-fill-hover"
                         )}
                       >
-                        <FileTypeIcon path={file.path} className="size-3.5 shrink-0 text-faint/80" />
+                        <FileIcon path={file.path} className="size-3.5 shrink-0 text-faint/80" />
                         <PathLabel path={file.path} className="flex-1" nameClassName={file.status === "deleted" ? "text-faint line-through decoration-faint/60" : "text-foreground/85"} />
                         {!file.binary ? <LineCounts insertions={file.insertions} deletions={file.deletions} /> : null}
                         <StatusLetter status={file.status} className="w-3 text-center" />

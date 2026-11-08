@@ -29,6 +29,21 @@ export type MobileStep =
 
 export type MobileNeed = "keyboard" | "microphone" | "signed-in"
 
+/** What a case ran on, as the target says it: a simulator's own name, its device type and its iOS. */
+export interface MobileDevice {
+  name: string
+  /** `com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro`. */
+  type?: string
+  runtime?: string
+}
+
+/** A summary's name for a device, from what it is and never from what a form is expected to be. */
+export function deviceLabel(device: MobileDevice): string {
+  const type = device.type?.replace(/^com\.apple\.CoreSimulator\.SimDeviceType\./, "").replaceAll("-", " ")
+  const about = [type, device.runtime].filter(Boolean).join(", ")
+  return about ? `${device.name} (${about})` : device.name
+}
+
 export interface MobileCase {
   id: string
   kind: "guard" | "bad" | "control"

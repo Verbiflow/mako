@@ -12,6 +12,7 @@ import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudCarriedFile } from "../contracts/cloud-carried-files.js"
+import type { CommitAuthor } from "../contracts/github-authorship.js"
 import type { CloudAccount as CloudAccountView } from "../contracts/cloud-account.js"
 import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
@@ -28,6 +29,8 @@ import { appPorts } from "./app-ports.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac } from "../base/platform.js"
 import { describeThisDevice } from "./device-description.js"
+import type { SourceAnswer } from "@mako/protocol/borrow"
+import type { BorrowSnapshot } from "../contracts/setup.js"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
 /** The account's stream skipped a number, or said one was lost: the list is read whole again (`onAccountGap`). */
@@ -129,7 +132,7 @@ export interface CloudAccount {
   /** This Mac's claim on a message that waited for one of its Sessions, before it runs it here (`CloudAccount.claimWaiting`). */
   claimWaiting?(session: string, id: string): Promise<WaitingClaim>
   /** The account's devices, by ID and name, and which is this one. */
-  devices?(): Promise<{ devices: Array<{ id: string; name: string }>; current: string }>
+  devices?(): Promise<{ devices: Array<{ id: string; name: string; kind?: string; platform?: string }>; current: string }>
   /** The harness versions the cloud's machines run, or null from a cloud that doesn't say (`CloudAccounts.cloudHarnesses`). */
   cloudHarnesses?(): Promise<CloudHarnesses | null>
   /** The person's access choices as the account keeps them, or null from a cloud that doesn't keep them yet. */
@@ -142,8 +145,16 @@ export interface CloudAccount {
     put(repository: string, file: { path: string; data: Buffer; names: string[] }): Promise<CloudCarriedFile>
     remove(repository: string, path?: string): Promise<string[]>
   }
+  /** The account's broker, for Setup: what it holds for this person, this device's answer to an ask, a revoke. */
+  borrow?: {
+    snapshot(since: number): Promise<BorrowSnapshot | null>
+    answer(ask: string, answer: SourceAnswer): Promise<void>
+    revoke(grant: string): Promise<void>
+  }
   /** Hears what the account's list of Sessions is told (`AccountListNotice`), in the stream's order, as it comes; returns how to stop. */
   onThreadListings?(listener: (heard: AccountListNotice) => void): () => void
+  /** Hears each time this device's runtime is enrolled on a new link: its account's other devices' calls reach it from then. */
+  onRuntimeLinked?(listener: () => void): () => void
   /** Whether the account's link is open and heard from within a ping: what the account says reaches this Mac now. */
   accountHeard?(): boolean
   /** The account's link tried now if it isn't heard, rather than at its next backoff step: whether it opened (`CloudLink.reach`). */
@@ -243,6 +254,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
   })
   const threadListeners = new Set<(heard: AccountListNotice) => void>()
+  const runtimeListeners = new Set<() => void>()
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
     secrets: secrets.secrets,
@@ -294,6 +306,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onAccountLinked: () => {
       for (const listener of threadListeners) listener("linked")
     },
+    onRuntimeLinked: () => {
+      for (const listener of runtimeListeners) listener()
+    },
     onRequest: request,
     sessions,
     // With the cloud entitlement, this Mac answers its account's other devices and the cloud through the same
@@ -334,6 +349,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   methods.handle("mako:github-token", () => cloud.githubToken())
   methods.handle("mako:github-token-save", (token: string, repository?: string) => cloud.saveGitHubToken(token, repository))
   methods.handle("mako:github-token-remove", () => cloud.removeGitHubToken())
+  // Who cloud commits and pull requests are authored as: the person or Mako's bot, kept by the account.
+  methods.handle("mako:github-authorship", () => cloud.githubAuthorship())
+  methods.handle("mako:github-authorship-save", (as: CommitAuthor) => cloud.saveGitHubAuthorship(as))
 
   sync?.start()
   const unsharable = () => Promise.reject(new Error("This Mac can't share sign-ins with Mako Cloud."))
@@ -388,9 +406,18 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       put: (repository, file) => cloud.putCarriedFile(repository, file),
       remove: (repository, path) => cloud.removeCarriedFiles(repository, path),
     },
+    borrow: {
+      snapshot: (since) => cloud.borrowSnapshot(since),
+      answer: (ask, answer) => cloud.answerBorrowAsk(ask, answer),
+      revoke: (grant) => cloud.revokeBorrowGrant(grant),
+    },
     onThreadListings: (listener) => {
       threadListeners.add(listener)
       return () => threadListeners.delete(listener)
+    },
+    onRuntimeLinked: (listener) => {
+      runtimeListeners.add(listener)
+      return () => runtimeListeners.delete(listener)
     },
     leaving: (why) => cloud.leaving(why),
     accountHeard: () => cloud.accountHeard(),

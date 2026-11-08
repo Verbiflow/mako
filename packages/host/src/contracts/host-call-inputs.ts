@@ -22,11 +22,30 @@ const inputs = {
   "mako:account-usage": () => z.tuple([z.string(), z.string()]),
   "mako:accounts": () => z.tuple([]),
   "mako:activate-tab": () => z.tuple([z.string()]),
+  "mako:agent-ask-answer": () => z.tuple([z.string(), z.string(), z.boolean()]),
   "mako:agents-answer": () =>
     z.tuple([
       z.union([
         z.object({ kind: z.literal("agent"), session: z.string() }),
         z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
       ]),
       z.object({
         to: z.string(),
@@ -36,6 +55,31 @@ const inputs = {
         clientKey: z.string(),
       }),
     ]),
+  "mako:agents-cancel": () =>
+    z.tuple([
+      z.object({
+        version: z.number(),
+        op: z.string(),
+        parent: z.object({
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+        }),
+        reason: z.string().optional(),
+      }),
+    ]),
+  "mako:agents-capabilities": () => z.tuple([]),
+  "mako:agents-continue-next": () => z.tuple([z.string(), z.string()]),
   "mako:agents-diagnostics": () => z.tuple([]),
   "mako:agents-direct": () =>
     z.tuple([
@@ -62,6 +106,24 @@ const inputs = {
       z.union([
         z.object({ kind: z.literal("agent"), session: z.string() }),
         z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
       ]),
       z.object({
         session: z.string(),
@@ -84,6 +146,24 @@ const inputs = {
       z.union([
         z.object({ kind: z.literal("agent"), session: z.string() }),
         z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
       ]),
       z.object({
         scope: z
@@ -92,8 +172,194 @@ const inputs = {
             z.literal("tree"),
             z.literal("crew"),
             z.literal("apexes"),
+            z.literal("threads"),
           ])
           .optional(),
+        query: z.string().optional(),
+      }),
+    ]),
+  "mako:agents-move": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        child: z.string().optional(),
+        all: z.boolean().optional(),
+        harness: z.string(),
+        model: z.string().optional(),
+        reasoning: z.string().optional(),
+        fast: z.boolean().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
+  "mako:agents-next-place": () => z.tuple([z.string()]),
+  "mako:agents-notice": () =>
+    z.tuple([
+      z.object({
+        id: z.string(),
+        op: z.string(),
+        parent: z.object({ thread: z.string(), session: z.string() }),
+        child: z.string(),
+        report: z.object({
+          id: z.string(),
+          child: z.string(),
+          status: z.union([
+            z.literal("failed"),
+            z.literal("progress"),
+            z.literal("blocked"),
+            z.literal("done"),
+            z.literal("needs-input"),
+          ]),
+          summary: z.string(),
+          ownerGeneration: z.number(),
+          at: z.number(),
+          artifacts: z
+            .array(
+              z.object({
+                kind: z.union([
+                  z.literal("file"),
+                  z.literal("branch"),
+                  z.literal("commit"),
+                  z.literal("link"),
+                  z.literal("pull-request"),
+                  z.literal("screenshot"),
+                  z.literal("test-run"),
+                ]),
+                ref: z.string(),
+                label: z.string().optional(),
+              })
+            )
+            .optional(),
+          question: z.string().optional(),
+          decides: z.union([z.literal("person"), z.literal("apex")]).optional(),
+          waitingOn: z
+            .array(
+              z.union([
+                z.object({
+                  kind: z.literal("pull-request"),
+                  ref: z.string(),
+                  repository: z.string().optional(),
+                  number: z.number().optional(),
+                  until: z
+                    .union([
+                      z.literal("checks"),
+                      z.literal("merge"),
+                      z.literal("review"),
+                    ])
+                    .optional(),
+                }),
+                z.object({ kind: z.literal("person"), what: z.string() }),
+                z.object({ kind: z.literal("other"), text: z.string() }),
+              ])
+            )
+            .optional(),
+          options: z
+            .array(
+              z.object({ label: z.string(), detail: z.string().optional() })
+            )
+            .optional(),
+          recommended: z.number().optional(),
+          action: z.string().optional(),
+          for: z.literal("person").optional(),
+          told: z.literal(true).optional(),
+          implicit: z.literal(true).optional(),
+        }),
+        standing: z
+          .object({
+            heard: z.number(),
+            working: z.boolean(),
+            owner: z.number(),
+            seq: z.number(),
+          })
+          .optional(),
+      }),
+    ]),
+  "mako:agents-place": () =>
+    z.tuple([
+      z.object({
+        version: z.number(),
+        op: z.string(),
+        clientKey: z.string(),
+        parent: z.object({
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+        }),
+        brief: z.object({
+          objective: z.string(),
+          doneWhen: z.array(z.string()).optional(),
+          boundaries: z.array(z.string()).optional(),
+          output: z.string().optional(),
+        }),
+        name: z.string(),
+        title: z.string().optional(),
+        role: z
+          .union([
+            z.literal("lead"),
+            z.literal("worker"),
+            z.literal("reviewer"),
+            z.literal("verifier"),
+            z.literal("researcher"),
+          ])
+          .optional(),
+        harness: z.string(),
+        model: z.string().optional(),
+        reasoning: z.string().optional(),
+        fast: z.boolean().optional(),
+        access: z.union([
+          z.literal("ask"),
+          z.literal("auto"),
+          z.literal("full"),
+          z.literal("deny"),
+          z.literal("plan"),
+          z.literal("edits"),
+          z.literal("chat"),
+        ]),
+        workspace: z.object({
+          remote: z.string().optional(),
+          branch: z.string().optional(),
+          base: z.string().optional(),
+          folder: z.string().optional(),
+        }),
+        mode: z.union([z.literal("wait"), z.literal("background")]).optional(),
+        wake: z
+          .union([
+            z.literal("never"),
+            z.literal("decisions"),
+            z.literal("finish"),
+          ])
+          .optional(),
+        queue: z.boolean().optional(),
       }),
     ]),
   "mako:agents-read": () =>
@@ -101,6 +367,24 @@ const inputs = {
       z.union([
         z.object({ kind: z.literal("agent"), session: z.string() }),
         z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
       ]),
       z.object({
         child: z.string(),
@@ -120,6 +404,24 @@ const inputs = {
       z.union([
         z.object({ kind: z.literal("agent"), session: z.string() }),
         z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
       ]),
       z.object({
         status: z.union([
@@ -153,6 +455,28 @@ const inputs = {
           .optional(),
         recommended: z.number().optional(),
         action: z.string().optional(),
+        decides: z.union([z.literal("person"), z.literal("apex")]).optional(),
+        waitingOn: z
+          .array(
+            z.union([
+              z.object({
+                kind: z.literal("pull-request"),
+                ref: z.string(),
+                repository: z.string().optional(),
+                number: z.number().optional(),
+                until: z
+                  .union([
+                    z.literal("checks"),
+                    z.literal("merge"),
+                    z.literal("review"),
+                  ])
+                  .optional(),
+              }),
+              z.object({ kind: z.literal("person"), what: z.string() }),
+              z.object({ kind: z.literal("other"), text: z.string() }),
+            ])
+          )
+          .optional(),
         clientKey: z.string(),
       }),
     ]),
@@ -173,6 +497,24 @@ const inputs = {
       z.union([
         z.object({ kind: z.literal("agent"), session: z.string() }),
         z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
       ]),
       z.object({
         to: z.string(),
@@ -180,11 +522,12 @@ const inputs = {
         text: z.string().optional(),
         deliver: z
           .union([
-            z.literal("steer"),
             z.literal("queue"),
+            z.literal("steer"),
             z.literal("interrupt"),
           ])
           .optional(),
+        context: z.array(z.object({ thread: z.string() })).optional(),
         clientKey: z.string(),
       }),
     ]),
@@ -193,6 +536,24 @@ const inputs = {
       z.union([
         z.object({ kind: z.literal("agent"), session: z.string() }),
         z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
       ]),
       z.object({
         brief: z.object({
@@ -244,6 +605,9 @@ const inputs = {
           ])
           .optional(),
         timeoutMs: z.number().optional(),
+        after: z.array(z.string()).optional(),
+        queue: z.boolean().optional(),
+        context: z.array(z.object({ thread: z.string() })).optional(),
         clientKey: z.string(),
         cwd: z.string().optional(),
       }),
@@ -253,6 +617,24 @@ const inputs = {
       z.union([
         z.object({ kind: z.literal("agent"), session: z.string() }),
         z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
       ]),
       z.object({ child: z.string(), reason: z.string().optional() }),
     ]),
@@ -261,6 +643,24 @@ const inputs = {
       z.union([
         z.object({ kind: z.literal("agent"), session: z.string() }),
         z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
       ]),
       z.object({
         children: z.array(z.string()).optional(),
@@ -334,7 +734,10 @@ const inputs = {
     z.tuple([z.union([z.null(), z.string()])]),
   "mako:browser-control-status": () => z.tuple([]),
   "mako:browser-extension-setup": () => z.tuple([]),
-  "mako:build-update": () => z.tuple([z.enum(["upstream", "checkout"]).optional()]),
+  "mako:build-update": () =>
+    z.tuple([
+      z.union([z.literal("upstream"), z.literal("checkout")]).optional(),
+    ]),
   "mako:capabilities": () => z.tuple([]),
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
@@ -459,6 +862,31 @@ const inputs = {
   "mako:file-events-dismiss": () => z.tuple([]),
   "mako:file-events-restart": () => z.tuple([]),
   "mako:file-events-service": () => z.tuple([]),
+  "mako:files-find": () => z.tuple([z.string(), z.number().optional()]),
+  "mako:files-folders": () =>
+    z.tuple([
+      z.array(z.string()),
+      z
+        .object({
+          limit: z.number().optional(),
+          since: z.number().optional(),
+          epoch: z.string().optional(),
+        })
+        .optional(),
+    ]),
+  "mako:files-grep": () =>
+    z.tuple([
+      z.string(),
+      z
+        .object({
+          regex: z.boolean().optional(),
+          caseSensitive: z.boolean().optional(),
+          wholeWord: z.boolean().optional(),
+          limit: z.number().optional(),
+        })
+        .optional(),
+    ]),
+  "mako:fin-ceiling-set": () => z.tuple([z.number()]),
   "mako:fin-default-choose": () =>
     z.tuple([
       z.string(),
@@ -473,6 +901,8 @@ const inputs = {
       ]),
     ]),
   "mako:fin-defaults": () => z.tuple([]),
+  "mako:fin-limit-set": () => z.tuple([z.union([z.null(), z.number()])]),
+  "mako:fin-move-on-limit": () => z.tuple([z.boolean()]),
   "mako:fin-policy-save": () =>
     z.tuple([
       z.object({
@@ -506,12 +936,19 @@ const inputs = {
               .optional(),
           })
           .optional(),
+        forFins: z.string().optional(),
+        forApexes: z.string().optional(),
       }),
+    ]),
+  "mako:fin-role-rules-save": () =>
+    z.tuple([
+      z.union([z.literal("forFins"), z.literal("forApexes")]),
+      z.string(),
     ]),
   "mako:fork": () =>
     z.tuple([
       z.string(),
-      z.union([z.literal("before"), z.literal("at")]).optional(),
+      z.union([z.literal("at"), z.literal("before")]).optional(),
     ]),
   "mako:git-cancel-generation": () => z.tuple([z.string()]),
   "mako:git-changed-since": () => z.tuple([z.string()]),
@@ -546,8 +983,8 @@ const inputs = {
       z.object({
         head: z.string().optional(),
         action: z.union([
-          z.literal("abort"),
           z.literal("merge"),
+          z.literal("abort"),
           z.literal("fetch"),
           z.literal("pull"),
           z.literal("continue"),
@@ -565,6 +1002,9 @@ const inputs = {
   "mako:git-status": () => z.tuple([]),
   "mako:git-unstage": () => z.tuple([z.array(z.string())]),
   "mako:git-unstage-all": () => z.tuple([]),
+  "mako:github-authorship": () => z.tuple([]),
+  "mako:github-authorship-save": () =>
+    z.tuple([z.union([z.literal("you"), z.literal("mako")])]),
   "mako:github-status": () => z.tuple([]),
   "mako:github-token": () => z.tuple([]),
   "mako:github-token-remove": () => z.tuple([]),
@@ -600,6 +1040,14 @@ const inputs = {
   "mako:install-update": () => z.tuple([]),
   "mako:installation-state": () => z.tuple([]),
   "mako:integrations": () => z.tuple([]),
+  "mako:keep-awake": () => z.tuple([]),
+  "mako:keep-awake-set": () =>
+    z.tuple([
+      z.object({
+        on: z.boolean().optional(),
+        lidClosed: z.boolean().optional(),
+      }),
+    ]),
   "mako:launch-prewarm": () => z.tuple([z.string()]),
   "mako:lifecycle-command": () =>
     z.tuple([
@@ -631,7 +1079,7 @@ const inputs = {
   "mako:list-sessions": () =>
     z.tuple([
       z.string().optional(),
-      z.union([z.literal("workspace"), z.literal("all")]).optional(),
+      z.union([z.literal("all"), z.literal("workspace")]).optional(),
     ]),
   "mako:live-action": () =>
     z.tuple([
@@ -736,6 +1184,33 @@ const inputs = {
         ]),
       }),
     ]),
+  "mako:live-files-find": () =>
+    z.tuple([z.string(), z.string(), z.number().optional()]),
+  "mako:live-files-folders": () =>
+    z.tuple([
+      z.string(),
+      z.array(z.string()),
+      z
+        .object({
+          limit: z.number().optional(),
+          since: z.number().optional(),
+          epoch: z.string().optional(),
+        })
+        .optional(),
+    ]),
+  "mako:live-files-grep": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z
+        .object({
+          regex: z.boolean().optional(),
+          caseSensitive: z.boolean().optional(),
+          wholeWord: z.boolean().optional(),
+          limit: z.number().optional(),
+        })
+        .optional(),
+    ]),
   "mako:live-fork": () =>
     z.tuple([
       z.string(),
@@ -758,7 +1233,7 @@ const inputs = {
               .optional(),
           }),
         ]),
-        thread: z.union([z.literal("new"), z.literal("parent")]).optional(),
+        thread: z.union([z.literal("parent"), z.literal("new")]).optional(),
         worktree: z.boolean().optional(),
         move: z.boolean().optional(),
         session: z.string().optional(),
@@ -951,6 +1426,7 @@ const inputs = {
                 path: z.string().optional(),
               })
             ),
+            grants: z.array(z.string()).optional(),
           })
           .optional(),
         conversationId: z.string(),
@@ -968,6 +1444,7 @@ const inputs = {
               .optional(),
           })
           .optional(),
+        account: z.string().optional(),
         session: z.string().optional(),
         worktree: z.boolean().optional(),
         worktreeStart: z
@@ -1006,6 +1483,8 @@ const inputs = {
           .optional(),
         parent: z
           .object({
+            op: z.string(),
+            parent: z.string(),
             name: z.string(),
             role: z.union([
               z.literal("lead"),
@@ -1014,7 +1493,6 @@ const inputs = {
               z.literal("verifier"),
               z.literal("researcher"),
             ]),
-            parent: z.string(),
             origin: z.union([
               z.literal("started"),
               z.literal("attached"),
@@ -1076,20 +1554,37 @@ const inputs = {
                   z.literal("migration"),
                   z.literal("auto-continue"),
                   z.literal("relay"),
+                  z.literal("pull-watch"),
                 ]),
               }),
             ]),
-            op: z.string(),
+            remote: z
+              .object({
+                device: z.string(),
+                access: z.union([
+                  z.literal("ask"),
+                  z.literal("auto"),
+                  z.literal("full"),
+                  z.literal("deny"),
+                  z.literal("plan"),
+                  z.literal("edits"),
+                  z.literal("chat"),
+                ]),
+                conversation: z.string().optional(),
+                heard: z.number().optional(),
+              })
+              .optional(),
             tuned: z
               .object({
                 source: z.union([
+                  z.literal("apex"),
                   z.literal("harness"),
                   z.literal("rule"),
-                  z.literal("asked"),
                   z.literal("mako"),
+                  z.literal("asked"),
                   z.literal("fins"),
-                  z.literal("apex"),
                   z.literal("used"),
+                  z.literal("connection"),
                 ]),
                 note: z.string().optional(),
                 rerouted: z
@@ -1097,10 +1592,54 @@ const inputs = {
                     from: z.string(),
                     until: z.number().optional(),
                     instead: z.string().optional(),
+                    account: z.string().optional(),
+                    to: z
+                      .union([
+                        z.object({
+                          why: z.literal("account"),
+                          harness: z.string(),
+                          account: z.string(),
+                          label: z.string(),
+                        }),
+                        z.object({
+                          why: z.literal("connection"),
+                          harness: z.string(),
+                          connection: z.string(),
+                          connectionName: z.string(),
+                          model: z.string(),
+                        }),
+                        z.object({
+                          why: z.literal("harness"),
+                          harness: z.string(),
+                        }),
+                      ])
+                      .optional(),
+                    at: z.number().optional(),
+                    line: z.string().optional(),
                   })
                   .optional(),
                 rule: z
                   .object({ when: z.string(), n: z.number().optional() })
+                  .optional(),
+              })
+              .optional(),
+            placed: z
+              .object({
+                target: z.union([
+                  z.object({
+                    kind: z.literal("device"),
+                    device: z.string(),
+                    name: z.string(),
+                  }),
+                  z.object({ kind: z.literal("cloud"), thread: z.string() }),
+                ]),
+                session: z.string().optional(),
+                conversation: z.string().optional(),
+                working: z.boolean().optional(),
+                epoch: z.number().optional(),
+                stop: z.object({ at: z.number(), why: z.string() }).optional(),
+                said: z
+                  .object({ owner: z.number(), seq: z.number() })
                   .optional(),
               })
               .optional(),
@@ -1158,6 +1697,8 @@ const inputs = {
           })
           .optional(),
         modeId: z.string().optional(),
+        account: z.string().optional(),
+        grants: z.array(z.string()).optional(),
       }),
     ]),
   "mako:live-turn-changes": () =>
@@ -1637,8 +2178,8 @@ const inputs = {
       z.string(),
       z.string(),
       z.object({
-        conversation: z.string().optional(),
         thread: z.string().optional(),
+        conversation: z.string().optional(),
       }),
       z.union([z.null(), z.number()]),
     ]),
@@ -1802,7 +2343,7 @@ const inputs = {
           caseSensitive: z.boolean().optional(),
           wholeWord: z.boolean().optional(),
           threads: z.boolean().optional(),
-          scope: z.union([z.literal("workspace"), z.literal("all")]).optional(),
+          scope: z.union([z.literal("all"), z.literal("workspace")]).optional(),
         })
         .optional(),
     ]),
@@ -1824,6 +2365,36 @@ const inputs = {
         z.literal("high"),
         z.literal("xhigh"),
         z.literal("max"),
+      ]),
+    ]),
+  "mako:setup": () => z.tuple([z.string()]),
+  "mako:setup-act": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.object({
+          act: z.literal("answer"),
+          ask: z.string(),
+          answer: z.union([
+            z.literal("allow-thread"),
+            z.literal("allow-project"),
+            z.literal("decline"),
+            z.literal("add-to-setup"),
+          ]),
+        }),
+        z.object({
+          act: z.literal("row"),
+          place: z.string(),
+          row: z.string(),
+          action: z.union([
+            z.literal("stop"),
+            z.literal("send"),
+            z.literal("add"),
+            z.literal("retry"),
+            z.literal("keep"),
+          ]),
+        }),
+        z.object({ act: z.literal("rebuild") }),
       ]),
     ]),
   "mako:shutdown-ack": () => z.tuple([z.string()]),
@@ -1876,6 +2447,15 @@ const inputs = {
           z.object({ kind: z.literal("open-url"), url: z.string() }),
           z.object({
             kind: z.literal("tap"),
+            at: z.object({ x: z.number(), y: z.number() }),
+          }),
+          z.object({
+            kind: z.literal("touch"),
+            phase: z.union([
+              z.literal("move"),
+              z.literal("begin"),
+              z.literal("end"),
+            ]),
             at: z.object({ x: z.number(), y: z.number() }),
           }),
           z.object({
@@ -2119,6 +2699,8 @@ const inputs = {
         viewer: z.string(),
         box: z.object({ width: z.number(), height: z.number() }).optional(),
         waitMs: z.number().optional(),
+        decoded: z.number().optional(),
+        leave: z.boolean().optional(),
       }),
     ]),
   "mako:skills-discover": () => z.tuple([]),
@@ -2291,8 +2873,6 @@ const inputs = {
         })
         .optional(),
     ]),
-  "mako:thread-move-ask-answer": () => z.tuple([z.string(), z.boolean()]),
-  "mako:thread-move-asks": () => z.tuple([]),
   "mako:thread-open": () => z.tuple([z.string()]),
   "mako:thread-original": () => z.tuple([z.string(), z.string()]),
   "mako:thread-owner-resolve": () => z.tuple([z.string()]),
@@ -2346,6 +2926,24 @@ const inputs = {
       z.union([
         z.object({ kind: z.literal("agent"), session: z.string() }),
         z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
       ]),
       z.object({
         to: z.union([z.literal("cloud"), z.literal("back")]),
@@ -2425,7 +3023,7 @@ const inputs = {
   "mako:workspace-move-answer": () =>
     z.tuple([
       z.string(),
-      z.union([z.literal("allow"), z.literal("deny"), z.literal("always")]),
+      z.union([z.literal("deny"), z.literal("allow"), z.literal("always")]),
     ]),
   "mako:workspace-move-bring": () => z.tuple([z.string(), z.boolean()]),
   "mako:workspace-move-bring-stayed": () => z.tuple([z.string()]),
@@ -2501,11 +3099,19 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:account-usage", "harnesses"],
   ["mako:accounts", "harnesses"],
   ["mako:activate-tab", "workspaces"],
+  ["mako:agent-ask-answer", "conversations"],
   ["mako:agents-answer", "conversations"],
+  ["mako:agents-cancel", "conversations"],
+  ["mako:agents-capabilities", "conversations"],
+  ["mako:agents-continue-next", "conversations"],
   ["mako:agents-diagnostics", "conversations"],
   ["mako:agents-direct", "conversations"],
   ["mako:agents-link", "conversations"],
   ["mako:agents-list", "conversations"],
+  ["mako:agents-move", "conversations"],
+  ["mako:agents-next-place", "conversations"],
+  ["mako:agents-notice", "conversations"],
+  ["mako:agents-place", "conversations"],
   ["mako:agents-read", "conversations"],
   ["mako:agents-redirect", "conversations"],
   ["mako:agents-report", "conversations"],
@@ -2585,9 +3191,16 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:file-events-dismiss", "workspaces"],
   ["mako:file-events-restart", "workspaces"],
   ["mako:file-events-service", "workspaces"],
+  ["mako:files-find", "workspaces"],
+  ["mako:files-folders", "workspaces"],
+  ["mako:files-grep", "workspaces"],
+  ["mako:fin-ceiling-set", "harnesses"],
   ["mako:fin-default-choose", "harnesses"],
   ["mako:fin-defaults", "harnesses"],
+  ["mako:fin-limit-set", "harnesses"],
+  ["mako:fin-move-on-limit", "harnesses"],
   ["mako:fin-policy-save", "harnesses"],
+  ["mako:fin-role-rules-save", "harnesses"],
   ["mako:fork", "workspaces"],
   ["mako:git-cancel-generation", "git"],
   ["mako:git-changed-since", "git"],
@@ -2612,6 +3225,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:git-status", "git"],
   ["mako:git-unstage", "git"],
   ["mako:git-unstage-all", "git"],
+  ["mako:github-authorship", "usage"],
+  ["mako:github-authorship-save", "usage"],
   ["mako:github-status", "git"],
   ["mako:github-token", "usage"],
   ["mako:github-token-remove", "usage"],
@@ -2634,6 +3249,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:install-update", "application"],
   ["mako:installation-state", "application"],
   ["mako:integrations", "tools"],
+  ["mako:keep-awake", "conversations"],
+  ["mako:keep-awake-set", "conversations"],
   ["mako:launch-prewarm", "tools"],
   ["mako:lifecycle-command", "application"],
   ["mako:lifecycle-state", "application"],
@@ -2654,6 +3271,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-continue-turn", "conversations"],
   ["mako:live-earlier", "conversations"],
   ["mako:live-edit-queued", "conversations"],
+  ["mako:live-files-find", "conversations"],
+  ["mako:live-files-folders", "conversations"],
+  ["mako:live-files-grep", "conversations"],
   ["mako:live-fork", "conversations"],
   ["mako:live-goal", "conversations"],
   ["mako:live-hold-until", "conversations"],
@@ -2759,6 +3379,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:set-model", "workspaces"],
   ["mako:set-name", "workspaces"],
   ["mako:set-thinking", "workspaces"],
+  ["mako:setup", "workspaces"],
+  ["mako:setup-act", "workspaces"],
   ["mako:shutdown-ack", "application"],
   ["mako:simulator-setup", "control"],
   ["mako:simulator-setup-press", "control"],
@@ -2825,8 +3447,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-groups", "threads"],
   ["mako:thread-harness-check", "conversations"],
   ["mako:thread-move", "conversations"],
-  ["mako:thread-move-ask-answer", "conversations"],
-  ["mako:thread-move-asks", "conversations"],
   ["mako:thread-open", "threads"],
   ["mako:thread-original", "threads"],
   ["mako:thread-owner-resolve", "conversations"],

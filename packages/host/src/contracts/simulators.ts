@@ -27,6 +27,8 @@ export type SimulatorBlocker =
   | "no-xcode"
   /** Xcode without a simulator runtime for the platform. */
   | "no-runtime"
+  /** The tools Mako streams and drives a simulator with aren't installed yet. */
+  | "no-tools"
   /** The host is there, but Mako's driving of it isn't built yet: it lists, and it refuses to act. */
   | "not-built"
   /** Another Mac of the person's that isn't connected now, or didn't answer in time. */
@@ -85,6 +87,8 @@ export interface SimulatorSummary {
   state: SimulatorState
   /** The screen in points, when the host knows it. */
   screen?: { width: number; height: number; scale: number }
+  /** How it's turned now, when it's running and the host knows: the screen's picture is drawn upright for it. */
+  orientation?: SimulatorOrientation
   /** A stand-in: a desktop engine at this size, not the platform. */
   standIn?: true
 }
@@ -167,6 +171,11 @@ export type SimulatorOrientation = "portrait" | "landscape-left" | "landscape-ri
 export type SimulatorAction =
   | { kind: "open-url"; url: string }
   | { kind: "tap"; at: SimulatorPoint }
+  /**
+   * One finger's touch as it goes, as the panel sends a drag: down, its moves as they happen, and up. iOS reads the
+   * speed of the last moves, so a drag flings as it would on a phone. A gesture an agent makes is a tap or a swipe.
+   */
+  | { kind: "touch"; phase: "begin" | "move" | "end"; at: SimulatorPoint }
   | { kind: "swipe"; from: SimulatorPoint; to: SimulatorPoint; ms?: number }
   | { kind: "pinch"; at: SimulatorPoint; scale: number; ms?: number }
   | { kind: "type"; text: string }
@@ -307,6 +316,13 @@ export interface SimulatorsWatchInput {
   /** The box it draws in, in pixels, so the host never sends more than it shows. */
   box?: { width: number; height: number }
   waitMs?: number
+  /**
+   * The sequence of the newest picture this viewer's decoder drew, when it drew one since its last read: how the host
+   * learns its H.264 really decodes, and which capture it was that did.
+   */
+  decoded?: number
+  /** This viewer is done: it stops watching at once, and a screen nobody else watches stops streaming. */
+  leave?: boolean
 }
 export interface SimulatorsWatched {
   /** False once the screen stopped streaming: nothing more comes until a viewer watches again. */

@@ -10,6 +10,7 @@ import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import { levelDbEntries, levelDbFolder, snappyDecompress } from "./leveldb-text.js"
 import { openReadOnly } from "./read-only-sqlite.js"
 import { JsonValueSchema, jsonStoreAccess, unknownFields, type JsonValue } from "./store-format.js"
+import { sendToChild } from "./child-input.js"
 
 /**
  * Attachment files Mako keeps, given back once nothing can name them. Three
@@ -819,8 +820,7 @@ class NamesAside {
     if (this.exited) return Promise.resolve(null)
     return new Promise((resolve) => {
       this.pending = { resolve }
-      this.child.send(job, (error) => {
-        if (!error) return
+      sendToChild(this.child, job).catch(() => {
         this.pending = null
         resolve(null)
       })

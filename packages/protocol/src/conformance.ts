@@ -985,8 +985,7 @@ export function runMediaConformance(
   scenario("media never enters the Thread's stream", async (gateway) => {
     const { threadId, runtime } = await gateway.thread()
     const client = await gateway.client()
-    const events = client.subscribe({ stream: threadStream(threadId), after: 0 })
-    const before = await drain(events)
+    const events = client.subscribe({ stream: threadStream(threadId), after: await marked(client, runtime, threadId) })
     const stream = streamName()
     const watch = client.watch({ threadId, stream, request: Payload.of({}) })
     await watched(runtime, threadId, stream)
@@ -996,7 +995,7 @@ export function runMediaConformance(
     expect(await runtime.next(), "media-ack")
     watch.close()
     expect(await runtime.next(), "media-unwatch")
-    assert.deepEqual(await drain(events), [], `nothing was recorded after the ${before.length} events already there`)
+    assert.deepEqual(await drain(events), [], "nothing was recorded after the stream's place before the media")
     events.close()
   })
 
@@ -1262,6 +1261,30 @@ function joined(pieces: readonly Uint8Array[]): Uint8Array {
     at += piece.byteLength
   }
   return all
+}
+
+/**
+ * The Thread's stream's place now, by an operation `client` sends it: its admission's number, from its answer once the
+ * runtime gives one. A reader subscribed after it gets only what came later, so it needn't wait out what was already
+ * there, which reaches a reader on a slow connection whenever it does: past 200 ms once, on a loaded runner.
+ */
+async function marked(client: ClientSession, runtime: RuntimeLink, threadId: string): Promise<number> {
+  const operation: Operation = {
+    v: PROTOCOL_VERSION,
+    id: crypto.randomUUID(),
+    op: "thread.send",
+    target: { kind: "thread", threadId },
+    input: Payload.of({ text: "the stream's place" }),
+    correlationId: crypto.randomUUID(),
+    actor: desktop,
+    attempt: 1,
+  }
+  const replied = client.call(operation)
+  assert.equal(expect(await runtime.next(), "operation").operation.id, operation.id, "the mark reaches the Thread's runtime")
+  runtime.send({ type: "reply", reply: { v: PROTOCOL_VERSION, id: operation.id, ok: true, value: Payload.of("marked") } })
+  const { seq } = success(await replied)
+  assert.ok(seq !== undefined, "an admitted operation's answer says its number")
+  return seq
 }
 
 /** Every event that arrives within a short wait. */

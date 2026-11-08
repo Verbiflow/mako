@@ -36,6 +36,9 @@ for a picker that chooses it.
   carries its noun.
 - **Icons**: lucide, at 14px (`size-3.5`) beside UI text and 12px (`size-3`) beside a label, the default stroke.
   One icon one meaning: Copy, Edit (`PencilLine`), Rewind (`Undo2`), never two circular arrows side by side.
+  A file's or folder's mark is the one exception: its kind's own (`components/ui/file-icon.tsx`, by name and
+  extension in `lib/file-kinds.ts`), at the same sizes, one stroke on one grid, square joins, told apart by shape or a
+  language's letters and never by hue.
 
 ## Who and how: the fin
 
@@ -61,13 +64,25 @@ Use these; don't redraw them.
 | A button | `Action`, `IconAction` (`ui/kit.tsx`), with `pressable` |
 | A small fact | `Chip` |
 | A switch | `Toggle` |
-| Something to read or act on above the composer | `Notice` (`ui/notice.tsx`) |
+| Something to read or act on above the composer | `Notice` (`ui/notice.tsx`), on the composer box's own edges: whatever stands over it (notices, the queue, a goal, a plan) is its width, on every form |
 | A menu, a popover, a dialog | `ui/menu.tsx`, `ui/popover.tsx`, `ui/dialog.tsx` |
 | A tooltip | `ui/tooltip.tsx`, or `title` naming the action ("Send", "Copy") |
 | Loading | `Skeleton` for a shape to come, `Shimmer` for words at work, `Spinner` only inside a control that waits |
-| A list of an Apex's Fins | the crew card (`viewer/crew-card.tsx`): needs you, working, queued, failed; done and idle folded |
+| A list of an Apex's Fins | the crew card (`viewer/crew-card.tsx`): needs you, working, queued, failed; done and idle folded. A row's time is how long the Fin has stood as it does (`since`): a working one's current turn, never its age |
+| A row of a rail's fixed top | `RailRow` (`rail/rail-row.tsx`): the left rail's New thread and Inbox, the right rail's Changes and Files |
 | A message | `Prompt` and `FinReports` (`transcript/`), the avatar beside the message's last line |
 | The composer | one square raised box, no outline, a short field and one row: plus, model, access glyph, send |
+
+## The rails and tabs
+
+The window is two rails on the shell and the conversation between them, the one pane on `--surface`. The right rail is
+the left's twin: `SideRail`'s rows, one a surface in a fixed order, each with a quiet reading at its end (`+141 −246`,
+`2 need you` in `--attention`), and what a row opens under them. Agents shows only while there's someone to show:
+no Fins and nothing running, no row. Changes is a list; what's read at length opens as a tab.
+
+A tab is what someone opened on purpose: a file, a diff, a plan, a Session, the one Fin opened in place. Nothing gets a
+tab by starting. An Apex's Fins stand in the crew card and the rail; opened, a Fin gets one tab, and closing it is the
+Apex again. The phone's the same: a count in the bar and the crew card, no chip a Fin.
 
 ## Words
 

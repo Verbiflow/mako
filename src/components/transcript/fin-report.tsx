@@ -1,7 +1,8 @@
-import { memo, useState } from "react"
+import { memo, use, useState } from "react"
 import { GitPullRequestIcon, LinkIcon } from "lucide-react"
 import type { FinReportCard } from "@mako/host/contracts/fin-reports"
 import { AgentAvatar } from "@/components/transcript/message-avatar"
+import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { useTranscriptSource } from "@/components/transcript/source-context"
 import { formatTime } from "@/lib/format"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
@@ -9,29 +10,7 @@ import { cn } from "@/lib/utils"
 import { useAcp } from "@/state/acp"
 import { openFinInApex, useApexTitle, useThreadAsks, useThreadChildren } from "@/state/apex-fins"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
-
-/** What a report says it did: its word and the hue it's drawn in. */
-interface Said {
-  word: string
-  tone: string
-}
-
-/** What it did, in one word, as Capy labels a crew report: an ask in the attention hue, an end in its own. */
-function said(card: FinReportCard): Said {
-  if (card.apex) return card.status === "done" ? { word: "replied", tone: "text-faint" } : { word: "didn't reply", tone: "text-negative" }
-  switch (card.status) {
-    case "needs-input":
-      return { word: card.forPerson ? "asks you" : "asks", tone: "text-attention" }
-    case "blocked":
-      return { word: card.forPerson ? "waits on you" : "is blocked", tone: "text-attention" }
-    case "done":
-      return { word: "finished", tone: "text-positive" }
-    case "failed":
-      return { word: "failed", tone: "text-negative" }
-    case "progress":
-      return { word: "says", tone: "text-faint" }
-  }
-}
+import { said } from "@/components/transcript/fin-report-words"
 
 /** A pull request's short name from its link ("#369"), else its label or its ref. */
 function artifactName(artifact: NonNullable<FinReportCard["artifacts"]>[number]): string {
@@ -74,6 +53,7 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
       if (!answered) setSent(undefined)
     })
   }
+  const routed = use(RoutedOpenContext)
   const options = card.options ?? []
   const made = (card.artifacts ?? []).filter((artifact) => artifact.kind === "pull-request" || artifact.kind === "link")
   return (
@@ -83,7 +63,7 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
           {fin && thread ? (
             <button
               type="button"
-              onClick={() => openFinInApex(thread, apexTitle ?? "Apex", fin)}
+              onClick={() => (routed ? routed(fin) : openFinInApex(thread, apexTitle ?? "Apex", fin))}
               title={`Open ${card.name}`}
               className="pressable min-w-0 truncate text-ui font-medium text-foreground hover:underline"
             >
@@ -102,6 +82,7 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
           ) : null}
         </p>
         {card.line ? <p className="mt-0.5 text-prose leading-[1.6] text-foreground [overflow-wrap:anywhere]">{card.line}</p> : null}
+        {card.waiting ? <p data-fin-report-waiting className="mt-0.5 text-label text-faint">{card.waiting}</p> : null}
         {options.length ? (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
             {options.map((option, index) => {

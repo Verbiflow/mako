@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useContext } from "react"
 import { ChevronDownIcon, ExpandIcon, RotateCwIcon } from "lucide-react"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { ExpandedFilePreview } from "@/components/viewer/expanded-file-preview"
 import { readTranscriptFile } from "@/state/transcript-media"
 import { viewer } from "@/state/viewer"
@@ -193,7 +193,7 @@ export function InlineFilePreview({
   if (file?.withheld)
     return (
       <div ref={host} data-inline-file-preview={path} className="not-prose my-2 flex min-w-0 items-center gap-2 text-ui">
-        <FileTypeIcon path={name} mimeType={file.mimeType} className="size-4 shrink-0 text-muted-foreground" />
+        <FileIcon path={name} mimeType={file.mimeType} className="size-4 shrink-0 text-muted-foreground" />
         <button type="button" className="pressable min-w-0 truncate font-medium underline decoration-hairline underline-offset-3 hover:decoration-current" onClick={() => void viewer.open(path, undefined, context.threadPath, context.liveId)}>{name}</button>
         <span className="min-w-0 truncate text-label text-faint">{file.withheld}</span>
       </div>
@@ -205,7 +205,7 @@ export function InlineFilePreview({
       className="not-prose my-3 overflow-hidden asset-surface border border-hairline bg-surface text-ui"
     >
       <div className="flex items-center gap-2 px-3 py-2.5">
-        <FileTypeIcon path={name} mimeType={file?.mimeType ?? mimeType} className="size-4 shrink-0 text-muted-foreground" />
+        <FileIcon path={name} mimeType={file?.mimeType ?? mimeType} className="size-4 shrink-0 text-muted-foreground" />
         <button
           type="button"
           className="pressable flex min-w-0 flex-1 items-center gap-2 text-left"

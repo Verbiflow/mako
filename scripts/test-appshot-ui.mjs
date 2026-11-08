@@ -1,9 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * Appshots in the production desk with the fixture bridge (`?mock`): the
@@ -29,7 +30,7 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-appshot-ui-"))
+  const root = testScratch("mako-appshot-ui-")
   const evidence = process.argv[2] ? resolve(process.argv[2]) : root
   await mkdir(evidence, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 20029, strictPort: true, hmr: false } })
@@ -46,7 +47,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Appshot UI evidence: ${evidence}`)
 }
 
 async function check() {
@@ -54,9 +54,11 @@ async function check() {
   const root = process.env.MAKO_APPSHOT_ROOT
   const evidence = process.env.MAKO_APPSHOT_EVIDENCE
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const watchdog = setTimeout(() => app.exit(1), 180_000)
   const window = new BrowserWindow({ width: 1360, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1360, 900)
   const page = window.webContents
   page.debugger.attach("1.3")
   page.on("console-message", (details) => {

@@ -3,11 +3,14 @@ import { resolveObjectURL } from "node:buffer"
 import { createHash } from "node:crypto"
 import { zstdCompressSync } from "node:zlib"
 import { test } from "node:test"
-import type { ListedSession } from "@mako/protocol/thread-listing"
-import { foldThreads, openingSession } from "../src/web-client/threads"
+import type { ListedFin, ListedSession } from "@mako/protocol/thread-listing"
+import { threadChildren } from "../src/state/apex-fins"
+import { rollup } from "@mako/host/contracts/children"
+import { foldThreads, openingSession, subtitle } from "../src/web-client/threads"
 import { parseRoute, routeHref, type WebRoute } from "../src/web-client/route"
 import { typedRepository } from "../src/web-client/account"
 import { Gateway, GatewayError } from "../src/web-client/gateway"
+import { webGitHubAuthorships } from "../src/web-client/github-authorship"
 import { renewAtMs } from "@mako/protocol"
 import { deviceOf, errorReading, note, openingThread, readingsStore, readingWords } from "../src/web-client/probe"
 import { rowDetail } from "../src/web-client/rows"
@@ -35,9 +38,13 @@ import { listedHeads, listedSummaries, listingChanges } from "../src/web-client/
 import { selectAcpPresence } from "../src/state/acp-presence"
 import { presenceThreadStatus } from "../src/lib/thread-fold"
 import { acpStore } from "../src/state/acp-state"
+import { readingLive, receivingLive } from "../src/state/live-door"
+import { failAroundTheDoor } from "./live-door-watch"
 import { applyLiveSnapshot, listLive } from "../src/state/live-recovery"
 import type { ToolCall } from "../src/extend/slots"
 import { diagnose, diagnosisText, lastSeen, type ReachInput } from "../src/web-client/diagnosis"
+import { longestWaitingFirst, type WebFinAsk } from "../src/web-client/inbox"
+import { said } from "../src/components/transcript/fin-report-words"
 import { quietLine } from "../src/lib/quiet-device"
 import { barFrom, forward, percentWords, sentWords, stepFraction, stepWords } from "../src/web-client/move-progress"
 import { endMove, followedWays, listedMove, movesStore, putMove, stepHeard } from "../src/web-client/moves"
@@ -61,6 +68,8 @@ import { z } from "zod"
 import { AccountList, accountListStore } from "../src/web-client/account-list"
 import { WebCopies } from "../src/web-client/copies"
 import type { CopyAnswer } from "@mako/host/contracts/copy-history"
+// What the window's own code writes of a conversation goes through the door (`receiveLive`), or the suite fails.
+failAroundTheDoor(acpStore, receivingLive, readingLive)
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const STUDIO = uuid(900)
@@ -84,6 +93,12 @@ function row(n: number, fields: Partial<ListedSession>): ListedSession {
 }
 
 const devices = new Map([[STUDIO, { id: STUDIO, kind: "desktop", name: "Studio", platform: "macOS" }]])
+
+test("a gateway without who commits are authored as says so with no error, and any other failure stays one", async () => {
+  const answering = (status: number) => webGitHubAuthorships({ rest: async () => { throw new GatewayError(status, "No such route", undefined) } }, "u1")
+  assert.equal(await answering(404).read(), null)
+  await assert.rejects(answering(500).read(), GatewayError)
+})
 
 test("one row per Thread, folded by its ID, the ones that need the person first", () => {
   const rows = [
@@ -234,21 +249,30 @@ test("a connection token is renewed before it runs out, never on every ask, howe
 })
 
 test("a row says one fact under its title: what it waits on, that it failed or works, else its project", () => {
+  // A machine of the person's own beside the Mac, as #468's Settings › Devices adds one.
+  const BUILD_BOX = uuid(960)
   const rows = [
     row(10, { thread: uuid(110), state: "waiting", waitingOn: "Approve: npm test" }),
     row(11, { thread: uuid(111), state: "failed" }),
     row(12, { thread: uuid(112), state: "working" }),
     row(13, { thread: uuid(113), runsOn: { kind: "device", deviceId: STUDIO }, folder: "/Users/ana/web" }),
     row(14, { thread: uuid(114) }),
+    row(15, { thread: uuid(115), runsOn: { kind: "device", deviceId: BUILD_BOX }, folder: "/srv/mako" }),
   ]
-  const { threads } = foldThreads({ rows, devices, quiet: new Map(), waiting: new Map(), archived: [] })
+  const withMachine = new Map([...devices, [BUILD_BOX, { id: BUILD_BOX, kind: "runtime", name: "build-box", platform: "Linux x64" }]])
+  const { threads } = foldThreads({ rows, devices: withMachine, quiet: new Map(), waiting: new Map(), archived: [] })
   const said = (id: number, named = false) => rowDetail(threads.find((thread) => thread.id === uuid(id))!, named)
   assert.deepEqual(said(110), { text: "Approve: npm test", tone: "attention" })
   assert.deepEqual(said(111), { text: "Failed", tone: "negative" })
   assert.deepEqual(said(112), { text: "Working", tone: "working" })
   assert.deepEqual(said(113), { text: "web", tone: "faint", place: "device" }, "one Mac: its name goes without saying")
-  assert.deepEqual(said(113, true), { text: "web · Studio", tone: "faint", place: "device" }, "several: the Mac is named")
+  assert.deepEqual(said(113, true), { text: "Studio · web", tone: "faint", place: "device" }, "several: the Mac is named, then the project, as the bar says them")
+  const studio = threads.find((thread) => thread.id === uuid(113))!
+  assert.equal(said(113, true).text, subtitle(studio, studio.sessions[0]!), "the list's row and the Thread's bar say where it runs in one order")
   assert.deepEqual(said(114, true), { text: "api", tone: "faint", place: "cloud" }, "the cloud is its glyph, never a word again")
+  assert.deepEqual(said(115, true), { text: "build-box · mako", tone: "faint", place: "machine" }, "a machine: its name, then the project, under a server")
+  const machine = threads.find((thread) => thread.id === uuid(115))!
+  assert.equal(said(115, true).text, subtitle(machine, machine.sessions[0]!), "the list's row and the Thread's bar say a machine's place in one order")
 })
 
 test("a Thread starts on a Mac that's on, the one last used first, else the cloud; a Mac that's off is listed, not chosen", () => {
@@ -1452,6 +1476,20 @@ test("a listed Session keeps its Thread's name and its time once its owner's sna
   assert.equal(listed()?.movedAt, Date.parse(at(40)))
 })
 
+test("a listed Apex's Fins reach the rail from its row, and keep coming from it once it's opened here without a roster of its own", () => {
+  const fin = (name: string, state: ListedFin["state"]): ListedFin => ({ thread: uuid(5100 + name.length), name, harness: "cursor", state, startedAt: at(1) })
+  const rowOf = (fins: ListedFin[]) => row(51, { thread: uuid(510), runsOn: { kind: "device", deviceId: STUDIO }, activityAt: at(2), fins })
+  const counts = () => ({ ...rollup(threadChildren(acpStore.get(), uuid(510))) })
+  const [summary] = listedSummaries({ rows: [rowOf([fin("one", { kind: "working" }), fin("three", { kind: "queued", reason: "place-full", ahead: 0 })])], devices, quiet: new Map(), waiting: new Map() })
+  listLive([summary!])
+  assert.deepEqual(counts(), { total: 2, needs: 0, working: 1, queued: 1, idle: 0, failed: 0, done: 0 }, "from the row, as its owner counts them")
+  applyLiveSnapshot({ ...summary!, fins: undefined, session: { ...summary!.session, connection: "connected", status: "ready" }, revision: 2, base: null, permissions: [], requests: [], blocks: [] })
+  assert.equal(counts().total, 2, "opened here, its owner's snapshot holds no roster: its row's Fins stay")
+  const [later] = listedSummaries({ rows: [rowOf([fin("one", { kind: "ended", outcome: "done" }), fin("three", { kind: "working" })])], devices, quiet: new Map(), waiting: new Map() })
+  listLive([later!])
+  assert.deepEqual(counts(), { total: 2, needs: 0, working: 1, queued: 0, idle: 0, failed: 0, done: 1 }, "opened here, it still takes the list's word on its Fins")
+})
+
 test("when the person last sent a listed Session a message reaches the desk's rail, and its owner's snapshot only moves it later", () => {
   const [summary] = listedSummaries({ rows: [row(41, { thread: uuid(410), runsOn: { kind: "device", deviceId: STUDIO }, createdAt: at(0), promptedAt: at(30), activityAt: at(45) })], devices, quiet: new Map(), waiting: new Map() })
   assert.equal(summary!.promptedAt, Date.parse(at(30)))
@@ -1579,4 +1617,24 @@ test("a terminal's session its own app has open on a Mac wears that Mac's hollow
   assert.equal(quiet.rail?.openElsewhere, undefined, "a Mac that can't be heard says nothing of what it has open")
   const working = listedSummaries({ rows: [{ ...ringed, state: "working" }], devices, quiet: new Map(), waiting: new Map() })[0]!
   assert.equal(working.rail?.openElsewhere, undefined, "a turn at work there is the working mark, not the ring")
+})
+
+test("a Fin's finished report says who decides: the person's in the attention hue, its Apex's quietly", () => {
+  const card = { report: "report:fin:merge", fin: "fin", name: "swipe", status: "done" as const, line: "Merge #371 into main?" }
+  assert.deepEqual(said({ ...card, decides: "person" }), { word: "finished · needs you", tone: "text-attention" })
+  assert.deepEqual(said({ ...card, decides: "lead" }), { word: "finished · asks its Apex", tone: "text-muted-foreground" }, "its Apex's decision waits on no one the person sees")
+  assert.deepEqual(said(card), { word: "finished", tone: "text-positive" })
+})
+
+test("the phone's asking Fins keep one order when they asked in the same moment", () => {
+  const ask = (key: string, observedAt: number): WebFinAsk => ({
+    key,
+    ask: { fin: key, title: key, harness: "codex", question: "Merge?", ask: { kind: "report", id: key } },
+    agent: { nativeId: `mako-child:${key}`, title: key, bindingId: "mako:children", provider: "codex", state: { kind: "completed" }, observedAt },
+    apex: { thread: "apex", title: "Mobile polish", conversation: "apex-conversation" },
+  })
+  const asks = [ask("fin:c:3", 5), ask("fin:a:1", 5), ask("fin:b:2", 1), ask("fin:d:4", 5)]
+  const keys = (list: WebFinAsk[]) => list.map((each) => each.key)
+  assert.deepEqual(keys([...asks].sort(longestWaitingFirst)), ["fin:b:2", "fin:a:1", "fin:c:3", "fin:d:4"], "the longest waiting first, then by key")
+  assert.deepEqual(keys([...asks].reverse().sort(longestWaitingFirst)), keys([...asks].sort(longestWaitingFirst)), "whatever order they came in")
 })

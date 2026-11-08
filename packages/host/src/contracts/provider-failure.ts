@@ -60,6 +60,13 @@ interface Rule {
 }
 
 /**
+ * The words that say an account ran out rather than that a service is busy: `Your team has reached its usage limit`,
+ * `You've hit your weekly limit · resets 1pm`, `Claude usage limit reached`, `Quota exhausted`.
+ */
+const USAGE_LIMIT = /\bhit your (?:[\w-]+ )?limit|\breached (?:your|its|the) (?:[\w-]+ )?(?:usage |rate )?limit|\busage limit\b|\b(?:session|weekly|daily|monthly|five-hour|5-hour) limit (?:reached|hit)|\bquota (?:exhausted|exceeded)\b|usage_limit_(?:reached|exceeded)/i
+
+
+/**
  * Order matters: the first rule that matches wins, and the specific faults
  * (a rejected transcript names request items; a context overflow names
  * tokens) precede the broad HTTP families they could also trip.
@@ -115,7 +122,7 @@ const rules: Rule[] = [
     // `[canceled] http/2 stream closed with error code CANCEL (0x8)`.
     kind: "network",
     match:
-      /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|fetch failed|network (?:error|failure|request)|socket hang up|connection (?:reset|refused|closed|lost|error|stalled|failed)|timed? ?out|terminated|stream (?:ended|closed|disconnected)|other side closed|http\/2|\[(?:canceled|cancelled|deadline_exceeded)\]/i,
+      /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|fetch failed|resume attempts made no progress|network (?:error|failure|request)|socket hang up|connection (?:reset|refused|closed|lost|error|stalled|failed)|timed? ?out|terminated|stream (?:ended|closed|disconnected)|other side closed|http\/2|\[(?:canceled|cancelled|deadline_exceeded)\]/i,
   },
   {
     kind: "resume-failed",
@@ -139,12 +146,44 @@ const rules: Rule[] = [
   },
 ]
 
+/** The kinds a second attempt can't fix, whatever else the message says. */
+const PERMANENT = new Set<ProviderFailureKind>([
+  "transcript-rejected", "context-exhausted", "auth", "plan", "wrong-account", "rejected-input", "missing-folder", "transport-limit", "launch-failed",
+])
+
+/** A client error other than a timeout (408), a rate limit (429) or a plan's refusal (402), named by its status alone. */
+const CLIENT_ERROR = /\b4\d\d (?:Bad Request|Unauthorized|Forbidden|Not Found|Method Not Allowed|Not Acceptable|Conflict|Gone|Unprocessable)/i
+
+/** Whether `text` names a fault only the person can fix, apart from what a plan covers. */
+function personsFault(text: string): boolean {
+  return rules.some((rule) => PERMANENT.has(rule.kind) && rule.kind !== "plan" && rule.match.test(text)) || CLIENT_ERROR.test(text)
+}
+
+/**
+ * Whether `message` says an account ran out. A limit often suggests a bigger plan, and those words give way to it; any
+ * other fault only the person can fix stands, whichever is said first: an invalid key doesn't clear at a reset.
+ */
+export function usageLimitWords(message: string | undefined): boolean {
+  const text = message ?? ""
+  return USAGE_LIMIT.test(text) && !personsFault(text)
+}
+
+/**
+ * Whether `message` names a fault only the person can fix anywhere in it, before the first rule decides its kind:
+ * a provider's "API error: 400 Bad Request: unknown model x" is a refused setting under a service's words.
+ */
+export function permanentFailure(message: string | undefined): boolean {
+  const text = message ?? ""
+  if (usageLimitWords(text)) return false
+  return personsFault(text) || rules.some((rule) => rule.kind === "plan" && rule.match.test(text))
+}
+
 export function classifyProviderFailure(
   message: string | undefined,
   providerLabel = "The provider"
 ): ProviderFailure {
   const text = message ?? ""
-  const kind = rules.find((rule) => rule.match.test(text))?.kind ?? "unknown"
+  const kind = usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown"
   return describeProviderFailure(kind, providerLabel)
 }
 
