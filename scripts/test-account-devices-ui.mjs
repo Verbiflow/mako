@@ -144,7 +144,7 @@ async function checkWindow() {
   assert.equal(names[0], "Ada's MacBook Pro", "this Mac first")
   assert.match(await deviceRow("Ada's MacBook Pro"), /^Ada's MacBook Pro\nThis Mac\nMac · macOS 26\.0 · Mako 0\.4\.0\nOnline now/)
   assert.match(await deviceRow("build-box"), /^build-box\nLinux machine · x64 · Ubuntu 24\.04 · Mako 0\.4\.0\nOnline now\nJoined .+ from Frankfurt, Germany, with a code you approved/)
-  assert.match(await deviceRow("gpu-rig"), /\nLinux machine · x64 · Debian 13 · Mako 0\.4\.0\nQuiet since \d/)
+  assert.match(await deviceRow("gpu-rig"), /\nLinux machine · x64 · Debian 13 · Mako 0\.4\.0\nQuiet since (?:[A-Z][a-z]{2} \d{1,2}, )?\d{1,2}[:.]\d{2}/)
   assert.match(await deviceRow("nas"), /^nas\nNeeds Mako's update\nLinux machine · arm64 · Alpine 3\.22 · Mako 0\.1\.37\nOnline now/)
   assert.match(await deviceRow("Studio"), /\nMac · macOS 15\.5 · Mako 0\.3\.9\nQuiet since /)
   assert.match(await deviceRow("ada-terminal"), /\nTerminal · Linux\nNever connected/)
