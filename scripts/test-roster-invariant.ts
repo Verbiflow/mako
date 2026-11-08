@@ -138,7 +138,7 @@ async function run(seed: number): Promise<void> {
   for (const window of [0, 1]) {
     for (; next[window]! < sent.length; next[window]! += 1) await send(window, { kind: "batch", batch: sent[next[window]!]! })
     for (let round = 0; state[window]!.reads.length && round < 30; round += 1)
-      for (const read of [...state[window]!.reads]) await send(window, { kind: "reply", read: read.number, snapshot: snapshot() })
+      for (const read of state[window]!.reads) await send(window, { kind: "reply", read: read.number, snapshot: snapshot() })
     assert.equal(state[window]!.reads.length, 0, `seed ${seed}: recovery settled`)
     assert.deepEqual(state[window]!.held?.roster, roster, `seed ${seed}, window ${window}: normal recovery converges to the host; held ${state[window]!.held?.epoch}:${state[window]!.held?.revision}, host ${epoch()}:${revision}; ${trail.slice(-22).join("; ")}`)
   }

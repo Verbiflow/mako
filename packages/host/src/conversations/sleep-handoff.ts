@@ -1,4 +1,5 @@
-import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { hostSpawn } from "../base/host-command.js"
+import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -125,7 +126,7 @@ export class SleepHandOff {
 }
 
 function spawnHelper(path: string, args: readonly string[]): ChildProcessWithoutNullStreams {
-  return spawnProcess(path, args, { stdio: ["pipe", "pipe", "pipe"] })
+  return hostSpawn(path, args, { stdio: ["pipe", "pipe", "pipe"] })
 }
 
 /** The helper's name, in a packaged app's `Contents/MacOS` and in a checkout's build of it. */

@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process"
+import { hostSpawn } from "../base/host-command.js"
+import type { ChildProcess } from "node:child_process"
 import { setTimeout as delay } from "node:timers/promises"
 import { AGENT_VIEWS_ENV } from "../contracts/desktop-channel.js"
 import type { DesktopChannel } from "./desktop-channel.js"
@@ -77,7 +78,7 @@ export class AgentViewsApp {
   }
 
   private spawn(launch: AgentViewsLaunch): ChildProcess {
-    const child = spawn(launch.executable, launch.args, { env: { ...launch.env, [AGENT_VIEWS_ENV]: "1" }, stdio: "ignore" })
+    const child = hostSpawn(launch.executable, launch.args, { env: { ...launch.env, [AGENT_VIEWS_ENV]: "1" }, stdio: "ignore" })
     hostLog("desktop", "agent views app started", { pid: child.pid ?? 0 })
     child.once("error", (error) => hostWarn("desktop", "agent views app didn't start", { reason: error.message }))
     child.once("exit", (code, signal) => hostLog("desktop", "agent views app left", { pid: child.pid ?? 0, exit: signal ?? `exit ${code}` }))

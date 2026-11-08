@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { hostSpawn } from "../base/host-command.js"
 import type { ProviderActivityResult } from "../threads/index.js"
 import { onMac, onWindows } from "../base/platform.js"
 
@@ -29,7 +29,7 @@ export async function probeOpenFiles({
     return { kind: "unavailable", reason: "unsupported" }
   const command = onMac() ? "/usr/sbin/lsof" : "lsof"
   return new Promise((resolve) => {
-    const child = spawn(
+    const child = hostSpawn(
       command,
       sourcePath ? ["-Fpgn", "--", sourcePath] : ["-Fpgn", ...processNames.flatMap((name) => ["-c", name])],
       { signal, stdio: ["ignore", "pipe", "pipe"] }

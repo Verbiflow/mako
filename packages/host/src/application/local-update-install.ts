@@ -11,13 +11,10 @@ import { physicalFiles } from "../base/physical-files.js"
 import { constants } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { verifyLocalCandidate } from "./local-updates.js"
+import { verifyLocalCandidate, unregisterBundle } from "./local-updates.js"
 import { resolveExecutable } from "../base/executable.js"
 import { runtimeLocation } from "../transport/index.js"
-import {
-  desktopLaunchEnvironment,
-  unregisterBundle,
-} from "./local-update-installer.js"
+import { desktopLaunchEnvironment } from "./local-update-installer.js"
 import { sendToChild } from "@mako/sessions/child-input"
 
 export async function prepareLocalInstall(

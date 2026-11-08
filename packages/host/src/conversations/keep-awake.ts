@@ -1,4 +1,5 @@
-import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { hostSpawn } from "../base/host-command.js"
+import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import type { EventEmitter } from "node:events"
@@ -300,7 +301,7 @@ export class KeepAwake {
 }
 
 function spawnHelper(path: string, args: readonly string[]): PowerHelper {
-  const child = spawnProcess(path, args, { stdio: ["pipe", "pipe", "pipe"] })
+  const child = hostSpawn(path, args, { stdio: ["pipe", "pipe", "pipe"] })
   trackProviderChild(child, { kind: "keep-awake", owner: "host" })
   return child
 }
