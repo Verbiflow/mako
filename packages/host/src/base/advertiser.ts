@@ -1,5 +1,5 @@
 import type { Advertisement } from "@mako/protocol"
-import type { Capability, Slots } from "@mako/protocol/borrow"
+import { satisfies, type Capability, type Grant, type Slots } from "@mako/protocol/borrow"
 
 /** This device's room as Fins and lent operations share it: its own Fins at work, out of what it runs at once. */
 export type AdvertisedRoom = { slots: Slots; load?: string }
@@ -9,19 +9,36 @@ export type AdvertisementSink = (advertisement: Advertisement) => boolean | Prom
 
 export interface AdvertiserDeps {
   probe(): Promise<Capability[]>
+  /** The grants that stand, wherever this device reads them (its own brokers, the account's): what the person lends. */
+  lending(): Promise<readonly Grant[]>
+  /** The names this device goes by in a grant's `source.devices`. */
+  devices(): Promise<readonly string[]>
   room(): AdvertisedRoom
   sinks: readonly AdvertisementSink[]
   now?(): number
   log?(message: string, fields: Record<string, string | number>): void
 }
 
+/**
+ * What of a device's capabilities the person lends: each one some standing grant over capable devices wants (one of its
+ * `requires` matches it), where the grant names no devices or names this one. Nothing lent, nothing advertised; what
+ * the broker issues is decided again at issuance.
+ */
+export function lentCapabilities(capabilities: readonly Capability[], grants: readonly Grant[], devices: readonly string[]): Capability[] {
+  const lending = grants.flatMap((grant) =>
+    grant.source.kind === "capable" && (!grant.source.devices || grant.source.devices.some((device) => devices.includes(device))) ? grant.source.requires : []
+  )
+  return capabilities.filter((capability) => lending.some((query) => satisfies([capability], [query])))
+}
+
 /** How often a device says what it can serve though nothing changed, so a broker never holds a stale picture of it. */
 export const ADVERTISE_EVERY_MS = 60 * 60_000
 
 /**
- * What this device advertises to borrowing's brokers (`borrow.ts`): its capabilities as last probed, and its room. It
- * says so when either changes (an install, a slot freed), when its runtime link enrols, and hourly; an unchanged room
- * between those says nothing. Each sink is told in turn, and one that fails never keeps another from hearing.
+ * What this device advertises to borrowing's brokers (`borrow.ts`): what of its capabilities the person lends, as last
+ * probed, and its room. It says so when either changes (an install, a grant given, a slot freed), when its runtime link
+ * enrols, and hourly; an unchanged room between those says nothing. Each sink is told in turn, and one that fails
+ * never keeps another from hearing.
  */
 export class Advertiser {
   readonly #deps: AdvertiserDeps
@@ -45,9 +62,11 @@ export class Advertiser {
 
   /** Probes again (something may have been installed), and says what changed. */
   async probe(): Promise<void> {
-    this.#probing ??= this.#deps.probe().finally(() => {
-      this.#probing = undefined
-    })
+    this.#probing ??= Promise.all([this.#deps.probe(), this.#deps.lending().catch((): Grant[] => []), this.#deps.devices().catch((): string[] => [])])
+      .then(([capabilities, grants, devices]) => lentCapabilities(capabilities, grants, devices))
+      .finally(() => {
+        this.#probing = undefined
+      })
     this.#capabilities = await this.#probing
     this.#probedAt = this.#now()
     this.#say(false)

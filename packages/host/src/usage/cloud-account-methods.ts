@@ -29,7 +29,7 @@ import { appPorts } from "./app-ports.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac } from "../base/platform.js"
 import { describeThisDevice } from "./device-description.js"
-import type { SourceAnswer } from "@mako/protocol/borrow"
+import type { Grant, SourceAnswer } from "@mako/protocol/borrow"
 import type { BorrowSnapshot } from "../contracts/setup.js"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
@@ -150,6 +150,8 @@ export interface CloudAccount {
   /** The account's broker, for Setup: what it holds for this person, this device's answer to an ask, a revoke. */
   borrow?: {
     snapshot(since: number): Promise<BorrowSnapshot | null>
+    /** The grants that stand there, as this device advertises by them; null from a cloud that has none. */
+    grants(): Promise<Grant[] | null>
     answer(ask: string, answer: SourceAnswer): Promise<void>
     revoke(grant: string): Promise<void>
   }
@@ -409,6 +411,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     borrow: {
       snapshot: (since) => cloud.borrowSnapshot(since),
+      grants: () => cloud.borrowGrants(),
       answer: (ask, answer) => cloud.answerBorrowAsk(ask, answer),
       revoke: (grant) => cloud.revokeBorrowGrant(grant),
     },
