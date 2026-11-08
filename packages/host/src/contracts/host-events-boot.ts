@@ -126,9 +126,10 @@ export type HostEventBody =
   /**
    * A conversation's batch, and as its host emits it, the same in the compact live form (`compact`), which a reader that
    * said it reads that form hears in its place: each is encoded apart (`encodeRuntimeEvent`), never together. A window
-   * that reads the compact form may hear `batch` itself so (`HeardLiveBatch`, read by `expandLiveBatch`).
+   * that reads the compact form may hear `batch` itself so (`HeardLiveBatch`, read by `expandLiveBatch`). `rostered`: the
+   * same again for a host's own windows, its roster as what changed, where it has one (`rosteredLiveBatch`).
    */
-  | { type: "live-batch"; batch: LiveBatch; compact?: CompactLiveBatch }
+  | { type: "live-batch"; batch: LiveBatch; compact?: CompactLiveBatch; rostered?: CompactLiveBatch }
   /**
    * Conversations the account lists that this host doesn't run (another device's in the cloud): each listed as one is
    * at boot, unopened, or listed again as it changed. Opening one reads it where it runs.

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { acquireHostLock, type HostLock } from "./host-lock.js"
+import { acquireHostLock, type HostLockOptions, type HostLock } from "./host-lock.js"
 import type { HostLogFields } from "./host-log.js"
 
 /**
@@ -136,6 +136,8 @@ export function takePredecessor(env: NodeJS.ProcessEnv = process.env): number | 
 export type SuccessorLock = HostLock | (Extract<HostLock, { kind: "taken" }> & { stuck: string })
 
 export interface SuccessorLockOptions {
+  /** A short-lived holder waited out before refusing, as `acquireHostLock`'s `brief`: a `mako-host` command, never a host that answers. */
+  brief?: HostLockOptions["brief"]
   log(message: string, fields: HostLogFields): void
   /** How long a predecessor gets to exit by itself. */
   waitMs?: number
@@ -157,7 +159,7 @@ export interface SuccessorLockOptions {
  * says it ended: the kernel frees it with the process, while a killed process can still be listed until it's reaped.
  */
 export async function acquireSuccessorLock(dataRoot: string, predecessor: number | undefined, options: SuccessorLockOptions): Promise<SuccessorLock> {
-  const lock = await acquireHostLock(dataRoot, { predecessor, waitMs: options.waitMs })
+  const lock = await acquireHostLock(dataRoot, { predecessor, waitMs: options.waitMs, brief: options.brief })
   if (lock.kind === "held" || predecessor === undefined) return lock
   const pid = predecessor
   const answerMs = options.answerMs ?? { SIGTERM: TERM_MS, SIGKILL: KILL_MS }
