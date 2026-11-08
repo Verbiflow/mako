@@ -26,7 +26,7 @@ import { appendFile } from "node:fs/promises"
 const SUITES = [
   "test:acp-background-work", "test:action-recovery", "test:approval-answer-ui", "test:appshot-shortcut",
   "test:attachment-sweep", "test:authoring-ui", "test:automations", "test:background-work", "test:background-work-ui",
-  "test:checkout-heads", "test:client", "test:cloud-account", "test:codex-archived-resume",
+  "test:checkout-heads", "test:child-input", "test:client", "test:cloud-account", "test:codex-archived-resume",
   "test:codex-background-work", "test:codex-protocol", "test:commit-generation", "test:control-cli",
   "test:control-driver-install", "test:control-media-sources", "test:control-packages", "test:control-preview",
   "test:control-recording-continuous", "test:cursor-child", "test:desktop-answers", "test:desktop-crashes",

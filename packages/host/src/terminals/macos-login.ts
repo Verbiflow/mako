@@ -2,6 +2,7 @@ import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
 import { userInfo } from "node:os"
 import { z } from "zod"
+import { endChildInput } from "@mako/sessions/child-input"
 
 const LOGIN_PATH = "/usr/bin/login"
 const BASH_PATH = "/bin/bash"
@@ -60,7 +61,7 @@ function preflight(username: string, home: string): Promise<boolean | null> {
           resolve(parsed.success && parsed.data.killed ? null : false)
         }
       )
-      child.stdin?.end()
+      endChildInput(child)
     } catch {
       resolve(null)
     }
