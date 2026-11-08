@@ -1,6 +1,7 @@
 import { hostCommand } from "@mako/host/base/host-command"
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
+import { z } from "zod"
 import { setImmediate as turn } from "node:timers/promises"
 import { createServer } from "node:http"
 import { HostStopping, HostStoppingError, hostFetch } from "@mako/host/base/host-stopping"
@@ -139,10 +140,12 @@ const server = createServer((request, response) => {
   response.writeHead(200).write("waiting")
   request.on("close", () => disconnected.resolve())
 })
-await new Promise<void>((resolve) => server.listen(Number(process.env.MAKO_THREAD_PORT) + 2, "127.0.0.1", resolve))
+// The installed updater and CI don't inherit the Thread's environment.
+const listenPort = process.env.MAKO_THREAD_PORT ? Number(process.env.MAKO_THREAD_PORT) + 2 : 0
+await new Promise<void>((resolve) => server.listen(listenPort, "127.0.0.1", resolve))
 try {
   const network = new HostStopping(), lifetime = new HostCallLifetime(network)
-  const port = Number(process.env.MAKO_THREAD_PORT) + 2
+  const { port } = z.object({ port: z.number().int().positive() }).parse(server.address())
   const body = lifetime.run(async () => { const response = await hostFetch(`http://127.0.0.1:${port}`); headers.resolve(); return response.text() })
   const interrupted = assert.rejects(body, HostStoppingError)
   await headers.promise
