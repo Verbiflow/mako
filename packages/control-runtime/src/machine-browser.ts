@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process"
+import { spawn } from "./processes.js"
+import type { ChildProcess } from "node:child_process"
 import { statfsSync } from "node:fs"
 import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"

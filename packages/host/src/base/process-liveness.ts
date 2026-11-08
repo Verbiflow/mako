@@ -1,10 +1,9 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "./host-command.js"
 import { readFile, readlink, realpath } from "node:fs/promises"
 import { basename, isAbsolute } from "node:path"
-import { promisify } from "node:util"
 import { onLinux, onMac, onWindows } from "./platform.js"
 
-const run = promisify(execFile)
+const run = hostCommand
 const START_TOLERANCE_MS = 30_000
 /** The kernel's clock ticks per second in /proc: USER_HZ, 100 on every architecture Node runs Linux on. */
 const USER_HZ = 100

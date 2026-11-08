@@ -42,11 +42,13 @@ try {
   parent.stdout.on("data", (chunk: Buffer) => { printed += chunk.toString() })
   const closed = new Promise((resolve) => parent.once("close", resolve))
   await new Promise((resolve) => parent.once("exit", resolve))
-  assert.deepEqual(JSON.parse(readFileSync(providers.path, "utf8")).children, [], "an exited process leaves the registry")
-  stopFollowing()
+  assert.deepEqual(JSON.parse(readFileSync(providers.path, "utf8")).children.map((entry: { pid: number }) => entry.pid), [parent.pid], "the parent's exit does not release its still-running descendant")
   const orphan = Number(printed.trim())
   assert.ok(orphan > 0)
   await closed
+  await closeProviderProcess(parent)
+  assert.deepEqual(JSON.parse(readFileSync(providers.path, "utf8")).children, [], "the reaped provider group leaves the registry")
+  stopFollowing()
   const deadline = Date.now() + 5_000
   for (;;) {
     try { process.kill(orphan, 0) } catch { break }

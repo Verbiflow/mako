@@ -1,7 +1,6 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { statfs } from "node:fs/promises"
 import { availableParallelism, homedir, totalmem } from "node:os"
-import { promisify } from "node:util"
 import { coresBusy, cpuTicks, type CpuTicks } from "../base/machine-load.js"
 import { onMac } from "../base/platform.js"
 
@@ -124,7 +123,7 @@ export function finSlots(): number | undefined {
   return Number.isInteger(set) && set >= 1 ? set : undefined
 }
 
-const run = promisify(execFile)
+const run = hostCommand
 
 /** macOS's free swap (`sysctl vm.swapusage`: "total = 5120.00M  used = 4208.94M  free = 911.06M"); undefined elsewhere. */
 async function swapFree(): Promise<number | undefined> {

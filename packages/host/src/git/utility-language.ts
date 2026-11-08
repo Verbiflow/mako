@@ -1,3 +1,4 @@
+import { hostFetch } from "../base/host-stopping.js"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createAnthropic } from "@ai-sdk/anthropic"
@@ -25,7 +26,7 @@ import { UtilityModelError } from "./utility-model-error.js"
  */
 
 const privateFetch: typeof fetch = (input, init) =>
-  fetch(input, { ...init, redirect: "error" })
+  hostFetch(input, { ...init, redirect: "error" })
 
 /** A provider model instance; gateway model-id strings are never used for utility calls. */
 export type UtilityLanguageModel = Exclude<LanguageModel, string>
