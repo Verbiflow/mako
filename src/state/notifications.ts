@@ -224,9 +224,14 @@ interface PendingBanner {
 let burst: PendingBanner[] = []
 let cancelBurst: (() => void) | null = null
 
+/** The id of the notice an outcome makes: by it an ask's notice is taken back (`retireNotice`). */
+export function noticeId(subject: Pick<NotificationSubject, "id">, kind: NotificationKind, marker: string): string {
+  return `${subject.id}:${kind}:${marker}`
+}
+
 export function noteOutcome(outcome: AttentionOutcome): NotificationItem | null {
   const env = environment
-  const id = `${outcome.subject.id}:${outcome.kind}:${outcome.marker}`
+  const id = noticeId(outcome.subject, outcome.kind, outcome.marker)
   const state = notificationsStore.get()
   if (state.items.some((item) => item.id === id)) return null
   const prefs = prefsStore.get()
@@ -250,10 +255,11 @@ export function noteOutcome(outcome: AttentionOutcome): NotificationItem | null 
   if (siblings) item.thread = siblings.thread
   if (siblings?.working.length) item.alongside = siblings.working
   // One item per thread and kind on the unseen list; an older unseen item of
-  // the same kind is superseded, not stacked.
+  // the same kind is superseded, not stacked. Not an ask: each one open is its
+  // own until it's answered (`retireNotice`), however many wait on one thread.
   const kept = state.items.filter(
     (existing) =>
-      existing.seen || existing.subject.id !== item.subject.id || existing.kind !== item.kind
+      existing.seen || existing.subject.id !== item.subject.id || existing.kind !== item.kind || asks(item.kind)
   )
   notificationsStore.set({ items: [item, ...kept].slice(0, NOTIFICATION_LIMIT) })
   if (!env) return item
@@ -320,22 +326,36 @@ export function flushNotificationBursts(): void {
 }
 
 /**
- * A thread started working again. Whatever it had waiting is stale: the user
- * (or another client) answered it. Announced banners go with it. `"asks"`
- * retires only what asked the person (an approval, a question, a "needs you"):
- * the ask was answered, wherever it was.
+ * A thread started working again, or closed: what it said that's past (a turn finished, a failure) is stale, and its
+ * banners go with it. An ask stays: it's taken back by its own id once it's answered (`retireNotice`), since a thread at
+ * work can still wait on the person, and several asks of one thread (its own, its Fins') each wait on their own answer.
  */
-export function retireSubject(id: string, only?: "asks"): void {
+export function retireSubject(id: string): void {
   const env = environment
   const state = notificationsStore.get()
-  const stale = (item: NotificationItem) =>
-    item.subject.id === id && !item.seen && (only === undefined || asks(item.kind))
+  const stale = (item: NotificationItem) => item.subject.id === id && !item.seen && !asks(item.kind)
   if (!state.items.some(stale)) return
   notificationsStore.set({ items: state.items.filter((item) => !stale(item)) })
   burst = burst.filter((pending) => !stale(pending.item))
   if (state.items.some((item) => item.subject.id === id && !item.seen && !stale(item))) return
   env?.dismissToast(id)
   env?.dismissDesktop(id)
+}
+
+/**
+ * One notification taken back by its own id (`noteOutcome` makes it from its subject, kind and marker), unseen only:
+ * what else waits on its subject stays. Its toast and desktop notice go when nothing unseen is left there.
+ */
+export function retireNotice(id: string): void {
+  const env = environment
+  const state = notificationsStore.get()
+  const retired = state.items.find((item) => item.id === id && !item.seen)
+  if (!retired) return
+  notificationsStore.set({ items: state.items.filter((item) => item !== retired) })
+  burst = burst.filter((pending) => pending.item.id !== id)
+  if (state.items.some((item) => item !== retired && item.subject.id === retired.subject.id && !item.seen)) return
+  env?.dismissToast(retired.subject.id)
+  env?.dismissDesktop(retired.subject.id)
 }
 
 /* ------------------------------------------------------------------ */

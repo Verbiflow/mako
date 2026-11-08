@@ -28,8 +28,6 @@ const reads = [
   "mako:launch-prewarm",
   /** The Threads at work here a handoff would take, and the person's choice for sleep, as they stand. */
   "mako:handoff-candidates",
-  /** Agents' asks to move their Thread, as they stand. */
-  "mako:thread-move-asks",
   "mako:handoff-settings",
   "mako:conversation-settings",
   /** Where keeping this Mac awake stands; reads what `KeepAwake` holds. */
@@ -173,6 +171,8 @@ const reads = [
   "mako:cloud-sign-ins",
   /** A project's carried files and where each stands in the cloud, read, never sent. */
   "mako:cloud-carried-files",
+  /** A project's Setup: what each place reads of itself and what the broker grants, read, never changed. */
+  "mako:setup",
   /** Who the account's own GitHub token belongs to, read from the cloud; never the token. */
   "mako:github-token",
   /** Who the account's cloud commits and pull requests are authored as, read from the cloud. */
@@ -294,7 +294,7 @@ const replays = [
   /** `ThreadMoveTool.move`: the move is named by the caller's key, so a repeat joins it or answers how it went. */
   "mako:threads-move",
   /** `ThreadMoveTool.answer`: the ask's id; an answered ask ignores a repeat. */
-  "mako:thread-move-ask-answer",
+  "mako:agent-ask-answer",
   /** Whether a machine has its folder for a move only reads. */
   "mako:move-ready",
   /** A move staged again stages the same, or what the device sent since: nothing of it is the machine's own yet. */

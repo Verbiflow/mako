@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 // The crew card (`crew-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
 // its own turn settles and its Fins still work, on the mock bridge's Apex scene (`?mock&app=apex`): every Fin
@@ -106,6 +107,7 @@ async function check() {
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const base = process.env.MAKO_CREW_UI_URL
   const preload = join(root, "commit-counter.cjs")
@@ -122,6 +124,7 @@ async function check() {
       sandbox: false,
     },
   })
+  atSize(window, 1440, 900)
   const page = window.webContents
   const errors = []
   page.on("console-message", (event) => {
@@ -528,14 +531,30 @@ async function check() {
   )
   assert.ok(forty.scrollable, "the card scrolls inside itself past twenty rows")
   assert.equal(forty.more, false, "no cutoff text, however many Fins there are")
-  const lastTitle = await evaluate("window.apexScene.children().at(-1).title")
+  // The roster's last inserted Fin is a needs-you row, sorted near the top. Check the last queued row in display
+  // order (oldest start first), before the folded settled group, after the virtualizer has painted the scroll.
+  const lastTitle = await evaluate(`(() => {
+    const queued = window.apexScene.children().filter(agent => agent.child.state.kind === 'queued')
+    queued.sort((left, right) => (left.startedAt ?? left.observedAt) - (right.startedAt ?? right.observedAt))
+    return queued.at(-1).title
+  })()`)
   await evaluate(
     "(() => { const scroller = document.querySelector('[data-crew-scroller]'); scroller.scrollTop = scroller.scrollHeight; return true })()"
   )
+  await evaluate("new Promise(done => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))")
   await until(
-    `document.querySelector('[data-crew-scroller]').innerText.includes(${JSON.stringify(lastTitle)})`,
+    `(() => {
+      const scroller = document.querySelector('[data-crew-scroller]')
+      const row = [...scroller.querySelectorAll('[data-crew-row]')].find(row => row.innerText.includes(${JSON.stringify(lastTitle)}))
+      const bounds = row?.getBoundingClientRect(), viewport = scroller.getBoundingClientRect()
+      if (bounds && bounds.top >= viewport.top && bounds.bottom <= viewport.bottom) return true
+      // Measuring newly mounted rows can extend the scroll range. Continue to the end of that measured range.
+      scroller.scrollTop = scroller.scrollHeight
+      return false
+    })()`,
     "the last Fin reachable by scrolling"
   )
+  console.log("SCROLLED LAST", lastTitle)
   await evaluate(
     "document.querySelector('[data-crew]')?.scrollIntoView({ block: 'start' }); true"
   )

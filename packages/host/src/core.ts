@@ -31,7 +31,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -40,8 +40,8 @@ import { makoViews, type ThreadRef } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { busySinceLastAsk } from "./base/machine-load.js"
-import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
+import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice } from "./usage/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, type CloudSignInPlace, type PrefetchOutcome, harnessLabel } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import type { GitHubPerson } from "./contracts/github-person.js"
@@ -64,6 +64,7 @@ import { declareApplicationMethods, Updates, type Application } from "./applicat
 import { devHostBuildDirectories } from "./base/dev-host-build.js"
 import type { HostOwner } from "./create-host.js"
 import { backgroundWork } from "./contracts/background-work.js"
+import { withChildren } from "./contracts/native-agents.js"
 import { personPromptedAt } from "./contracts/worked-at.js"
 import { projectFolder, worktreeAt } from "./contracts/worktree-paths.js"
 
@@ -503,6 +504,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }
     return undefined
   }
+  // What a conversation's turn left running: its provider's work as memory holds it, and its Thread's Fins as they stand
+  // now. Only its Thread's newest Session hears them move (`finReaders`), so an older one's roster keeps them as they were.
+  const heldWork = (id: string) => {
+    const held = late.conversations?.live.held(id)
+    if (!held) return undefined
+    const agents = late.conversations?.agents
+    return backgroundWork(held.session, agents ? withChildren(held.nativeAgents, agents.roster(id)) : held.nativeAgents)?.count
+  }
   const sessions = new SessionPublisher({
     rows: () => {
       const live = late.conversations?.live
@@ -532,11 +541,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         },
         head: listedHead,
         repository: (folder) => repositories.of(folder),
-        background: (id) => {
-          const held = live.held(id)
-          return held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined
-        },
+        background: heldWork,
         asking: (id) => finAsking(late.conversations?.agents?.personAsk(id)),
+        asked: (id) => live.askWaiting(id),
         fins: (id) => listedFins(late.conversations?.agents?.roster(id)),
         now: Date.now,
       }))
@@ -552,9 +559,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         session,
         working: live.workOf(id)?.status,
         waitingOn: (conversation) => live.waitingOn(conversation),
-        background: held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined,
+        background: heldWork(id),
         promptedAt: held ? personPromptedAt(held.requests, held.control?.actions) : undefined,
         asking: (conversation) => finAsking(late.conversations?.agents?.personAsk(conversation)),
+        asked: (conversation) => live.askWaiting(conversation),
         fins: (conversation) => listedFins(late.conversations?.agents?.roster(conversation)),
       })
     },
@@ -849,6 +857,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     notice: (message) => emit({ type: "notice", level: "error", message }),
   })
   const opened = await openConversations({
+    ...(owner.start && { start: owner.start }),
+    stopping: () => shell.closing(),
     streams,
     finDefaults,
     finCapacity,
@@ -1063,6 +1073,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     step: (conversationId, op, step) => emit({ type: "thread-continue-step", conversationId, op, step }),
   })
   // The same three moves for an agent's `thread_move` and `mako thread move`: its own Thread, or the person's named one.
+  // An agent's ask is answered on the path a harness's approval is, by whoever answers: one answer for each.
+  live.asks.answering = async (conversation, ask, allow) => late.threadMoves?.answer(conversation, ask, allow)
   late.threadMoves = new ThreadMoveTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
     place: (id) => {
@@ -1076,8 +1088,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       return Boolean(snapshot && (snapshot.session.status === "starting" || snapshot.session.status === "running" || snapshot.requests.some((request) => request.status === "queued" || request.status === "dispatching")))
     },
     ownWorktree: (id) => workspaces.worktrees?.threadCheckout(id) !== undefined,
-    harness: (id) => live.session(id)?.harness,
-    title: (id) => live.session(id)?.title || undefined,
     machine: config.machineAgentFd !== undefined,
     moves: () => cloudMoves && cloudReturns && cloudContinues ? {
       move: (id, move, handOff) => cloudMoves.move(id, move, handOff),
@@ -1085,7 +1095,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       bringBack: (id, move) => cloudReturns.bringBack(id, move),
       continue: (id, op) => cloudContinues.press(id, op),
     } : undefined,
-    announce: (asks) => emit({ type: "thread-move-asks", asks }),
+    asks: live.asks,
   })
   // And archives them, from here, whichever device they came from: the cloud ends them and keeps what they ran.
   const cloudArchives = cloudConversations && new CloudArchives({
@@ -1295,6 +1305,53 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const helperRuns = new HelperRuns(helperRunsRoot(environment.dataRoot))
   declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets, recordHelperRun: helperRuns.record, person: shell.machineGitHubPerson })
   declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
+  declareSetupMethods(
+    methods,
+    new SetupViews({
+      recipe: async (folder) => late.movers?.appTools?.desk.setup(folder),
+      ...(carriedFiles && {
+        carried: {
+          view: (folder) => carriedFiles.view(folder),
+          decide: (folder, allowed) => carriedFiles.decide(folder, allowed ? "allowed" : "declined"),
+          keep: (folder, path, keep) => carriedFiles.keep(folder, path, keep),
+        },
+      }),
+      cloudSignIns: {
+        state: async () => late.cloud?.signIns?.(),
+        share: async (sharing) => {
+          await methods.invoke("mako:cloud-sign-ins-share", [sharing])
+        },
+      },
+      accounts: () => harnesses.accounts.catalog(),
+      keys: () => providerHost.modelConnections.snapshot(),
+      device: async () => ({ id: await late.cloud?.deviceId().catch(() => undefined), name: (await describeThisDevice(environment.version)).name }),
+      label: (harness) => harnessLabel(providerHost, harness),
+      borrowing: {
+        local: async () => {
+          const checkouts = workspaces.worktrees?.borrowing.borrowing
+          const saved = fixtureDesk ? undefined : await secrets.borrowing()
+          return [checkouts, saved].filter((broker) => broker !== undefined)
+        },
+        account: {
+          snapshot: async (since) => (await late.cloud?.borrow?.snapshot(since)) ?? null,
+          answer: async (ask, answer) => {
+            if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
+            await late.cloud.borrow.answer(ask, answer)
+          },
+          revoke: async (grant) => {
+            if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
+            await late.cloud.borrow.revoke(grant)
+          },
+        },
+        secretVersion: (kind, name) => (fixtureDesk ? Promise.resolve(undefined) : secrets.secretVersion(kind, name)),
+        asker: (thread) => {
+          const parsed = ThreadIdSchema.safeParse(thread)
+          const title = parsed.success ? threads.store?.thread(parsed.data)?.title : undefined
+          return title ? { thread, title, fin: false } : undefined
+        },
+      },
+    })
+  )
   declareControlMethods(methods, control, environment.appRoot, config.executable)
   declareCloudControlPreviewMethods(methods, () => cloudConversations?.controlPreviews)
   declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine })
@@ -1529,6 +1586,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       if (channel === "mako:thread-move" && cloudMoves) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-move`'s schema before routing it.
         const [conversationId, move, handOff] = args as [string, string, ThreadHandOff | undefined]
+        late.threadMoves?.retire(conversationId)
         return { handled: true, value: encodeRuntimeValue(await cloudMoves.move(conversationId, move, handOff)) }
       }
       if (cloudHandOffs) {

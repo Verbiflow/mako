@@ -454,12 +454,12 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
 
 /**
  * Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves; `wakeAt` is
- * read from `requests`, and `promptedAt` from `prompted`, which each commit of the requests keeps. `elsewhere`,
+ * read from `requests`, and `promptedAt` from `prompted`, which each commit of the requests keeps. `elsewhere`, `elsewhereKind`,
  * `waitingOn`, `waitingFor`, `attention`, `threadTitle`, `quietSince`, `cloudContinue`, `movedAt`, `rail` and `copy` are a cloud
  * router's word on a conversation it relays or reads from the account's copy, never a journal's. `parent` is its
  * Thread's edge, read from the Thread store whenever it's listed, and `children` its children's count, read from them.
  */
-type UnstoredMetadata = "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt"
+type UnstoredMetadata = "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -753,8 +753,8 @@ export class LiveJournal {
    * the host goes on: a journal of 150MB read at once held the loop for a
    * third of a second. Nothing else may use this journal until it resolves.
    */
-  readSliced(): Promise<LiveSnapshot | null> {
-    return inSlices(this.reading())
+  readSliced(stopping?: () => boolean): Promise<LiveSnapshot | null> {
+    return inSlices(this.reading(), undefined, stopping)
   }
 
   /** `read` as `Steps`, its rows read and parsed `ROWS_PER_STEP` at a time, in one read transaction. */

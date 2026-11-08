@@ -14,19 +14,18 @@ import { appendFile } from "node:fs/promises"
  * `test:grok-modes-live` and `test:native-routing-live` skip theirs here, with no harness CLIs on this runner.
  * `test:control-api-e2e` and `test:cloud-archive-ui` each failed one run in four.
  *
- * These pass on a person's Mac and fail on this runner, in a window it draws more slowly or not as they expect,
- * and aren't here: `test:account-devices-ui`, `test:account-threads-ui`, `test:animations-ui`, `test:appshot-ui`,
- * `test:carried-files-ui`, `test:cloud-turn-on-ui`, `test:crew-card-ui`, `test:fin-counts-ui`,
- * `test:fin-view-keeps-ui`, `test:fins-fresh-on-return-ui`, `test:inbox-ui`, `test:live-refresh`, `test:moves-ui`,
- * `test:opening-send-ui`, `test:orch-ui`, `test:sync-status-ui`, `test:terminal-live-ui`, `test:thread-app`,
- * `test:tool-rows-ui`.
+ * This runner's screen is 1024×768 and it asks for reduced motion; a UI test sizes its window and turns motion on
+ * itself (`lib/test-window.mjs`), or its window is cut to the screen and its marks stand still. Not here yet, each
+ * for a reason of its own: `test:orch-ui` reads the Agents panel's groups from the rows drawn, and the runner's
+ * panel leaves its last group undrawn; `test:live-refresh`'s page fails as Vite bundles its dependencies again
+ * while it loads; `test:terminal-live-ui` timed out waiting for both terminals' output in one run of six.
  *
  *   node scripts/ci-suites.mjs <shard> <shards>     what CI runs, shards counted from 1
  */
 const SUITES = [
   "test:acp-background-work", "test:action-recovery", "test:approval-answer-ui", "test:appshot-shortcut",
   "test:attachment-sweep", "test:authoring-ui", "test:automations", "test:background-work", "test:background-work-ui",
-  "test:checkout-heads", "test:client", "test:cloud-account", "test:codex-archived-resume",
+  "test:checkout-heads", "test:child-input", "test:client", "test:cloud-account", "test:codex-archived-resume",
   "test:codex-background-work", "test:codex-protocol", "test:commit-generation", "test:control-cli",
   "test:control-driver-install", "test:control-media-sources", "test:control-packages", "test:control-preview",
   "test:control-recording-continuous", "test:cursor-child", "test:desktop-answers", "test:desktop-crashes",
@@ -41,7 +40,12 @@ const SUITES = [
   "test:run-suite", "test:test-scratch", "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees", "test:transfer-scheduling",
   "test:tree-watcher", "test:update-local", "test:usage-worker", "test:web-delivery", "test:window-boot",
   "test:follow-ui",
+  "test:account-devices-ui", "test:account-threads-ui", "test:animations-ui", "test:appshot-ui", "test:carried-files-ui",
+  "test:cloud-turn-on-ui", "test:crew-card-ui", "test:fin-counts-ui", "test:fin-decision-ui", "test:fin-view-keeps-ui",
+  "test:fins-fresh-on-return-ui", "test:inbox-ui", "test:moves-ui", "test:opening-send-ui", "test:sync-status-ui",
+  "test:thread-app", "test:tool-rows-ui",
   "test:composer-edges-ui",
+  "test:agent-ask-ui",
 ]
 /** Past this a suite has hung: the slowest here takes about 4 minutes on a Mac at load 15. */
 const SUITE_MS = 20 * 60_000

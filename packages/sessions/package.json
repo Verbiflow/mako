@@ -22,6 +22,7 @@
     "./record-streams": "./dist/record-streams.js",
     "./mako-root": "./dist/mako-root.js",
     "./process-log": "./dist/process-log.js",
+    "./child-input": "./dist/child-input.js",
     "./record-carried": "./dist/record-carried.js",
     "./record-backfill": "./dist/record-backfill.js",
     "./attachment-sweep": "./dist/attachment-sweep.js",

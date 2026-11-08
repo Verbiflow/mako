@@ -1,14 +1,15 @@
 import { attentionLine } from "@mako/host/contracts/notifications"
 import { formatRelative } from "@/lib/format"
+import type { RunPlace } from "@mako/host/contracts/account-devices"
 import type { MoveWay } from "./move-progress"
-import { CLOUD_WHERE, type WebThread } from "./threads"
+import { placeLine, type WebThread } from "./threads"
 
 /** What a row says under its title, and in which tone. */
 export interface RowDetail {
   text: string
   tone: "attention" | "negative" | "working" | "faint"
   /** Where it runs, as a glyph at the line's head: only on a row that says where. */
-  place?: "cloud" | "device"
+  place?: RunPlace
   /** How long its run has gone, after "Working", in figures that hold their width as they count. */
   elapsed?: string
   /** A word before the rest, in the row's own ink: "Done", for a run that finished since the Thread was last opened. */
@@ -39,7 +40,7 @@ export function workingFor(ms: number): string {
 
 /**
  * What a row says under its title, in as few words as say it: what it waits on, that it failed, that it works and for
- * how long, or its project (and its Mac's name, when the account has more than one Mac), led by "Done" when its run
+ * how long, or its project (and its computer's name, when the account has more than one), led by "Done" when its run
  * finished since it was last opened. A quiet Mac is said once, at the list's head.
  */
 export function rowDetail(thread: WebThread, named: boolean, context: RowContext = {}): RowDetail {
@@ -53,9 +54,8 @@ export function rowDetail(thread: WebThread, named: boolean, context: RowContext
   if (context.move) return { text: context.move === "cloud" ? "Moving to the cloud" : "Coming back from the cloud", tone: "working", move: context.move }
   if (thread.standing === "moving") return { text: "Moving", tone: "working" }
   if (thread.waitingMessages) return { text: thread.waitingMessages === 1 ? "1 message waiting" : `${thread.waitingMessages} messages waiting`, tone: "faint" }
-  const cloud = thread.where === CLOUD_WHERE
-  const words = [thread.project, !cloud && named ? thread.where : undefined].filter(Boolean).join(" · ")
-  const detail: RowDetail = { text: words || (cloud ? "Cloud" : thread.where), tone: "faint", place: cloud ? "cloud" : "device" }
+  const line = placeLine(thread.where, thread.project, { named, machine: thread.machine })
+  const detail: RowDetail = { text: line.text, tone: "faint", place: line.place }
   if (context.done && !thread.quietSince) detail.lead = "Done"
   return detail
 }

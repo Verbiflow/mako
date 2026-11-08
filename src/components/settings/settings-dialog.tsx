@@ -30,6 +30,7 @@ import { section as skills } from "@/components/settings/sections/skills"
 import { section as nativeAuthoring } from "@/components/settings/sections/native-authoring"
 import { section as plugins } from "@/components/settings/sections/plugins"
 import { section as account } from "@/components/settings/sections/account"
+import { section as devices } from "@/components/settings/sections/devices"
 import { section as updates } from "@/components/settings/sections/updates"
 import { section as storage } from "@/components/settings/sections/storage"
 import { section as privacy } from "@/components/settings/sections/privacy"
@@ -58,6 +59,7 @@ const SECTIONS: readonly SettingsSection[] = [
   plugins,
   simulators,
   account,
+  devices,
   updates,
   storage,
   privacy,

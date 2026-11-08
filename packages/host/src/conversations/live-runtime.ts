@@ -222,6 +222,8 @@ export interface ConversationChildren {
   edgeWritten?(op: string): void
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
+  /** Whether the conversation hears its Thread's Fins move: its Thread's newest Session's. Its Fins hold no other. */
+  showsFins?(conversation: string): boolean
   /** Stops one of them, by its Thread: false when it isn't the conversation's or has nothing running. */
   stopChild(conversation: string, child: string): Promise<boolean>
   /** One of the conversation's requests settled. */
@@ -251,6 +253,10 @@ export function launchAccount(resident: Resident, harness: string): () => string
   }
 }
 export interface Dependencies {
+  /** This host's start on its data root (`takeHostStart`), which its epoch carries; none, an epoch no window orders. */
+  start?: import("../base/host-start.js").HostStart
+  /** The host has begun to stop, though these conversations haven't yet (a stop while the host still starts): reads in slices end. */
+  stopping?(): boolean
   /** This machine's build slots now, for the note a heavy suite started while each is in use hears (`build-slots-full`). */
   builds?(): CallThread["builds"]
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */

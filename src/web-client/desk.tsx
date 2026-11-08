@@ -1,7 +1,8 @@
 import { useLimitContinueNotice } from "@/components/composer/account-notice"
+import { useAgentAskNotice } from "@/components/composer/agent-ask-card"
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { CloudIcon, LaptopIcon, LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
+import { LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
 import { toast } from "sonner"
 import { CommandPalette } from "@/components/palette/command-palette"
 import { InboxView } from "@/components/inbox/inbox-view"
@@ -10,6 +11,8 @@ import { inboxView } from "@/state/inbox"
 import { AgentThreads } from "@/components/rail/agent-threads"
 import { Divider } from "@/components/shell/divider"
 import { RailToggle, TitleStrip } from "@/components/shell/title-bar"
+import { PlaceMark } from "@/components/ui/place-mark"
+import { runPlace } from "@mako/host/contracts/account-devices"
 import { useStaleSendNotice } from "@/components/composer/stale-send-notice"
 import { FinTab } from "@/components/stage/child-tabs"
 import { SessionTabList } from "@/components/stage/session-tabs"
@@ -33,6 +36,8 @@ import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { AgentsLayer } from "./agents-layer"
+import { SetupLayer } from "./setup-layer"
+import { closeSetup, setupOpenStore } from "./setup-open"
 import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
@@ -45,7 +50,8 @@ import { routeHref } from "./route"
 import type { Started } from "./start"
 import { startingWhere } from "./started"
 import { archiveWithUndo } from "./archive-thread"
-import { ThreadActions, ThreadBody, TranscriptLoading } from "./thread"
+import { ThreadActions, ThreadBody } from "./thread"
+import { TranscriptLoading } from "./transcript-loading"
 import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, type WebThread } from "./threads"
 import { useThread } from "./use-thread"
 import { ConnectMac } from "./connect-mac"
@@ -56,7 +62,7 @@ import { FilesLayer } from "./files-layer"
 import { closeFiles, filesOpenStore, openFiles, useFilesOpen } from "./files-open"
 import { closeReview, deskReviewCode, openReview, reviewOpenStore, useReviewOpen } from "./review-open"
 
-const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
+const DeskSettings = lazy(() => import("./desk-settings"))
 
 /** The rail's narrowest and widest, as the desktop's. */
 const RAIL_MIN = 200
@@ -128,9 +134,11 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   // The Inbox lies over whatever the desk shows; its address opens it, and going anywhere else puts it away.
   useEffect(() => (under.kind === "inbox" ? inboxView.open() : inboxView.close()), [route, under.kind])
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
-  // Of the desk's notices above its composer, the one a laptop's browser needs: a send to an old Session asks first.
+  // Of the desk's notices above its composer, those a laptop's browser needs: a send to an old Session asks first, and
+  // what an agent asked is answered here as on the desk.
   useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
   useEffect(() => registerNotice("limit-continue", useLimitContinueNotice, -4), [])
+  useEffect(() => registerNotice("agent-ask", useAgentAskNotice), [])
 
   return (
     <TooltipProvider delayDuration={350}>
@@ -141,7 +149,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           <>
             <nav ref={rail} aria-label="Threads" style={{ width: prefsStore.get().railWidth }} className="flex min-h-0 shrink-0 flex-col overflow-hidden">
               <AgentThreads />
-              <DeskIdentity settings={!starting && under.kind === "settings"} onSettings={() => open({ kind: "settings" })} />
+              <DeskIdentity settings={!starting && (under.kind === "settings" || under.kind === "setup")} onSettings={() => open({ kind: "settings" })} />
             </nav>
             <Divider
               side="left"
@@ -160,9 +168,9 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
             <DeskStart key="new" startIn={startIn} onDismiss={back} onStarted={onStarted} />
           ) : under.kind === "thread" ? (
             <DeskThread key={under.thread} threadId={under.thread} sessionId={under.session} addSessionRef={addSession} onArchived={back} onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })} />
-          ) : under.kind === "settings" ? (
+          ) : under.kind === "settings" || under.kind === "setup" ? (
             <Suspense fallback={null}>
-              <Settings onBack={undefined} />
+              <DeskSettings route={under} open={open} />
             </Suspense>
           ) : (
             <DeskEmpty onNew={() => newThread()} />
@@ -172,6 +180,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
         <FilesLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
         <AgentsLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
+        <SetupLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} onAll={(project) => open({ kind: "setup", project })} />
       </div>
       <CommandPalette />
       <ConfirmHost />
@@ -228,6 +237,7 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
 function toggleSide(): void {
   if (filesOpenStore.get().open) return closeFiles()
   if (agentsOpenStore.get().open) return closeAgents()
+  if (setupOpenStore.get().open) return closeSetup()
   toggleChanges()
 }
 
@@ -495,7 +505,9 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
       </>
     )
   }
-  const Place = session.row.runsOn.kind === "cloud" ? CloudIcon : session.quietSince ? MoonIcon : LaptopIcon
+  // Where it runs, in the place's one glyph: a cloud, a server for a machine of the person's own, a laptop for a Mac;
+  // a device asleep or offline under the moon.
+  const place = runPlace(session.row.runsOn.kind === "cloud", session.machine ? "runtime" : undefined)
   const opened = child ? childSession(session, child) : undefined
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-thread-screen={thread.id} data-child-of={opened ? thread.id : undefined}>
@@ -503,7 +515,7 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
         end={
           <>
             <span className="flex min-w-0 shrink items-center gap-1.5 px-2 text-label text-faint">
-              <Place aria-hidden className="size-3 shrink-0" />
+              {session.quietSince && place !== "cloud" ? <MoonIcon aria-hidden data-place="quiet" className="size-3 shrink-0" /> : <PlaceMark place={place} />}
               <span className="truncate">{subtitle(thread, session)}</span>
             </span>
             {thread.archived ? null : <ThreadActions desk thread={thread} session={session} onArchived={onArchived} onAdd={undefined} />}

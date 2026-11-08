@@ -22,6 +22,7 @@ const inputs = {
   "mako:account-usage": () => z.tuple([z.string(), z.string()]),
   "mako:accounts": () => z.tuple([]),
   "mako:activate-tab": () => z.tuple([z.string()]),
+  "mako:agent-ask-answer": () => z.tuple([z.string(), z.string(), z.boolean()]),
   "mako:agents-answer": () =>
     z.tuple([
       z.union([
@@ -1978,6 +1979,36 @@ const inputs = {
         z.literal("max"),
       ]),
     ]),
+  "mako:setup": () => z.tuple([z.string()]),
+  "mako:setup-act": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.object({
+          act: z.literal("answer"),
+          ask: z.string(),
+          answer: z.union([
+            z.literal("allow-thread"),
+            z.literal("allow-project"),
+            z.literal("decline"),
+            z.literal("add-to-setup"),
+          ]),
+        }),
+        z.object({
+          act: z.literal("row"),
+          place: z.string(),
+          row: z.string(),
+          action: z.union([
+            z.literal("stop"),
+            z.literal("send"),
+            z.literal("add"),
+            z.literal("retry"),
+            z.literal("keep"),
+          ]),
+        }),
+        z.object({ act: z.literal("rebuild") }),
+      ]),
+    ]),
   "mako:shutdown-ack": () => z.tuple([z.string()]),
   "mako:simulator-setup": () => z.tuple([z.boolean().optional()]),
   "mako:simulator-setup-press": () =>
@@ -2454,8 +2485,6 @@ const inputs = {
         })
         .optional(),
     ]),
-  "mako:thread-move-ask-answer": () => z.tuple([z.string(), z.boolean()]),
-  "mako:thread-move-asks": () => z.tuple([]),
   "mako:thread-open": () => z.tuple([z.string()]),
   "mako:thread-original": () => z.tuple([z.string(), z.string()]),
   "mako:thread-owner-resolve": () => z.tuple([z.string()]),
@@ -2664,6 +2693,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:account-usage", "harnesses"],
   ["mako:accounts", "harnesses"],
   ["mako:activate-tab", "workspaces"],
+  ["mako:agent-ask-answer", "conversations"],
   ["mako:agents-answer", "conversations"],
   ["mako:agents-continue-next", "conversations"],
   ["mako:agents-diagnostics", "conversations"],
@@ -2940,6 +2970,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:set-model", "workspaces"],
   ["mako:set-name", "workspaces"],
   ["mako:set-thinking", "workspaces"],
+  ["mako:setup", "workspaces"],
+  ["mako:setup-act", "workspaces"],
   ["mako:shutdown-ack", "application"],
   ["mako:simulator-setup", "control"],
   ["mako:simulator-setup-press", "control"],
@@ -3006,8 +3038,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-groups", "threads"],
   ["mako:thread-harness-check", "conversations"],
   ["mako:thread-move", "conversations"],
-  ["mako:thread-move-ask-answer", "conversations"],
-  ["mako:thread-move-asks", "conversations"],
   ["mako:thread-open", "threads"],
   ["mako:thread-original", "threads"],
   ["mako:thread-owner-resolve", "conversations"],

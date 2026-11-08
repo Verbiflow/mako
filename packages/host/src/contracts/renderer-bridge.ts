@@ -11,6 +11,7 @@ import type {
   StopTarget,
 } from "./thread-lifecycle.js"
 import type { ThreadGroup } from "./thread-groups.js"
+import type { SetupAct, SetupActOutcome, SetupView } from "./setup.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { ProjectAppSetup } from "./project-app.js"
@@ -84,7 +85,6 @@ import type { CommitAuthor, GitHubAuthorship } from "./github-authorship.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadContinueOffer, ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { ContinueReading } from "./cloud-continues.js"
-import type { ThreadMoveAsk } from "./thread-tools.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
@@ -474,9 +474,8 @@ export function createMakoBridge(transport: BridgeTransport) {
      * answers how that move went. Its steps arrive as `thread-move-step` events.
      */
     threadMove: (conversationId: string, move: string, handOff?: ThreadHandOff) => invokeTrustedHost<ThreadMoveOutcome>("mako:thread-move", conversationId, move, handOff),
-    /** Agents' asks to move their Thread to the cloud (`thread_move` below full access); `thread-move-asks` events follow them. */
-    threadMoveAsks: () => invokeTrustedHost<ThreadMoveAsk[]>("mako:thread-move-asks"),
-    answerThreadMoveAsk: (id: string, allow: boolean) => invokeTrustedHost<void>("mako:thread-move-ask-answer", id, allow),
+    /** What the agent of a conversation asked the person (`AgentAsk`) is answered on the host running it. */
+    answerAgentAsk: (conversationId: string, id: string, allow: boolean) => invokeTrustedHost<void>("mako:agent-ask-answer", conversationId, id, allow),
     /** What the Thread of a conversation's harnesses here and in the cloud mean for moving it either way, before it moves. */
     threadHarnessCheck: (conversationId: string) => invokeTrustedHost<ThreadHarnessCheck>("mako:thread-harness-check", conversationId),
     /** This Mac's Threads whose agents are working, each with why it couldn't go to the cloud now, if it couldn't. */
@@ -561,6 +560,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     cloudCarriedFiles: (folder: string) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files", folder),
     cloudCarriedFilesDecide: (folder: string, allowed: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-decide", folder, allowed),
     cloudCarriedFilesKeep: (folder: string, path: string, keep: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-keep", folder, path, keep),
+    /* A project's Setup: what each place has for it and where each thing stands, and the person's taps on it. */
+    setup: (folder: string) => invokeTrustedHost<SetupView>("mako:setup", folder),
+    setupAct: (folder: string, act: SetupAct) => invokeTrustedHost<SetupActOutcome>("mako:setup-act", folder, act),
     /** Starts the harness's own sign-in for Mako Cloud to keep; wait, paste and cancel as an account sign-in. */
 
     /* What this install reports to Mako, and what the person allows. */
