@@ -163,7 +163,8 @@ async function forkPair(where: string, reader: string, harness: string, fixtureH
       }
       const arriving = drawing((await storeMessages(reader, harness, source, path)).messages)
       const drawn = drawing((await storeMessages(reader, harness, destination, forkPath)).messages)
-      if (!drawn.length || arriving.join("\n") !== drawn.join("\n")) found.push(`the fork draws ${drawn.length} lines unlike the arriving version's ${arriving.length}`)
+      // A session can keep no turn at all (Devin 3000.12.17 keeps none of a turn that failed before its model answered): its fork draws the same nothing.
+      if (arriving.join("\n") !== drawn.join("\n")) found.push(`the fork draws ${drawn.length} lines unlike the arriving version's ${arriving.length}`)
       // Rows numbered by the destination keep the session's order (Devin's message nodes by `row_id`).
       const ordered = ORDERED.get(reader)
       if (ordered) {

@@ -23,6 +23,8 @@ import { registryJson } from "./registry-fetch.js"
 import {
   npmUpdate,
   pinnedPolicy,
+  unpublishedBuild,
+  unpublishedWords,
   type ProviderUpdateSource,
   type RuntimeUpdateSource,
 } from "./update-source.js"
@@ -953,6 +955,11 @@ export class RuntimeUpdates {
         this.options.updateTimeoutMs
       )
       if (outcome.code !== 0) {
+        // A pinned build its vendor withdrew: say which, never the installer's bare HTTP error.
+        const versions = this.sources().find((entry) => entry.key === provider)?.versions
+        const pinned = versions && !versions.bundled ? versions.tested : undefined
+        if (pinned && [plan.command, ...plan.args].join(" ").includes(pinned) && unpublishedBuild(outcome.output))
+          throw new Error(unpublishedWords(current.label ?? provider, pinned))
         const tail = outcome.output
           .trim()
           .split("\n")
