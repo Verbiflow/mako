@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { NativeAgentSchema, type NativeAgent, type NativeAgentRoster } from "@mako/host/contracts/native-agents"
 import { applyRosterPatch, compactLiveBatch, rosteredLiveBatch, type CompactLiveBatch, type LiveSnapshot } from "@mako/host/contracts/live-conversations"
