@@ -58,7 +58,6 @@ const fixtureReads = [
   /** Answers from memory: agents' asks to move their Thread to the cloud. */
   "mako:plan-builds",
   "mako:live-snapshot",
-  "mako:live-roster",
   "mako:live-state",
   "mako:live-locate",
   "mako:automations",

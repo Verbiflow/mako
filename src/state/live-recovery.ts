@@ -585,7 +585,7 @@ function takeBatch(heard: HeardLiveBatch): void {
     for (const patch of read.unheld) settleMessage(patch.id, true)
     applyBatch(read.batch, heard, read.unread)
     // A listed Session can read the rest without its roster. If the seal failed, read it whole as a gap is.
-    if (read.unreadRoster && held && !held.hydrated) refreshListed(heard.id)
+    if (read.unreadRoster && held) refreshListed(heard.id)
   }
   noteTaken(heard.id)
 }

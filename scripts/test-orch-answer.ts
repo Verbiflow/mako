@@ -256,6 +256,35 @@ try {
   }
   console.log("ask: the Apex was told the approval was the person's, refused it, and the person's answer from its Thread let the Fin go on, once")
 
+  // A progress report before an approval suppresses the inferred end report. The stored notice that the Apex
+  // couldn't answer must still stop blocking the Fin once the person answers, even before it reports anything else.
+  {
+    const { world, apex, fin, thread, state, heard } = await fixture("answered-after-progress", {
+      access: "ask", finHarness: "codex",
+      asks: async (world, conversation, heard) => {
+        await world.agents.report(world.caller(conversation), { status: "progress", summary: "Checking the change.", clientKey: "checking" })
+        await approve(world, conversation, heard)
+      },
+    })
+    await until("the approval", () => state()?.kind === "blocked")
+    const blocked = state()
+    assert.ok(blocked?.kind === "blocked" && blocked.ask)
+    assert.equal(answered(await world.agents.respond(apex.conversation, { fin: thread(), ask: blocked.ask.id, allow: true, request: "r-progress-allow" })).answered, "approval")
+    await until("the answered turn to end", () => heard.length === 1 && world.live.session(fin)?.status === "ready")
+    assert.equal(state()?.kind, "idle", "the stored approval notice no longer blocks the Fin after the person's answer")
+    assert.equal(world.agents.personAsk(apex.conversation), undefined)
+    const read = await world.agents.read(apex.caller, { child: "tests" })
+    assert.ok("text" in read)
+    assert.doesNotMatch(read.text, /asked them in their Inbox|^blocked/, "agents_read cannot repeat the stale notice as its current report")
+    const listed = await world.agents.list(apex.caller, {})
+    assert.ok("children" in listed)
+    assert.equal(listed.children[0]?.report, undefined, "the strip cannot keep it as a blocked report either")
+    await world.restart()
+    assert.equal(state()?.kind, "idle", "a restart cannot revive that notice from the journal")
+    await world.close()
+  }
+  console.log("an answered approval's stored notice no longer blocks its idle Fin, including after restart")
+
   // What stalled two Fins for 45 minutes: an Apex on full access, mid-turn on a harness that hears a digest only at its
   // turn's end, leaves an approval it may answer. Past the window the person is asked; their answer lets the Fin go on,
   // and the Apex, its turn over, isn't woken for an ask already answered.

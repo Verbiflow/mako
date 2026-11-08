@@ -1,67 +1,17 @@
 import assert from "node:assert/strict"
-import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { request } from "node:http"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { COMPACT_LIVE_FORM, ROSTER_LIVE_FORM, WHOLE_LIVE_FORM, saidLiveForm, saidWindowForm } from "@mako/protocol/live-form"
-import { z } from "zod"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { applyRosterPatch, compactLiveBatch, expandLiveBatch, rosteredLiveBatch, type CompactLiveBatch, type LiveBatch } from "@mako/host/contracts/live-conversations"
-import { NativeAgentSchema, type NativeAgent, type NativeAgentRoster } from "@mako/host/contracts/native-agents"
-import { decodeRuntimeEvent, encodeRuntimeEvent, payloadFor } from "@mako/host/contracts/runtime-value"
+import { NativeAgentSchema, type NativeAgent, type NativeAgentRoster, type NativeAgentObservation } from "@mako/host/contracts/native-agents"
+import { decodeRuntimeEvent, encodeRuntimeEvent, payloadFor, readEventLine } from "@mako/host/contracts/runtime-value"
+import { LIVE_FORM_HEADER } from "@mako/host/contracts/runtime"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import { startWebHost } from "@mako/host/transport/server"
 import { AgentsWorld } from "./lib/agents-world.ts"
-import { ReplayOpenSchema, ReplayPacketSchema, type ReplayPlan } from "./lib/replay-plan.ts"
-
-/**
- * Whether a window hearing rosters as what changed draws what a window hearing them whole draws (`rosteredLiveBatch`).
- * The same stream goes through the real renderer twice, in a process each, as a window: whole, as every reader but a
- * host's own windows hears it, and rostered. Every store every surface draws from is compared, all along the stream,
- * in windows that open conversations and leave them, attach mid-stream, miss batches, and hold another roster than the
- * host wrote against. `npm run test:roster-delta` makes its stream from a real host with real Fins; `-- --capture
- * <folder>` replays one recorded from a real host, which stays private and isn't in this repository.
- */
-const run = promisify(execFile)
-const capture = process.argv.includes("--capture") ? process.argv[process.argv.indexOf("--capture") + 1] : undefined
-
-/** Every event for a stream short enough; a recording of thousands, often enough to catch a roster that mends itself. */
-const every = capture ? "20" : "1"
-
-const EndSchema = z.object({
-  end: z.literal(true),
-  asked: z.boolean(), rosterReads: z.number(), rostered: z.number(), whole: z.number(), fullRosters: z.number(), wholeBytes: z.number(), rosteredBytes: z.number(), conversations: z.number(), seq: z.number(),
-  full: z.object({ conversations: z.array(z.tuple([z.string(), z.any()])), notifications: z.array(z.any()), children: z.array(z.tuple([z.string(), z.array(z.any())])) }).catchall(z.any()),
-})
-type End = z.infer<typeof EndSchema>
-const DigestSchema = z.object({ at: z.number(), reading: z.boolean() }).catchall(z.string())
-
-async function windowOf(folder: string, mode: "whole" | "rostered", plan: string) {
-  const { stdout } = await run(process.execPath, ["--import", "tsx", join(import.meta.dirname, "lib/replay-window.ts"), folder, mode, plan, every], { maxBuffer: 2 ** 30, env: { ...process.env, TSX_TSCONFIG_PATH: join(import.meta.dirname, "../tsconfig.scripts.json") } })
-  const lines = stdout.trim().split("\n")
-  return { digests: lines.slice(0, -1).map((line) => DigestSchema.parse(JSON.parse(line))), end: EndSchema.parse(JSON.parse(lines.at(-1)!)) }
-}
-
-async function sameDrawn(folder: string, plan: ReplayPlan, label: string): Promise<End> {
-  const planned = JSON.stringify(plan)
-  const [whole, rostered] = await Promise.all([windowOf(folder, "whole", planned), windowOf(folder, "rostered", planned)])
-  assert.ok(rostered.end.rostered > 0, `${label}: some rosters went as what changed`)
-  assert.equal(rostered.digests.length, whole.digests.length, `${label}: both reached the same points`)
-  for (const [at, digest] of rostered.digests.entries()) {
-    // A roster being read is behind for as long as the read takes, and no longer.
-    if (digest.reading) continue
-    const other = whole.digests[at]!
-    const differs = Object.keys(digest).filter((surface) => surface !== "reading" && digest[surface] !== other[surface])
-    if (!differs.length) continue
-    const surface = differs[0]!
-    const a = JSON.stringify(whole.end.full[surface]) ?? "", b = JSON.stringify(rostered.end.full[surface]) ?? ""
-    let first = 0
-    while (first < a.length && a[first] === b[first]) first += 1
-    assert.fail(`${label}: at event ${String(digest.at)} ${differs.join(", ")} differ; at the end of the stream ${surface} ${a === b ? "came back the same" : `differs near: whole ${a.slice(Math.max(0, first - 40), first + 160)} rostered ${b.slice(Math.max(0, first - 40), first + 160)}`}`)
-  }
-  assert.deepEqual(rostered.end.full, whole.end.full, `${label}: every store ends the same`)
-  return rostered.end
-}
+import { rosterWindow } from "./lib/roster-window.ts"
 
 /** What a roster's change says, what form each reader hears it in, and what it won't risk. */
 function contract(): void {
@@ -113,164 +63,99 @@ function contract(): void {
   assert.equal(saidWindowForm(undefined), WHOLE_LIVE_FORM)
 }
 
-async function recorded(folder: string): Promise<void> {
-  const lines: string[] = []
-  let boot: unknown[] = []
-  const heard = (event: HostEvent) => {
-    const encoded = encodeRuntimeEvent(event)
-    lines.push(JSON.stringify({ channel: "event", type: encoded.type, conversation: encoded.conversation, payload: encoded.compact ?? encoded.payload, rostered: encoded.rostered }))
-    if (event.type === "live-batch" && !seen.has(event.batch.id)) {
-      seen.add(event.batch.id)
-      discover(event.batch.id, lines.length)
+/** Real conversations and socket transport in a scratch root; only scripted drivers, no native harness or live host. */
+async function traffic(): Promise<void> {
+  const root = mkdtempSync("/tmp/mako-roster-wire-")
+  const socket = join(root, "host.sock")
+  const server = await startWebHost(socket, async () => undefined, async () => new Response("fixture"))
+  const world = new AgentsWorld({ root: join(root, "world"), events: (event) => server.event(event), script: () => "ok" })
+  const windows = [rosterWindow(), rosterWindow()]
+  const wait = async (what: string, done: () => boolean) => {
+    const deadline = Date.now() + 10_000
+    while (!done()) {
+      assert.ok(Date.now() < deadline, what)
+      await new Promise((resolve) => setTimeout(resolve, 5))
     }
   }
-  const held: string[] = []
-  const seen = new Set<string>()
-  const found: { id: string; asked: number; answered: number; file: string; found: true }[] = []
-  // What a window reads on first hearing of a conversation: read here as the host would answer it.
-  const discover = (id: string, asked: number) => queueMicrotask(() => {
-    const file = `found-${found.length}.json`
-    writeFileSync(join(folder, file), JSON.stringify(w.live.snapshot(id)))
-    // Answered a little later, as a read is: what the stream says meanwhile is newer than it.
-    found.push({ id, asked, answered: asked + 3, file, found: true })
-  })
-  const w: AgentsWorld = new AgentsWorld({
-    root: join(folder, "world"),
-    events: heard,
-    script: (turn) => {
-      if (!turn.text.includes("You're fin:")) return "Started them."
-      held.push(turn.conversation)
-      return turn.world.hold(turn.conversation).then(() => "Done: it's finished.")
-    },
-  })
-  const opens: { id: string; asked: number; answered: number; file: string }[] = []
-  try {
-    const apex = await w.apex("codex")
-    boot = w.live.summaries()
-    for (const summary of w.live.listed()) seen.add(summary.session.id)
-    const until = async (check: () => boolean) => { while (!check()) await new Promise((resolve) => setTimeout(resolve, 10)) }
-    for (const name of ["one", "two", "three"]) {
-      const started = await w.agents.start(apex.caller, { brief: { objective: "Work on it." }, harness: "claude", name, clientKey: `k-${name}`, cwd: w.root })
-      assert.ok(!("refused" in started), JSON.stringify(started))
-    }
-    await until(() => held.length === 3)
-    const [one, two, three] = held
-    assert.ok(one && two && three, "three Fins are held")
-    const open = (id: string) => {
-      const file = `open-${opens.length}.json`
-      const asked = lines.length + 1
-      writeFileSync(join(folder, file), JSON.stringify(w.live.snapshot(id)))
-      opens.push({ id, asked, answered: lines.length + 3, file })
-    }
-    // One's window opens it while it works, leaves it for two, and comes back; two asks the person something; three
-    // finishes unseen; the Apex is told.
-    const stream = (conversation: string, text: string) => w.live.observe({ type: "live-update", id: conversation, update: { kind: "text", text } })
-    for (let at = 0; at < 30; at += 1) { stream(one, `one ${at} `); stream(two, `two ${at} `); await new Promise((resolve) => setTimeout(resolve, 5)) }
-    open(one)
-    for (let at = 30; at < 60; at += 1) { stream(one, `one ${at} `); stream(three, `three ${at} `); await new Promise((resolve) => setTimeout(resolve, 5)) }
-    void w.ask(two, "Run the migration?")
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    open(two)
-    for (let at = 60; at < 80; at += 1) { stream(one, `one ${at} `); await new Promise((resolve) => setTimeout(resolve, 5)) }
-    open(one)
-    for (let at = 80; at < 100; at += 1) { stream(one, `one ${at} `); await new Promise((resolve) => setTimeout(resolve, 5)) }
-    w.release(three)
-    w.release(one)
-    // Two still asks: a stream ends with something waiting, as a real one does.
-    await until(() => w.live.held(three)?.session.status === "ready" && w.live.held(one)?.session.status === "ready")
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    // A window that can't read a change asks: the roster goes whole in a batch of its own, in its place in the stream,
-    // to every window; several asking before it goes share it.
-    const batchesOf = (id: string, from: number) => lines.slice(from).flatMap((line) => {
-      const packet = ReplayPacketSchema.parse(JSON.parse(line))
-      const event = packet.conversation === id && packet.payload ? decodeRuntimeEvent<HostEvent>(packet.payload) : undefined
-      return event?.type === "live-batch" ? [{ batch: event.batch, rostered: packet.rostered }] : []
+  const stream = (form: number) => {
+    const events: HostEvent[] = []
+    let bytes = 0, ready = false, rest = ""
+    const errors: string[] = []
+    const call = request({ socketPath: socket, path: "/events", method: "POST", headers: { "x-mako-window": randomUUID(), [LIVE_FORM_HEADER]: String(form) } }, (response) => {
+      response.on("data", (chunk: Buffer) => {
+        bytes += chunk.length
+        rest += chunk.toString("utf8")
+        for (let at = rest.indexOf("\n"); at >= 0; at = rest.indexOf("\n")) {
+          const line = rest.slice(0, at)
+          rest = rest.slice(at + 1)
+          const packet = readEventLine(line)
+          if (packet) events.push(decodeRuntimeEvent<HostEvent>(packet.payload))
+          else if (line.includes('"ready"')) ready = true
+        }
+      })
+      response.on("error", (error) => errors.push(error.message))
     })
-    const roster = w.live.held(apex.conversation)?.nativeAgents
-    assert.ok(roster?.agents.length, "the Apex has its Fins")
-    let from = lines.length
-    assert.equal(w.live.sendRosterWhole(apex.conversation), true)
-    assert.equal(w.live.sendRosterWhole(apex.conversation), true)
-    await until(() => batchesOf(apex.conversation, from).length > 0)
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    const sent = batchesOf(apex.conversation, from)
-    assert.equal(sent.length, 1, "two asks, one batch")
-    assert.deepEqual(sent[0]!.batch.nativeAgents, roster, "with the roster whole")
-    assert.equal(sent[0]!.rostered, undefined, "to every window alike, a host's own included")
-    assert.equal(w.live.sendRosterWhole("no-such-conversation"), false, "there's none of a conversation that isn't one")
-    // One let go of since its last change is read back in to say it: its windows may yet need that change.
-    await w.live.close(three)
-    from = lines.length
-    assert.ok(w.live["records"].release(three), "the finished Fin, closed, goes from memory")
-    assert.equal(w.live.held(three), undefined)
-    assert.equal(w.live.sendRosterWhole(three), true, "and is read back")
-    await until(() => batchesOf(three, from).length > 0)
-    assert.ok(batchesOf(three, from)[0]!.batch.nativeAgents, "its roster goes whole, an empty one where it has none")
-  } finally {
-    await w.close()
+    call.on("error", (error) => errors.push(error.message))
+    call.end()
+    return { events, errors, ready: () => ready, bytes: () => bytes, reset: () => { bytes = 0 }, close: () => call.destroy() }
   }
-  writeFileSync(join(folder, "stream.jsonl"), `${lines.join("\n")}\n`)
-  writeFileSync(join(folder, "boot.json"), JSON.stringify({ at: 0, live: boot }))
-  writeFileSync(join(folder, "opens.json"), JSON.stringify([...opens, ...found]))
+  const streams = [stream(COMPACT_LIVE_FORM), stream(ROSTER_LIVE_FORM)]
+  try {
+    await wait("both window streams opened", () => streams.every((stream) => stream.ready()))
+    for (const window of windows) await window.ask({ kind: "inspect" })
+    const apex = await world.apex("codex")
+    const entries: NativeAgentObservation[] = Array.from({ length: 81 }, (_, at) => ({ nativeId: `worker-${at}`, title: `Worker ${at}`, work: "agent", background: true, detail: "The worker's scoped instructions and context. ".repeat(50), state: { kind: "working", activity: "Starting work" } }))
+    for (const agent of entries) world.live.observe({ type: "live-agent", id: apex.conversation, agent })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const snapshot = world.live.snapshot(apex.conversation)
+    assert.equal(snapshot?.nativeAgents?.agents.length, 81)
+    assert.ok(snapshot)
+    await wait("seed roster reached both streams", () => streams.every((stream) => stream.events.some((event) => event.type === "live-batch" && event.batch.revision === snapshot.revision)))
+    for (const window of windows) await window.ask({ kind: "init", snapshot, listed: true })
+    for (const stream of streams) stream.reset()
+    let batches = 0
+    const consumed = [0, 0]
+    const started = performance.now()
+    for (let at = 0; at < 40; at += 1) {
+      const index = at % entries.length
+      entries[index] = { ...entries[index]!, state: { kind: "working", activity: `Step ${at}: checking the next file` } }
+      world.live.observe({ type: "live-agent", id: apex.conversation, agent: entries[index]! })
+      const current = world.live.snapshot(apex.conversation)
+      assert.ok(current)
+      await wait("the changed roster reached both windows", () => streams.every((stream) => stream.events.some((event) => event.type === "live-batch" && event.batch.revision === current.revision)))
+      const states = []
+      for (const [index, window] of windows.entries()) {
+        let state = await window.ask({ kind: "inspect" })
+        const events = streams[index]!.events
+        for (; consumed[index]! < events.length; consumed[index]! += 1) {
+          const event = events[consumed[index]!]!
+          if (event.type === "live-batch" && event.batch.id === apex.conversation && event.batch.revision > snapshot.revision) {
+            state = await window.ask({ kind: "batch", batch: event.batch })
+          }
+        }
+        assert.equal(state.reads.length, 0, `an intact stream needs no recovery: window ${index}, step ${at}, held ${state.held?.revision}, host ${current.revision}, events ${streams[index]!.events.filter((event) => event.type === "live-batch").map((event) => event.batch.revision).join(",")}`)
+        assert.deepEqual(state.held?.roster, JSON.parse(JSON.stringify(current.nativeAgents)), "both actual renderer processes hold exactly what the host holds")
+        states.push(state)
+      }
+      assert.equal(states[0]!.drawn, states[1]!.drawn, "presence, children, Inbox and notifications agree at every batch")
+      batches += 1
+    }
+    assert.deepEqual(streams.flatMap((stream) => stream.errors), [])
+    const before = streams[0]!.bytes(), after = streams[1]!.bytes()
+    assert.ok(after < before / 10, "a one-entry change must not send 81 entries")
+    const result = { source: "scratch conversations and actual window socket streams", entries: entries.length, batches, beforeBytes: before, afterBytes: after, reductionPercent: Number((100 * (1 - after / before)).toFixed(2)), elapsedMs: Math.round(performance.now() - started) }
+    console.log(`Roster window traffic: ${JSON.stringify(result)}`)
+    const out = process.argv.indexOf("--out")
+    if (out >= 0) writeFileSync(process.argv[out + 1]!, JSON.stringify(result, null, 2) + "\n")
+  } finally {
+    for (const stream of streams) stream.close()
+    for (const window of windows) window.close()
+    await world.close()
+    server.close()
+    rmSync(root, { recursive: true, force: true })
+  }
 }
 
-// A capture proves the windows alone: what's caught there, the replay caught.
-if (!capture) contract()
-const folder = capture ?? mkdtempSync(join(tmpdir(), `mako-roster-${randomUUID().slice(0, 8)}-`))
-try {
-  if (!capture) await recorded(folder)
-  const opens = z.array(ReplayOpenSchema).parse(JSON.parse(readFileSync(join(folder, "opens.json"), "utf8"))).filter((open) => !open.found)
-  const places = opens.map((_, at) => at)
-  const first = opens[0]!.id
-  // Where the rosters are, for what to do to a window: the conversation that changes its roster most, and when.
-  const moves = readFileSync(join(folder, "stream.jsonl"), "utf8").trim().split("\n").flatMap((text, at) => {
-    const packet = ReplayPacketSchema.parse(JSON.parse(text))
-    return packet.conversation && packet.payload?.includes('"nativeAgents":{') ? [{ conversation: packet.conversation, seq: at + 1, patch: Boolean(capture || packet.rostered) }] : []
-  })
-  const counts = new Map<string, number>()
-  for (const move of moves) counts.set(move.conversation, (counts.get(move.conversation) ?? 0) + 1)
-  const busiest = [...counts].sort((a, b) => b[1] - a[1])[0]![0]
-  // What happens to a window happens just before a change it could read: one that goes whole would mend it unasked.
-  const own = moves.filter((move) => move.conversation === busiest && move.patch)
-  assert.ok(own.length > 1, "rosters go as what changed")
-  const halfway = Math.floor(own.length / 2)
-  const middle = own[halfway]!.seq, later = own[Math.floor((own.length * 3) / 4)]!.seq
-  // A read long enough that of the two changes after the one that asks, its answer says the first and not the second.
-  const slow = 2 * (own[Math.min(halfway + 2, own.length - 1)]!.seq - middle) - 1
-  // A batch that said nothing of its roster, then changes close behind it: the roster it holds is right, and it can't know.
-  const batches = readFileSync(join(folder, "stream.jsonl"), "utf8").trim().split("\n").flatMap((text, at) => {
-    const packet = ReplayPacketSchema.parse(JSON.parse(text))
-    return packet.conversation === busiest ? [{ seq: at + 1, roster: Boolean(packet.payload?.includes('"nativeAgents":{')) }] : []
-  })
-  const silent = batches.find((batch, at) => !batch.roster && own.filter((move) => move.seq > batch.seq).length > 1 && own.some((move) => move.seq === batches[at + 1]?.seq))
-  // Its read goes out with the first change after it and answers as of before the next, which lands while it's on its way.
-  const [firstAfter, nextAfter] = own.filter((move) => move.seq > (silent?.seq ?? 0))
-  const windows: [string, ReplayPlan, (end: End) => void][] = [
-    ["a window with nothing open", {}, (end) => assert.equal(end.rosterReads, 0, "with every change heard, it asks for none whole")],
-    ["a window going from conversation to conversation", { opens: places }, () => {}],
-    ["a window attaching mid-stream", { attach: middle }, (end) => assert.ok(end.rosterReads > 0, "attaching asks for the roster whole")],
-    ["a window that misses batches", { gap: { conversation: busiest, from: middle, to: later } }, (end) => assert.ok(end.rosterReads > 0, "a gap asks for the roster whole")],
-    ["a window holding another roster", { drift: { conversation: busiest, at: middle } }, (end) => assert.ok(end.rosterReads > 0, "the seal asks for the roster whole")],
-    ["a window holding one from before a restart", { restart: { conversation: busiest, at: middle } }, (end) => assert.ok(end.rosterReads > 0, "another start's asks for it whole")],
-    // Changes that land while the ask is on its way can't be read either, and the roster that goes whole mends them all.
-    ["a window whose ask for a roster is slow", { attach: middle, lag: slow }, () => {}],
-    ["one of two windows", { opens: places.filter((at) => opens[at]!.id === first) }, () => {}],
-    ["the other of two windows", { opens: places.filter((at) => opens[at]!.id !== first) }, () => {}],
-  ]
-  if (silent) windows.push(["a window that misses a batch saying nothing of its roster", { gap: { conversation: busiest, from: silent.seq, to: silent.seq + 1 }, lag: Math.max(1, nextAfter!.seq - firstAfter!.seq) }, (end) => assert.ok(end.rosterReads > 0, "it can't know that, so it asks")])
-  for (const [label, plan, check] of windows) {
-    const end = await sameDrawn(folder, plan, label)
-    check(end)
-    // Two empty windows match too: this has to have drawn what it's meant to prove.
-    if (!capture && !("attach" in plan)) {
-      assert.ok(end.full.conversations.length >= 4, `${label}: the Fins were found (${end.full.conversations.length})`)
-      assert.ok(end.full.notifications.length > 0, `${label}: a notification was raised`)
-      assert.ok(end.full.children.some(([, children]) => children.length), `${label}: a Thread's Fins are drawn`)
-    }
-    console.log(`${label}: every store the same; ${end.rostered} of ${end.fullRosters} rosters as what changed, ${end.rosterReads} asked for whole, ${(end.wholeBytes / 1048576).toFixed(1)} MB to ${(end.rosteredBytes / 1048576).toFixed(1)} MB`)
-  }
-  console.log("Roster delta: a window draws the same from what changed as from whole rosters, opening conversations, attaching mid-stream, missing batches and holding another roster")
-} finally {
-  if (!capture) rmSync(folder, { recursive: true, force: true })
-}
-process.exit(0)
+contract()
+await traffic()
+console.log("Roster delta: contract, real host writer, socket negotiation and both renderer forms agree")

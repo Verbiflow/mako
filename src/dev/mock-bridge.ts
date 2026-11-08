@@ -2717,7 +2717,6 @@ export function installMockBridge() {
       truncated: false,
     }),
     liveAttach: async () => null,
-    liveRoster: async () => false,
     liveSnapshot: async (id: string) => liveSnapshots.get(id) ?? null,
     liveContextBreakdown: async (id: string) => {
       const session = liveSnapshots.get(id)?.session

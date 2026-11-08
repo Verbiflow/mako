@@ -1014,7 +1014,7 @@ function rosterPatch(held: NativeAgentRoster, next: NativeAgentRoster): RosterPa
 /**
  * `batch` as a host's own windows hear it, where its roster goes as what changed of `held`, the one they hold at the
  * revision before; undefined where it has no roster to say so or a whole one says it better. A window that can't read it
- * asks for the roster whole (`mako:live-roster`), which its next batch carries, in its place in the stream.
+ * reads the conversation again through its guarded snapshot path.
  */
 export function rosteredLiveBatch(batch: CompactLiveBatch, held: NativeAgentRoster | undefined): CompactLiveBatch | undefined {
   const { nativeAgents, ...rest } = batch

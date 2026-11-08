@@ -121,8 +121,6 @@ export interface Resident {
   exited?: Map<string, Promise<void>>
   pendingCharacters: number
   updates: LiveBatch["updates"]
-  /** A window couldn't read a change to its roster: the next batch carries the roster whole (`sendRosterWhole`). */
-  rosterWhole?: boolean
   /** See `LiveSnapshot.activityAt`; the next flush publishes it. */
   activityAt?: number
   timer: ReturnType<typeof setTimeout> | null

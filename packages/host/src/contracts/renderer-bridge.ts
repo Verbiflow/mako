@@ -416,8 +416,6 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot | null>("mako:live-attach", path),
     liveSnapshot: (id: string) =>
       invokeTrustedHost<LiveSnapshot | null>("mako:live-snapshot", id),
-    liveRoster: (id: string) =>
-      invokeTrustedHost<boolean>("mako:live-roster", id),
     liveContextBreakdown: (id: string) =>
       invokeTrustedHost<ContextBreakdown | null>("mako:live-context-breakdown", id),
     liveRead: (id: string, input: LiveHistoryRead) =>

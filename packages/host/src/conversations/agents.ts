@@ -684,7 +684,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** A digest never says a Fin ended, or was cut short, while its Session shows it at work: the end the host inferred for its run is past. */
-  private current(notice: Notice): boolean {
+  private current(notice: Pick<Notice, "report">): boolean {
     const { report } = notice
     // Nor a question a message answered before this digest went.
     if (this.answersHeld.get(report.child)?.ask === reportAsk(report).id) return false
@@ -3381,8 +3381,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     return childState(edge, this.childReading(edge), this.journalOf(edge.child))
   }
 
+  /** A notice of a harness ask speaks only while the ask does: the digest, state and current report share that rule. */
+  private latestOf(child: string): Report | undefined {
+    const report = this.latest.get(child)
+    return report?.implicit && report.status === "blocked" && !this.current({ report }) ? undefined : report
+  }
+
   private journalOf(child: string): ChildJournal {
-    const latest = this.latest.get(child)
+    const latest = this.latestOf(child)
     const kept = this.answersHeld.get(child)
     return { ...(latest && { latest }), ...(kept && { answered: { by: kept.by, answer: kept.answer, ask: kept.ask, request: kept.request, at: kept.at, ...(kept.op === kept.request && { routine: true as const }), ...(kept.delivered && { delivered: true as const }) } }) }
   }
@@ -3580,7 +3586,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   private strip(edge: ThreadParent, under?: string): AgentStrip {
     const reading = this.childReading(edge)
-    const latest = this.latest.get(edge.child)
+    const latest = this.latestOf(edge.child)
     const state = this.stateOf(edge)
     const waiting = state.kind === "idle" && state.waitingOn?.length
       ? waitingStateWords(state.waitingOn, state.since, this.now())
@@ -3609,8 +3615,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   private reportText(edge: ThreadParent, state: ChildState): string {
-    const latest = this.latest.get(edge.child)
-    if (!latest) return `No report yet. It is ${state.kind}${state.kind === "working" && state.step ? `: ${state.step}` : ""}.`
+    const latest = this.latestOf(edge.child)
+    if (!latest) return `${this.latest.has(edge.child) ? "No current report" : "No report yet"}. It is ${state.kind}${state.kind === "working" && state.step ? `: ${state.step}` : ""}.`
     const lines = [`${latest.status}${latest.implicit ? " (its turn ended without a report; this is its last reply)" : ""}:`, latest.summary]
     if (latest.question) lines.push(`Question: ${latest.question}`)
     for (const artifact of latest.artifacts ?? []) lines.push(`${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
@@ -4548,7 +4554,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       const words = decisionWords(state.decision).replace(/\s+/g, " ")
       return words.length > 240 ? `${words.slice(0, 239).trimEnd()}…` : words
     }
-    const latest = this.latest.get(edge.child)
+    const latest = this.latestOf(edge.child)
     if (latest) return `${latest.status}: ${noteLine(reportPhase(latest) ?? latest.status, 160)}`
     const line = childLine(state)
     return line ? `${state.kind}: ${noteLine(line, 160)}` : state.kind
@@ -4588,7 +4594,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * `facts`, as the crew view reads it, how long it has been idle and its open pull requests too.
    */
   private frontDoorChild(edge: ThreadParent, facts = false): FrontDoorChild {
-    const latest = this.latest.get(edge.child)
+    const latest = this.latestOf(edge.child)
     const conversation = this.conversationOf(edge.child)
     const direct = conversation
       ? this.deps.live.held(conversation)?.requests.filter((request) => request.actor?.kind === "person" && request.createdAt !== undefined).at(-1)

@@ -10,7 +10,7 @@ const moveHoldTarget = z.object({ conversation: z.string().optional() })
 
 export const conversationCalls: ReadonlySet<string> = new Set([
   "mako:live-read",
-  "mako:live-continue", "mako:live-snapshot", "mako:live-roster", "mako:live-state", "mako:live-prompt", "mako:live-permission",
+  "mako:live-continue", "mako:live-snapshot", "mako:live-state", "mako:live-prompt", "mako:live-permission",
   "mako:live-mode", "mako:live-cancel", "mako:live-stop-agent", "mako:live-goal", "mako:live-side-question", "mako:live-review", "mako:live-close", "mako:live-prewarm", "mako:live-edit-queued",
   "mako:live-clear-queue", "mako:live-hold-until", "mako:live-sign-in-readiness", "mako:live-sign-in-resume", "mako:live-earlier", "mako:live-bind", "mako:read-live-file",
   "mako:live-files-folders", "mako:live-files-find", "mako:live-files-grep",
