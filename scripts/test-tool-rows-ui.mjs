@@ -30,7 +30,7 @@ if (process.versions.electron) {
   const portAt = args.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(args.splice(portAt, 2)[1])
   const root = testScratch("mako-tool-rows-ui-")
-  const evidence = args[0] ? resolve(args[0]) : root
+  const evidence = args[0] ? resolve(args[0]) : process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "tool-rows") : root
   await mkdir(evidence, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: port !== 0, hmr: false } })
   await server.listen()
@@ -55,7 +55,7 @@ if (process.versions.electron) {
  */
 const WATCH = `(() => {
   const faults = []
-  let frames = 0, most = 0, running = true
+  let frames = 0, most = 0, running = true, largest = []
   const clip = (row) => {
     let top = -Infinity, bottom = Infinity
     for (let node = row.parentElement; node && node !== document.body; node = node.parentElement) {
@@ -80,11 +80,14 @@ const WATCH = `(() => {
         bottom = Math.max(bottom, line.bottom)
       }
     }
-    return { words: row.querySelector('button')?.innerText.replace(/\\s+/g, ' ').trim(), box, top: Math.max(top, shown.top), bottom: Math.min(bottom, shown.bottom) }
+    return { id: row.dataset.transcriptTool, words: row.querySelector('button')?.innerText.replace(/\\s+/g, ' ').trim(), box, top: Math.max(top, shown.top), bottom: Math.min(bottom, shown.bottom) }
   }
   const frame = () => {
     const rows = [...document.querySelectorAll('[data-transcript-tool]')].filter(row => row.getClientRects().length).map(drawn).filter(row => row.bottom > row.top).sort((a, b) => a.top - b.top)
-    most = Math.max(most, rows.length)
+    if (rows.length > most) {
+      most = rows.length
+      largest = rows.map(({ id, words, top, bottom }) => ({ id, words, top, bottom }))
+    }
     rows.forEach((row, index) => {
       if (row.top < row.box.top - 0.5 || row.bottom > row.box.bottom + 0.5)
         faults.push(row.words + ': its words span ' + row.top.toFixed(1) + '–' + row.bottom.toFixed(1) + ' px, its row ' + row.box.top.toFixed(1) + '–' + row.box.bottom.toFixed(1))
@@ -96,7 +99,7 @@ const WATCH = `(() => {
     if (running) requestAnimationFrame(frame)
   }
   requestAnimationFrame(frame)
-  window.__rows = { stop: () => { running = false; return { frames, most, faults: [...new Set(faults)] } } }
+  window.__rows = { stop: () => { running = false; return { frames, most, largest, faults: [...new Set(faults)] } } }
   return true
 })()`
 
@@ -118,12 +121,20 @@ async function checkRows() {
   const evaluate = (code) => page.executeJavaScript(code)
   const send = (method, params) => page.debugger.sendCommand(method, params)
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-  const capture = async (name) => writeFile(join(evidence, name), (await page.capturePage()).toPNG())
+  const capture = async (name, measured) => {
+    await writeFile(join(evidence, `${name}.png`), (await page.capturePage()).toPNG())
+    const state = await evaluate(`({
+      viewport: { width: innerWidth, height: innerHeight, scale: devicePixelRatio },
+      streaming: window.toolRows?.streaming,
+      steps: [...document.querySelectorAll('[data-work-summary],[data-steps-line]')].map(control => ({ words: control.innerText, open: control.getAttribute('aria-expanded') })),
+      rows: [...document.querySelectorAll('[data-transcript-tool]')].map(row => ({ id: row.dataset.transcriptTool, box: row.getBoundingClientRect().toJSON() }))
+    })`)
+    await writeFile(join(evidence, `${name}.json`), JSON.stringify({ measured, ...state }, null, 2))
+  }
   const until = async (code, label = code) => {
     const deadline = Date.now() + 15_000
     while (!(await evaluate(code))) {
       if (Date.now() > deadline) {
-        await capture("failure.png")
         throw new Error(`Timed out: ${label}`)
       }
       await wait(30)
@@ -150,20 +161,26 @@ async function checkRows() {
           // The turns before it open their steps, so settled rows stand above the streaming ones.
           if (surface === "desk") await evaluate(`[...document.querySelectorAll('[data-turn-fold="closed"] > button')].slice(-2).forEach(fold => fold.click()), true`)
           await evaluate(WATCH)
-          const playing = await evaluate("window.toolRows.stream(8, 120)")
-          await wait(400)
+          await evaluate("window.toolRows.stream(8, 120)")
           // The turn's steps so far open, as the reader opens them while it runs: on the desk under the turn, on a
-          // phone in the steps sheet.
-          if (surface === "desk") await evaluate(`document.querySelectorAll('[data-work-summary][aria-expanded="false"]').forEach(summary => summary.click()), true`)
-          else await evaluate(`[...document.querySelectorAll('[data-steps-line]')].at(-1).click(), true`)
-          await wait(playing / 2)
-          // A settled row opens mid-stream: what follows it moves down in the same frame.
-          await evaluate(`[...document.querySelectorAll('[data-transcript-tool] > div > button[aria-expanded="false"]')].at(-2)?.click(), true`)
-          await wait(playing / 2)
+          // phone in the steps sheet. A running call alone has no work summary yet; a timed click could miss it.
+          const summary = surface === "desk" ? '[data-work-summary]' : '[data-steps-line="live"]'
+          await until(`Boolean(document.querySelector('${summary}'))`, `${label}: the steps control`)
+          await evaluate(`document.querySelector('${summary}').click(), true`)
+          await until(`document.querySelector('${summary}').getAttribute('aria-expanded') === 'true'`, `${label}: the steps opened`)
+          // Open an actual settled call while later calls are still streaming, whichever pace this renderer keeps.
+          const row = '[data-transcript-tool$=":live-2"] > div > button'
+          await until(`document.querySelector('[data-transcript-tool$=":live-3"]') && document.querySelector('${row}')`, `${label}: the fourth call`)
+          assert.equal(await evaluate("window.toolRows.streaming"), true, `${label}: the row opens mid-stream`)
+          await evaluate(`document.querySelector('${row}').click(), true`)
+          await until(`document.querySelector('${row}').getAttribute('aria-expanded') === 'true'`, `${label}: the settled row opened`)
+          await until("!window.toolRows.streaming", `${label}: every stream phase arrived`)
+          assert.equal(await evaluate(`document.querySelectorAll('[data-transcript-tool*=":live-"]').length`), 8, `${label}: every streamed call is mounted`)
           await evaluate(`[...document.querySelectorAll('[data-transcript-tool] > div > button[aria-expanded="true"]')].forEach(row => row.click()), true`)
-          await wait(300)
-          if (turns < 200) await capture(`tool-rows-${surface}-${theme}.png`)
+          await evaluate(`Promise.all(document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {}))).then(() => true)`)
+          await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))`)
           const watched = await evaluate("window.__rows.stop()")
+          if (turns < 200 || watched.most < 6 || watched.faults.length) await capture(`tool-rows-${surface}-${turns}-${theme}`, watched)
           await evaluate("window.toolRows.settle(), true")
           assert.ok(watched.most >= 6, `${label}: ${watched.most} rows were drawn at once, fewer than the stream's`)
           assert.deepEqual(watched.faults, [], `${label}: rows drew over one another`)
@@ -186,11 +203,14 @@ async function checkRows() {
         assert.ok(said.some((row) => row.includes(words)), `${label}: no row says "${words}": ${JSON.stringify(said)}`)
       assert.ok(!said.some((row) => /\bmako$/.test(row)), `${label}: a Mako tool's row names its server`)
       assert.match(await evaluate(`[...document.querySelectorAll('[data-work-summary]')].map(summary => summary.innerText).join(' ')`), /\b1 failed\b/, `${label}: the lint a retry fixed still counts as failed`)
-      await capture(`tool-words-desk-${theme}.png`)
+      await capture(`tool-words-desk-${theme}`)
       const watched = await evaluate("window.__rows.stop()")
       assert.deepEqual(watched.faults, [], `${label}: rows drew over one another`)
       console.log(`${label}: ${said.length} rows say what happened, none over another`)
     }
+  } catch (error) {
+    await capture("failure")
+    throw error
   } finally {
     clearTimeout(watchdog)
   }

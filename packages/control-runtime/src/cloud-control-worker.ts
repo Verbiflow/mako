@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process"
+import { spawn } from "./processes.js"
+import type { ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import {
   access,

@@ -106,7 +106,28 @@ starting host away, as one polled with `status` inside a container did.
 `createHost(config, owner)` in `create-host.ts` is the host. Its `start()` opens
 each domain in `electron/domains/` in dependency order, declares every method,
 then listens on the socket; its `stop()` releases everything in one fixed
-order. A host that can't start says why on stderr and in `host.log`, stops
+order. Before draining host calls, `HostStopping` cancels outside work: the
+owners registered together in `core.ts`, provider children, commands and
+HTTP requests (including response bodies). Keep local commits and stores
+open through that drain. Register new outside waiters with that scope. Start commands through
+`hostCommand`/`hostExecFile`, streaming children through `hostSpawn`, and
+IPC children through `hostFork`. These runners and provider launches own isolated
+process groups on macOS and Linux. They keep their stop registration until
+cleanup confirms no live group member remains, even after the parent exits.
+Deliberate daemon, app, installer and editor handoffs keep their independent
+lifetimes at the named launch exceptions. `check-host-children.mjs` (in lint) rejects
+raw Node process starts in the host and every local package it references,
+except its documented owner and handoff boundaries. Git's commands and object
+reader use one independent process runner; `hostGit` injects the host's scoped
+adapter, and `Git.close()` joins child cleanup. `HostStopping.run` also binds
+the control-runtime and sessions adapters per async context, so package code
+cannot start an unregistered child under a host call. Standalone workers keep
+their own lifetime; no process adapter is changed globally. UTF-8 buffered
+commands follow Node's decoded-string slicing at `maxBuffer` overflow;
+borrowed SDK checks cancel their operation without taking the client's
+ownership. An unfinished login reports that Mako quit and asks for a new
+sign-in; a saved result stays saved (`test:stop-provider-checks`). A stop still running at 2 s and 10 s logs
+`stopping is slow` with its step and the named work open. A host that can't start says why on stderr and in `host.log`, stops
 through its lifecycle and exits 1.
 
 Each domain file has an `open…` factory that takes its dependencies and

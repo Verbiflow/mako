@@ -1,3 +1,4 @@
+import { hostCommand } from "../base/host-command.js"
 import { constants } from "node:fs"
 import { physicalFiles } from "../base/physical-files.js"
 import {
@@ -13,8 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises"
 import { basename, dirname, join, relative } from "node:path"
-import { execFile } from "node:child_process"
-import { promisify, stripVTControlCharacters } from "node:util"
+import { stripVTControlCharacters } from "node:util"
 import { z } from "zod"
 import { createHash } from "node:crypto"
 import {
@@ -34,7 +34,7 @@ import { describeRow, parseVerdicts } from "../contracts/performance-verdict.js"
 import { busyReasons, describeMachine, readMachine, type MachineReading } from "../base/machine-load.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
-import { unregisterBundle } from "./local-update-installer.js"
+import { unregisterBundle as unregisterPreparedBundle } from "./local-update-installer.js"
 import { changesSince, readUncommitted, readUpdateSource, type Writers } from "./local-update-source.js"
 import { checkScripts, performanceEnvironment, UPDATE_CHECKS, updateEnvironment, updaterInherited, writeChanged } from "./local-update-checks.js"
 import { describeFailure, failureMessage, StepError, type FailureContext } from "./local-update-failures.js"
@@ -45,7 +45,12 @@ import { runProcessGroup } from "./process-group.js"
 import { DependencyInstallError, installDependencies, missingDependencies, uninstalledPackages } from "./local-update-dependencies.js"
 import type { Git } from "@mako/git"
 
-const execute = promisify(execFile)
+const execute = hostCommand
+
+/** Host-side bundle cleanup uses the stop scope; the standalone installer supplies its own runner. */
+export function unregisterBundle(app: string): Promise<void> {
+  return unregisterPreparedBundle(app, (command, args) => hostCommand(command, args, { timeout: 30_000 }))
+}
 const localPackage = z.object({
   makoDistribution: z.literal("local"),
   makoLocalSigningIdentity: z.string().regex(/^[A-Fa-f0-9]{40}$/),

@@ -1,12 +1,11 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { request } from "node:http"
 import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join, sep } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 
-const run = promisify(execFile)
+const run = hostCommand
 
 /** One request to the engine; a slower one is a runtime too busy to ask now. */
 const REQUEST_MS = 2_000

@@ -1,7 +1,7 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
+import { hostFetch } from "../base/host-stopping.js"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { resolveExecutable } from "../base/executable.js"
 import { MACHINE_GITHUB_ENV } from "../contracts/machine-agent.js"
@@ -12,7 +12,7 @@ import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-workt
 import { MERGE_METHODS, type MergeMethod } from "../contracts/git-actions.js"
 import type { Git } from "@mako/git"
 
-const run = promisify(execFile)
+const run = hostCommand
 
 /**
  * GitHub, through the `gh` CLI.
@@ -787,7 +787,7 @@ export async function repoAvatar(
       await gh(cwd, ["api", `repos/${repo}`, "--jq", ".owner.avatar_url"])
     ).trim()
     if (!url.startsWith("https://")) return undefined
-    const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
+    const response = await hostFetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
     if (!response.ok) return undefined
     const bytes = Buffer.from(await response.arrayBuffer())
     // A logo is a few kilobytes; anything much larger is not one.
@@ -818,7 +818,7 @@ export async function userAvatar(cwd: string, dir: string): Promise<string | und
     }
     const url = (await gh(cwd, ["api", "user", "--jq", ".avatar_url"])).trim()
     if (!url.startsWith("https://")) return undefined
-    const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
+    const response = await hostFetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
     if (!response.ok) return undefined
     const bytes = Buffer.from(await response.arrayBuffer())
     // An avatar is a few kilobytes; anything much larger is not one.

@@ -1,3 +1,4 @@
+import { HostStopping } from "../base/host-stopping.js"
 import { withHostClient, hostHistoryPaging } from "../base/host-client.js"
 import { hostCallSchema, hostChannels, isHostChannel, type HostArguments, type HostCallInput, type HostChannel } from "../contracts/host-call-inputs.js"
 import type { MethodTable } from "../base/methods.js"
@@ -19,6 +20,7 @@ export interface HostMethodsOptions {
    * A fixture desk refuses every call outside the fixture allowlist, from
    * every client, before its arguments are parsed.
    */
+  stopping?: HostStopping
   fixtureDesk: boolean
   /** A call about a conversation another host owns is answered there. */
   route(channel: HostChannel, args: unknown[]): Promise<RoutedCall>
@@ -38,12 +40,13 @@ export class HostMethods implements MethodTable {
   private readonly calls = new Map<HostChannel, (args: unknown[]) => Promise<EncodedValue>>()
   private preview: ((args: unknown[]) => Promise<ControlPreview | null>) | undefined
   private video: ((args: unknown[]) => Promise<Uint8Array>) | undefined
-  private readonly lifetime = new HostCallLifetime()
+  private readonly lifetime: HostCallLifetime
   private readonly repeated = new RepeatedCalls()
   private readonly options: HostMethodsOptions
 
   constructor(options: HostMethodsOptions) {
     this.options = options
+    this.lifetime = new HostCallLifetime(options.stopping)
   }
 
   handle<Channel extends HostChannel, Result>(channel: Channel, listener: (...args: HostArguments<Channel>) => Result): void {

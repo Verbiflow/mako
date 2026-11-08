@@ -1,4 +1,5 @@
-import { fork, type ChildProcess } from "node:child_process"
+import { fork } from "./processes.js"
+import type { ChildProcess } from "node:child_process"
 import { createReadStream, existsSync, type Dirent } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { lstat, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises"

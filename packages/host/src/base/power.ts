@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process"
+import { hostExecFile } from "./host-command.js"
 import { onMac } from "./platform.js"
 
 /** How the machine is powered, as work in the background asks before it takes more: on battery, how full, and Low Power Mode. */
@@ -20,7 +20,7 @@ export function parsePower(battery: string, settings: string): PowerReading {
 
 function pmset(args: string[]): Promise<string> {
   return new Promise((resolve) => {
-    execFile("/usr/bin/pmset", args, { timeout: 5_000, maxBuffer: 64 * 1024 }, (error, stdout) => resolve(error ? "" : stdout))
+    hostExecFile("/usr/bin/pmset", args, { timeout: 5_000, maxBuffer: 64 * 1024 }, (error, stdout) => resolve(error ? "" : stdout))
   })
 }
 
