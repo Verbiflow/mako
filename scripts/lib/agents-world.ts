@@ -110,6 +110,8 @@ export interface WorldOptions {
   finCeiling?: () => number
   /** Takes up what the last host left as the host does, each conversation read in a slice at a time first (`resumed`); at once without it. */
   resumeInSlices?: boolean
+  /** The host has begun to stop while it still starts (`ConversationsDeps.stopping`). */
+  stopping?: () => boolean
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
   /** A harness closing a session, awaited before it's closed (a switch retiring its source, say). */
@@ -262,6 +264,7 @@ export class AgentsWorld {
       return [harness, admission ? withExecutionAdmission(driver, admission) : driver]
     }))
     const live = new LiveConversations({
+      ...(this.options.stopping && { stopping: this.options.stopping }),
       appPath: this.root,
       root: join(this.root, "journals"),
       driver: (provider) => drivers.get(provider),
@@ -613,7 +616,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, wakeDue: () => [], snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, pinnedAccount: () => undefined, submit: none,
     act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
-    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {}, readIn: async () => {},
+    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {}, readIn: async () => true,
   }
 }
 
