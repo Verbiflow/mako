@@ -5,7 +5,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import { harnessLabel } from "@/lib/harness-label"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { acpStore } from "@/state/acp-state"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { readLive } from "@/state/live-recovery"
 import { createHook, createStore } from "@/state/store"
 import { acknowledgeThread } from "@/state/thread-lifecycle"
 import { refreshWorktrees } from "@/state/worktrees"
@@ -226,9 +226,8 @@ export async function workspaceMoved(event: Extract<HostEvent, { type: "workspac
     return
   }
   if (active !== event.from) return
-  const fork = await getMako().liveSnapshot(event.to).catch(() => null)
+  const fork = await readLive(event.to, () => getMako().liveSnapshot(event.to).catch(() => null))
   if (!fork) return
-  applyLiveSnapshot(fork)
   await show(event.to)
   if (event.outcome && !event.lead) {
     movedToast(event.to, event.branch, event.outcome, event.told)
