@@ -190,7 +190,7 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
       const pull = artifacts.success ? artifacts.data.find((artifact) => artifact.kind === "pull-request") : undefined
       const number = pull ? /(?:\/pull\/|#)(\d+)\b/.exec(pull.ref)?.[1] ?? (/^\d+$/.test(pull.ref) ? pull.ref : undefined) : undefined
       const what = `${(status && REPORT_WORDS.get(status)) ?? status ?? "back"}${number ? ` · PR #${number}` : ""}`
-      return { verb: verb("Report", "Reporting", "Reported"), what, ...pull && /^https:\/\//.test(pull.ref) && { link: pull.ref } }
+      return { verb: verb("Report", "Reporting", "Reported"), what, ...pull && pull.ref.startsWith("https://") && { link: pull.ref } }
     },
   }],
   ["agents_answer", {
