@@ -7,8 +7,10 @@ import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
 import type { ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
-import { AFTER_MOVE, THREAD_MOVE_TOOL, type ThreadMoveAsk, type ThreadMoveRefused, type ThreadsMoveInput, type ThreadsMoveResult } from "../contracts/thread-tools.js"
+import type { AgentAsk } from "../contracts/agent-asks.js"
+import { AFTER_MOVE, THREAD_MOVE_TOOL, type ThreadMoveRefused, type ThreadsMoveInput, type ThreadsMoveResult } from "../contracts/thread-tools.js"
 import { namedUuid } from "./cloud-moves.js"
+import type { LiveAsks } from "./live-asks.js"
 
 /** Where a conversation's Thread runs, as its row says it: here, in the cloud, or on another device. */
 export type ThreadPlace = "here" | "cloud" | "device"
@@ -31,12 +33,11 @@ export interface ThreadMoveToolDeps {
   busy(conversationId: string): boolean
   /** The Thread works in its own worktree, from which a move hands off. */
   ownWorktree(conversationId: string): boolean
-  harness(conversationId: string): string | undefined
-  title(conversationId: string): string | undefined
   /** This host is a cloud machine: its Threads are brought back from their Mac. */
   machine: boolean
   moves(): HostMoves | undefined
-  announce(asks: ThreadMoveAsk[]): void
+  /** Where an agent's asks wait for the person (`LiveAsks`). */
+  asks: Pick<LiveAsks, "open" | "raise" | "settle">
   /** How long after an agent's answer its handoff starts, so the answer reaches it first. */
   handOffAfterMs?: number
 }
@@ -47,30 +48,18 @@ const refused = (reason: ThreadMoveRefused["refused"], why: string): ThreadMoveR
 
 /**
  * An agent's or a shell's move of a Thread between this Mac and the cloud, through the moves the app presses. An agent
- * moves its own Thread: on full access at once, below it once the person allows it above the composer (`ThreadMoveAsk`).
+ * moves its own Thread: on full access at once, below it once the person allows it (`AgentAsk`).
  * A Thread in its own worktree hands off, its running turn paused here and going on in the cloud; one in the main
  * checkout waits for its turns to end, then goes onto its own branch and to the cloud, as Move to the cloud does. The
  * person's own call (a shell outside a Thread) names the conversation and waits for the move's end.
  */
 export class ThreadMoveTool {
   readonly #deps: ThreadMoveToolDeps
-  readonly #asks = new Map<string, ThreadMoveAsk>()
-  /** By ask, the move it starts once allowed. */
-  readonly #askMoves = new Map<string, string>()
   /** Moves of Threads in the main checkout, waiting for their turns to end. */
   readonly #afterTurn = new Map<string, Pending>()
 
   constructor(deps: ThreadMoveToolDeps) {
     this.#deps = deps
-  }
-
-  asks(): ThreadMoveAsk[] {
-    for (const [id, ask] of this.#asks) {
-      if (this.#deps.place(ask.conversationId)) continue
-      this.#asks.delete(id)
-      this.#askMoves.delete(id)
-    }
-    return [...this.#asks.values()]
   }
 
   async move(caller: AgentCaller, input: ThreadsMoveInput): Promise<ThreadsMoveResult> {
@@ -108,16 +97,17 @@ export class ThreadMoveTool {
     return this.#go(conversationId, key, handsOff)
   }
 
-  /** The person's answer to an agent's ask: allowed, the Thread moves as a full-access agent's would. */
-  answer(id: string, allow: boolean): void {
-    const ask = this.#asks.get(id)
-    const move = this.#askMoves.get(id)
-    if (!ask || !move) return
-    this.#asks.delete(id)
-    this.#askMoves.delete(id)
-    this.#announce()
-    hostLog("thread-moves", allow ? "the person allowed an agent's move to the cloud" : "the person kept an agent's Thread here", { conversation: ask.conversationId })
-    if (allow) this.#go(ask.conversationId, move, this.#deps.ownWorktree(ask.conversationId))
+  /** The person's answer to an agent's ask: allowed, the Thread moves as a full-access agent's would. A repeat finds nothing. */
+  answer(conversationId: string, id: string, allow: boolean): void {
+    const ask = this.#deps.asks.settle(conversationId, id)
+    if (!ask) return
+    hostLog("thread-moves", allow ? "the person allowed an agent's move to the cloud" : "the person kept an agent's Thread here", { conversation: conversationId })
+    if (allow && this.#deps.place(conversationId) === "here") this.#go(conversationId, ask.want.move, this.#deps.ownWorktree(conversationId))
+  }
+
+  /** The Thread is moving by the person's own hand: an agent's ask to move it says nothing now. */
+  retire(conversationId: string): void {
+    for (const ask of this.#deps.asks.open(conversationId)) this.#deps.asks.settle(conversationId, ask.id)
   }
 
   /** A conversation's turn ended: a move waiting for it goes now. */
@@ -130,18 +120,14 @@ export class ThreadMoveTool {
 
   /** Whether a move of this conversation's Thread waits: on the person, or on its turns. */
   pending(conversationId: string): boolean {
-    return this.#afterTurn.has(conversationId) || [...this.#asks.values()].some((ask) => ask.conversationId === conversationId)
+    return this.#afterTurn.has(conversationId) || this.#deps.asks.open(conversationId).length > 0
   }
 
   #ask(conversationId: string, move: string, handsOff: boolean): ThreadsMoveResult {
-    const known = [...this.#asks.values()].find((ask) => ask.conversationId === conversationId)
-    if (known) return { outcome: "asked", ask: known.id, next: AFTER_MOVE.asked(known.handsOff) }
-    const ask: ThreadMoveAsk = { id: randomUUID(), conversationId, harness: this.#deps.harness(conversationId) ?? "agent", to: "cloud", handsOff, at: Date.now() }
-    const title = this.#deps.title(conversationId)
-    if (title) ask.title = title
-    this.#asks.set(ask.id, ask)
-    this.#askMoves.set(ask.id, move)
-    this.#announce()
+    const known = this.#deps.asks.open(conversationId)[0]
+    if (known) return { outcome: "asked", ask: known.id, next: AFTER_MOVE.asked(known.want.handsOff) }
+    const ask: AgentAsk = { id: randomUUID(), at: Date.now(), want: { kind: "move", move, handsOff } }
+    this.#deps.asks.raise(conversationId, ask)
     return { outcome: "asked", ask: ask.id, next: AFTER_MOVE.asked(handsOff) }
   }
 
@@ -171,10 +157,6 @@ export class ThreadMoveTool {
       ? refused("already-there", "This Thread runs in the cloud already.")
       : refused("from-the-mac", "A cloud Thread comes back from the Mac it came from: the person presses Bring it back to this Mac there, or runs `mako thread move back --conversation <id>` in a shell on it.")
   }
-
-  #announce(): void {
-    this.#deps.announce(this.asks())
-  }
 }
 
 function moved(outcome: ThreadMoveOutcome): ThreadsMoveResult {
@@ -195,8 +177,7 @@ function continued(outcome: ThreadContinueOutcome): ThreadsMoveResult {
 /** `mako:threads-move`, and the person's answers to agents' asks. */
 export function declareThreadMoveMethods(methods: MethodTable, tool: () => ThreadMoveTool | undefined): void {
   methods.handle("mako:threads-move", (caller: AgentCaller, input: ThreadsMoveInput) => tool()?.move(caller, input) ?? refused("unavailable", "This host doesn't move Threads."))
-  methods.handle("mako:thread-move-asks", () => tool()?.asks() ?? [])
-  methods.handle("mako:thread-move-ask-answer", (id: string, allow: boolean) => tool()?.answer(id, allow))
+  methods.handle("mako:agent-ask-answer", (conversationId: string, id: string, allow: boolean) => tool()?.answer(conversationId, id, allow))
 }
 
 /** The MCP input schema of `thread_move`: the host call's generated schema, less what the door fills in. */

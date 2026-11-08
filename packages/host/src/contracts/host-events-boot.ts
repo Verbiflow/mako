@@ -109,7 +109,6 @@ export type HostEventBody =
   /** Agents' requests to move onto their Thread's own branch, and the projects that always allow it. */
   | { type: "workspace-moves"; moves: WorkspaceMoves }
   /** Agents' asks to move their Thread to the cloud (`thread_move` below full access), which the person answers above its composer. */
-  | { type: "thread-move-asks"; asks: import("./thread-tools.js").ThreadMoveAsk[] }
   /** The host's record of built plans changed; window-wide. */
   | { type: "plan-builds"; builds: PlanBuilds }
   /** The person's access choices changed, here or on another device (`contracts/access-choices.ts`); window-wide. */

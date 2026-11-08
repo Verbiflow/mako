@@ -329,8 +329,10 @@ message being sent, or the next in line (`nextQueued`) about to go, never a
 message nothing will send; a stopped Fin never reads working, and only
 working Fins hold room against the Mac and the tree (`test:fin-states`). A
 Fin's harness asking (`askApex`) wakes its Apex, told whether it may
-answer: an approval under an Apex below full access is the person's at once,
-and the Apex hears so in the digest's "waits on the person" (`Report.told`).
+answer, and so does its agent asking through Mako's tools (an `AgentAsk`, kept
+in its conversation and read as a pending approval, `LiveAsks.pending`, which
+`agents_answer` and the person answer through `LiveConversations.permission`):
+an approval under an Apex below full access is the person's at once, and the Apex hears so in the digest's "waits on the person" (`Report.told`).
 One the Apex may answer that it leaves for `APEX_ANSWER_MS` (a minute) goes
 to the person too (`escalate`), as an Apex mid-turn on a harness that hears
 a digest only at its turn's end would leave it; the Apex hears they were
@@ -1375,7 +1377,11 @@ fails on a host that keeps it whole, or on any of those (or the sweep's
 measure of a copy) holding the event loop past 50ms. A pass over a whole
 history (a merge, a journal's read, that measure) is written once as `Steps`
 (`@mako/sessions/slices`) and run `inSlices` wherever the host, or the sync
-daemon, can wait; a turn starts once the history's rows are written ahead
+daemon, can wait. One that outlives its host's stop takes a `stopping` check
+and ends at its next step (`StepsStopped`, thrown into the steps so a read
+transaction rolls back): a resume read cut by a stop resumes nothing and is
+the next host's, and a count or pass the journal's close cuts ends quietly
+(`test:resume-holds`, `test:attribution-holds`); a turn starts once the history's rows are written ahead
 (`LiveJournal.writtenAhead`), so its first commit writes none of them. `MAKO_PAGING_CHECK=1` pages every field
 of every entry as soon as a commit writes it, the turn running included; run
 the live, transcript and conversation-control suites with it after changing
@@ -1672,8 +1678,10 @@ Three rules hold this together, and each has a specific failure it prevents:
   user scrolling may release follow mode; virtualizer size adjustments must not.
   Follow changes only as the reader moves: up leaves the end, down into it
   follows again, and a scroll's end decides nothing. A move counts from 24 px
-  (`LEFT_END`), a wheel's as its net travel over 500 ms, so a trackpad's rest
-  jitter never lets go while a flick up does at once. A wheel taken by a
+  (`LEFT_END`), a wheel's as its travel within 500 ms since it last turned, so
+  a trackpad's rest jitter never lets go while a flick up does at once, and a
+  wheel up then as far back down follows the end again (its net was nothing,
+  which read as rest, and the end went unfollowed). A wheel taken by a
   scroller inside the transcript (the crew card's list, a code block) stays
   with it until it settles, as the browser's own gesture does. Input ends when
   it settles (`INPUT_SETTLE_MS`), for input that moved nothing and a browser
@@ -3279,16 +3287,34 @@ keep-alive, closed a pooled connection a read had just been written to, and
 the reset read as the host leaving. `test-host-liveness.ts` covers these.
 
 Every `live-batch` and `LiveSummary` carries the host's `epoch`, minted per
-`LiveConversations` instance. Revisions climb within one epoch and a
-restarted host continues from the journal, but a recovering host rewrites
-what it reopens at the same revision and two hosts never share a counter, so
-`live-recovery.ts` merges a batch onto held state only within the epoch;
-across epochs it buffers and takes a snapshot, and a snapshot from another
-epoch replaces the state outright and drops any batch still buffered from
-another epoch: it came from a host that no longer answers, and replayed it
-would ask the new host for a snapshot in its numbering forever (a window once
-reread one conversation every 280 ms for an hour after a restart). An unstamped batch (an older host) still
+`LiveConversations` instance: its start on its data root (`g<generation>.<root>.…`,
+`takeHostStart`, one past the last, kept on disk before it's used), or, from a
+build before starts, none. Revisions climb within one epoch, but a recovering
+host rewrites what it reopens at the same revision and two hosts never share a
+counter, so `live-recovery.ts` merges a batch onto held state only within the
+epoch, and orders what hosts said by their start, then revision (`olderThan`),
+never by a clock. A reply whose order can't be established (a build before
+starts, another data root) never replaces what the window holds: the current
+host is read afresh. A batch of another start buffers and takes a snapshot;
+after it, what waited goes on if it's of a newer start or of the one the stream
+last said, and is otherwise past: replayed, it would ask the new host for a
+snapshot in its numbering forever (a window once reread one conversation every
+280 ms for an hour after a restart). An unstamped batch (an older host) still
 applies by revision. `test-prompt-delivery.tsx` covers both.
+
+What reaches the window about a live conversation goes through one door,
+`receiveLive` (`src/state/live-door.ts`): a batch, one that waited on a
+snapshot, a listing or a reconnect's summaries, an unlisting, its owner's
+connection, a move's, a return's or a continue's step, a snapshot (a read's or
+an action's answer) and a history page. What its host says unasked goes on the
+record of every read of it out (`moved`, `heard`), so no answer of a read
+speaks for what came after it was asked. A reconnect's summary carries no
+permission, so a Session of this host keeps the one it had and is read again.
+`test-ask-notices.ts` generates host restarts, late and stray replies, and
+batches and listings while reads are out (300 runs, in `test:notifications`);
+`test-live-door.ts` drives each way in under a watch of the store that fails on
+any write around the door (`watchDoor`), which the window's suites keep on too
+(`failAroundTheDoor`).
 
 A window reads a conversation's earlier history, released turns and full
 outputs through a view the host captured (`LiveHistoryReader`). A

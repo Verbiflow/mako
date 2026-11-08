@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * What an Apex's Thread shows stays through whatever its session does (`npm run test:fin-view-keeps-ui`): the person
@@ -65,8 +66,10 @@ async function check() {
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1440, height: 1100, show: false, webPreferences: { backgroundThrottling: false } })
+  atSize(window, 1440, 1100)
   const page = window.webContents
   const errors = []
   page.on("console-message", (event) => {

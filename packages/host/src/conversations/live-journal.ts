@@ -753,8 +753,8 @@ export class LiveJournal {
    * the host goes on: a journal of 150MB read at once held the loop for a
    * third of a second. Nothing else may use this journal until it resolves.
    */
-  readSliced(): Promise<LiveSnapshot | null> {
-    return inSlices(this.reading())
+  readSliced(stopping?: () => boolean): Promise<LiveSnapshot | null> {
+    return inSlices(this.reading(), undefined, stopping)
   }
 
   /** `read` as `Steps`, its rows read and parsed `ROWS_PER_STEP` at a time, in one read transaction. */

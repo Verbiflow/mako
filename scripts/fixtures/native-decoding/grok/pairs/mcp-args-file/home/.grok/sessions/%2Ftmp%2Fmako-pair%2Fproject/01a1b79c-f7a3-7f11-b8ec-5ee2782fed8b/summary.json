@@ -1,0 +1,23 @@
+{
+  "info": {
+    "id": "01a1b79c-f7a3-7f11-b8ec-5ee2782fed8b",
+    "cwd": "/tmp/mako-pair/project"
+  },
+  "agent_id": "ag1.8aaa86834f2d4380ab5e146cbbdbfdea",
+  "attempt_id": "at1.919f0cb8a84441b5a8d3867d01873150",
+  "session_summary": "Save big.txt note via MCP JSON",
+  "created_at": "2026-11-07T20:04:39.997458Z",
+  "updated_at": "2026-11-07T20:05:02.366931Z",
+  "num_messages": 24,
+  "num_chat_messages": 18,
+  "current_model_id": "grok-4.7",
+  "next_trace_turn": 1,
+  "chat_format_version": 1,
+  "request_id": "c9ef7255-3b1c-40d8-b121-8b6902c66516",
+  "grok_home": "/tmp/mako-pair/home/.grok",
+  "last_active_at": "2026-11-07T20:05:02.366931Z",
+  "generated_title": "Save big.txt note via MCP JSON",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off",
+  "reasoning_effort": "high"
+}

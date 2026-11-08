@@ -19,21 +19,7 @@ import {
   SquareIcon,
   XIcon,
 } from "lucide-react"
-import {
-  CHILD_GROUPS,
-  askWords,
-  childGroup,
-  childLine,
-  childStateOf,
-  openAsk,
-  rollup,
-  rollupLabel,
-  rollupLine,
-  stoodFor,
-  timeWords,
-  type ChildGroup,
-  type Rollup,
-} from "@mako/host/contracts/children"
+import { approvalWords, CHILD_GROUPS, askWords, childGroup, childLine, childStateOf, openAsk, rollup, rollupLabel, rollupLine, stoodFor, timeWords, type ChildGroup, type Rollup } from "@mako/host/contracts/children"
 import { APEX_WORD, FIN_WORD, finsWord, type ChildState } from "@mako/host/contracts/agents"
 import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
@@ -267,7 +253,7 @@ const NeedsRow = memo(function NeedsRow({
                 )}
               >
                 <CheckIcon className="size-3.5" />
-                Allow once
+                {approvalWords(ask ?? {}).allow}
               </button>
               <button
                 type="button"
@@ -281,7 +267,7 @@ const NeedsRow = memo(function NeedsRow({
                 )}
               >
                 <XIcon className="size-3.5" />
-                Refuse
+                {approvalWords(ask ?? {}).refuse}
               </button>
             </>
           ) : (
@@ -324,7 +310,7 @@ const NeedsRow = memo(function NeedsRow({
           {!compact ? (
             <span className="ml-auto text-label text-faint">
               {approval
-                ? `${agent.title} waits on this command`
+                ? ask?.named ? `${agent.title} waits on your answer` : `${agent.title} waits on this command`
                 : `Answer here or tell ${apexTitle}`}
             </span>
           ) : null}

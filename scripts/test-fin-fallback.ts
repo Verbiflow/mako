@@ -347,8 +347,12 @@ try {
   console.log("a message arriving while the next harness prepares: refused in words, and sent again it goes after the move and its context")
 
   // The exact words that stopped this Mac's Fins on 2026-11-05: Cursor marks no limit and its reading can't say it, so the words alone move it, with their reset.
+  // Their date is three days from today, in Cursor's form: the words named 11/8/2026, which a run on that day found already past.
   {
-    const words = "Your team has reached its usage limit Please reach out to an admin to increase your limit, or return on 11/8/2026 when your usage resets."
+    const resets = new Date()
+    resets.setHours(0, 0, 0, 0)
+    resets.setDate(resets.getDate() + 3)
+    const words = `Your team has reached its usage limit Please reach out to an admin to increase your limit, or return on ${resets.getMonth() + 1}/${resets.getDate()}/${resets.getFullYear()} when your usage resets.`
     const r = await run("cursor-words", {
       accounts: { cursor: named("default"), claude: named("personal") },
       selected: { cursor: "default", claude: "personal" },
@@ -363,7 +367,7 @@ try {
     assert.ok(!("refused" in r))
     await until("it to go on", () => r.finTurns().some((turn) => turn.harness !== "cursor"))
     const moved = edgeOf(r).tuned?.rerouted
-    assert.equal(moved?.until, new Date(2026, 10, 8).getTime(), "until the date Cursor's words name")
+    assert.equal(moved?.until, resets.getTime(), "until the date Cursor's words name")
     assert.equal(moved?.from, "cursor")
     await r.world.close()
   }
