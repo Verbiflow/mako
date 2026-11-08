@@ -1,5 +1,4 @@
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
+import { command } from "./processes.js"
 import { z } from "zod"
 import {
   WindowRecordSchema,
@@ -26,7 +25,7 @@ import type { JsonObject, JsonValue } from "./json.js"
  * names, and the warm-up below reads a 16-pixel picture.
  */
 
-const execute = promisify(execFile)
+const execute = command
 
 /** A driver reply, already checked: a refusal rejects with the driver's words instead. */
 export interface AppshotReply {

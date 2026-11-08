@@ -5,7 +5,8 @@
  * against the catalog's heap: the sync daemon runs in 128 MB. The child is
  * `decode-aside-main.js`; one runs at a time.
  */
-import { fork, type ChildProcess } from "node:child_process"
+import { fork } from "./processes.js"
+import type { ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"

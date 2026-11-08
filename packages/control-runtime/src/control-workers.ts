@@ -1,4 +1,5 @@
-import { fork, type ChildProcess, type Serializable } from "node:child_process"
+import { fork } from "./processes.js"
+import type { ChildProcess, Serializable } from "node:child_process"
 import type { Server, Socket } from "node:net"
 import { fileURLToPath } from "node:url"
 import { ControlFault } from "@mako/control/control"

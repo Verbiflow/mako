@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { writeFile } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
@@ -33,16 +33,21 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
+  const args = process.argv.slice(2)
+  const portAt = args.indexOf("--port")
+  const port = portAt === -1 ? 0 : Number(args[portAt + 1])
   const root = testScratch("mako-thread-move-ui-")
+  const evidence = process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "moves") : root
+  await mkdir(evidence, { recursive: true })
   const server = await createServer({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],
-    server: { host: "127.0.0.1", port: 0 },
+    server: { host: "127.0.0.1", port, strictPort: port !== 0 },
   })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-thread-move-check", main: fileURLToPath(import.meta.url) }))
-  const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0] }
+  const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_EVIDENCE: evidence, MAKO_UI_TEST_URL: server.resolvedUrls.local[0] }
   delete env.ELECTRON_RUN_AS_NODE
   try {
     const child = spawn(resolve("node_modules/.bin/electron"), [root], { stdio: "inherit", env })
@@ -58,6 +63,7 @@ if (process.versions.electron) {
 async function checkWindow() {
   const { app, BrowserWindow } = await import("electron")
   const root = process.env.MAKO_UI_TEST_ROOT
+  const evidence = process.env.MAKO_UI_TEST_EVIDENCE
   const base = process.env.MAKO_UI_TEST_URL
   app.setPath("userData", join(root, "profile"))
   withMotion(app)
@@ -88,7 +94,13 @@ async function checkWindow() {
   /** The whole window, and a crop around `around` when given. */
   const capture = async (name, around) => {
     await settle()
-    await writeFile(join(root, `${name}.png`), (await page.capturePage()).toPNG())
+    await writeFile(join(evidence, `${name}.png`), (await page.capturePage()).toPNG())
+    await writeFile(join(evidence, `${name}.json`), JSON.stringify(await evaluate(`({
+      trace: window.moveTrace,
+      move: document.querySelector('[data-thread-move]')?.dataset.threadMove,
+      returning: document.querySelector('[data-thread-return]')?.dataset.threadReturn,
+      place: document.querySelector('[data-run-place]')?.dataset.runPlace
+    })`), null, 2))
     if (!around) return
     const rect = await evaluate(`(() => {
       const nodes = ${JSON.stringify(around)}.flatMap(selector => [...document.querySelectorAll(selector)])
@@ -99,17 +111,20 @@ async function checkWindow() {
       const y = Math.max(0, Math.floor(Math.min(...rects.map(r => r.top)) - pad))
       return { x, y, width: Math.min(innerWidth - x, Math.ceil(Math.max(...rects.map(r => r.right)) + pad - x)), height: Math.min(innerHeight - y, Math.ceil(Math.max(...rects.map(r => r.bottom)) + pad - y)) }
     })()`)
-    if (rect) await writeFile(join(root, `${name}-crop.png`), (await page.capturePage(rect)).toPNG())
+    if (rect) await writeFile(join(evidence, `${name}-crop.png`), (await page.capturePage(rect)).toPNG())
   }
   const theme = async (next) => {
     await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: ${JSON.stringify(next)}}))`)
     await evaluate(`new Promise(resolve => { const check = () => document.documentElement.classList.contains('light') === ${next === "light"} ? resolve(true) : requestAnimationFrame(check); check() })`)
   }
   const both = async (name, around) => {
+    const phase = await evaluate(`JSON.stringify([document.querySelector('[data-thread-move]')?.dataset.threadMove, document.querySelector('[data-thread-return]')?.dataset.threadReturn])`)
     await capture(name, around)
     await theme("light")
     await capture(`${name}-light`, around)
     await theme("dark")
+    if (around?.includes('[data-thread-move]') || around?.includes('[data-thread-return]'))
+      assert.equal(await evaluate(`JSON.stringify([document.querySelector('[data-thread-move]')?.dataset.threadMove, document.querySelector('[data-thread-return]')?.dataset.threadReturn])`), phase, `${name}: the captured phase stays until the check advances it`)
   }
   /** The toast holding `title`, alone, in both themes. */
   const toastShot = async (name, title) => {
@@ -147,11 +162,19 @@ async function checkWindow() {
     await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" })
     await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 })
   }
+  const phases = (action) => evaluate(`window.mockMovePhases.${action}(), true`)
   /** A new Thread on its own branch, signed in with the cloud: its first message makes its worktree and starts it there. */
   const startThread = async (query, inWorktree = true) => {
-    await window.loadURL(`${base}?mock&cloud=signed-in&invited&making=fast${query}`)
+    await window.loadURL(`${base}?mock&cloud=signed-in&invited&making=fast&move-steps${query}`)
     await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 264, theme: 'dark', newThreadsInWorktree: ${inWorktree}}))`)
     await until(`Boolean(document.querySelector('.composer-input')) && !document.querySelector('.composer-input').readOnly`, "the composer")
+    await evaluate(`(() => {
+      window.moveTrace = []
+      window.mako.onEvent(event => {
+        if (event.type === 'thread-move-step' || event.type === 'thread-return-step') window.moveTrace.push({ at: performance.now(), type: event.type, kind: event.step.kind })
+      })
+      return true
+    })()`)
     await click(".composer-input")
     await type("Retry the billing webhooks with backoff")
     await enter()
@@ -170,14 +193,18 @@ async function checkWindow() {
   await both("move-offer", ['[data-thread-move-offer]', '[data-run-place]'])
 
   // 2. Moving: the strip above the composer says each step, and the chip says Moving.
+  await phases("hold")
   await click('[data-thread-move-offer]')
   await until(`document.querySelector('[data-thread-move="packing"]') !== null`, "sending ahead")
   assert.match(await evaluate(`document.querySelector('[data-run-place]').getAttribute('aria-label')`), /Moving/)
   await both("move-packing", ['[data-thread-move]', '[data-run-place]'])
+  await phases("next")
   await until(`document.querySelector('[data-thread-move="handing-over"]') !== null`, "handing over")
   await both("move-handing-over", ['[data-thread-move]'])
+  await phases("next")
   await until(`document.querySelector('[data-thread-move="resuming"]') !== null`, "resuming")
   await both("move-resuming", ['[data-thread-move]'])
+  await phases("run")
 
   // 3. Moved: the strip goes, the chip says Cloud.
   await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved")
@@ -189,12 +216,15 @@ async function checkWindow() {
   assert.equal(await evaluate(`document.querySelector('[data-thread-return-offer]').disabled`), false, "a quiet cloud Thread can come back")
   assert.match(await evaluate(`document.querySelector('[data-thread-return-offer]').innerText`), /Bring back to this Mac[\s\S]*cloud machine ends/)
   await both("return-offer", ['[data-thread-return-offer]', '[data-run-place]'])
+  await phases("hold")
   await click('[data-thread-return-offer]')
   await until(`document.querySelector('[data-thread-return="packing"]') !== null`, "packing in the cloud")
   assert.match(await evaluate(`document.querySelector('[data-run-place]').getAttribute('aria-label')`), /Coming back/)
   await both("return-packing", ['[data-thread-return]', '[data-run-place]'])
+  await phases("next")
   await until(`document.querySelector('[data-thread-return="bringing"]') !== null`, "bringing it here")
   await both("return-bringing", ['[data-thread-return]'])
+  await phases("run")
   await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-return]')`, "back")
   await both("back", ['[data-run-place]', '[data-composer]'])
 
@@ -217,12 +247,19 @@ async function checkWindow() {
   await until(`document.querySelector('[data-thread-move-offer][data-thread-handoff]') !== null`, "the handoff offer")
   assert.match(await evaluate(`document.querySelector('[data-thread-move-offer]').innerText`), /Hand off to the cloud[\s\S]*turn pauses[\s\S]*goes on there/)
   await both("handoff-offer", ['[data-thread-move-offer]', '[data-run-place]'])
+  await phases("hold")
   await click('[data-thread-move-offer]')
+  await until(`document.querySelector('[data-thread-move="packing"]') !== null`, "packing its turn")
+  await phases("next")
   await until(`document.querySelector('[data-thread-move="pausing"][data-thread-handoff]') !== null`, "pausing its turn")
   assert.match(await evaluate(`document.querySelector('[data-thread-move]').innerText`), /Handing off to the cloud/)
   await both("handoff-pausing", ['[data-thread-move]', '[data-run-place]'])
+  await phases("next")
+  await until(`document.querySelector('[data-thread-move="handing-over"]') !== null`, "handing its turn over")
+  await phases("next")
   await until(`document.querySelector('[data-thread-move="resuming"][data-thread-handoff]') !== null`, "continuing in the cloud")
   await both("handoff-resuming", ['[data-thread-move]'])
+  await phases("run")
   await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "handed off")
 
   // 5b. A Thread whose turn ended but left work running in the background is handed off too: that work stops, and it's told so there.
@@ -420,10 +457,12 @@ async function checkWindow() {
   assert.equal(await evaluate(`document.querySelector('[data-thread-move-offer]').disabled`), false, "a quiet Thread in the project folder can move")
   assert.match(await text('[data-thread-move-offer]'), /Move to the cloud[\s\S]*own branch first[\s\S]*project folder keeps yours/)
   await both("main-checkout-offer", ['[data-thread-move-offer]', '[data-run-place]'])
+  await phases("hold")
   await click('[data-thread-move-offer]')
   await until(`document.querySelector('[data-thread-move="own-branch"]') !== null`, "onto its own branch")
   assert.match(await text('[data-thread-move]'), /Moving to the cloud[\s\S]*Onto its own branch/)
   await both("main-checkout-own-branch", ['[data-thread-move]', '[data-run-place]'])
+  await phases("run")
   await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved")
   await toastShot("main-checkout-moved", "Moved to the cloud")
   assert.match(await evaluate(`[...document.querySelectorAll('[data-sonner-toast]')].map((node) => node.innerText).join('\\n')`), /both its repositories and 3 files from outside its folder[\s\S]*One file stayed here: credentials, a secret/)
