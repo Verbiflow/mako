@@ -12,6 +12,8 @@ import type { WorkingThread } from "./cloud-handoffs.js"
 
 /** How often a Thread at work is brought up to date in its cloud Thread standing by. */
 export const READY_EVERY_MS = 30_000
+/** Threads brought up to date at once; the rest wait their turn within the same refresh. */
+const ROUNDS_AT_ONCE = 2
 /** After a move takes a Thread's cloud Thread, it isn't kept ready again for this long: it's leaving, or it stayed. */
 const TAKEN_REST_MS = 5 * 60_000
 /** A Thread standing by that nothing has used or brought up to date for this long is forgotten here. */
@@ -36,6 +38,9 @@ const ReadyFileSchema = z.object({ version: z.literal(1), threads: z.record(z.st
 
 /** What keeping a Thread ready asks of the account: a cloud Thread standing by, its checkpoints and its records. */
 export type ReadinessAccount = Pick<CloudAccount, "createThread" | "sendCheckpoint" | "threadRecords">
+
+/** As the cloud weighs them: a cloud Thread is made for one repository and one branch, and refuses any other. */
+const sameRepository = (left: CloudRepository, right: CloudRepository) => left.url === right.url && left.branch === right.branch
 
 /** A cloud Thread kept ready, as a move takes it: and the checkpoint the cloud keeps for it, by its hash. */
 export type TakenReady = { cloudThread: string; checkpoint?: string }
@@ -90,7 +95,12 @@ export class CloudReadiness {
   async refresh(): Promise<void> {
     if (!(await this.#options.enabled())) return
     const resting = (thread: string) => this.#options.leaving(thread) || Date.now() - (this.#taken.get(thread) ?? Number.NEGATIVE_INFINITY) < TAKEN_REST_MS
-    await Promise.all(this.#options.working().filter((working) => !resting(working.thread)).map((working) => this.#round(working)))
+    // Each round captures its checkout through Git (an `add --all` of the whole worktree) and sends its records
+    // through the sync daemon: with every Thread at work at once, a Mac of many Fins ran hundreds of them together.
+    const due = this.#options.working().filter((working) => !resting(working.thread)).values()
+    await Promise.all(Array.from({ length: ROUNDS_AT_ONCE }, async () => {
+      for (const working of due) await this.#round(working)
+    }))
     await this.#prune()
   }
 
@@ -103,7 +113,11 @@ export class CloudReadiness {
     await this.#rounds.get(thread)?.catch(() => undefined)
     const entries = await this.#load()
     const entry = entries[thread]
-    if (!entry || entry.folder !== folder || entry.repository.url !== repository.url) return undefined
+    if (!entry) return undefined
+    if (entry.folder !== folder || !sameRepository(entry.repository, repository)) {
+      hostLog("readiness", "a move didn't take a cloud Thread standing by for another folder or branch", { thread, cloudThread: entry.cloudThread, folderMoved: entry.folder !== folder, stoodBy: entry.repository.branch ?? "its default", moves: repository.branch ?? "its default" })
+      return undefined
+    }
     if (Date.now() - entry.at > READY_FRESH_MS) {
       // Not kept ready lately (the Mac slept, or the Thread rested): the cloud may have ended it. Forgotten here.
       delete entries[thread]
@@ -139,7 +153,7 @@ export class CloudReadiness {
     }
     const entries = await this.#load()
     let entry = entries[plan.thread]
-    if (!entry || entry.folder !== plan.folder || entry.repository.url !== plan.repository.url) {
+    if (!entry || entry.folder !== plan.folder || !sameRepository(entry.repository, plan.repository)) {
       entry = { cloudThread: this.#options.newCloudThread(), folder: plan.folder, repository: plan.repository, at: Date.now() }
       entries[plan.thread] = entry
       await this.#save()

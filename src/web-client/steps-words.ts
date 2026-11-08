@@ -1,6 +1,7 @@
 import type { ToolKind } from "@mako/sessions/tool-identity"
 import { liveVerb } from "@/state/agent-activity"
-import { toolLabel, toolTarget } from "@/lib/tools"
+import { callTarget, factsNote, makoCallWords, toolLabel } from "@/lib/tools"
+import { harnessLabel } from "@/lib/harness-label"
 import type { ToolCall } from "@/extend/slots"
 
 /** What a finished step did, said as the line says it: "ran", "read", "edited". */
@@ -43,13 +44,17 @@ const DONE_VERBS = {
 /** Kinds whose verb says nothing of the tool, so its label follows the verb ("Used Linear: create issue"). */
 const NAMED_BY_LABEL: ReadonlySet<ToolKind> = new Set(["mcp", "other", "computer", "skill"])
 
-/** One step in the line's words, its verb in the tense of whether it's still running. */
+/**
+ * One step in the line's words, its verb in the tense of whether it's still running: a Mako tool's own words, as the
+ * desk's row says them, and a file step's facts after its file ("read src/x.ts :120–180", "edited src/x.ts +12 −3").
+ */
 export function stepWords(call: ToolCall, running: boolean): string {
   const kind = call.tool.kind
+  const mako = makoCallWords(call, harnessLabel)
   const verb = running ? liveVerb(kind) : DONE_VERBS[kind]
   const label = NAMED_BY_LABEL.has(kind) ? toolLabel(call.tool) : ""
-  const target = toolTarget(call.tool)
-  const said = [verb, label, target].filter(Boolean).join(" ")
+  const target = callTarget(call)
+  const said = mako ? (running ? mako.running : call.isError ? mako.label : mako.done) : [verb, label, target, factsNote(call)].filter(Boolean).join(" ")
   return said.charAt(0).toLowerCase() + said.slice(1)
 }
 

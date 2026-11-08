@@ -1,3 +1,4 @@
+import { hostCommand } from "../base/host-command.js"
 /**
  * Adding an account, or signing one in again, without a terminal.
  *
@@ -15,19 +16,27 @@
  * never listed, and the next sign-in for that provider removes it.
  */
 
+import { HostStoppingError } from "../base/host-stopping.js"
+import { hostLog } from "../base/host-log.js"
 import { randomUUID } from "node:crypto"
-import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process"
+import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { homedir } from "node:os"
-import { promisify } from "node:util"
 import type { AccountHarness, AccountLogin, AccountLoginResult } from "../contracts/accounts.js"
 import type { HarnessAccounts } from "./accounts.js"
 import { environmentForExecutable } from "../base/executable.js"
 import type { AccountLoginCommand, AccountLoginTarget, AccountLoginTask } from "./account-capability.js"
-import { spawnProviderProcess } from "./provider-process.js"
+import { endProviderProcess, spawnProviderProcess } from "./provider-process.js"
 import { onLinux, onMac, onWindows } from "../base/platform.js"
 import type { HostJobs } from "../base/host-jobs.js"
+import { writeChildInput } from "@mako/sessions/child-input"
 
-const run = promisify(execFile)
+type LoginAccounts = Pick<HarnessAccounts, "label" | "prepareLogin" | "discardLogin" | "loginLanded" | "finishLogin">
+
+const run = hostCommand
+
+function signInStopped(): HostStoppingError {
+  return new HostStoppingError("Mako quit before sign-in finished; sign in again.")
+}
 
 /** Long enough to find a password manager and approve on a phone; a forgotten tab still ends. */
 const LOGIN_TIMEOUT_MS = 15 * 60_000
@@ -59,7 +68,7 @@ interface RunningLogin {
   session: Session
   result: Promise<AccountLoginResult>
   done: boolean
-  cancel(): void
+  cancel(reason?: HostStoppingError): void
 }
 
 function terminate(child: ChildProcessWithoutNullStreams): void {
@@ -140,7 +149,7 @@ function commandSession(
     const text = chunk.toString("utf8")
     if (output.length < OUTPUT_LIMIT) output += text
     if (launch.terminal)
-      for (const [query, answer] of TERMINAL_ANSWERS) if (text.includes(query)) child.stdin.write(answer)
+      for (const [query, answer] of TERMINAL_ANSWERS) if (text.includes(query)) writeChildInput(child, answer).catch(() => {})
     const url = signInUrl(output)
     if (url) announce(url)
     if (pastedAt !== undefined && launch.refusedCode?.test(output.slice(pastedAt).replace(TERMINAL_STYLING, ""))) {
@@ -150,7 +159,6 @@ function commandSession(
   }
   child.stdout.on("data", listen)
   child.stderr.on("data", listen)
-  child.stdin.on("error", () => {})
 
   const ended = new Promise<Ending>((resolve) => {
     child.once("error", () => resolve({ kind: "failed" }))
@@ -166,12 +174,13 @@ function commandSession(
   const session: Session = {
     announced,
     ended,
-    stop: () => terminate(child),
+    stop: () => { void endProviderProcess(child, "SIGTERM", 100) },
   }
   if (launch.paste)
     session.paste = (text) => {
       pastedAt = output.length
-      child.stdin.write(`${text}${launch.terminal ? "\r" : "\n"}`)
+      // A sign-in gone as it's pasted to ends as its `close` says.
+      writeChildInput(child, `${text}${launch.terminal ? "\r" : "\n"}`).catch(() => {})
       // A CLI with no status command may keep running after it signs in;
       // the profile itself says when it has.
       if (!launch.statusArgs && stopPolling === undefined)
@@ -200,10 +209,14 @@ function taskSession(launch: AccountLoginTask): Session {
 /** This host's running sign-ins, one per provider, each ending added, renewed, connected, cancelled or failed. */
 export class AccountLogins {
   private readonly logins = new Map<string, RunningLogin>()
-  private readonly accounts: HarnessAccounts
+  private readonly accounts: LoginAccounts
   private readonly jobs: HostJobs
+  private readonly starting = new Set<Promise<AccountLogin>>()
+  private readonly stopping = new AbortController()
+  private closing = false
+  private stopped: Promise<void> | undefined
 
-  constructor(accounts: HarnessAccounts, jobs: HostJobs) {
+  constructor(accounts: LoginAccounts, jobs: HostJobs) {
     this.accounts = accounts
     this.jobs = jobs
   }
@@ -214,7 +227,25 @@ export class AccountLogins {
    * its sign-in page (or has had time to), with what the card needs to show;
    * `wait` resolves when it ends.
    */
-  async start(harness: AccountHarness, renew?: string): Promise<AccountLogin> {
+  start(harness: AccountHarness, renew?: string): Promise<AccountLogin> {
+    if (this.closing) return Promise.reject(signInStopped())
+    const starting = this.begin(harness, renew).catch((error: Error) => { throw this.closing ? signInStopped() : error })
+    this.starting.add(starting)
+    void starting.finally(() => this.starting.delete(starting)).catch(() => {})
+    return starting
+  }
+
+  /** Close admission and cancel all unfinished logins before the host drains their callers. */
+  stop(): Promise<void> {
+    if (this.stopped) return this.stopped
+    this.closing = true
+    this.stopping.abort(signInStopped())
+    for (const login of this.logins.values()) if (!login.done) login.cancel(signInStopped())
+    this.stopped = Promise.allSettled([...this.starting, ...[...this.logins.values()].map((login) => login.result)]).then(() => {})
+    return this.stopped
+  }
+
+  private async begin(harness: AccountHarness, renew?: string): Promise<AccountLogin> {
     // One per provider: a second would race the first for the CLI's callback port.
     for (const login of this.logins.values())
       if (login.info.harness === harness && !login.done) await this.cancel(login.info.id)
@@ -222,6 +253,10 @@ export class AccountLogins {
       ? { name: `account-${randomUUID().slice(0, 8)}`, renew: false }
       : { name: renew, renew: true }
     const { launch, previousEmail } = await this.accounts.prepareLogin(harness, target)
+    if (this.closing) {
+      await this.accounts.discardLogin(harness, target)
+      throw signInStopped()
+    }
     const id = randomUUID()
     let session: Session
     try {
@@ -233,6 +268,7 @@ export class AccountLogins {
       throw error
     }
 
+    let stopped: HostStoppingError | undefined
     let cancelled = false
     let expired = false
     const timer = setTimeout(() => { expired = true; session.stop() }, LOGIN_TIMEOUT_MS)
@@ -242,8 +278,9 @@ export class AccountLogins {
     const result = session.ended.then(async (ending): Promise<AccountLoginResult> => {
       clearTimeout(timer)
       try {
-        if (cancelled || expired) {
-          await this.accounts.discardLogin(harness, target)
+        if (cancelled || expired || stopped) {
+          await this.accounts.discardLogin(harness, target).catch((error: Error) => { if (!stopped) throw error })
+          if (stopped) throw stopped
           if (expired) throw new Error(`${name} sign-in timed out. ${again} when you're ready.`)
           return { status: "cancelled" }
         }
@@ -263,15 +300,18 @@ export class AccountLogins {
                 cwd: homedir(),
                 env: environmentForExecutable(launch.executable, env),
                 timeout: 20_000,
+                signal: this.stopping.signal,
               }).catch(() => {
                 throw new Error(`${name} finished, but the login didn't check out. ${again}.`)
               })
             }
           }
+          if (this.closing) throw signInStopped()
           return await this.accounts.finishLogin(harness, target, options)
         } catch (failure) {
-          await this.accounts.discardLogin(harness, target).catch(() => {})
-          throw failure
+          // A finish may already have published its credentials. A quit must never remove that result.
+          if (!this.closing) await this.accounts.discardLogin(harness, target).catch(() => {})
+          throw this.closing ? signInStopped() : failure
         }
       } finally {
         login.done = true
@@ -296,7 +336,7 @@ export class AccountLogins {
       session,
       result,
       done: false,
-      cancel: () => { cancelled = true; session.stop() },
+      cancel: (reason) => { stopped = reason; cancelled = true; session.stop() },
     }
     this.logins.set(id, login)
 
@@ -316,11 +356,13 @@ export class AccountLogins {
   async wait(id: string): Promise<AccountLoginResult> {
     const login = this.logins.get(id)
     if (!login) throw new Error("That sign-in already ended. Refresh to see your accounts.")
+    if (!login.done) hostLog("accounts", "waiting for sign-in", { harness: login.info.harness })
     return login.result
   }
 
   /** What the sign-in page showed, or the address the browser ended on, for a provider that reads one. */
   submitCode(id: string, code: string): void {
+    if (this.closing) throw signInStopped()
     const login = this.logins.get(id)
     if (!login || login.done) throw new Error("That sign-in already ended. Start it again.")
     if (!login.session.paste) throw new Error(`${this.accounts.label(login.info.harness)} doesn't take anything pasted.`)

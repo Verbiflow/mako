@@ -121,15 +121,24 @@ try {
   await assert.rejects(conversationFiles.read(root, artifact, ownedDataDir), /No file named/, "A removed artifact never falls through to another Thread")
   let scans = 0
   const indexGate = Promise.withResolvers<void>()
-  class CountedGit extends WorkspaceGit {
-    override async listFiles() { scans++; await indexGate.promise; return ["owned.md"] }
+  // Each index scan is one tracked listing (`ls-files` without `--others`).
+  class CountedGit extends Git {
+    override async run(options: Parameters<Git["run"]>[0]) {
+      if (options.args.includes("ls-files") && !options.args.includes("--others")) {
+        scans++
+        await indexGate.promise
+      }
+      return super.run(options)
+    }
   }
-  const concurrent = new WorkspaceFiles(root, new CountedGit(gitRunner, root), noPreviews)
+  const countedRunner = new CountedGit()
+  const concurrent = new WorkspaceFiles(root, new WorkspaceGit(countedRunner, root), noPreviews)
   const reads = [concurrent.list(), concurrent.list()]
   indexGate.resolve()
   const indexes = await Promise.all(reads)
+  countedRunner.close()
   assert.equal(scans, 1, "Simultaneous preview cards share one in-flight index scan")
-  assert.equal(indexes[0], indexes[1])
+  assert.deepEqual(indexes[0], indexes[1])
   for (const [name, data, media, mime] of [
     [
       "native-image",

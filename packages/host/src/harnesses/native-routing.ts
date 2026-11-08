@@ -1,20 +1,7 @@
-import { hostLog } from "../base/host-log.js"
-import { nativeSpawnsOff, type NativeRoutingReading, type RoutedThread } from "../contracts/native-routing.js"
+import type { NativeRoutingReading } from "../contracts/native-routing.js"
 import type { HarnessVersions } from "../contracts/harness-versions.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
 import type { LaunchReadings } from "./runtime-floor.js"
-
-/**
- * Whether a launch switches the harness's own spawning off, read as it
- * launches: a Thread that becomes a lead mid-session gets the switch from its
- * next launch. Each switch is logged with the Thread's role.
- */
-export function launchSpawnsOff(harness: string, via: string, conversation: string, routing: (() => RoutedThread) | undefined): boolean {
-  const thread = routing?.()
-  if (!thread || !nativeSpawnsOff(thread)) return false
-  hostLog("routing", "native spawns off", { harness, via, role: thread.role, conversation })
-  return true
-}
 
 /** What Diagnostics' reading takes of the host: each driver's control, and the version a new session of each harness launches. */
 export interface NativeRoutingSources {

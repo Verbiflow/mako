@@ -23,9 +23,9 @@ process.on("message", (raw) => {
   const request = WatcherRequestSchema.safeParse(raw)
   if (!request.success) return
   const { id } = request.data
-  if (request.data.t === "mark" || request.data.t === "since") {
+  if (request.data.t === "mark" || request.data.t === "since" || request.data.t === "probe") {
     const asked = request.data
-    void (asked.t === "mark" ? mark(id) : since(id, asked.mark, asked.roots, asked.ignore, asked.exclude ?? [])).catch((error) =>
+    void (asked.t === "mark" ? mark(id) : asked.t === "probe" ? probe(id, asked.beats) : since(id, asked.mark, asked.roots, asked.ignore, asked.exclude ?? [])).catch((error) =>
       reply({ t: "failed", id, message: error instanceof Error ? error.message : String(error) }))
     return
   }
@@ -99,13 +99,20 @@ async function mark(id: number): Promise<void> {
   }
 }
 
-/** How often a read waiting for its sentinel replays the scratch folder again. */
+/**
+ * How long a read waiting for its sentinel first waits before replaying the
+ * scratch folder again, doubling to `CAUGHT_UP_POLL_MAX_MS`. Each replay is a
+ * stream fseventsd registers and answers: at a steady 20 ms, a daemon 2.6 s
+ * behind was asked 130 times for every read.
+ */
 const CAUGHT_UP_POLL_MS = 20
+const CAUGHT_UP_POLL_MAX_MS = 500
 
 /*
  * FSEvents replays its history only up to the newest id it has committed
  * (FSEventsGetCurrentEventId), and that runs behind the events it has
- * already handed out live: by seconds on a busy Mac. A change made just
+ * already handed out live: by milliseconds healthy, by seconds on a
+ * degraded fseventsd. A change made just
  * before a read can be past the history and yet before a new stream
  * started, so neither the replay nor that stream ever reports it. The ids
  * follow the order changes happen in, so a read first writes a sentinel and
@@ -125,8 +132,8 @@ async function caughtUp(): Promise<boolean> {
   try {
     await parcel.writeSnapshot(folder, mark, { backend: "fs-events" })
     writeFileSync(sentinel, "")
-    while (!(await parcel.getEventsSince(folder, mark, { backend: "fs-events" })).some((event) => event.path === reported))
-      await new Promise((resolve) => setTimeout(resolve, CAUGHT_UP_POLL_MS))
+    for (let wait = CAUGHT_UP_POLL_MS; !(await parcel.getEventsSince(folder, mark, { backend: "fs-events" })).some((event) => event.path === reported); wait = Math.min(wait * 2, CAUGHT_UP_POLL_MAX_MS))
+      await new Promise((resolve) => setTimeout(resolve, wait))
     return true
   } catch {
     return false
@@ -183,20 +190,70 @@ function ignoredBy(folders: ReadonlyMap<string, number>, path: string): number {
   return -1
 }
 
+/** How long a probe waits for each of its beats. */
+const PROBE_WITHIN_MS = 10_000
+/** Between a probe's beats, so parcel's debounce never folds two into one. */
+const PROBE_GAP_MS = 100
+
+/**
+ * Delivery measured now: a folder of this probe's own, written `beats`
+ * times, one after another, each timed until its own path is heard. Taken
+ * after fseventsd restarts, so the person sees how late events are then
+ * without waiting a minute of the canary's beats.
+ */
+async function probe(id: number, beats: number): Promise<void> {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-probe-")))
+  const heard = new Map<string, () => void>()
+  const lagsMs: number[] = []
+  let subscription: AsyncSubscription | undefined
+  try {
+    subscription = await parcel.subscribe(folder, (error, events) => {
+      if (error) return
+      for (const event of events) {
+        const hear = heard.get(event.path)
+        if (!hear) continue
+        heard.delete(event.path)
+        if (test?.lagMs) setTimeout(hear, test.lagMs)
+        else hear()
+      }
+    })
+    for (let index = 0; index < beats; index++) {
+      const path = join(folder, `beat-${index}`)
+      const sent = performance.now()
+      const lag = await new Promise<number | undefined>((settle) => {
+        const timer = setTimeout(() => settle(undefined), PROBE_WITHIN_MS)
+        heard.set(path, () => {
+          clearTimeout(timer)
+          settle(performance.now() - sent)
+        })
+        writeFileSync(path, String(Date.now()))
+      })
+      heard.delete(path)
+      if (lag !== undefined) lagsMs.push(Math.round(lag))
+      await new Promise((resolve) => setTimeout(resolve, PROBE_GAP_MS))
+    }
+  } finally {
+    await subscription?.unsubscribe().catch(() => {})
+    rmSync(folder, { recursive: true, force: true })
+  }
+  reply({ t: "probed", id, lagsMs })
+}
+
 /*
- * A subscription that settles says nothing about delivery. An fseventsd
- * grown to gigabytes accepts every stream and delivers to none, and
- * parcel's one debounce thread can deadlock with the same result: no error,
- * just silence. So while anything is watched, this child watches a folder
- * of its own and writes to it. Missing that twice running means nothing
- * here is being heard; the host restarts the child once and polls until the
- * canary is heard again.
+ * A subscription that settles says nothing about delivery. A degraded
+ * fseventsd, grown to gigabytes, accepts every stream and delivers to none,
+ * and parcel's one debounce thread can deadlock with the same result: no
+ * error, just silence. So while anything is watched, this child watches a
+ * folder of its own and writes to it. Missing that twice running means
+ * nothing here is being heard; the host restarts the child once and polls
+ * until the canary is heard again.
  *
- * Late is not silent: an fseventsd with a backlog delivers in batches, 15 s
- * apart on a Mac a month up, with nothing lost, and each silence costs every
- * root a poll and a rescan and the child a restart. A beat is missed only
- * when nothing is heard for `CANARY_WITHIN_MS`; how late beats arrive is
- * reported instead.
+ * Late is not silent: a degraded fseventsd delivers in batches, seconds
+ * apart, with nothing lost, and each silence costs every root a poll and a
+ * rescan and the child a restart. A beat is missed only when nothing is
+ * heard for `CANARY_WITHIN_MS`. How late each beat arrives goes to the host
+ * (`beat`), which reads the daemon's health from it and offers the restart
+ * that fixes a degraded one; the slowest of the latest is said as `delivery`.
  */
 const test = canaryTest()
 const CANARY_EVERY_MS = test?.everyMs ?? 10_000
@@ -283,8 +340,10 @@ function heard(current: Canary): void {
   const now = Date.now()
   current.heard = now
   if (current.unheardSince === undefined) return
-  current.lags.push(now - current.unheardSince)
+  const lag = now - current.unheardSince
+  current.lags.push(lag)
   current.unheardSince = undefined
+  reply({ t: "beat", lagMs: lag })
   if (current.lags.length > LAGS_KEPT) current.lags.shift()
   const lagMs = Math.max(...current.lags)
   if (current.reported !== undefined && Math.abs(lagMs - current.reported) < LAG_STEP_MS) return
@@ -309,7 +368,7 @@ function stopCanary(): void {
   })
 }
 
-/** Tests shorten the beat and make the canary deaf while a file exists. */
+/** Tests shorten the beat, make the canary deaf while a file exists, and delay what it and a probe hear. */
 function canaryTest(): CanaryTest | undefined {
   const raw = process.env.MAKO_WATCHER_CANARY_TEST
   if (!raw) return undefined

@@ -1,15 +1,14 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../../base/host-command.js"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
-import { promisify } from "node:util"
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
 } from "../../threads/index.js"
 import { onWindows } from "../../base/platform.js"
 
-const run = promisify(execFile)
+const run = hostCommand
 /** `ps` reports start times to the second. */
 const START_SLACK_MS = 2_000
 const MAX_LOCKS = 100_000

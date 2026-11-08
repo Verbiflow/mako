@@ -7,6 +7,7 @@ import type { PlanBuilds } from "./plan-builds.js"
 import type { ThreadGroupChange } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { StoreFormats } from "./store-formats.js"
+import type { FileEventsService } from "./file-events-service.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { Entry } from "@mako/sessions/entries"
 import type { WorktreeStep } from "./thread-worktrees.js"
@@ -107,6 +108,7 @@ export type HostEventBody =
   | { type: "github-changed" }
   /** Agents' requests to move onto their Thread's own branch, and the projects that always allow it. */
   | { type: "workspace-moves"; moves: WorkspaceMoves }
+  /** Agents' asks to move their Thread to the cloud (`thread_move` below full access), which the person answers above its composer. */
   /** The host's record of built plans changed; window-wide. */
   | { type: "plan-builds"; builds: PlanBuilds }
   /** The person's access choices changed, here or on another device (`contracts/access-choices.ts`); window-wide. */
@@ -124,9 +126,10 @@ export type HostEventBody =
   /**
    * A conversation's batch, and as its host emits it, the same in the compact live form (`compact`), which a reader that
    * said it reads that form hears in its place: each is encoded apart (`encodeRuntimeEvent`), never together. A window
-   * that reads the compact form may hear `batch` itself so (`HeardLiveBatch`, read by `expandLiveBatch`).
+   * that reads the compact form may hear `batch` itself so (`HeardLiveBatch`, read by `expandLiveBatch`). `rostered`: the
+   * same again for a host's own windows, its roster as what changed, where it has one (`rosteredLiveBatch`).
    */
-  | { type: "live-batch"; batch: LiveBatch; compact?: CompactLiveBatch }
+  | { type: "live-batch"; batch: LiveBatch; compact?: CompactLiveBatch; rostered?: CompactLiveBatch }
   /**
    * Conversations the account lists that this host doesn't run (another device's in the cloud): each listed as one is
    * at boot, unopened, or listed again as it changed. Opening one reads it where it runs.
@@ -157,8 +160,11 @@ export type HostEventBody =
   | { type: "cloud-sign-ins"; signIns: CloudSignInsState }
   /** Turning Mako Cloud on moved: a step done, stuck or under way (`CloudTurnOn`). */
   | { type: "cloud-turn-on"; turnOn: import("./cloud-turn-on.js").CloudTurnOn }
+  | { type: "simulator-setup"; setup: import("./simulator-setup.js").SimulatorSetup }
   /** The person's choice about handing agents to the cloud as this Mac sleeps changed. */
   | { type: "handoff-settings"; settings: import("./cloud-threads.js").HandOffSettings }
+  /** Keeping this Mac awake while agents work: the person's choice, or what's held, changed (`KeepAwake`). */
+  | { type: "keep-awake"; state: import("./keep-awake.js").KeepAwakeState }
   /** The person's conversation settings changed (`ConversationSettings`). */
   | { type: "conversation-settings"; settings: import("./turn-continuation.js").ConversationSettings }
   /** Something happened to the account's devices (`@mako/protocol/account-events`); `mine` when it's about this Mac. */
@@ -186,6 +192,8 @@ export type HostEventBody =
   | { type: "thread-purposes"; purposes: ThreadPurpose[] }
   /** A shared store's format changed under this host: a newer Mako changed it, so this one now only reads it. Window-wide. */
   | { type: "store-formats"; formats: StoreFormats }
+  /** fseventsd's health changed, or a restart moved a step; window-wide. */
+  | { type: "file-events-service"; service: FileEventsService }
   /** These Threads' names changed, from any host; the rest are as they were. Window-wide. */
   | { type: "thread-titles"; titles: ThreadTitleEntry[] }
   /** Sessions were added to another Thread or split into a new one; window-wide. */

@@ -33,7 +33,7 @@ export function UpdateMako() {
       data-update-mako=""
       disabled={busy}
       onClick={act}
-      className="pressable -my-0.5 h-5 shrink-0 rounded px-1.5 text-label font-medium text-foreground/80 hover:bg-fill-hover hover:text-foreground disabled:opacity-50"
+      className="pressable -my-0.5 h-5 shrink-0 px-1.5 text-label font-medium text-foreground/80 hover:bg-fill-hover hover:text-foreground disabled:opacity-50"
     >
       {label}
     </button>

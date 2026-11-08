@@ -1,8 +1,7 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { readdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, relative, sep } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import type { AppProbeView, Capped } from "../contracts/thread-app.js"
 import type { Container } from "./container-runtime.js"
@@ -11,7 +10,7 @@ import { listed, toolText, when } from "../base/tool-text.js"
 import type { FileHistory } from "./watch-backend.js"
 import { onMac } from "../base/platform.js"
 
-const run = promisify(execFile)
+const run = hostCommand
 
 const LSOF_BYTES = 16 * 1024 * 1024
 /** Each list in a report stops here; a longer one says how many it left out. */

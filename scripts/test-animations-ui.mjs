@@ -1,9 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 // Every mark of work in progress moves for as long as its work runs, in
 // production components on the isolated live workflow fixture: the sweep
@@ -21,7 +22,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-animations-ui-"))
+  const root = testScratch("mako-animations-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-animations-ui", main: fileURLToPath(import.meta.url) }))
   const given = process.argv[2]
   let server
@@ -48,8 +49,10 @@ async function check() {
   const root = process.env.MAKO_ANIMATIONS_UI_ROOT
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
+  atSize(window, 1440, 900)
   const page = window.webContents
   const evaluate = (code) => page.executeJavaScript(code)
   const pause = (ms) => new Promise((done) => setTimeout(done, ms))
@@ -121,20 +124,25 @@ async function check() {
   assert.equal(await evaluate("document.querySelectorAll('[data-live-step] .activity-orb, [data-live-step] canvas').length"), 0, "a running call's only signal is its sweep: no orb")
   assert.equal(await evaluate("document.querySelectorAll('.lucide-activity, .activity-meter').length"), 0, "nothing draws a heartbeat")
 
-  // A spinner and the rail's working orb.
+  // A spinner and the rail's working fin, which runs on the shared clock: at the timeline's own point of its loop.
   const spinner = "[data-fixture=spinner] [data-spinner]"
-  const orb = "[data-fixture=status-marks] .activity-orb[data-state=working]"
+  const fin = "[data-fixture=status-marks] [data-live-mark=working] .live-mark-body"
+  const inPhase = `(() => { const animation = document.querySelector(${JSON.stringify(fin)}).getAnimations()[0]; const period = animation.effect.getComputedTiming().duration; return Math.abs((animation.currentTime % period) - (document.timeline.currentTime % period)) < 20 })()`
   moving(await read(spinner), "a spinner", "spinner-turn")
-  assert.ok((await pictures(orb)) > 1, "the working orb moves")
+  moving(await read(fin), "the working fin", "live-mark-bob")
+  assert.ok((await pictures(fin)) > 1, "the working fin moves")
+  assert.equal(await evaluate(inPhase), true, "the fin runs on the shared clock")
 
   // Covered or minimized, they rest; shown again, every one moves again.
   await visibility("hidden")
   resting(await read(rows), "a running call, hidden")
   resting(await read(spinner), "a spinner, hidden")
+  resting(await read(fin), "the working fin, hidden")
   await visibility("visible")
   moving(await read(rows), "a running call, shown again", "shimmer-sweep")
   moving(await read(spinner), "a spinner, shown again", "spinner-turn")
-  assert.ok((await pictures(orb)) > 1, "the working orb moves again once shown")
+  moving(await read(fin), "the working fin, shown again", "live-mark-bob")
+  assert.equal(await evaluate(inPhase), true, "shown again, the fin is back on the shared clock rather than where it rested")
 
   // Scrolled out of view the rows rest; scrolled back they sweep again.
   const scroller = "document.querySelector('[data-live-step]').closest('.scroll-fade-scroller')"
@@ -151,12 +159,12 @@ async function check() {
   moving(await read("[data-agent-group] .shimmer-text"), "agents running", "shimmer-sweep")
   assert.equal(await evaluate("document.querySelectorAll('[data-live-step] .activity-orb, [data-live-step] canvas').length"), 0, "agents running carry no orb")
 
-  // Reduced motion: the words stand still in their own colours, the spinner and the orb stand still.
+  // Reduced motion: the words stand still in their own colours, the spinner and the fin stand still.
   await reduceMotion(true)
   await pause(200)
   for (const mark of await read("[data-agent-group] .shimmer-text")) assert.equal(mark.name, "none", "reduced motion: the words stand still")
   for (const mark of await read(spinner)) assert.ok(mark.running !== "running" || mark.moved === 0, "reduced motion: the spinner stands still")
-  assert.equal(await pictures(orb), 1, "reduced motion: the orb stands still")
+  assert.equal(await pictures(fin), 1, "reduced motion: the fin stands still")
   await reduceMotion(false)
 
   console.log("Every mark of work in progress moves while it is seen, rests while it is not, and moves again when seen.")

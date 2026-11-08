@@ -60,6 +60,7 @@ function generatedFields(tool: (typeof AGENT_TOOLS)[number]) {
 const ToolResultSchema = z.object({ content: z.array(z.object({ type: z.literal("text"), text: z.string() })), isError: z.boolean().optional() })
 const StartedSchema = AgentAnswerSchema.extend({ child: z.string(), name: z.string(), conversation: z.string(), deduped: z.literal(true).optional() })
 const ReadSchema = AgentAnswerSchema.extend({ text: z.string() })
+const ListedSchema = AgentAnswerSchema.extend({ children: z.array(z.looseObject({ name: z.string(), idleFor: z.number().optional() })) })
 
 async function call(client: Client, name: string, args: Parameters<Client["callTool"]>[0]["arguments"]): Promise<AgentAnswer> {
   const result = ToolResultSchema.parse(await client.callTool({ name, arguments: args }))
@@ -110,7 +111,7 @@ try {
   const listed: Record<string, Awaited<ReturnType<Client["listTools"]>>["tools"]> = {}
   for (const [door, client] of Object.entries(doors)) {
     listed[door] = (await client.listTools()).tools
-    assert.deepEqual(listed[door]!.map((tool) => tool.name).sort(), AGENT_TOOLS.map((tool) => tool.mcp.name).sort(), `${door} lists every tool`)
+    assert.deepEqual(listed[door]!.map((tool) => tool.name).filter((name) => name.startsWith("agents_")).sort(), AGENT_TOOLS.map((tool) => tool.mcp.name).sort(), `${door} lists every tool`)
     for (const tool of AGENT_TOOLS) {
       const schema = listed[door]!.find((listedTool) => listedTool.name === tool.mcp.name)!.inputSchema
       const fields = generatedFields(tool)
@@ -119,7 +120,8 @@ try {
     }
   }
   // The in-memory door keeps the undefined fields the wire drops.
-  assert.deepEqual(listed["mako mcp"], JSON.parse(JSON.stringify(listed["in-thread"])), "both MCP doors list the same tools, schemas and words")
+  const agentsOnly = (tools: (typeof listed)[string]) => tools.filter((tool) => tool.name.startsWith("agents_"))
+  assert.deepEqual(agentsOnly(listed["mako mcp"]!), JSON.parse(JSON.stringify(agentsOnly(listed["in-thread"]!))), "both MCP doors list the same tools, schemas and words")
 
   const command = async (...args: string[]) => {
     const { stdout } = await run(process.execPath, [cli, "agents", ...args, "--socket", socket, "--cwd", cwd, "--json"], { env: { ...process.env, MAKO_SESSION_ID: session } }).catch((error: { stdout?: string; code?: number }) => {
@@ -145,9 +147,12 @@ try {
 
   world.release(first.conversation)
   await world.settle()
-  const lists = [await call(thread, "agents_list", {}), await call(stdio, "agents_list", {}), await command("list")]
-  assert.deepEqual(lists[1], lists[0])
-  assert.deepEqual(lists[2], lists[0], "the same list through all three")
+  // A strip's `idleFor` reads the clock as each door answers, so it can tick between them: the rest is the same list.
+  const lists = [await call(thread, "agents_list", {}), await call(stdio, "agents_list", {}), await command("list")].map((list) => ListedSchema.parse(list))
+  assert.ok(lists[0]!.children.every((strip) => Number.isInteger(strip.idleFor)), "a finished Fin's strip says how long it's been idle")
+  const unclocked = (list: z.infer<typeof ListedSchema>) => ({ ...list, children: list.children.map((strip) => Object.fromEntries(Object.entries(strip).filter(([key]) => key !== "idleFor"))) })
+  assert.deepEqual(unclocked(lists[1]!), unclocked(lists[0]!))
+  assert.deepEqual(unclocked(lists[2]!), unclocked(lists[0]!), "the same list through all three")
   const reads = [await call(thread, "agents_read", { child: "sidebar" }), await call(stdio, "agents_read", { child: "sidebar" }), await command("read", "sidebar")]
   assert.match(ReadSchema.parse(reads[0]).text, /the sidebar is reviewed/)
   assert.deepEqual(reads[1], reads[0])

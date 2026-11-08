@@ -1,13 +1,6 @@
-import { spawn } from "node:child_process"
-import {
-  mkdir,
-  readFile,
-  realpath,
-  rename,
-  stat,
-  writeFile,
-} from "node:fs/promises"
-import { basename, dirname } from "node:path"
+import { spawnProviderProcess } from "./provider-process.js"
+import { readFile, realpath, stat } from "node:fs/promises"
+import { basename } from "node:path"
 import { z } from "zod"
 import {
   HarnessUpdateCommandSchema,
@@ -24,15 +17,19 @@ import type { InstalledReading } from "@mako/sessions/record-writers"
 import { JsonObjectSchema, JsonValueSchema, jsonStoreAccess, unknownFields, type JsonObject } from "@mako/sessions/store-format"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { publishFile } from "../base/published-files.js"
 import type { DiscoveryProcesses } from "./discovery-process.js"
 import { registryJson } from "./registry-fetch.js"
 import {
   npmUpdate,
   pinnedPolicy,
+  unpublishedBuild,
+  unpublishedWords,
   type ProviderUpdateSource,
   type RuntimeUpdateSource,
 } from "./update-source.js"
 import type { HostJobs } from "../base/host-jobs.js"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /**
  * The runtimes behind every provider: what is installed, what is current,
@@ -959,6 +956,11 @@ export class RuntimeUpdates {
         this.options.updateTimeoutMs
       )
       if (outcome.code !== 0) {
+        // A pinned build its vendor withdrew: say which, never the installer's bare HTTP error.
+        const versions = this.sources().find((entry) => entry.key === provider)?.versions
+        const pinned = versions && !versions.bundled ? versions.tested : undefined
+        if (pinned && [plan.command, ...plan.args].join(" ").includes(pinned) && unpublishedBuild(outcome.output))
+          throw new Error(unpublishedWords(current.label ?? provider, pinned))
         const tail = outcome.output
           .trim()
           .split("\n")
@@ -1022,16 +1024,7 @@ export class RuntimeUpdates {
     }
     this.writes = this.writes
       .then(async () => {
-        const temp = `${this.options.path}.${process.pid}.tmp`
-        await mkdir(dirname(this.options.path), {
-          recursive: true,
-          mode: 0o700,
-        })
-        await writeFile(temp, JSON.stringify(file), {
-          encoding: "utf8",
-          mode: 0o600,
-        })
-        await rename(temp, this.options.path)
+        await publishFile(this.options.path, JSON.stringify(file), { mode: 0o600, dirMode: 0o700 })
       })
       .catch((error) => {
         hostWarn("runtime", "readings not saved", {
@@ -1234,7 +1227,7 @@ export async function readRuntimeVersion(
       }
       child.stdout.on("data", collect)
       child.stderr.on("data", collect)
-      child.stdin.end()
+      endChildInput(child)
       const result = await exited
       const output = Buffer.concat(chunks).toString("utf8")
       if (result.code !== 0 && !parseVersion(output))
@@ -1278,11 +1271,11 @@ function spawnUpdate(
   timeoutMs: number
 ): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnProviderProcess(command, args, {
       env: environmentForExecutable(command, env),
-      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
-    })
+    }, { kind: "runtime-update", owner: basename(command) })
+    endChildInput(child)
     let output = ""
     const collect = (chunk: Buffer) => {
       output = (output + chunk.toString("utf8")).slice(-OUTPUT_TAIL)

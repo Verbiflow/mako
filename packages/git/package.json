@@ -8,7 +8,8 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
-    "./environment": "./dist/environment.js"
+    "./environment": "./dist/environment.js",
+    "./process-runner": "./dist/process-runner.js"
   },
   "files": [
     "dist"

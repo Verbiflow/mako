@@ -72,12 +72,17 @@ try {
   // A project checkout's repositories, each answering an update its own way.
   const updatesOf = new Map<string, WorktreeUpdate | Error>()
   let mergeStops: string | undefined
+  const wanted_: { conversationId: string; cwd: string; branch?: string; base?: string }[] = []
   const worktrees = {
     threadCheckout: () => projectCheckout ?? (placed && { path: placed.path, project: placed.repoRoot, branch: placed.branch, worktrees: [placed] }),
     startedFrom: async () => "origin/main",
     review: async (path: string) => reviews.get(path) ?? assert.fail(`no review of ${path}`),
     ahead: async () => 0,
     shares: async () => undefined,
+    wantBranch: async (conversationId: string, cwd: string, wanted: { branch?: string; base?: string }) => {
+      if (wanted.branch === "taken") throw new Error("taken already exists in the project. worktree_move makes a new branch")
+      wanted_.push({ conversationId, cwd, ...wanted })
+    },
     merge: async (path: string) => {
       if (path === mergeStops) throw new Error("Git stopped the merge and main was left as it was.")
       mergedPaths.push(path)
@@ -398,6 +403,16 @@ try {
   assert.match(text(asked), /^Asked the user\. .*worktree_status shows it/)
   assert.equal(moves.state().requests.find((candidate) => candidate.conversationId === "g")?.harness, "claude")
   assert.equal(parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: {} }))).move, "asking")
+  {
+    // A move can name its branch and base: the worktree service holds them for the worktree the move makes, and the reply says them.
+    const named = await agent.callTool({ name: "worktree_move", arguments: { branch: "alt", base: "main" } })
+    assert.equal(named.isError, undefined)
+    assert.match(JSON.stringify(named.content), /The worktree's branch: on alt from main\./)
+    assert.deepEqual(wanted_.at(-1), { conversationId: "g", cwd: project, branch: "alt", base: "main" })
+    const taken = await agent.callTool({ name: "worktree_move", arguments: { branch: "taken" } })
+    assert.equal(taken.isError, true, "a branch that exists is refused before anything is asked")
+    assert.match(JSON.stringify(taken.content), /makes a new branch/)
+  }
 
   placed = worktree
   sources.set("g", { ...sources.get("g")!, cwd: worktreePath })

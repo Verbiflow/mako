@@ -22,6 +22,7 @@ import { publishDraft, readRecipe, readVersion, recipePath, recipeProblem, Recip
 import { ThreadStore } from "@mako/host/threads/store"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import { TraceRefresh } from "@mako/host/workspaces/app-probe"
+import { reapApps } from "./lib/reap-apps.ts"
 
 const gitRunner = new Git()
 
@@ -50,6 +51,7 @@ const records = join(root, "thread-environments")
 const title = new Map<string, string>()
 const host = () => new ThreadProcesses({ root: records, listening: portListening, whose: (app) => title.get(app) })
 const processes = host()
+const reap = reapApps(processes)
 const settle = 15_000
 
 function git(cwd: string, ...args: string[]): string {
@@ -881,5 +883,6 @@ setInterval(() => {}, 1000)
   console.log("thread processes: one app per folder, shared by the Threads in it, and the same app from the desk (its view, start, restart, checks, stop, output followed across runs, a look that claims nothing, broken and being set up, an install stopped mid-way run again, a long install starting the app by itself once done unless stopped, waiting in line for memory and making room); recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, credentials carried as copies and named in the save, the save naming what publishing reaches and how long each check last took against its target, app_status and Settings, install and catch-up only when inputs change, room made from quiet apps or the start waits in line and goes ahead by itself, idle apps stopped; one copy at a time (a fixed port, a start refused naming whose copy runs, the desk taking a turn); process trees started detached, adopted by another host, surviving the host that started them, stopped whole; what an app leaves running given time to exit by itself, and named left behind only when it stays; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
 } finally {
   for (const cleanup of cleanups) await cleanup().catch(() => {})
+  await reap()
   rmSync(root, { recursive: true, force: true })
 }

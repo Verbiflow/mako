@@ -151,7 +151,7 @@ export function WorktreesSection() {
                 ))}
               </ListCard>
             ) : (
-              <div className="rounded-lg bg-surface ring-1 ring-hairline">
+              <div className="bg-raised">
                 <Blank title="No worktrees" body="Choose Own branch under the composer, and the next Thread’s worktree shows up here." />
               </div>
             )}

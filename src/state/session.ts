@@ -1,6 +1,7 @@
 import { accounts } from "@/state/accounts"
 import { handOff } from "@/state/handoff"
 import { conversationSettings } from "@/state/conversation-settings"
+import { keepAwake } from "@/state/keep-awake"
 import { revealWorkedProject } from "@/state/prefs"
 import { playFeedback } from "@/state/feedback"
 import { workspaceTransitionStore } from "@/state/workspace-transition"
@@ -10,6 +11,7 @@ import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
 import { applyThreadPurposes, loadThreadPurposes } from "@/state/thread-purposes"
 import { applyStoreFormats, loadStoreFormats } from "@/state/store-formats"
+import { applyFileEvents, loadFileEvents } from "@/state/file-events"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
 import { refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
@@ -32,6 +34,7 @@ import { providerConnectionsStore } from "@/state/provider-connections"
 import { cloudAccountStore, heardAccountEvent } from "@/state/cloud-account"
 import { offerCloudProjects } from "@/state/cloud-projects"
 import { cloudTurnOn } from "@/state/cloud-turn-on"
+import { simulatorSetup } from "@/state/simulator-setup"
 import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
@@ -336,11 +339,18 @@ function apply(event: HostEvent) {
     applyStoreFormats(event.formats)
     return
   }
+  if (event.type === "file-events-service") {
+    applyFileEvents(event.service)
+    return
+  }
   if (event.type === "thread-titles") {
     applyThreadTitles(event.titles)
     return
   }
   if (event.type === "host-reconnected") {
+    // The stream attached, so the host is there. The boot brings the window up to date; on a busy host that took 18 s,
+    // and it isn't an outage. One that fails says so itself.
+    hostConnectionStore.set({ kind: "connected" })
     void actions.reconnect()
     return
   }
@@ -395,12 +405,20 @@ function apply(event: HostEvent) {
     cloudTurnOn.heard(event.turnOn)
     return
   }
+  if (event.type === "simulator-setup") {
+    simulatorSetup.heard(event.setup)
+    return
+  }
   if (event.type === "handoff-settings") {
     handOff.settled(event.settings)
     return
   }
   if (event.type === "conversation-settings") {
     conversationSettings.settled(event.settings)
+    return
+  }
+  if (event.type === "keep-awake") {
+    keepAwake.settled(event.state)
     return
   }
   if (event.type === "runtime-updates") {
@@ -761,6 +779,8 @@ async function loadGroups() {
   }
   // Which shared stores a newer Mako changed; the rail and Diagnostics say so. An older host without the method has none to say.
   await loadStoreFormats().catch(() => undefined)
+  // fseventsd's health, for the notice above the desk; a host without the reading says nothing.
+  await loadFileEvents().catch(() => undefined)
   try {
     await loadThreadTitles()
   } catch (error) {

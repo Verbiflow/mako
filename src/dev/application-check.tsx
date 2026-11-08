@@ -6,7 +6,7 @@ import { bindTheme, prefsStore } from "@/state/prefs"
 import { getMako } from "@/lib/bridge"
 import { installMockBridge } from "./mock-bridge"
 import { threadMoveStepped } from "@/state/cloud-moves"
-import type { LifecycleState, LifecycleWork, LocalBuildState, RevisionChanges, UncommittedChanges, UnsurePerformance, UpdateInstallation, UpdateSource } from "@mako/host/contracts/app-lifecycle"
+import type { BuildFailure, CheckoutStanding, UpdateBuildFrom, LifecycleState, LifecycleWork, LocalBuildState, RevisionChanges, UncommittedChanges, UnsurePerformance, UpdateInstallation, UpdateSource, UpdateSourcePlan } from "@mako/host/contracts/app-lifecycle"
 import type { HandOffCandidate, HandOffResult, ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 import "../index.css"
 
@@ -60,6 +60,10 @@ const UNCOMMITTED: UncommittedChanges = {
     { path: "scripts/bench-session-uploads.ts", change: "deleted" },
   ],
 }
+/** A reading's plan: what Build recommends, how the checkout stands, and what the app already runs. */
+function plan(recommended: UpdateSourcePlan["recommended"], standing: CheckoutStanding, installed: { upstream?: boolean; checkout?: boolean } = {}): UpdateSourcePlan {
+  return { recommended, upstream: { installed: installed.upstream ?? false }, checkout: { standing, installed: installed.checkout ?? false } }
+}
 const reading = (overrides: Partial<Extract<UpdateSource, { kind: "checkout" }>>): UpdateSource => ({
   kind: "checkout",
   head: INSTALLED,
@@ -71,15 +75,15 @@ const reading = (overrides: Partial<Extract<UpdateSource, { kind: "checkout" }>>
   untracked: 0,
   uncommitted: CLEAN,
   fetch: { kind: "fetched" },
-  plan: { kind: "fast-forward" },
+  plan: plan("upstream", "behind"),
   target: UPSTREAM,
   changes: CHANGES,
   readAt: "2026-10-28T08:20:00.000Z",
   ...overrides,
 })
-const LEVEL = reading({ head: UPSTREAM, behind: 0, plan: { kind: "as-is", why: "level", installed: false } })
+const LEVEL = reading({ head: UPSTREAM, behind: 0, plan: plan("upstream", "level") })
 const BY_HAND = "cd '/Users/developer/Projects/mako' && npm install"
-const READY: LocalBuildState = { kind: "ready", build: { ...installedBuild, id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: UPSTREAM }, changes: CHANGES, forwarded: { branch: "main", from: INSTALLED, to: UPSTREAM } }
+const READY: LocalBuildState = { kind: "ready", build: { ...installedBuild, id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: UPSTREAM }, changes: CHANGES, from: "upstream", took: { ms: 312_000, steps: { copying: 9_000, compiling: 71_000, checking: 168_000, packaging: 58_000, verifying: 6_000 } } }
 /** The morning the Mac indexed a fresh dependency tree while the update timed itself: three rows it couldn't settle in 15 rounds. */
 const BUSY: UnsurePerformance = {
   rows: [
@@ -99,22 +103,31 @@ const BUSY: UnsurePerformance = {
  */
 export const SOURCE_SCENES = {
   behind: { checkout: reading({}) },
-  current: { checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "current" }, changes: { from: UPSTREAM, count: 0, titles: [] } }), build: { ...installedBuild, id: "c41e7d2f9a0b3e65", revision: UPSTREAM } },
-  changes: { checkout: reading({ changed: 3, untracked: 1, uncommitted: { count: 4, files: UNCOMMITTED.files.slice(0, 4) }, plan: { kind: "as-is", why: "changes", installed: false }, target: INSTALLED, changes: { from: INSTALLED, count: 0, titles: [] } }) },
-  uncommitted: { checkout: reading({ head: UPSTREAM, behind: 0, changed: 39, untracked: 2, uncommitted: UNCOMMITTED, plan: { kind: "as-is", why: "level", installed: false } }), build: { ...installedBuild, revision: INSTALLED, dirty: true, uncommitted: { count: 12, files: UNCOMMITTED.files.slice(0, 3) } } },
-  branch: { checkout: reading({ head: LOCAL, branch: "approval-bar", ahead: 2, plan: { kind: "as-is", why: "branch", installed: false }, target: LOCAL, changes: { from: INSTALLED, count: 2, titles: ["Approve in place (#190)", "Name the waiting tool"] } }) },
-  diverged: { checkout: reading({ head: LOCAL, ahead: 2, plan: { kind: "as-is", why: "diverged", installed: false }, target: LOCAL, changes: { from: INSTALLED, count: 2, titles: ["Local experiment", "Local fix"] } }) },
+  current: { checkout: reading({ head: UPSTREAM, behind: 0, plan: plan(null, "level", { upstream: true, checkout: true }), changes: { from: UPSTREAM, count: 0, titles: [] } }), build: { ...installedBuild, id: "c41e7d2f9a0b3e65", revision: UPSTREAM } },
+  changes: { checkout: reading({ changed: 3, untracked: 1, uncommitted: { count: 4, files: UNCOMMITTED.files.slice(0, 4).map((file, index) => ({ ...file, by: [index < 3 ? "Speed up the Git runner" : "you"] })) } }) },
+  uncommitted: { checkout: reading({ head: UPSTREAM, behind: 0, changed: 39, untracked: 2, uncommitted: UNCOMMITTED, plan: plan("upstream", "level") }), build: { ...installedBuild, revision: INSTALLED, dirty: true, uncommitted: { count: 12, files: UNCOMMITTED.files.slice(0, 3) } } },
+  branch: { checkout: reading({ head: LOCAL, branch: "approval-bar", ahead: 2, plan: plan("upstream", "branch"), changes: { from: INSTALLED, count: 2, titles: ["Approve in place (#190)", "Name the waiting tool"] } }) },
+  diverged: { checkout: reading({ head: LOCAL, ahead: 2, plan: plan("upstream", "diverged") }) },
+  ahead: { checkout: reading({ head: LOCAL, ahead: 2, behind: 0, plan: plan("checkout", "ahead"), target: LOCAL, changes: { from: INSTALLED, count: 2, titles: ["Local experiment", "Local fix"] } }) },
   offline: { checkout: reading({ fetch: { kind: "failed", reason: "origin didn't answer in 15 seconds" }, behind: 4, upstream: { name: "origin/main", commit: "d9da1b16a8e2f3c4b5a6978877665544332211ff", branch: "main" }, target: "d9da1b16a8e2f3c4b5a6978877665544332211ff", changes: { ...CHANGES, count: 4, titles: CHANGES.titles.slice(4) } }) },
   installing: { checkout: LEVEL, local: { kind: "building", phase: "installing", revision: UPSTREAM, dependencies: { count: 1, names: ["@mako/web-client"] } } },
-  installRefused: { checkout: reading({ head: UPSTREAM, behind: 0, changed: 1, uncommitted: { count: 1, files: [{ path: "package-lock.json", change: "edited" }] }, plan: { kind: "as-is", why: "level", installed: false } }), local: { kind: "error", message: `The update couldn't install dependencies: package-lock.json lists a package the checkout hasn't installed: @mako/web-client. The checkout has uncommitted changes to package-lock.json, so Mako won't run npm install there for you. Commit or discard them, or run npm install yourself, then build again. Your installed app and agents were not changed.`, command: BY_HAND } },
-  installFailed: { checkout: LEVEL, local: { kind: "error", message: `The update couldn't install dependencies: npm install didn't finish within 10 minutes, so Mako stopped it. Run npm install yourself to see the whole error, then build again. Your installed app and agents were not changed.`, command: BY_HAND } },
-  building: { checkout: LEVEL, local: { kind: "building", phase: "checking", revision: UPSTREAM } },
+  installRefused: { checkout: reading({ head: UPSTREAM, behind: 0, changed: 1, uncommitted: { count: 1, files: [{ path: "package-lock.json", change: "edited" }] }, plan: plan("checkout", "ahead"), ahead: 1 }), local: failed({ step: "installing", blame: "checkout", what: "package-lock.json lists a package the checkout hasn't installed: @mako/web-client. The checkout has uncommitted changes to package-lock.json, so Mako won't run npm install there for you. Commit or discard them, or run npm install yourself, then build again.", next: "Mako installs into its own copy, never your checkout." }, BY_HAND) },
+  installFailed: { checkout: LEVEL, local: failed({ step: "installing", blame: "machine", what: "npm install didn't finish within 10 minutes, so Mako stopped it. Run npm install yourself to see the whole error, then build again.", next: "This is the network or the Mac, not the code. Build again when it's back." }, BY_HAND) },
+  building: { checkout: LEVEL, local: { kind: "building", phase: "checking", from: "upstream", revision: UPSTREAM } },
   ready: { checkout: LEVEL, local: READY },
   busy: { checkout: LEVEL, local: { ...READY, performance: BUSY } },
   remeasuring: { checkout: LEVEL, local: { kind: "building", phase: "checking", remeasuring: true, revision: UPSTREAM } },
-  slower: { checkout: LEVEL, local: { kind: "error", message: "The update failed during checking: test:performance: this row is slower than the code its baseline measured, beside it on this Mac: merge/merge large (same): +61% beside 9a7a5c0c, between +48% and +77%, 7 rounds, 0 busy. Rows that failed against the baseline (25% slower allowed). Your installed app and agents were not changed." } },
-  installed: { checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "current" }, changes: { from: UPSTREAM, count: 0, titles: [] } }), build: { ...installedBuild, id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: UPSTREAM }, installed: CHANGES },
+  slower: { checkout: LEVEL, local: failed({ step: "checking", blame: "code", what: "The performance check found a timing clearly slower than the code before it, measured beside it on this Mac: merge/merge large (same): +61% beside 9a7a5c0c, between +48% and +77%, 7 rounds, 0 busy.", next: "That's the code, not the Mac: a Mac too busy to tell reads as unsure, never slower. Build again once a fix lands.", details: "Rows that failed against the baseline (50% slower allowed)" }) },
+  /** A check that fails on the commit itself: anyone building it would see the same. */
+  codeFailed: { checkout: LEVEL, local: failed({ step: "checking", blame: "code", what: "Checking (test:application) failed on origin/main at 53cad1f4.", next: "It fails the same way for anyone on this commit, so wait for a fix on origin/main, then build again.", details: "AssertionError [ERR_ASSERTION]: with nobody to choose, unsure fails\n    at scripts/test-perf-reference.ts:141" }) },
+  /** The Mac, not the code: out of open files while agents build. */
+  machineFailed: { checkout: LEVEL, local: failed({ step: "compiling", blame: "machine", what: "Compiling failed: the Mac ran out of open files.", next: "This is the Mac, not the code. Wait for agents and builds to finish, then build again.", details: "Error: EMFILE: too many open files, open 'dist/assets/index.js'" }) },
+  installed: { checkout: reading({ head: UPSTREAM, behind: 0, plan: plan(null, "level", { upstream: true, checkout: true }), changes: { from: UPSTREAM, count: 0, titles: [] } }), build: { ...installedBuild, id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: UPSTREAM }, installed: CHANGES },
 } satisfies Record<string, Partial<UpdateInstallation>>
+/** A failed build as the updater words it. */
+function failed(failure: BuildFailure, command?: string): LocalBuildState {
+  return { kind: "error", message: `${failure.what} ${failure.next} Your installed app and agents were not changed.`, failure, ...command && { command } }
+}
 export function sourceScene(name: keyof typeof SOURCE_SCENES) {
   lifecycle = { ...lifecycle, work: [], operation: { kind: "idle" } }
   installation = { ...installation, build: installedBuild, local: { kind: "idle" }, reading: false, installed: null, ...SOURCE_SCENES[name] }
@@ -154,8 +167,11 @@ let lifecycle: LifecycleState = {
   operation: { kind: "idle" },
   work: WORK,
 }
+/** Where each build was asked to come from: what the reading recommends, or the person's other choice. */
+const builtFrom: (UpdateBuildFrom | "recommended")[] = []
 export const calls = {
   build: 0,
+  builtFrom,
   measuredAgain: 0,
   quit: 0,
   stopped: 0,
@@ -207,7 +223,7 @@ export function setLocal(local: LocalBuildState) {
   applicationStore.set({ installation })
 }
 export function ready() {
-  setLocal({ kind: "ready", build: { ...identity, id: "8fc69a47318e520b" }, changes: null, forwarded: null })
+  setLocal({ kind: "ready", build: { ...identity, id: "8fc69a47318e520b" }, changes: null })
 }
 export function idle() {
   lifecycle = { ...lifecycle, work: [], operation: { kind: "idle" } }
@@ -241,8 +257,9 @@ window.mako = {
     return installation
   },
   pickFolder: async () => "/Users/developer/Projects/mako",
-  buildUpdate: async () => {
+  buildUpdate: async (from?: UpdateBuildFrom) => {
     calls.build++
+    calls.builtFrom.push(from ?? "recommended")
     setLocal({ kind: "building", phase: "compiling" })
   },
   measureUpdateAgain: async () => {

@@ -18,6 +18,8 @@ export interface HostWork {
    * or none.
    */
   current(): string | undefined
+  /** The named work open now, longest first, each with how long it has run: what a slow stop waits on. */
+  openWork?(): string[]
 }
 
 /** For a part built without a host around it, such as in a test. */
@@ -81,6 +83,9 @@ export interface EventLoopWatchOptions {
   heldMs?: number
   /** How long the loop stays watched after an event goes out. */
   lingerMs?: number
+  /** A hold of `longMs` or more: told so it can be looked into, such as by profiling what follows. */
+  heldLong?: (ms: number) => void
+  longMs?: number
 }
 
 interface Span {
@@ -125,11 +130,15 @@ export class EventLoopWatch implements HostWork {
   private loggedAt = -Infinity
   private unlogged = 0
   private stopped = false
+  private readonly heldLong: ((ms: number) => void) | undefined
+  private readonly longMs: number
 
-  constructor({ resolutionMs = 20, heldMs = 100, lingerMs = 1000 }: EventLoopWatchOptions = {}) {
+  constructor({ resolutionMs = 20, heldMs = 100, lingerMs = 1000, heldLong, longMs = 1000 }: EventLoopWatchOptions = {}) {
     this.resolutionMs = resolutionMs
     this.heldMs = heldMs
     this.lingerMs = lingerMs
+    this.heldLong = heldLong
+    this.longMs = longMs
   }
 
   begin(label: string): () => void {
@@ -152,6 +161,14 @@ export class EventLoopWatch implements HostWork {
 
   current(): string | undefined {
     return this.names.current()
+  }
+
+  openWork(): string[] {
+    const now = performance.now()
+    return [...this.open.values()]
+      .sort((a, b) => a.since - b.since)
+      .slice(0, NAMED_PER_HOLD)
+      .map((span) => `${span.label} (${Math.round(now - span.since)} ms)`)
   }
 
   /** An event went out: the loop stays watched for `lingerMs`. */
@@ -204,7 +221,10 @@ export class EventLoopWatch implements HostWork {
     else this.timer = undefined
   }
 
-  /** The loop was held `ms` somewhere between `from` and `to`: names the work running in that stretch, longest first. */
+  /**
+   * The loop was held `ms` somewhere between `from` and `to`: names the work open in that stretch, longest first.
+   * Most of it is waiting on a process or a reply; which one held the thread takes a profile (`heldLong`).
+   */
   private held(from: number, to: number, ms: number): void {
     const longestByLabel = new Map<string, number>()
     for (const span of [...this.open.values(), ...this.recent.filter((span) => (span.ended ?? to) >= from)]) {
@@ -216,6 +236,7 @@ export class EventLoopWatch implements HostWork {
       .slice(0, NAMED_PER_HOLD)
       .map(([label, spanMs]) => `${label} (${Math.round(spanMs)} ms)`)
     const hold: LoopHold = { at: Date.now(), ms: Math.round(ms), during }
+    if (ms >= this.longMs) this.heldLong?.(ms)
     this.count += 1
     if (!this.longest || hold.ms > this.longest.ms) this.longest = hold
     this.holds.push(hold)

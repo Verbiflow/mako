@@ -2,6 +2,7 @@ import { z } from "zod"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AdmittedLiveDriver } from "../harnesses/index.js"
+import { retriesBegun } from "../contracts/delivery-retry.js"
 import type { LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import type { Actor } from "../contracts/thread-identity.js"
@@ -11,7 +12,7 @@ import { promptFingerprint } from "./live-assets.js"
 import { LiveJournal, LiveRequestSchema } from "./live-journal.js"
 import { releaseHold } from "./live-ledger.js"
 import { snapshotFacts } from "./live-moves.js"
-import { launchRouting, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, launchAccount, launchCalls, launched, launchRouting, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { updateBinding } from "./live-sources.js"
 import { captureNativeHistory } from "./native-history.js"
 
@@ -135,6 +136,7 @@ export class LiveLaunches {
             path: options.threadPath,
             tuning,
             modeId,
+            ...options.account !== undefined && { account: options.account },
           },
         ],
         transfers: [],
@@ -216,6 +218,29 @@ export class LiveLaunches {
     return snapshot.session
   }
 
+  /**
+   * Starts again a conversation whose first launch failed before any native session existed, as it was asked to
+   * start, for the messages that waited for it (`LiveRequest.retry`): nothing to resume, so a launch, not a wake.
+   * False when there's nothing to start: its harness isn't here, or it has a session or a start already.
+   */
+  relaunch(resident: Resident): boolean {
+    const { dependencies } = this.access
+    const binding = activeBinding(resident)
+    const { session } = resident.snapshot
+    const driver = dependencies.driver(session.harness)
+    if (!binding || launched(binding) || resident.driver || resident.opening || resident.closing || !driver?.available(dependencies.appPath)) return false
+    resident.driver = driver
+    resident.opening = true
+    resident.snapshot = { ...resident.snapshot, session: { ...session, status: "starting", connection: "starting", error: undefined } }
+    hostLog("residency", "a conversation whose first start failed for now starts again", { conversation: session.id, harness: session.harness })
+    this.launch(resident, driver, session.harness, session.cwd, {
+      conversationId: session.id,
+      ...session.title !== undefined && { title: session.title },
+      ...binding.modeId !== undefined && { modeId: binding.modeId },
+    }, binding.modeId, binding.tuning ?? session.settings)
+    return true
+  }
+
   /** Start the conversation's first native session; its outcome lands on the resident. */
   launch(
     resident: Resident,
@@ -250,6 +275,8 @@ export class LiveLaunches {
           conversationTools,
           threadEnvironment,
           nativeRouting: launchRouting(dependencies, id, conversationTools),
+          nativeCalls: launchCalls(dependencies, id, cwd, conversationTools, threadEnvironment),
+          pinnedAccount: launchAccount(resident, provider),
           unattended: dependencies.unattended,
         }))
       })
@@ -303,16 +330,19 @@ export class LiveLaunches {
         resident.opening = !closed
         resident.driver = closed ? null : driver
         if (closed) resident.connections.clear()
+        const requests = this.access.failedStart(resident, { error }, options.resume !== undefined)
+        // A message that goes again by itself leaves the session to reopen then, not failed.
+        const waits = retriesBegun(resident.snapshot.requests, requests)
         resident.snapshot = {
           ...resident.snapshot,
           permissions: [],
           session: {
             ...resident.snapshot.session,
-            status: "failed",
+            status: waits ? "ready" : "failed",
             connection: closed ? "disconnected" : "connected",
-            error: errorMessage({ error }),
+            error: waits ? undefined : errorMessage({ error }),
           },
-          requests: this.access.failedStart(resident, { error }, options.resume !== undefined),
+          requests,
         }
         this.access.flush(resident)
         if (closed && options.resume)

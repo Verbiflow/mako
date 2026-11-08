@@ -2,12 +2,12 @@ import { useCallback, useEffect, useState } from "react"
 import { z } from "zod"
 import { heardPop } from "./back"
 
-/** Where the person is in the web app: the list, a Thread (and which of its Sessions), Settings, or a new Thread over one. */
+/** Where the person is in the web app: the list, a Thread (and which of its Sessions), Settings, the Inbox, or a new Thread over one. */
 export type WebRoute = ScreenRoute | { kind: "new"; over?: ScreenRoute }
-export type ScreenRoute = { kind: "list" } | { kind: "thread"; thread: string; session?: string } | { kind: "settings" }
+export type ScreenRoute = { kind: "list" } | { kind: "thread"; thread: string; session?: string } | { kind: "settings" } | { kind: "inbox" } | { kind: "setup"; project: string }
 
 /** What a new Thread's sheet was opened over, kept in the history entry: a reload opens it over the list. */
-const OverSchema = z.object({ over: z.discriminatedUnion("kind", [z.object({ kind: z.literal("list") }), z.object({ kind: z.literal("thread"), thread: z.string(), session: z.string().optional() }), z.object({ kind: z.literal("settings") })]) })
+const OverSchema = z.object({ over: z.discriminatedUnion("kind", [z.object({ kind: z.literal("list") }), z.object({ kind: z.literal("thread"), thread: z.string(), session: z.string().optional() }), z.object({ kind: z.literal("settings") }), z.object({ kind: z.literal("inbox") }), z.object({ kind: z.literal("setup"), project: z.string() })]) })
 /** How many of the app's own steps lie behind a history entry: Back goes back only while there's one. */
 const DepthSchema = z.object({ depth: z.number().int().nonnegative() })
 
@@ -29,6 +29,8 @@ export function parseRoute(pathname: string, search: string, base: string): WebR
     return over ? { kind: "new", over } : { kind: "new" }
   }
   if (first === "settings") return { kind: "settings" }
+  if (first === "inbox") return { kind: "inbox" }
+  if (first === "setup" && second) return { kind: "setup", project: second }
   return { kind: "list" }
 }
 
@@ -42,6 +44,10 @@ export function routeHref(route: WebRoute, base: string): string {
       return `${base}new`
     case "settings":
       return `${base}settings`
+    case "inbox":
+      return `${base}inbox`
+    case "setup":
+      return `${base}setup/${encodeURIComponent(route.project)}`
   }
 }
 

@@ -1,3 +1,4 @@
+import { retryWords } from "@mako/host/contracts/delivery-retry"
 import { describePromptRecovery } from "@mako/host/contracts/prompt-recovery"
 import type { InterruptionReason, LiveRequest } from "@/lib/types"
 import { turnStopLabel, type TurnStop } from "@/state/prompt-delivery"
@@ -76,11 +77,21 @@ const NO_FRESH_ESCAPE = new Set<LiveRequest["failure"]>(["auth", "transport-limi
  * makes is kept; only where they're said changes.
  */
 export function requestRecovery(
-  request: Pick<LiveRequest, "status" | "failure" | "nativeDelivery" | "interruption">,
+  request: Pick<LiveRequest, "status" | "failure" | "nativeDelivery" | "interruption" | "retry">,
   context: RecoveryContext
 ): RequestRecovery {
   const now = context.now ?? Date.now()
   const recovery = describePromptRecovery(request, context.provider, context.compacted)
+  // A turn its harness failed for now that Mako continues by itself: a wait, said once, with nothing to press.
+  if (request.status === "failed" && request.retry && request.retry.at > now)
+    return {
+      title: "Continues by itself",
+      description: `at ${clockText(request.retry.at, now)}`,
+      guidance: `The turn stopped because ${retryWords(request.retry, context.provider)}. What it did so far stands, and Mako picks it up then.`,
+      tone: "caution",
+      delivery: recovery.delivery,
+      more: [{ kind: "copy" }],
+    }
   const failed = request.status === "failed"
   const reset = usageLimitReset(request, context.resetAt, now)
   const resend: RecoveryAction | undefined = recovery.resendLabel ? { kind: "resend", label: recovery.resendLabel } : undefined

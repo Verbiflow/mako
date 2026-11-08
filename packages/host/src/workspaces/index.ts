@@ -1,5 +1,7 @@
+import type { BuildSlots } from "./build-slots.js"
 import { sessionAccessTier } from "../contracts/access.js"
 import type { GitHubPerson } from "../contracts/github-person.js"
+import type { PullRequestsAs } from "../contracts/github-authorship.js"
 import type { Git } from "@mako/git"
 import { realpathSync } from "node:fs"
 import { rm, stat } from "node:fs/promises"
@@ -18,15 +20,17 @@ import { WorkspaceMoves } from "./moves.js"
 import { WorktreeLeaves } from "./worktree-leaves.js"
 import { moveablePlace, registerWorkspaceTools, repositoryPlace, workspaceTools } from "./tools.js"
 import { projectRecipe, type RecipeAccounts, type RecipeWhere } from "./thread-recipe.js"
+export { BuildSlots } from "./build-slots.js"
 export { RecipeAccounts } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { beginTrace, SAMPLE_EVERY_MS, TraceRefresh } from "./app-probe.js"
-import { childHistory } from "./watch-backend.js"
+import { childHistory, type DaemonRestarts } from "./watch-backend.js"
 import type { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
 import { isSpareCheckout } from "./worktree-carry.js"
+import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
 import { ThreadIdSchema } from "../contracts/thread-identity.js"
 import { listExternalEditors, openInExternalEditor } from "./editors.js"
@@ -56,17 +60,21 @@ export { captureCarry, cloneRepository, openCarry, placeOutside, planOutsideRetu
 export { mergeReturned, unchangedSince } from "./move-merge.js"
 export { ProjectMissingError } from "./worktree-reattach.js"
 export { CloudCarriedFiles, declareCarriedFilesMethods } from "./cloud-carried-files.js"
+export { declareSetupMethods, SetupViews, type SetupViewDeps } from "./setup-view.js"
 export { projectRecipe, readProjectRecipe, type ProjectRecipeRead } from "./thread-recipe.js"
 export { answeredElsewhere, elsewhereRefusal, type ElsewhereFolder } from "./elsewhere.js"
 export type { Relocation, WorkspaceConversations } from "./conversations.js"
 export { readSignedFile, readWindowFile } from "./file-readers.js"
+export type { FileOwner } from "./file-previews.js"
+export { OwnedFiles, ownerFileRead } from "./owned-files.js"
 export { MediaRenditions } from "./media-renditions.js"
 export { ConversationFiles } from "./files.js"
 export type { AgentHost, TabServices } from "./agent-host.js"
 export type { HostPool } from "./pool.js"
 export { WorkspaceSnapshots, type CheckpointComparison } from "./snapshots.js"
-export { applyThreadEnvironment, threadEnvironmentInstructions } from "./thread-environment.js"
-export { childBackend } from "./watch-backend.js"
+export { applyThreadEnvironment, CLOUD_MACHINE_INSTRUCTIONS, threadEnvironmentInstructions } from "./thread-environment.js"
+export { childBackend, probeDelivery, type FileHistory } from "./watch-backend.js"
+export { administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd } from "./file-events-service.js"
 export { WatchReadings } from "./watch-readings.js"
 export { watchTree } from "./tree-watcher.js"
 export { watchOutsideGitDir } from "./git-dir-watch.js"
@@ -115,6 +123,8 @@ export interface WorkspacesDeps {
   inUse(path: string): Promise<string[]>
   /** Conversations mid-turn in a worktree. */
   working(path: string): Promise<string[]>
+  /** Every folder a conversation is mid-turn in. */
+  workingFolders(): Promise<string[]>
   /** What holds a removed worktree, and its conversations going on in the main checkout. */
   conversations: CheckoutConversations
   /** The recipe's cleanup for a worktree about to be removed, once the app tools exist. */
@@ -123,6 +133,8 @@ export interface WorkspacesDeps {
   ledger?: () => MoveLedger | undefined
   /** What the file system's history reads cost, for Diagnostics. */
   watchReadings?: WatchReadings
+  /** When fseventsd started over, so a read of history across it is reported lost. */
+  daemonRestarts?: DaemonRestarts
 }
 
 export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
@@ -138,7 +150,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   const environments = store && shared
     ? new ThreadEnvironments({ git, store, dataRoot: join(shared, "thread-data"), recipesRoot: recipes, where: deps.where, recipes: deps.recipes })
     : null
-  const fileHistory = childHistory(undefined, deps.watchReadings)
+  const fileHistory = childHistory(undefined, deps.watchReadings, deps.daemonRestarts)
   const whoseApp = (app: AppKey): string | undefined => {
     const thread = ThreadIdSchema.safeParse(app)
     if (thread.success) {
@@ -171,6 +183,8 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     /** Each running copy's peak counts toward its project's "about N at once"; with nothing running a look reads no process table. */
     deps.jobs.every("measure thread apps' memory", 30_000, async () => { await processes.memory() })
   }
+  const borrowing = shared ? CheckoutBorrowing.open(git, deps.readOnly ? undefined : join(shared, "borrowing")) : undefined
+  if (borrowing && !deps.readOnly) deps.jobs.every("keep what worktrees borrowed", 60 * 60_000, () => borrowing.keep())
   const worktrees = store && shared
     ? new ThreadWorktreeService(git, join(shared, "worktrees"), store, deps.inUse, deps.working, processes && environments ? {
         stop: async (thread) => { await processes.stop(AppKeySchema.parse(thread)) },
@@ -188,13 +202,14 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
         prepared: (checkout) => processes.prepared(checkout),
         savePrepared: (checkout, prepared) => processes.savePrepared(checkout, prepared),
         forgetPrepared: (checkout) => processes.forgetPrepared(checkout),
+        borrowing,
         spareInstall: spareInstaller({
           git,
           processes,
           recipe: (checkout) => projectRecipe(git, checkout, recipes),
           env: (values) => ({ ...commandEnvironment(), ...values }),
         }),
-      } : undefined, deps.conversations, deps.ledger)
+      } : undefined, deps.conversations, deps.ledger, deps.workingFolders)
     : null
   if (worktrees) {
     const tidy = () => worktrees.tidy()
@@ -245,11 +260,15 @@ export interface WorkspaceMoversDeps {
   movedPaths: NonNullable<ThreadWorktreeMoveDeps["movedPaths"]>
   /** How long a harness's MCP calls may wait, for an app check to fit inside one. */
   checkWaitMs(harness: string): number | undefined
+  /** The host's build slots, which every check run takes one of while it runs. */
+  buildSlots?: BuildSlots
   jobs: HostJobs
   emit(event: HostEvent): void
   warn(message: string, facts: Record<string, string | number | boolean | undefined>): void
   /** On a cloud machine: whether its pull requests go as its person, asked now; undefined elsewhere. */
   person?(): Promise<GitHubPerson | undefined>
+  /** On a cloud machine: who its pull requests go as, as its agent last wrote it; undefined elsewhere. */
+  pullRequestsAs?(): Promise<PullRequestsAs | undefined>
 }
 
 export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers {
@@ -292,6 +311,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
   })
   const appTools = environments && processes ? environmentTools({
     git,
+    borrowing: worktrees?.borrowing,
     cwd: (id) => live.session(id)?.cwd,
     environment: (id, cwd) => environments.forConversation(id, live.session(id)?.title, cwd),
     launchedWith: (id) => environments.launchedWith(id),
@@ -306,6 +326,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     },
     folder: (cwd, claim) => environments.forFolder(cwd, claim),
     processes,
+    ...(deps.buildSlots && { buildSlots: deps.buildSlots }),
     traces: new TraceRefresh(),
     recipesRoot: workspaces.recipes,
     where: workspaces.where,
@@ -326,7 +347,7 @@ function worktreesChanged(worktrees: Workspaces["worktrees"], emit: (event: Host
   emit({ type: "github-changed" })
 }
 
-function agentTools({ git, workspaces, live, emit, person }: WorkspaceMoversDeps, moves: WorkspaceMoves, leaves: WorktreeLeaves, appTools: EnvironmentTools | undefined): MakoTools[] {
+function agentTools({ git, workspaces, live, store, emit, person, pullRequestsAs }: WorkspaceMoversDeps, moves: WorkspaceMoves, leaves: WorktreeLeaves, appTools: EnvironmentTools | undefined): MakoTools[] {
   const { worktrees } = workspaces
   const cwd = (id: string) => live.session(id)?.cwd
   const changed = () => worktreesChanged(worktrees, emit)
@@ -340,6 +361,8 @@ function agentTools({ git, workspaces, live, emit, person }: WorkspaceMoversDeps
     },
     changed,
     person,
+    pullRequestsAs,
+    threadOf: (id) => store?.journalPlacement(id)?.thread,
   })
   return [
     (server, conversationId) => registerWorkspaceTools(server, workspace, conversationId),

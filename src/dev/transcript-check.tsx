@@ -134,7 +134,7 @@ const eventBlocks = reduceLiveUpdates([], [
   configWarning,
   mcpFailure("wisprflow", "sign-in required"),
   mcpFailure("axiom", "sign-in required"),
-  { kind: "event", label: "Context compacted", detail: "Automatic · 182k → 24k tokens · took 8s", body: "The conversation so far: fixing variant matching." },
+  { kind: "event", label: "Context compacted", detail: "Automatic · 182K → 24K tokens · took 8s", body: "The conversation so far: fixing variant matching." },
   { kind: "event", label: "Turn failed", detail: "stream disconnected before completion", tone: "error" },
 ])
 const eventExchanges = toExchanges(live(eventBlocks, "codex"))
@@ -192,7 +192,7 @@ export function Fixtures() {
               key={value}
               type="button"
               aria-pressed={mode === value}
-              className="pressable rounded border border-hairline px-2 py-1 text-ui"
+              className="pressable border border-hairline px-2 py-1 text-ui"
               onClick={() => setMode(value)}
             >
               {value}

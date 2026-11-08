@@ -146,7 +146,7 @@ export const unfinished = z.literal(true).optional()
 /**
  * What the call did to the machine as its harness reported it
  * (`tool-effects.ts`), whole: a later update replaces the list. For
- * attribution, never drawn.
+ * attribution; a row draws only a failed command's exit code from it.
  */
 export const effects = z.array(ToolEffectSchema).max(1024).optional()
 /** `TranscriptEvent` from `@mako/sessions/events`. */

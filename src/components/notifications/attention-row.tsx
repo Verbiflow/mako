@@ -7,8 +7,8 @@ import { openItem, type NotificationItem } from "@/state/notifications"
 /**
  * One waiting thread as a row you click to go there. The titlebar once
  * carried a pill listing these; it put a standing count in the chrome that
- * the rail's own marks and its Status view already say. This is the
- * announcement now, and Cmd+Shift+U opens the next one.
+ * the rail's own marks and its Inbox already say. This is the
+ * announcement now, and Cmd+Shift+U opens the Inbox.
  */
 export function AttentionRow({
   item,
@@ -29,7 +29,7 @@ export function AttentionRow({
         openItem(item)
         onOpen()
       }}
-      className="pressable flex w-full items-start gap-2.5 rounded px-2 py-2 text-left hover:bg-fill-hover"
+      className="pressable flex w-full items-start gap-2.5 px-2 py-2 text-left hover:bg-fill-hover"
     >
       <span className="mt-0.5 flex shrink-0 items-center text-muted-foreground">
         <ActivityMark state={state} size={20} />

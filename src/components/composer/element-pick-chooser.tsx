@@ -82,7 +82,7 @@ export function ElementPickChooser({ cwd, onChosen }: { cwd?: string; onChosen?:
               onClick={() => {
                 void desktop.openUrl(appUrl).then(() => setTimeout(() => void elementPicks.loadTargets(), 1_200))
               }}
-              className="pressable flex min-h-11 w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-left hover:bg-fill-hover focus-visible:bg-fill-hover"
+              className="pressable flex min-h-11 w-full items-center gap-3 px-2.5 py-1.5 text-left hover:bg-fill-hover focus-visible:bg-fill-hover"
             >
               <AppWindowIcon className="size-4 shrink-0 text-faint" />
               <span className="min-w-0 flex-1">
@@ -144,7 +144,7 @@ function TabRow({ tab, browser, onPick }: { tab: ElementPickTab; browser?: Eleme
       onClick={() => onPick(tab)}
       title={tab.url}
       aria-label={`Pick an element in ${tab.title || host}`}
-      className="pressable flex min-h-11 w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-left outline-none hover:bg-fill-hover focus-visible:bg-fill-selected"
+      className="pressable flex min-h-11 w-full items-center gap-3 px-2.5 py-1.5 text-left outline-none hover:bg-fill-hover focus-visible:bg-fill-selected"
     >
       <BrowserMark browser={browser} />
       <span className="min-w-0 flex-1">
@@ -172,7 +172,7 @@ function BrowserRow({ browser }: { browser: ElementPickBrowser }) {
         : `Turn on browser use to pick in ${browser.name}’s tabs.`
   return (
     // Not a pickable row, but its Connect or Set up works: nothing here is disabled.
-    <div className="flex min-h-11 items-center gap-3 rounded-md px-2.5 py-1.5">
+    <div className="flex min-h-11 items-center gap-3 px-2.5 py-1.5">
       <span className="opacity-60"><BrowserMark browser={browser} /></span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-ui text-muted-foreground">{browser.name}</span>
@@ -182,7 +182,7 @@ function BrowserRow({ browser }: { browser: ElementPickBrowser }) {
         <button
           type="button"
           onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "mcp#browser-use" }))}
-          className="pressable shrink-0 rounded px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover"
+          className="pressable shrink-0 px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover"
         >
           Set up
         </button>
@@ -198,7 +198,7 @@ function BrowserRow({ browser }: { browser: ElementPickBrowser }) {
               setConnecting(false)
             }
           }}
-          className={cn("pressable shrink-0 rounded px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover", waiting && "opacity-60")}
+          className={cn("pressable shrink-0 px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover", waiting && "opacity-60")}
         >
           {waiting ? "Connecting…" : "Connect"}
         </button>

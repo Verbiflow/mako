@@ -1,3 +1,4 @@
+import { HostStopping } from "./base/host-stopping.js"
 import { Foreground } from "./base/foreground.js"
 import { lstat, mkdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -7,12 +8,13 @@ import { HostMethods, runtimeInfo, startWebHost } from "./transport/index.js"
 import { HostJobs, type JobDemand } from "./base/host-jobs.js"
 import { HostDomains, hostDomainOptions, type Domain } from "./base/host-domains.js"
 import { EventLoopWatch } from "./base/event-loop.js"
+import { HeldLoopProfiler } from "./base/loop-profile.js"
 import type { HostLifecycle } from "./base/host-lifecycle.js"
 import { hostLog, hostWarn } from "./base/host-log.js"
 import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
 import { hostChannelDomain, hostChannels, type HostChannel } from "./contracts/host-call-inputs.js"
 import { isClientCall, socketCalls } from "./contracts/client-calls.js"
-import { hostSecretStore, type SecretKeyHandover } from "./base/host-secrets.js"
+import { hostSecretStore, secretKeyFile, type SecretKeyHandover } from "./base/host-secrets.js"
 import type { CrashReports } from "./base/crash.js"
 import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases, removeRuntimeDirectory } from "./base/host-idle.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -28,6 +30,8 @@ export interface HostOwner {
   crashes: CrashReports
   /** Where the process keeps the lines the host logs. */
   logPath: string
+  /** This start of the host on its data root, taken while it holds the data root's lock (`takeHostStart`). */
+  start?: import("./base/host-start.js").HostStart
 }
 
 export interface Host {
@@ -87,21 +91,38 @@ const MACHINE_FIRST_START_CAP_MS = 120_000
  */
 export function createHost(config: HostConfig, owner: HostOwner): Host {
   const { environment, fixtureDesk } = config
-  const loop = new EventLoopWatch()
+  // A hold's log line names every piece of work open then; a profile of the next few seconds names the one holding it.
+  const profiler = new HeldLoopProfiler({
+    windowMs: 10_000,
+    restMs: 10 * 60_000,
+    report: (slices, ms) => {
+      if (!slices.length) return
+      const longest = [...slices].sort((a, b) => b.ms - a.ms).slice(0, 3)
+      hostWarn("loop", "held loop profiled", {
+        windowMs: ms,
+        slices: slices.length,
+        heldMs: slices.reduce((sum, slice) => sum + slice.ms, 0),
+        longest: longest.map((slice) => `${slice.ms} ms: ${slice.frames.map((frame) => `${frame.frame} (${frame.ms})`).join(" < ")}`).join(" | "),
+      })
+    },
+  })
+  const loop = new EventLoopWatch({ heldLong: () => profiler.held() })
   const foreground = new Foreground()
   const jobs = new HostJobs(loop, foreground)
   // A cloud machine is made for its Thread's first start, which its routine work waits for.
   if (config.machineAgentFd !== undefined) foreground.awaitFirstStart(MACHINE_FIRST_START_CAP_MS)
   const subscribed = jobs.demand("a client is subscribed")
   const domains = new HostDomains(hostDomainOptions(), loop)
-  const secrets = hostSecretStore(environment)
+  const secrets = hostSecretStore(environment, { keyFile: secretKeyFile(environment.userRoot, { env: process.env, cloudMachine: config.machineAgentFd !== undefined }) })
   let web: Awaited<ReturnType<typeof startWebHost>> | undefined
   let machine: MachineRuntime | undefined
   let closing = false
   let socketClosed = false
   let stopped: Promise<void> | undefined
 
+  const stopping = new HostStopping()
   const methods = new HostMethods({
+    stopping,
     fixtureDesk,
     route: async (channel, args) => core.current()?.route(channel, args) ?? { handled: false },
     presentHistory: (value) => core.current()?.presentHistory(value) ?? value,
@@ -134,8 +155,8 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       }
       stillStarting()
       const { openCore } = await import("./core.js")
-      const opened = await openCore({
-        config, owner, methods, jobs, foreground, subscribed, secrets, terminals,
+      const opened = await stopping.run(() => openCore({
+        config, owner, methods, jobs, foreground, subscribed, secrets, terminals, stopping,
         retryMachineWorkspace: () => machine?.retryWorkspace() ?? false,
         refreshMachineCarried: async () => {
           await machine?.refreshCarried()
@@ -146,7 +167,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         closing: () => closing,
         closeSocket,
         work: loop,
-      })
+      }))
       return declared(opened, CORE)
     },
   })
@@ -284,10 +305,12 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       const drained = methods.close()
       closeSocket()
       terminals.current()?.dispose()
+      await stopping.stop()
       await drained
       hostLog("lifecycle", "stopped")
     } finally {
       loop.stop()
+      profiler.stop()
     }
   }
 

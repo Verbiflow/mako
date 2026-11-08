@@ -14,7 +14,7 @@ ARG NODE_SHA256=cbb7d2d47c94e1e0ee82e0ebc3130664423258c3d36abf46ffaeea097ed85d30
 RUN test "$(dpkg --print-architecture)" = amd64 || { echo "Mako's Linux host image is x64: Node builds pointer compression for x64 only" >&2; exit 1; } \
     && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git lsof procps \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSLo /tmp/node.tar.gz "https://unofficial-builds.nodejs.org/download/release/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64-pointer-compression.tar.gz" \
+    && curl --retry 5 --retry-max-time 180 --connect-timeout 20 --max-time 120 -fsSLo /tmp/node.tar.gz "https://unofficial-builds.nodejs.org/download/release/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64-pointer-compression.tar.gz" \
     && echo "${NODE_SHA256}  /tmp/node.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 --no-same-owner --exclude=CHANGELOG.md --exclude=README.md --exclude=LICENSE --exclude=include --exclude=share \
     && rm /tmp/node.tar.gz \
@@ -76,6 +76,24 @@ RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 node /opt/mako/i
 # tested 3000.10.23 with the newest build within 40 s (2026-10-20). What its
 # setup wrote there stays.
 RUN node -e 'const fs = require("node:fs"); const file = "/home/node/.config/devin/config.json"; const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {}; fs.mkdirSync("/home/node/.config/devin", { recursive: true }); fs.writeFileSync(file, JSON.stringify({ ...config, auto_update: false }, null, 2) + "\n")'
+
+# Mako on a machine of the person's own, as a device of their account
+# (docs/linux-device.md): the host above with the harnesses it's given,
+# OpenCode unless HARNESSES names others, installed the same way. It joins
+# with a code its log shows (`mako-host join`), then runs as that device. Its
+# data, its sign-in and the key that seals it (a 0600 file, as there's no
+# keychain here) are on the volume at /data, so a new container of the image
+# is the same device; arguments go to `mako-host join` (`--name <name>`).
+FROM host AS device
+ARG HARNESSES=opencode
+COPY proof/host-process.mjs proof/install-harnesses.mjs /opt/mako/install/
+RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 node /opt/mako/install/install-harnesses.mjs /home/node/harnesses.json ${HARNESSES}
+USER root
+RUN install -d -o node -g node -m 700 /data
+USER node
+ENV MAKO_PROD=1 MAKO_DATA_ROOT=/data
+VOLUME /data
+ENTRYPOINT ["/bin/sh", "-c", "mako-host join \"$@\" && exec mako-host", "mako-device"]
 
 # The proof of item 1.1: those harnesses started by the host, and measured.
 FROM harnesses AS proof

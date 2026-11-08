@@ -3,7 +3,9 @@ import { HourglassIcon } from "lucide-react"
 import { acp, useAcp } from "@/state/acp"
 import { stage } from "@/state/stage"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
-import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
+import { backgroundWorkText } from "@mako/host/contracts/background-work"
+import { conversationWork } from "@/state/acp-state"
+import { readableStep } from "@mako/host/contracts/children"
 import { WorkGlyph } from "@/components/inspector/agents-panel"
 import { Elapsed } from "@/components/inspector/elapsed"
 import { Shimmer } from "@/components/ui/shimmer"
@@ -26,9 +28,6 @@ function sameWork(left: Waiting | null, right: Waiting | null): boolean {
     left.named.length === right.named.length && left.named.every((agent, index) => agent === right.named[index])
 }
 
-/** Named entries the line lists before it counts the rest. */
-const SHOWN = 3
-
 /**
  * The end of the transcript while the turn has ended and the provider still
  * runs work it will wake on: what runs, for how long, and what it last did.
@@ -43,14 +42,12 @@ export function BackgroundWorkLine() {
   const showAgents = useContext(ShowAgentsContext)
   const work = useAcp((state): Waiting | null => {
     const live = scopedLiveAcp(state, scope)
-    const found = live ? backgroundWork(live.session, live.nativeAgents) : null
+    const found = live ? conversationWork(state, live) : null
     return found && live
       ? { key: live.key, text: backgroundWorkText(found), named: found.named, unnamed: found.unnamed, stopping: live.canceling }
       : null
   }, sameWork)
   if (!work) return null
-  const shown = work.named.slice(0, SHOWN)
-  const more = work.named.length - shown.length + work.unnamed
   return (
     <div role="status" data-background-work className="flex min-w-0 flex-col gap-1 py-1 text-ui text-muted-foreground animate-in fade-in-0 duration-200 ease-[var(--ease-out)]">
       <div className="flex min-h-8 min-w-0 items-center gap-2">
@@ -62,7 +59,7 @@ export function BackgroundWorkLine() {
           <button
             type="button"
             onClick={() => (showAgents ? showAgents() : stage.open("agents"))}
-            className="pressable rounded-md px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+            className="pressable px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
           >
             Show in Agents
           </button>
@@ -71,20 +68,27 @@ export function BackgroundWorkLine() {
             disabled={work.stopping}
             title="Stop ends every background task of this session"
             onClick={() => void acp.stopBackground(work.key)}
-            className="pressable rounded-md px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
+            className="pressable px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
           >
             {work.stopping ? "Stopping" : "Stop all"}
           </button>
         </span>
       </div>
-      {shown.map((agent) => <WorkItem key={`${agent.bindingId}:${agent.nativeId}`} agent={agent} />)}
-      {more > 0 ? <p className="pl-7 text-label text-faint">and {more} more</p> : null}
+      {/* Every named entry is listed; a long list scrolls in place rather than folding into "and N more". */}
+      <div className="flex max-h-52 min-w-0 flex-col gap-1 overflow-y-auto">
+        {work.named.map((agent) => <WorkItem key={`${agent.bindingId}:${agent.nativeId}`} agent={agent} />)}
+      </div>
+      {work.unnamed > 0 ? (
+        <p className="pl-7 text-label text-faint">
+          {work.unnamed === 1 ? "1 more the provider counts without naming it" : `${work.unnamed} more the provider counts without naming them`}
+        </p>
+      ) : null}
     </div>
   )
 }
 
 const WorkItem = memo(function WorkItem({ agent }: { agent: NativeAgent }) {
-  const said = agent.state.kind === "working" ? agent.state.activity : undefined
+  const said = agent.state.kind === "working" ? readableStep(agent.state.activity) : undefined
   const uses = agent.usage?.toolUses
   return (
     <div data-native-work={agent.work ?? "agent"} className="flex min-w-0 items-center gap-2 pl-7 text-label text-faint">

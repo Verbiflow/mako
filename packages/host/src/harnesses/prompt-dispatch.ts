@@ -13,6 +13,7 @@ export interface PromptDispatch {
    * says while the prompt is prepared and sent, which the view draws after it.
    */
   shownAt?: number
+  /** Records what became of the attempt. `submitted` is the handoff, and throws when it's refused (`handOff`). */
   report(evidence: Exclude<PromptDeliveryEvidence, { kind: "prepared" }>): void
 }
 
@@ -26,6 +27,30 @@ export class TurnInProgressError extends Error {
     super(`${harness} is already working`)
     this.name = "TurnInProgressError"
   }
+}
+
+/**
+ * The handoff refused (`handOff`): nothing was sent. `stopped`: a Stop reached the message while it was prepared.
+ * `superseded`: a newer attempt or owner has the conversation. `unsaved`: the journal couldn't record it as sent.
+ * `withdrawn`: a message Mako sent by itself no longer holds, as what made it says (`ConversationChildren.admits`).
+ */
+export class HandoffRefused extends Error {
+  readonly why: "stopped" | "superseded" | "unsaved" | "withdrawn"
+  constructor(why: HandoffRefused["why"], options?: ErrorOptions) {
+    super(why === "stopped" ? "Stopped before it was sent" : why === "superseded" ? "Another send of this conversation took its place" : why === "withdrawn" ? "What it was sent for no longer holds" : "Mako couldn't save this message as sent, so it wasn't sent", options)
+    this.name = "HandoffRefused"
+    this.why = why
+  }
+}
+
+/**
+ * A driver's last step before its transport call, in the same synchronous step as that call and ahead of any change
+ * of its own: the attempt is written as submitted, and only once that write holds and the attempt is still Mako's to
+ * send does the driver go on. Otherwise it throws `HandoffRefused` with nothing sent, the attempt refused, so a
+ * journal that still reads `prepared` proves the harness never had it (`PromptDelivery.gated`).
+ */
+export function handOff(dispatch: PromptDispatch, evidence: Extract<PromptDeliveryEvidence, { kind: "submitted" }>): void {
+  preparePrompt(dispatch, () => dispatch.report(evidence))
 }
 
 /** Only preparation before the native send can prove that no input was delivered. */

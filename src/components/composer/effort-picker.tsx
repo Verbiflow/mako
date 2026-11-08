@@ -54,7 +54,7 @@ export function EffortPicker({ disabled }: { disabled?: boolean }) {
           disabled={disabled}
           aria-label={`Reasoning effort: ${level}`}
           className={cn(
-            "pressable no-drag flex h-7 items-center gap-1.5 rounded-md px-2 text-ui font-medium",
+            "pressable no-drag flex h-7 items-center gap-1.5 px-2 text-ui font-medium",
             "[transition:transform_var(--duration-press)_var(--ease-out),background-color_120ms_ease]",
             "hover:not-disabled:bg-fill-hover aria-expanded:bg-fill-selected disabled:opacity-40",
             level === "off" ? "text-faint" : "text-foreground/85"
@@ -76,7 +76,7 @@ export function EffortPicker({ disabled }: { disabled?: boolean }) {
                 setOpen(false)
               }}
               className={cn(
-                "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-100",
+                "flex w-full items-start gap-2 px-2 py-1.5 text-left transition-colors duration-100",
                 "hover:bg-fill-hover",
                 active && "bg-fill-selected"
               )}
@@ -109,7 +109,7 @@ function Gauge({ level, className }: { level: ThinkingLevel; className?: string 
         <span
           key={index}
           className={cn(
-            "w-[2px] rounded-[1px] transition-colors duration-150",
+            "w-[2px] transition-colors duration-150",
             index < filled ? "bg-foreground" : "bg-foreground/20"
           )}
           style={{ height: 4 + index * 2 }}

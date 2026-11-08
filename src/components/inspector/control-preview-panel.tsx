@@ -68,7 +68,7 @@ export function ControlPreviewPanel() {
       className="flex h-full min-h-0 flex-col"
       aria-label="Control preview"
     >
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline px-3 text-label">
+      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-label">
         {browser ? (
           <GlobeIcon className="size-3.5 shrink-0 text-faint" />
         ) : (
@@ -108,7 +108,7 @@ export function ControlPreviewPanel() {
             title="Point at something in this tab to add it to your message"
             disabled={picking}
             onClick={() => void elementPicks.start({ conversation: conversationId }, "this task’s tab")}
-            className="pressable -mr-1.5 flex h-6 shrink-0 items-center gap-1.5 rounded px-1.5 text-label font-medium text-foreground hover:bg-fill-hover disabled:opacity-50"
+            className="pressable -mr-1.5 flex h-6 shrink-0 items-center gap-1.5 px-1.5 text-label font-medium text-foreground hover:bg-fill-hover disabled:opacity-50"
           >
             <SquareDashedMousePointerIcon className="size-3.5" aria-hidden />
             {picking ? "Picking…" : "Pick an element"}
@@ -121,7 +121,7 @@ export function ControlPreviewPanel() {
             type="button"
             aria-label="Enlarge over the chat"
             onClick={() => zoomControlPreview(conversationId)}
-            className="group pressable relative block w-full cursor-zoom-in overflow-hidden rounded-lg bg-background [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
+            className="group pressable relative block w-full cursor-zoom-in overflow-hidden bg-background [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
           >
             {preview?.window ? (
               <NativeControlPreview

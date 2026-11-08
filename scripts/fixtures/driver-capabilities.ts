@@ -1,10 +1,11 @@
 import type { ProviderAcpSource } from "@mako/host/harnesses/acp-source"
 import type { NativeResume, ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import type { LayerCapabilities } from "@mako/host/contracts/mako-layer"
 
 const FIXTURE = "Injected driver fixture"
 const none = { kind: "unavailable", reason: FIXTURE } as const
 
-type Capabilities = Pick<ProviderLiveDriver, "resume" | "fork" | "steering" | "questions" | "nativeAgents" | "nativeRouting" | "contextBreakdown" | "compaction" | "modeSwitching" | "goals" | "sideQuestions" | "review">
+type Capabilities = Pick<ProviderLiveDriver, "resume" | "fork" | "steering" | "questions" | "nativeAgents" | "nativeRouting" | "modelRoutes" | "contextBreakdown" | "compaction" | "modeSwitching" | "goals" | "sideQuestions" | "review">
 
 /** A fake driver that declares none of the live capabilities; spread it first and override what the test drives. Goals fall to Mako's loop, as for any harness without its own. */
 export const noCapabilities: Capabilities = {
@@ -14,6 +15,7 @@ export const noCapabilities: Capabilities = {
   questions: none,
   nativeAgents: none,
   nativeRouting: { kind: "words", reason: FIXTURE },
+  modelRoutes: { kind: "absent", reason: FIXTURE },
   contextBreakdown: none,
   compaction: none,
   modeSwitching: { kind: "single", reason: FIXTURE },
@@ -22,14 +24,27 @@ export const noCapabilities: Capabilities = {
   review: { kind: "mako", reason: FIXTURE },
 }
 
+/** A fake harness's adapter that takes nothing of the Mako layer natively. */
+export const noLayer: LayerCapabilities = {
+  instructions: { kind: "fallback", via: "prompt-note", loses: FIXTURE },
+  toolServing: { kind: "fallback", via: "http-mcp", loses: FIXTURE },
+  removal: { kind: "absent", reason: FIXTURE },
+  interception: { kind: "absent", reason: FIXTURE },
+  subagents: { kind: "absent", reason: FIXTURE },
+  hooks: { kind: "absent", reason: FIXTURE },
+  personSetup: "kept",
+}
+
 /** The same for a fake ACP source, whose subagents, steering and resume carry their wire hooks. */
-export const noAcpCapabilities: Pick<ProviderAcpSource, "resume" | "fork" | "steering" | "questions" | "agents" | "nativeRouting" | "compaction" | "goals" | "sideQuestions" | "review"> = {
+export const noAcpCapabilities: Pick<ProviderAcpSource, "resume" | "fork" | "steering" | "questions" | "agents" | "nativeRouting" | "layer" | "modelRoutes" | "compaction" | "goals" | "sideQuestions" | "review"> = {
   resume: none,
   fork: none,
   steering: none,
   questions: none,
   agents: none,
   nativeRouting: { kind: "words", reason: FIXTURE },
+  layer: noLayer,
+  modelRoutes: { kind: "absent", reason: FIXTURE },
   compaction: none,
   goals: { kind: "mako", reason: FIXTURE },
   sideQuestions: none,

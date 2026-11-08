@@ -16,7 +16,7 @@ import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE, type KeptRest
 import { makoRecords } from "@mako/sessions/record-streams"
 import { recordWritersAt } from "@mako/sessions/record-store"
 import type { InstalledReading, SessionWriters } from "@mako/sessions/record-writers"
-import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords, StagedRecords } from "@mako/sessions/record-sync"
+import type { LinkForm, ReceivedRecords, ReceivingSession, RecordsLink, SentRecords, StagedRecords } from "@mako/sessions/record-sync"
 import type { CopyPage } from "@mako/sessions/reading-copies"
 import type { CatalogSyncStatus, SyncScope } from "@mako/sessions/scoped-uploads"
 import { isReplyEntry } from "@mako/sessions/entries"
@@ -95,6 +95,7 @@ import type { ExternalThreadActivity, HostEvent } from "../contracts/host-events
 import type { FileContents, FileReadPurpose } from "../contracts/git-workspace-search.js"
 import type { ThreadFileContext } from "../contracts/conversation-session.js"
 import { listedAsThread, THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "../contracts/thread-list.js"
+import { listedUnderApex } from "../contracts/agents.js"
 
 const TEMPORARY_ROOTS = [
   tmpdir(),
@@ -104,6 +105,8 @@ const TEMPORARY_ROOTS = [
   "/private/var/folders",
 ]
 const WORKSPACE_PRESENCE_TTL_MS = 60_000
+/** How soon catalog events' activity is reconciled, all of them at once (`reconcileSoon`). */
+const RECONCILE_MS = 250
 const CATALOG_ACTOR: Actor = { kind: "service", name: "catalog" }
 
 /** Refs other host callers look through; the rail's own list is `threadList`. */
@@ -316,6 +319,8 @@ export interface ThreadCatalog {
   syncCopies(link: RecordsLink | null): Promise<void>
   syncOriginals(link: RecordsLink | null): Promise<void>
   scopeSync(scope: SyncScope): Promise<void>
+  /** The catalog's reader says a link's token is due or was refused (`LinkCredential`): its owner sends it renewed. */
+  onLinkDue(listener: (form: LinkForm) => void): () => void
   /** How that stands, as the catalog's stores know the account holds them (`SessionCatalog.syncStatus`). */
   syncStatus(): Promise<CatalogSyncStatus>
   /**
@@ -482,10 +487,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     }
   }
 
-  /** A child's row names its parent's Thread, so it shows inside it and never as a row (`listedAsThread`). */
+  /** A child's row names its parent's Thread, so it shows inside it and never as a row (`listedAsThread`); one whose Apex is on another device is a row of its own (`listedUnderApex`). */
   function withParent(ref: ThreadRef, edges: ThreadEdges | undefined): ThreadRef {
     const edge = ref.threadId ? edges?.of(ref.threadId) : undefined
-    return edge ? { ...ref, parent: { thread: edge.parent, session: edge.parentSession } } : ref
+    return listedUnderApex(edge) ? { ...ref, parent: { thread: edge.parent, session: edge.parentSession } } : ref
   }
 
   function annotate(ref: ThreadRef): ThreadRef {
@@ -556,6 +561,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     if (!old || threadIdentity(old) !== threadIdentity(ref)) activityIndex = null
   }
   const threadEventSubscribers = new Set<(event: HostEvent) => void>()
+  const linkDueListeners = new Set<(form: LinkForm) => void>()
+  const linkDue = (form: LinkForm) => {
+    for (const listener of linkDueListeners) listener(form)
+  }
   let recoveringDaemon: Promise<void> | null = null
   let catalogStartup: Promise<void> | null = null
   let catalogLifetime: AbortController | null = null
@@ -619,6 +628,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   /** When each catalogued store last visibly moved (bytes or activity time). */
   const storeWrites = new Map<string, number>()
   let writeSettleTimer: ReturnType<typeof setTimeout> | null = null
+  let reconcileTimer: ReturnType<typeof setTimeout> | null = null
 
   /** Each store's last seen size and activity time, so a title refinement is not a write. */
   const storeMarks = new Map<string, string>()
@@ -663,6 +673,21 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return earliest
   }
 
+  /**
+   * A reconcile asks the ledger about every store written in the last
+   * `WRITE_ACTIVE_MS`, and a catalog event arrives for every write: with
+   * thirty Fins writing, a reconcile per event held the host's thread most of
+   * the time. Events ask for one within `RECONCILE_MS`, which answers for all.
+   */
+  function reconcileSoon(): void {
+    if (reconcileTimer) return
+    reconcileTimer = setTimeout(() => {
+      reconcileTimer = null
+      reconcileProviderActivity()
+    }, RECONCILE_MS)
+    reconcileTimer.unref?.()
+  }
+
   function reconcileProviderActivity(): void {
     if (!activityIndex)
       activityIndex = indexActivityRefs(daemon ? mirror.values() : (catalog?.list() ?? []))
@@ -692,7 +717,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     activityEngine = new ProviderActivityEngine(harnesses.processProbes())
     activityEngine.onChange((snapshot) => {
       providerActivity.set(snapshot.provider, snapshot.sessions)
-      reconcileProviderActivity()
+      reconcileSoon()
     })
     activityEngine.start()
   }
@@ -706,6 +731,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     storeMarks.clear()
     if (writeSettleTimer) clearTimeout(writeSettleTimer)
     writeSettleTimer = null
+    if (reconcileTimer) clearTimeout(reconcileTimer)
+    reconcileTimer = null
   }
 
   function start(): void {
@@ -758,14 +785,14 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       noteStoreWrite(event.ref, mirror.get(event.ref.path))
       mirror.set(event.ref.path, event.ref)
       if (announce) emit({ type: "thread-ref", ref: annotate(event.ref) })
-      reconcileProviderActivity()
+      reconcileSoon()
     } else if (event.event === "removed") {
       activityIndex = null
       nativeFolders = null
       mirror.delete(event.path)
       forgetStore(event.path)
       if (announce) emit({ type: "thread-removed", path: event.path })
-      reconcileProviderActivity()
+      reconcileSoon()
     } else if (event.event === "entries" && announce) {
       emit({
         type: "thread-entries",
@@ -899,6 +926,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     let hydrated = false
     const stopEvents = client.onEvent((event) => {
       if (signal.aborted || daemon !== client) return
+      if (event.event === "link-due") return linkDue(event.form)
       // A known-path follow may already be live while the catalog list loads.
       if (event.event === "entries" || event.event === "reload") {
         applyDaemonEvent(event, true)
@@ -1196,6 +1224,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       if (originalsLink) source.syncOriginals(originalsLink)
       source.onEvent((event) => {
         if (signal.aborted || catalog !== source) return
+        if (event.type === "link-due") return linkDue(event.form)
         if (event.type === "removed") {
           forgetStore(event.path)
           emit({ type: "thread-removed", path: event.path })
@@ -1203,7 +1232,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
           noteStoreWrite(event.ref, undefined)
           emit({ type: "thread-ref", ref: annotate(event.ref) })
         }
-        reconcileProviderActivity()
+        reconcileSoon()
       })
       void catalogTask(signal, async () => {
         await source.scan()
@@ -1754,6 +1783,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     syncRecords,
     syncCopies,
     syncOriginals,
+    onLinkDue: (listener) => {
+      linkDueListeners.add(listener)
+      return () => linkDueListeners.delete(listener)
+    },
     scopeSync,
     syncStatus,
     recent: recentThreads,

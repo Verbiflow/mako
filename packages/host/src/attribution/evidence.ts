@@ -106,27 +106,80 @@ export const authorOf = (interval: Pick<Interval, "thread" | "session" | "turn">
 
 const key = (session: string, id: string) => `${session}\u0000${id}`
 
+/**
+ * The changes new evidence can give another author: those heard between
+ * `from` and `to` (by any of their times), only on or under `paths` when
+ * given; or, for a Thread's work reaching more paths, the changes timing
+ * alone puts on that Thread on or under `paths`.
+ */
+export type Reach = { from: number; to: number; paths?: readonly string[] } | { thread: string; paths: readonly string[] }
+
+/** Whether `reach` takes in `change`, whose author stands at `author`. */
+export function reaches(reach: Reach, change: ObservedChange, author: Attribution | null): boolean {
+  if (reach.paths && !reach.paths.some((folder) => within(folder, change.path) || (change.from !== undefined && within(folder, change.from)))) return false
+  if ("thread" in reach) return author?.certainty === "window" && author.author.thread === reach.thread
+  const heard = change.heard ?? change.changedAt
+  const from = Math.min(change.changedAt, heard, change.lost?.from ?? heard)
+  const to = Math.max(change.changedAt, heard, change.lost?.to ?? heard)
+  return from <= reach.to && to >= reach.from
+}
+
+/** When something could have written, as far as any rule reads it: an open end runs on. */
+interface Extent {
+  start: number
+  end: number | null
+}
+
+/** One Session's intervals and reports, by the same keys as the whole. */
+interface SessionEvidence {
+  intervals: Map<string, Interval>
+  reports: Map<string, ReportedCall>
+}
+
 /** Turns, calls, background work, reported effects and Mako's writes, in memory for the stretch attribution looks at. */
 export class Evidence {
   /** Every interval by session and id. */
   private readonly intervals = new Map<string, Interval>()
   private readonly reports = new Map<string, ReportedCall>()
+  private readonly sessions = new Map<string, SessionEvidence>()
   private readonly writes = new Set<MakoInterval>()
   /** When a call's reported effect on a path proved a change, by call and path: one effect explains one change. */
   private readonly proofs = new Map<string, number>()
   /** What each call's commands ran besides their own lines (`ranTexts`), by call; empty while it's read. */
   private readonly scripts = new Map<string, RanText[]>()
+  private readonly callSpans = new Map<ReportedCall, Span | undefined>()
+  private readonly intervalSpans = new Map<Interval, Span>()
+  private readonly exactSessions = new Map<string, boolean>()
+  /** What evidence came since `takeReaches` last asked: the changes it may give another author. */
+  private touched: Reach[] = []
   /** Where each Thread's work has been, over its whole history: never pruned with the rest. */
   readonly worked: WorkingSets
+  /** Off, every span is read afresh: the reference the caches are checked against. */
+  private readonly cached: boolean
 
-  constructor(worked = new WorkingSets()) {
+  constructor(worked = new WorkingSets(), options: { cached?: boolean } = {}) {
     this.worked = worked
+    this.cached = options.cached ?? true
+  }
+
+  /** The reaches of evidence since the last call, handed over once. */
+  takeReaches(): Reach[] {
+    const taken = this.touched
+    this.touched = []
+    return taken
+  }
+
+  /** The reaches not yet taken. */
+  reaching(): readonly Reach[] {
+    return this.touched
   }
 
   mark(mark: ActivityMark): Interval {
-    this.worked.add(mark.thread, { cwd: mark.cwd, named: mark.named ?? [] })
+    this.workedMore(mark.thread, { cwd: mark.cwd, named: mark.named ?? [] })
     const id = key(mark.session, `${mark.kind}:${mark.id}`)
     let interval = this.intervals.get(id)
+    const call = mark.kind === "call" ? this.reports.get(key(mark.session, mark.id)) : undefined
+    const was = [...(interval ? this.extentsOf(interval) : []), call && this.callSpan(call)]
     if (!interval) {
       interval = {
         kind: mark.kind,
@@ -143,6 +196,7 @@ export class Evidence {
         end: null,
       }
       this.intervals.set(id, interval)
+      this.sessionOf(mark.session).intervals.set(id, interval)
     }
     if (mark.named) interval.named = [...new Set([...interval.named, ...mark.named])]
     if (mark.checkout) interval.checkout = mark.checkout
@@ -153,25 +207,43 @@ export class Evidence {
     if (mark.standing) interval.standing = true
     if (mark.edge === "start") interval.start = Math.min(interval.start, mark.at)
     else interval.end = Math.max(mark.at, interval.start)
+    // Only this interval's span moved, and its call's, which reads its marks.
+    this.forget(interval, call)
+    this.touch(mark.session, { interval, call: mark.kind === "call" ? mark.id : undefined }, [...was, ...this.extentsOf(interval), call && this.callSpan(call)])
     return interval
   }
 
   report(call: ReportedCall): void {
-    if (call.status !== "refused") this.worked.add(call.thread, { named: [], effects: call.effects.filter((effect) => !seen(effect)) })
+    if (call.status !== "refused") this.workedMore(call.thread, { named: [], effects: call.effects.filter((effect) => !seen(effect)) })
     const id = key(call.session, call.call)
     const known = this.reports.get(id)
+    const marked = this.intervals.get(key(call.session, `call:${call.call}`))
+    const was = [known && this.callSpan(known), ...(marked ? this.extentsOf(marked) : [])]
+    const exactBefore = this.exactSession(call.session)
     // A hook's bounds and the stream's report of the same call arrive apart: each keeps what the other lacks.
     const exact = call.exact ?? known?.exact
     const merged: ReportedCall = known ? { ...known, ...call, effects: call.effects.length ? call.effects : known.effects } : { ...call }
     if (exact) merged.exact = exact
     if (known?.endedAt !== undefined && merged.endedAt !== undefined) merged.endedAt = Math.max(known.endedAt, merged.endedAt)
     this.reports.set(id, merged)
+    const own = this.sessionOf(call.session)
+    own.reports.set(id, merged)
+    // Only this call's spans moved, and its Session's turns' when a hook now bounds its calls or no longer does.
+    this.forget(marked, known)
+    this.exactSessions.delete(call.session)
+    if (exactBefore !== this.exactSession(call.session)) for (const interval of own.intervals.values()) if (interval.kind === "turn") this.intervalSpans.delete(interval)
+    this.touch(call.session, { call: call.call }, [...was, this.callSpan(merged), ...(marked ? this.extentsOf(marked) : []), exact && { start: exact.start, end: exact.detached ? null : exact.end }])
+    // A turn's span is exact once a hook bounds its Session's calls, and `between` reads every one of them.
+    if (exactBefore !== this.exactSession(call.session)) this.touchTurns(call.session)
   }
 
   /** Text a reported call's commands ran, read as it was when the call started: it names files as the command line does. */
   ran(session: string, call: string, texts: readonly RanText[]): void {
     const id = key(session, call)
-    if (this.reports.has(id)) this.scripts.set(id, [...(this.scripts.get(id) ?? []), ...texts])
+    const report = this.reports.get(id)
+    if (!report) return
+    this.scripts.set(id, [...(this.scripts.get(id) ?? []), ...texts])
+    if (texts.length) this.touchTimes([this.callSpan(report)])
   }
 
   /** What a call's commands ran, as far as read; undefined before it's asked for. */
@@ -184,17 +256,31 @@ export class Evidence {
     return this.reports.get(key(session, call))
   }
 
-  makoStart(write: MakoWrite, at: number): MakoInterval {
-    const interval = { write, start: at, end: null }
+  /** A write of Mako's from `at`, to `end` when it's known it ended. */
+  makoStart(write: MakoWrite, at: number, end: number | null = null): MakoInterval {
+    const interval: MakoInterval = { write, start: at, end: end === null ? null : Math.max(at, end) }
     this.writes.add(interval)
+    this.touched.push({ from: at - LEAD_MS, to: (interval.end ?? Infinity) + MAKO_TRAIL_MS, paths: write.paths })
     return interval
+  }
+
+  /** A write of Mako's that `makoStart` began ended at `at`: changes after it are no longer its. */
+  makoEnd(interval: MakoInterval, at: number): void {
+    interval.end = Math.max(interval.start, at)
+    this.touched.push({ from: interval.start - LEAD_MS, to: Infinity, paths: interval.write.paths })
   }
 
   /** The change at `changedAt` on `path` came out `exact` for `author`'s call. */
   proved(author: Author, path: string, changedAt: number): void {
     if (!author.call) return
     const id = `${key(author.session, author.call)}\u0000${path}`
-    this.proofs.set(id, Math.min(changedAt, this.proofs.get(id) ?? changedAt))
+    const known = this.proofs.get(id)
+    if (known !== undefined && known <= changedAt) return
+    this.proofs.set(id, changedAt)
+    // A later change there that the call's span covers is now someone else's write.
+    const report = this.reports.get(key(author.session, author.call))
+    const marked = this.intervals.get(key(author.session, `call:${author.call}`))
+    this.touchTimes([report && this.callSpan(report), ...(marked ? this.extentsOf(marked) : [])], [path])
   }
 
   /** When this call's effect on `path` proved a change, if it did. */
@@ -209,6 +295,15 @@ export class Evidence {
    * person's own hooks (a formatter after an edit) between the two.
    */
   callSpan(report: ReportedCall): Span | undefined {
+    if (!this.cached) return this.readCallSpan(report)
+    if (this.callSpans.has(report)) return this.callSpans.get(report)
+    const span = this.readCallSpan(report)
+    // A caller's own copy is never told when its marks move: only the report kept here is cached.
+    if (this.reports.get(key(report.session, report.call)) === report) this.callSpans.set(report, span)
+    return span
+  }
+
+  private readCallSpan(report: ReportedCall): Span | undefined {
     const marked = this.intervals.get(key(report.session, `call:${report.call}`))
     if (report.exact && !report.exact.detached) {
       return { start: report.exact.start, end: Math.max(report.exact.end, report.endedAt ?? 0, marked?.end ?? 0), exact: true }
@@ -221,6 +316,15 @@ export class Evidence {
 
   /** When an interval ran: a call's exact bounds when a hook marked them; a turn's are exact when its session's calls are. */
   span(interval: Interval): Span {
+    if (!this.cached) return this.readSpan(interval)
+    const known = this.intervalSpans.get(interval)
+    if (known) return known
+    const span = this.readSpan(interval)
+    this.intervalSpans.set(interval, span)
+    return span
+  }
+
+  private readSpan(interval: Interval): Span {
     if (interval.kind === "call") {
       const report = this.reports.get(key(interval.session, interval.id))
       const span = report && this.callSpan(report)
@@ -232,8 +336,103 @@ export class Evidence {
 
   /** Whether a hook marks this session's calls (`ReportedCall.exact`). */
   private exactSession(session: string): boolean {
-    for (const report of this.reports.values()) if (report.session === session && report.exact && !report.exact.detached) return true
-    return false
+    const known = this.cached ? this.exactSessions.get(session) : undefined
+    if (known !== undefined) return known
+    let exact = false
+    for (const report of this.sessions.get(session)?.reports.values() ?? []) if (report.exact && !report.exact.detached) { exact = true; break }
+    this.exactSessions.set(session, exact)
+    return exact
+  }
+
+  /** An interval's span and its call's, read again when next asked. */
+  private forget(interval: Interval | undefined, report: ReportedCall | undefined): void {
+    if (interval) this.intervalSpans.delete(interval)
+    if (report) this.callSpans.delete(report)
+  }
+
+  /** Every pending change asks about the same spans; only new marks, reports or pruning change them. */
+  private clearSpans(): void {
+    this.callSpans.clear()
+    this.intervalSpans.clear()
+    this.exactSessions.clear()
+  }
+
+  private sessionOf(session: string): SessionEvidence {
+    let found = this.sessions.get(session)
+    if (!found) this.sessions.set(session, (found = { intervals: new Map(), reports: new Map() }))
+    return found
+  }
+
+  /** An interval's own marks and the span the rules read for it, which a hook's bounds can move. */
+  private extentsOf(interval: Interval): Extent[] {
+    return [{ start: interval.start, end: interval.end }, this.span(interval)]
+  }
+
+  private workedMore(thread: string, activity: Parameters<WorkingSets["add"]>[1]): void {
+    const added = this.worked.add(thread, activity)
+    if (added.length) this.touched.push({ thread, paths: added })
+  }
+
+  /** The changes something spanning `extents` could cover, on or under `paths` when given. */
+  private touchTimes(extents: readonly (Extent | undefined | false)[], paths?: readonly string[]): { from: number; to: number } | undefined {
+    let from = Infinity
+    let to = -Infinity
+    for (const extent of extents) {
+      if (!extent) continue
+      from = Math.min(from, extent.start)
+      to = Math.max(to, extent.end ?? Infinity)
+    }
+    if (from === Infinity) return undefined
+    this.touched.push({ from: from - LEAD_MS, to: to + TRAIL_MS, ...(paths && { paths }) })
+    return { from, to }
+  }
+
+  /**
+   * What a Session's interval or call, spanning `extents` before and after,
+   * can change: the changes it covers, and, where a hook bounds the
+   * Session's calls, those whose turn `between` judges by it. That reads
+   * the calls either side of a change, so a call moves the answer from the
+   * start of the call before it on.
+   */
+  private touch(session: string, moved: { interval?: Interval; call?: string }, extents: readonly (Extent | undefined | false)[]): void {
+    const times = this.touchTimes(extents)
+    if (!times || !this.exactSession(session)) return
+    const turns = this.turnsOf(session)
+    if (!turns) return
+    let previous = -Infinity
+    for (const span of this.callsOf(session, moved)) if (span.start <= times.from && span.start > previous) previous = span.start
+    this.touched.push({ from: Math.max(previous - LEAD_MS, turns.from), to: turns.to })
+  }
+
+  /** Every change a turn of this Session covers. */
+  private touchTurns(session: string): void {
+    const turns = this.turnsOf(session)
+    if (turns) this.touched.push(turns)
+  }
+
+  /** Where this Session's turns could cover a change, end to end; undefined with none. */
+  private turnsOf(session: string): { from: number; to: number } | undefined {
+    let from = Infinity
+    let to = -Infinity
+    for (const interval of this.sessions.get(session)?.intervals.values() ?? []) {
+      if (interval.kind !== "turn") continue
+      from = Math.min(from, interval.start)
+      to = Math.max(to, interval.end ?? Infinity)
+    }
+    return from === Infinity ? undefined : { from: from - LEAD_MS, to: to + TRAIL_MS }
+  }
+
+  /** The spans `between` reads for a Session, but those of the interval or call that moved. */
+  private *callsOf(session: string, except: { interval?: Interval; call?: string }): Generator<Span> {
+    const own = this.sessions.get(session)
+    if (!own) return
+    for (const interval of own.intervals.values())
+      if (interval.kind !== "turn" && interval !== except.interval && !(interval.kind === "call" && interval.id === except.call)) yield this.span(interval)
+    for (const report of own.reports.values()) {
+      if (report.call === except.call || report.status === "refused") continue
+      const span = this.callSpan(report)
+      if (span) yield span
+    }
   }
 
   /**
@@ -247,16 +446,18 @@ export class Evidence {
   between(turn: Interval, change: ObservedChange): boolean {
     if (turn.kind !== "turn" || change.lost || change.heard !== undefined || !this.exactSession(turn.session)) return false
     const at = change.changedAt
+    const own = this.sessions.get(turn.session)
+    if (!own) return false
     const found: Span[] = []
     let writing = false
-    for (const interval of this.intervals.values()) {
-      if (interval.session !== turn.session || interval.kind === "turn") continue
+    for (const interval of own.intervals.values()) {
+      if (interval.kind === "turn") continue
       const span = this.span(interval)
       if (span.exact && interval.start - LEAD_MS <= at && at < span.start - EXACT_SLACK_MS) writing = true
       found.push(span)
     }
-    for (const report of this.reports.values()) {
-      if (report.session !== turn.session || report.status === "refused") continue
+    for (const report of own.reports.values()) {
+      if (report.status === "refused") continue
       // Work a call left running before the change may have written it.
       if (report.exact?.detached && report.exact.start <= at) return false
       const span = this.callSpan(report)
@@ -297,27 +498,43 @@ export class Evidence {
     return inside.size ? inside : all
   }
 
-  /** Whether anything that could still change an author is running or just ended. */
-  quietSince(at: number, now: number): boolean {
+  /**
+   * When the earliest call still running or just ended at `now` started;
+   * Infinity when none is. A change it could still be said to have made, one
+   * from `TRAIL_MS` before that on, isn't quiet yet.
+   */
+  liveSince(now: number): number {
+    let since = Infinity
     for (const report of this.reports.values()) {
       const span = this.callSpan(report)
-      if (span && span.start <= at + TRAIL_MS && (span.end === null || span.end + TRAIL_MS > now)) return false
+      if (span && (span.end === null || span.end + TRAIL_MS > now)) since = Math.min(since, span.start)
     }
     for (const interval of this.intervals.values())
-      if (interval.kind === "call" && interval.start <= at + TRAIL_MS && (interval.end === null || interval.end + TRAIL_MS > now)) return false
-    return true
+      if (interval.kind === "call" && (interval.end === null || interval.end + TRAIL_MS > now)) since = Math.min(since, interval.start)
+    return since
   }
 
   /** Forget what ended before `before`, which no unsettled change can reach. */
   prune(before: number): void {
-    for (const [id, interval] of this.intervals) if (interval.end !== null && interval.end + TRAIL_MS < before) this.intervals.delete(id)
+    for (const [id, interval] of this.intervals)
+      if (interval.end !== null && interval.end + TRAIL_MS < before) {
+        this.intervals.delete(id)
+        this.sessions.get(interval.session)?.intervals.delete(id)
+      }
+    // A call's span reads its marks, some of them gone now.
+    this.clearSpans()
     for (const [id, report] of this.reports) {
       const span = this.callSpan(report)
-      if (!span || (span.end !== null && span.end + TRAIL_MS < before)) this.reports.delete(id)
+      if (!span || (span.end !== null && span.end + TRAIL_MS < before)) {
+        this.reports.delete(id)
+        this.sessions.get(report.session)?.reports.delete(id)
+      }
     }
+    for (const [session, own] of this.sessions) if (!own.intervals.size && !own.reports.size) this.sessions.delete(session)
     for (const id of this.proofs.keys()) if (!this.reports.has(id.slice(0, id.lastIndexOf("\u0000")))) this.proofs.delete(id)
     for (const id of this.scripts.keys()) if (!this.reports.has(id)) this.scripts.delete(id)
     for (const write of this.writes) if (write.end !== null && write.end + MAKO_TRAIL_MS < before) this.writes.delete(write)
+    this.clearSpans()
   }
 }
 

@@ -9,7 +9,7 @@ import {
   type AccountSignIn,
   type ProviderAccount,
 } from "@/state/accounts"
-import { Action, ListCard } from "@/components/ui/kit"
+import { FIELD, Action, ListCard } from "@/components/ui/kit"
 import { Collapse } from "@/components/ui/collapse"
 import { Shimmer } from "@/components/ui/shimmer"
 import { HarnessAccounts } from "@/components/identity/account-usage"
@@ -151,7 +151,7 @@ function AccountActions({ account, renewable }: { account: ProviderAccount; rene
 }
 
 const CARD =
-  "animate-enter rounded-lg bg-shell/55 px-4 py-3.5 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
+  "animate-enter bg-raised px-4 py-3.5"
 
 function pageHost(url: string | undefined): string | undefined {
   if (!url) return undefined
@@ -271,7 +271,7 @@ function PasteEntry({
   const [sending, setSending] = useState(false)
   if (sent)
     return (
-      <p className="mt-3 border-t border-hairline pt-3 text-label text-muted-foreground">
+      <p className="mt-3 pt-3 text-label text-muted-foreground">
         <Shimmer text={kind === "address" ? "Finishing sign-in…" : "Checking the code…"} />
       </p>
     )
@@ -293,7 +293,7 @@ function PasteEntry({
       ? "When the page shows a code, paste it here"
       : "Paste the code from the sign-in page"
   return (
-    <div className="mt-3 border-t border-hairline pt-3">
+    <div className="mt-3 pt-3">
       {open ? null : (
         <button
           type="button"
@@ -324,7 +324,7 @@ function PasteEntry({
               maxLength={4096}
               disabled={sending}
               placeholder={kind === "address" ? "http://localhost:…" : "Code"}
-              className="h-7 min-w-0 flex-1 rounded-md bg-raised px-2 font-mono text-code text-foreground ring-1 ring-hairline placeholder:font-sans placeholder:text-ui placeholder:text-faint focus:outline-none focus-visible:ring-border"
+              className={cn(FIELD, "h-7 flex-1 px-2 font-mono text-code placeholder:font-sans placeholder:text-ui")}
             />
             <Action tone="solid" size="sm" type="submit" disabled={!value.trim() || sending}>
               Continue

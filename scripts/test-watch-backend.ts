@@ -4,8 +4,10 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { WatchEvent } from "@mako/host/contracts/watcher-child"
-import { childBackend, type WatchListener } from "@mako/host/workspaces/watch-backend"
+import { childBackend, childHistory, probeDelivery, type FileHistory, type WatchListener } from "@mako/host/workspaces/watch-backend"
 import { WatchReadings } from "@mako/host/workspaces/watch-readings"
+import { FileEventsServiceWatch } from "@mako/host/workspaces/file-events-service"
+import { ranOut } from "./lib/ran-out.ts"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-backend-")))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -88,13 +90,13 @@ try {
   // A child that dies every time is given up after five tries.
   const dying = join(root, "dying.mjs")
   writeFileSync(dying, "process.on('message', () => process.exit(1))\n")
-  const started = Date.now()
-  await assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/)
-  assert.ok(Date.now() - started < 10_000, "within the backoff, not forever")
+  // Within the backoff, by the waits it took rather than the runner's clock: each restart twice the last, then given up.
+  const { waits } = await ranOut(() => assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/))
+  assert.deepEqual(waits.filter((ms) => ms >= 250), [250, 500, 1_000, 2_000], "within the backoff, not forever")
 
-  // Late isn't silent: a canary heard 8 s late, as from an fseventsd that
-  // delivers in batches, mutes nothing and restarts nothing, and its lag is
-  // read and logged. The watch is told it's late.
+  // Late isn't silent: a canary heard 8 s late, as a degraded fseventsd
+  // delivers, mutes nothing and restarts nothing, and its lag is read and
+  // logged. The watch is told it's late.
   const deaf = join(root, "deaf")
   process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1200, deafWhile: deaf })
   const lines: string[] = []
@@ -109,7 +111,7 @@ try {
   await wait(2000)
   assert.deepEqual(late.mutes, [], "a canary heard late doesn't mute the watch")
   assert.equal(late.dropped(), 0, "or restart the child")
-  assert.deepEqual(lateReadings.reading().starts, { first: 1, crash: 0, silence: 0 })
+  assert.deepEqual(lateReadings.reading().starts, { first: 1, crash: 0, silence: 0, recovery: 0 })
   assert.ok(lines.includes("file events arrive late"), lines.join(", "))
   assert.equal(late.lates[0], true, "the watch hears it's late")
   const earlier = [second, lateReadings.reading().child?.pid]
@@ -117,7 +119,7 @@ try {
 
   // A child whose own canary goes unheard: every watch is told, the child is
   // restarted once, and the watches hear delivery come back. The window is
-  // longer than a busy Mac's fseventsd takes to deliver at all, 15 s on one.
+  // longer than a degraded fseventsd was seen taking to deliver at all, 15 s.
   process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1200, withinMs: 20_000, deafWhile: deaf })
   const readings = new WatchReadings()
   const canaried = childBackend(undefined, readings)
@@ -147,12 +149,79 @@ try {
   await wait(3000)
   assert.equal(c.dropped(), 1, "without restarting the child again")
   assert.deepEqual(watcherChildren().filter((pid) => !earlier.includes(pid)), [recycled])
-  assert.deepEqual(readings.reading().starts, { first: 1, crash: 0, silence: 1 })
+  assert.deepEqual(readings.reading().starts, { first: 1, crash: 0, silence: 1, recovery: 0 })
   rmSync(deaf)
   await until("and unmutes once heard", () => c.mutes.length === 4, 60_000)
   await quiet.unsubscribe()
   delete process.env.MAKO_WATCHER_CANARY_TEST
   console.log(`watch backend canary: silence detected in ${detected} ms at a 1.2 s beat and a 20 s window`)
+
+  // A degraded fseventsd, simulated: every beat heard 1.2 s late, short of the
+  // 5 s that makes watches poll. The host's read of the daemon says so once
+  // 18 beats are in; the restart, through a stand-in for the privileged step (nothing
+  // here touches the real daemon), starts the watcher child over, so every watch
+  // hears dropped and rescans; delivery is measured again, and a read of history
+  // from before the restart says every root is lost.
+  process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1_500, lagMs: 1_200 })
+  const scratch = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-restart-")))
+  const daemon = { pid: 338, residentBytes: 9 * 1024 ** 2 }
+  const healthReadings = new WatchReadings()
+  const healthBackend = childBackend(undefined, healthReadings)
+  let healthHistory: FileHistory | undefined
+  const service = new FileEventsServiceWatch({
+    mac: true,
+    readDaemon: async () => ({ ...daemon }),
+    privileged: async () => {
+      const made = mkdtempSync(join(scratch, "root-made."))
+      writeFileSync(join(made, "sample.txt"), "    2 Thread_11: com.apple.fseventsd.client.645\n")
+      daemon.pid = 19_513
+      return { kind: "done", stdout: made }
+    },
+    probe: () => probeDelivery(),
+    recover: () => {
+      healthBackend.recover()
+      healthHistory?.recover?.()
+    },
+    activity: () => ({ ...healthReadings.totals(), turnsRunning: 0 }),
+    emit: () => {},
+    log: () => {},
+    evidenceRoot: join(scratch, "crashes"),
+    evidenceTemporary: join(scratch, "root-made."),
+    history: () => healthHistory,
+    uid: process.getuid?.() ?? 0,
+  })
+  healthReadings.follow(service)
+  healthHistory = process.platform === "darwin" ? childHistory(undefined, healthReadings, service) : undefined
+  await service.tick()
+  const d = recorder()
+  const degrading = await healthBackend(kept, [], d.listener)
+  const degradingAt = Date.now()
+  await until("a canary 1.2 s late reads fseventsd degraded", () => service.snapshot().state === "degraded", 90_000)
+  const degradedIn = Date.now() - degradingAt
+  assert.ok((service.snapshot().lagMs ?? 0) >= 1_200, `the median beat is as late as it's heard (${service.snapshot().lagMs} ms)`)
+  assert.deepEqual(d.mutes, [], "degraded is said, not polled around")
+  const before = healthHistory ? await healthHistory.mark() : undefined
+  process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1_500 })
+  const restarted = await service.restart()
+  assert.equal(restarted.restart?.outcome, "restarted")
+  // Measured again, not the late beats carried over: well under the lag it restarted from, whatever the runner's pace.
+  assert.ok((restarted.restart?.after?.lagMs ?? Infinity) < (restarted.restart?.before.lagMs ?? 0) / 2, `delivery measured again after: ${restarted.restart?.after?.lagMs} ms, from ${restarted.restart?.before.lagMs} ms`)
+  assert.ok((restarted.restart?.before.lagMs ?? 0) >= 1_200)
+  assert.equal(restarted.state, "healthy", "and the notice goes")
+  await until("every watch hears its events may have been dropped, and rescans", () => d.dropped() === 1, 30_000)
+  assert.equal(healthReadings.reading().starts.recovery, 1, "the watcher child started over once")
+  await drained(kept, d.heard)
+  if (healthHistory && before) {
+    const across = await healthHistory.since(before, [kept])
+    assert.deepEqual(across.lost, [kept], "a read from before the restart is reported lost, not returned as if complete")
+    const after = await healthHistory.mark()
+    writeFileSync(join(kept, "after-restart.ts"), "")
+    assert.deepEqual((await healthHistory.since(after, [kept])).lost, [], "one from after it reads as usual")
+  }
+  await degrading.unsubscribe()
+  delete process.env.MAKO_WATCHER_CANARY_TEST
+  rmSync(scratch, { recursive: true, force: true })
+  console.log(`watch backend fseventsd: a canary 1.2 s late read degraded in ${degradedIn} ms at a 1.5 s beat; the restart rescanned every watch and measured ${restarted.restart?.after?.lagMs} ms after`)
 
   // Only something else holding this process open lets an unref'd timer fire.
   setTimeout(() => {

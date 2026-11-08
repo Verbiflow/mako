@@ -87,8 +87,8 @@ export function Notice({
       className={cn(
         "shrink-0 text-ui text-foreground",
         surface === "card"
-          ? "rounded-xl bg-popover [box-shadow:inset_0_0_0_0.5px_var(--hairline)] motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 motion-safe:ease-[var(--ease-out)]"
-          : "rounded-md",
+          ? "bg-popover [box-shadow:inset_0_0_0_0.5px_var(--hairline)] motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 motion-safe:ease-[var(--ease-out)]"
+          : "",
         className
       )}
     >
@@ -107,7 +107,7 @@ export function Notice({
             type="button"
             aria-expanded={open}
             onClick={() => setOpen((value) => !value)}
-            className="pressable -my-0.5 flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+            className="pressable -my-0.5 flex h-6 shrink-0 items-center gap-1 px-1.5 text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
           >
             Details
             <ChevronRightIcon
@@ -126,7 +126,7 @@ export function Notice({
             aria-label={dismissLabel}
             title={dismissLabel}
             onClick={onDismiss}
-            className="pressable -my-0.5 -mr-1 flex size-6 shrink-0 items-center justify-center rounded-md text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+            className="pressable -my-0.5 -mr-1 flex size-6 shrink-0 items-center justify-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
           >
             <XIcon className="size-3.5" />
           </button>
@@ -169,7 +169,7 @@ export function NoticeAction({
       aria-expanded={expanded}
       onClick={onClick}
       className={cn(
-        "pressable h-6 rounded-md px-2 text-label transition-colors duration-100 disabled:opacity-45",
+        "pressable h-6 px-2 text-label transition-colors duration-100 disabled:opacity-45",
         quiet
           ? "text-muted-foreground hover:bg-fill-hover hover:text-foreground"
           : "bg-fill-hover text-foreground hover:bg-fill-selected"
@@ -208,7 +208,7 @@ export function Disclosure({
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
         className={cn(
-          "pressable group/disclosure -mx-1 flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-left text-label transition-colors duration-100",
+          "pressable group/disclosure -mx-1 flex max-w-full items-center gap-1 px-1 py-0.5 text-left text-label transition-colors duration-100",
           tone === "danger"
             ? "text-destructive/90 hover:text-destructive"
             : tone === "caution"

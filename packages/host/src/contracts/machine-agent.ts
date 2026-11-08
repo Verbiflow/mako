@@ -1,4 +1,5 @@
 import { RuntimeIdSchema, type ThreadOutboxStats } from "@mako/protocol"
+import type { BorrowPush } from "@mako/protocol/borrow"
 import { z } from "zod"
 import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall } from "./cloud-sign-ins.js"
 import { GitHubPersonSchema } from "./github-person.js"
@@ -14,10 +15,10 @@ import { GitHubPersonSchema } from "./github-person.js"
  * the agent waits for before it calls the host ready. 5: and takes `prepare`, answering `prepared`. 6: and takes
  * `prefetch`, and sends its start's lines as `log`. 7: and takes `carried-files`, asking for them again as a move
  * arrives (`carried-files-refresh`). 8: and asks `github-person-refresh` before a pull request, answered with
- * `github-person`. 9: and takes `ssh`, where the machine's SSH server listens. An agent sends only what the host's
- * `hello` says it takes.
+ * `github-person`. 9: and takes `ssh`, where the machine's SSH server listens. 10: and passes on the gateway's `borrow`
+ * frames as `borrow`. An agent sends only what the host's `hello` says it takes.
  */
-export const MACHINE_AGENT_PROTOCOL = 9
+export const MACHINE_AGENT_PROTOCOL = 10
 
 /**
  * Set by the agent as it starts the host: the folder in memory that holds the machine's GitHub access, an hour-long
@@ -35,6 +36,17 @@ export const MACHINE_GITHUB_ENV = "MAKO_GITHUB_ACCESS"
  */
 export const MACHINE_GITHUB_PERSON_ENV = "MAKO_GITHUB_PERSON"
 export const MACHINE_GITHUB_AS = "MAKO_GITHUB_AS"
+
+/**
+ * Who the machine's commits and pull requests are authored as (`github-authorship.ts`), one value per file, which the
+ * agent writes before any harness runs and again on each answer the account gives: `name` and `email`, which it also
+ * sets as Git's global `user.name` and `user.email` and every harness shell exports as `GIT_AUTHOR_*` and
+ * `GIT_COMMITTER_*`; `as`, `you` or `mako`; `pull-requests`, `you`, `mako` or `mako-fallback` (`you` without a saved
+ * GitHub token); and in `mako` mode `co-author`, the person as `Name <email>`, which the machine's Git adds as a
+ * `Co-authored-by` trailer. Its push refuses new commits naming anyone else. The host reads only `pull-requests`, so a
+ * Thread's first pull request reply says when the bot opened it for want of a token.
+ */
+export const MACHINE_IDENTITY_DIR = "/run/mako/secrets/identity"
 
 /**
  * One of the project's carried files the agent placed in the Thread's checkout (its `.env`, a local settings file):
@@ -191,6 +203,11 @@ export type HostMessage =
    * person, keeps the answer where Git and `gh` read it, and answers `github-person` for this `id`.
    */
   | { type: "github-person-refresh"; id: string }
+  /**
+   * What the machine's Thread borrows changed, as the gateway said on the link (`borrow` frames): the agent, which
+   * places what the Thread borrows, acts on it, and asks for the pushes from its last `seq` when it sees a gap.
+   */
+  | { type: "borrow"; threadId: string; seq: number; push: BorrowPush }
   /**
    * One of the host's lines a machine's timeline shows beside the agent's (`npm run timeline`): each launch's phases,
    * what the machine runtime does, a held event loop, and every warning and error. The agent keeps them with its own.

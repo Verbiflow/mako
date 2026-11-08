@@ -24,15 +24,15 @@ export function UnreadRecords({ report }: { report: UnreadReport | null }) {
   }, [report])
   if (!report) return null
   return (
-    <div data-unread-records className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+    <div data-unread-records className="mt-2 bg-raised">
       <div className="px-3 py-2">
         <p className="text-ui">Unread records</p>
         <p className="text-label leading-relaxed text-faint">{unreadSummary(report)}</p>
       </div>
       {harnesses.length ? (
-        <div className="border-t border-hairline">
+        <div className="">
           {harnesses.map(([harness, rows]) => (
-            <div key={harness} data-unread-harness={harness} className="border-b border-hairline px-3 py-1.5 last:border-b-0">
+            <div key={harness} data-unread-harness={harness} className="px-3 py-1.5">
               <div className="flex items-center gap-1.5 pb-0.5 text-label text-muted-foreground">
                 <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
                 <span>{harnessLabel(harness)}</span>

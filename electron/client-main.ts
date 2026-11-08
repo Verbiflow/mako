@@ -15,7 +15,7 @@ import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtime
 import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, invokeRuntimeVideo, probeRuntime, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { runtimeEventRouting } from "@mako/host/contracts/runtime"
-import { LIVE_FORM } from "@mako/protocol/live-form"
+import { WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { invokeWithRecovery } from "@mako/host/contracts/host-call-recovery"
 import { HostLiveness, type HostProbe } from "@mako/host/contracts/host-liveness"
@@ -26,7 +26,7 @@ import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 import { installCrashReporting } from "@mako/host/base/crash"
 import { electronNativeCrashes } from "./crash-electron.js"
-import { hostLog, installHostLog, logsRoot } from "@mako/host/base/host-log"
+import { hostLog, hostWarn, installHostLog, logsRoot } from "@mako/host/base/host-log"
 import { watchRendererHealth } from "./renderer-health.js"
 import { buildMetadataAt } from "@mako/host/base/build-identity"
 import { userRootFor } from "@mako/host/base/host-environment"
@@ -307,6 +307,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
     message: DISCONNECTED_MESSAGE,
     announce: (event) => { if (!closed && !window.isDestroyed()) sendEvent(window.webContents, event) },
     probe: (timeoutMs) => askHost(timeoutMs),
+    log: (message, fields) => hostWarn("stream", message, { window: id, ...fields }),
   })
   const client = { id, link, dispose() { closed = true; clearTimeout(timer); subscription?.(); link.dispose() } }
   const rendererId = window.webContents.id
@@ -329,8 +330,8 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
         if (type !== undefined) crashes.breadcrumb(`window=${window.id} event ${type}`)
         window.webContents.send(packet.channel === "event" ? "mako:event" : "mako:terminal-event", packet.payload)
       }
-    }, () => {
-      stream.ended()
+    }, (end) => {
+      stream.ended(end)
       // The agent views app never starts a host; its link ends with this one and it leaves.
       if (closed || window.isDestroyed() || role === "agent-views") return
       const retry = () => {
@@ -338,7 +339,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
         void ensureRuntime(launch).then(async (next) => { runtime = next; await secretKeys?.attached(); connect() }).catch(() => { if (!closed) timer = setTimeout(retry, 2_000) })
       }
       timer = setTimeout(retry, 500)
-    }, { history: true, observer: Boolean(agentView), heard: stream.heard, live: LIVE_FORM })
+    }, { history: true, observer: Boolean(agentView), heard: stream.heard, live: WINDOW_LIVE_FORM })
   }
   connect()
   window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); watchAgentViewsIdle(); finishClientShutdown() })

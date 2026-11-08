@@ -52,10 +52,25 @@ export function applyThreadEnvironment(env: NodeJS.ProcessEnv, environment?: Thr
   if (values.length) env[RECIPE_NAMES] = values.map(([name]) => name).join(",")
 }
 
+/**
+ * The note's first line on a cloud machine, for every harness: where the agent runs, what of the person's computer
+ * isn't there, and how it gets what it lacks. A Thread moved from a computer keeps that computer's path for its
+ * folder, so without this an agent takes the machine for the computer and looks for its files and sign-ins.
+ */
+export const CLOUD_MACHINE_INSTRUCTIONS = [
+  "You run in Mako's cloud, not on the person's computer: a Linux machine of this Thread's own (Debian, user node, home /home/node), which pauses when the Thread is idle.",
+  "This Thread's folder is a clone of its GitHub repository. A Thread moved from a computer keeps that computer's path for it, but nothing else of that computer is here: none of the person's other folders, and none of its sign-ins, keychain, VPN or local services.",
+  "Git and gh reach GitHub through Mako's GitHub App, for this Thread's repository. Commits made here name who the person chose in Settings › Git, themselves or Mako's bot with them as co-author, as Mako set Git's identity before you started: never set user.name, user.email, --author or GIT_AUTHOR_*, and never copy an identity from another commit; keep your harness's co-author trailer. A push of commits naming anyone else is refused. Node with npm, Git, gh, curl and Chromium are installed; anything else the project needs goes in the recipe's prepare, so every Thread has it.",
+  "The project's carried files (an .env, a local settings file) are placed in this checkout from Mako's Settings › Apps › this project › In Mako Cloud. For access this machine doesn't have, or a file that's only on the person's computer, say exactly what you need and ask the person: to add the file there, to push it to the repository, or to bring the Thread back to their computer for that step. Never ask for a secret's value in the conversation.",
+].join(" ")
+
 /** One line for the note sent with each prompt; it names only what the process was started with. */
-export function threadEnvironmentInstructions(environment: ThreadEnvironment): string {
+export function threadEnvironmentInstructions(environment: ThreadEnvironment, place: "local" | "cloud" = "local"): string {
   const last = environment.port + environment.ports - 1
-  const values = `This Thread's own values, already in your shell's environment: ports ${environment.port}-${last} (MAKO_THREAD_PORT, MAKO_THREAD_PORTS), host ${environment.host} (${threadUrl(environment)} is MAKO_THREAD_URL; the name keeps this Thread's cookies apart), and a private data folder (MAKO_THREAD_DATA_DIR). Run anything you start for this Thread on those ports. Other Threads' agents share this machine: never stop a process you didn't start, and if the project needs a fixed port that is taken, say so instead.`
+  const sharing = place === "cloud"
+    ? "This machine is this Thread's alone, but its agents share it: never stop a process you didn't start."
+    : "Other Threads' agents share this machine: never stop a process you didn't start, and if the project needs a fixed port that is taken, say so instead."
+  const values = `This Thread's own values, already in your shell's environment: ports ${environment.port}-${last} (MAKO_THREAD_PORT, MAKO_THREAD_PORTS), host ${environment.host} (${threadUrl(environment)} is MAKO_THREAD_URL; the name keeps this Thread's cookies apart), and a private data folder (MAKO_THREAD_DATA_DIR). Run anything you start for this Thread on those ports. ${sharing}`
   return [values, WORKTREE_INSTRUCTIONS, missingInstructions(environment), recipeInstructions(environment)].filter(Boolean).join(" ")
 }
 

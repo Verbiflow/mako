@@ -1,3 +1,4 @@
+import { hostFetch } from "../../base/host-stopping.js"
 import { z } from "zod"
 import type { SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk"
 import { claudeProbeUsage } from "./usage-probe.js"
@@ -5,12 +6,10 @@ import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import {
   chmod,
-  copyFile,
   mkdir,
   readdir,
   readFile,
   rm,
-  writeFile,
 } from "node:fs/promises"
 import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
@@ -49,6 +48,7 @@ import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapabilit
 import { chainFingerprint, changeJsonFile, instant, objectValue, placeSecret, removeSecret, replaceFile, withFolderLock, without, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
 import { claudeRuntime } from "./runtime.js"
 import { onMac } from "../../base/platform.js"
+import { publishFile } from "../../base/published-files.js"
 
 /** Env vars that would override file credentials and cross accounts. */
 const AUTH_ENV = [
@@ -422,9 +422,7 @@ async function captureAccount(root: AccountRoot, name: string): Promise<void> {
         throw new Error(
           "The Claude Code login is invalid. Sign in with the CLI and capture it again."
         )
-      await writeFile(join(dir, ".credentials.json"), credentials, {
-        mode: 0o600,
-      })
+      await publishFile(join(dir, ".credentials.json"), credentials, { mode: 0o600 })
       await chmod(join(dir, ".credentials.json"), 0o600)
       await writeKeychain(scopedService(dir), credentials)
       scopedLoginSaved = onMac()
@@ -434,7 +432,7 @@ async function captureAccount(root: AccountRoot, name: string): Promise<void> {
     // The CLI's onboarding/config state is copied, not linked: it embeds
     // account state and prevents first-time setup from running again.
     const config = join(homedir(), ".claude.json")
-    if (existsSync(config)) await copyFile(config, join(dir, ".claude.json"))
+    if (existsSync(config)) await publishFile(join(dir, ".claude.json"), await readFile(config))
 
     if (!captured) {
       throw new Error(
@@ -548,7 +546,7 @@ export async function claudeOAuthUsage(
   harnessLabel: string
 ): Promise<AccountUsage> {
   try {
-    const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
+    const response = await hostFetch("https://api.anthropic.com/api/oauth/usage", {
       headers: {
         Authorization: `Bearer ${token}`,
         "anthropic-beta": "oauth-2025-04-20",

@@ -32,6 +32,7 @@ import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { ConversationTools, ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { HEADLESS_CHROME_ARGS } from "./lib/headless-chrome.ts"
 
 const executable =
   process.env.CHROMIUM_EXECUTABLE ??
@@ -52,7 +53,7 @@ async function until(check: () => boolean, what: string, ms = 15_000) {
 const root = await mkdtemp(join(tmpdir(), "mako-control-hibernation-"))
 const chromium = spawn(
   executable,
-  ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${join(root, "profile")}`, "--no-first-run", "--no-default-browser-check", "about:blank"],
+  [...HEADLESS_CHROME_ARGS, "--remote-debugging-port=0", `--user-data-dir=${join(root, "profile")}`, "--no-first-run", "--no-default-browser-check", "about:blank"],
   { stdio: ["ignore", "ignore", "pipe"] }
 )
 const endpoint = await new Promise<string>((done, fail) => {

@@ -24,6 +24,7 @@ import { EVIDENCE_RULES, givenVersion, mergeWriters, outdatedOf, restoreGate, ST
 import type { RecordRef } from "./entries.js"
 import { namesBuild } from "./runtime-version.js"
 import { SqliteBusy } from "./providers/sqlite-busy.js"
+import { atOnce, type Steps } from "./slices.js"
 
 export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
 
@@ -97,6 +98,13 @@ const EXPORT_VERSION_COLUMNS = {
 const ExportVersionSchema = z.object(EXPORT_VERSION_COLUMNS)
 /** A version and its unit, as one batch of `RecordStore.exportFor` reads them together. */
 const ExportRowSchema = ExportUnitSchema.omit({ held: true }).extend(EXPORT_VERSION_COLUMNS)
+
+/** Rows an export reads at once (`RecordStore.exportSteps`): a few ms of the loop, however large its batch. */
+const EXPORT_ROWS_A_READ = 500
+/** Units an export's read passes over at most, held whole by the remote or not. */
+const EXPORT_UNITS_A_READ = 2_000
+/** Units whose remote heads a write notes between turns of the loop (`RecordStore.remoteHolds`). */
+const REMOTE_HEADS_A_TURN = 500
 
 /** A version as it crosses to another store: its bytes in hex. */
 function exportedVersion(version: z.infer<typeof ExportVersionSchema>): RecordVersion {
@@ -1740,18 +1748,41 @@ export class RecordStore {
    * last. A unit cut short is taken up again past what the remote then holds.
    */
   exportFor(remote: string, harness: string, nativeId: string, page: ExportPage = {}): { bundle: RecordBundle; cursor: number | null } | null {
+    return atOnce(this.exportSteps(remote, harness, nativeId, page))
+  }
+
+  /**
+   * `exportFor` as `Steps`: the batch's versions in unit order, and one past it to tell whether a unit or the session
+   * goes on, read `EXPORT_ROWS_A_READ` at a time from where the last read ended. A version a query held the sync daemon
+   * 1.4 s for a batch of a Cursor chat's 342,965 rows; a batch of 10,000 in one read, 80 ms on a loaded Mac.
+   */
+  *exportSteps(remote: string, harness: string, nativeId: string, page: ExportPage = {}): Steps<{ bundle: RecordBundle; cursor: number | null } | null> {
     const found = SessionRowSchema.optional().parse(this.prepared("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
     if (!found?.layout) return null
     const limit = page.limit ?? Number.POSITIVE_INFINITY
-    // One read for the whole batch, the versions in unit order, and one past it to tell whether a unit or the session
-    // goes on. A version a query, as this was, held the sync daemon 1.4 s for a batch of a Cursor chat's 342,965 rows.
-    const rows = ExportRowSchema.array().parse(this.prepared(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places,
-        v.seq, v.kind, v.at, v.size, v.digest, v.tail, v.chunks, v.detail, v.writer, v.writer_source
-      FROM session_units su JOIN units u ON u.id = su.unit
-      LEFT JOIN remote_session_units r ON r.remote = ? AND r.session = su.session AND r.unit = u.id
-      JOIN versions v ON v.unit = u.id AND v.seq > coalesce(r.head, -1)
-      WHERE su.session = ? AND su.unit > ? AND u.head > coalesce(r.head, -1) ORDER BY su.unit, v.seq LIMIT ?`)
-      .all(remote, found.id, page.cursor ?? 0, Number.isFinite(limit) ? limit + 1 : -1))
+    const wanted = limit + 1
+    const rows: z.infer<typeof ExportRowSchema>[] = []
+    // Past the cursor's unit, then past each read's last version, `EXPORT_UNITS_A_READ` units at most: a session the
+    // remote holds nearly whole is mostly units to pass over, 42,000 of them in one read of a large Cursor agent's.
+    let after = { unit: page.cursor ?? 0, seq: Number.MAX_SAFE_INTEGER }
+    while (rows.length < wanted) {
+      const most = Math.min(EXPORT_ROWS_A_READ, wanted - rows.length)
+      const through = z.object({ unit: z.number() }).optional()
+        .parse(this.prepared("SELECT unit FROM session_units WHERE session = ? AND unit > ? ORDER BY unit LIMIT 1 OFFSET ?").get(found.id, after.unit, EXPORT_UNITS_A_READ - 1))?.unit
+      const read = ExportRowSchema.array().parse(this.prepared(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places,
+          v.seq, v.kind, v.at, v.size, v.digest, v.tail, v.chunks, v.detail, v.writer, v.writer_source
+        FROM session_units su JOIN units u ON u.id = su.unit
+        LEFT JOIN remote_session_units r ON r.remote = ? AND r.session = su.session AND r.unit = u.id
+        JOIN versions v ON v.unit = u.id AND v.seq > coalesce(r.head, -1)
+        WHERE su.session = ? AND su.unit >= ? AND su.unit <= ? AND (su.unit > ? OR v.seq > ?) AND u.head > coalesce(r.head, -1) ORDER BY su.unit, v.seq LIMIT ?`)
+        .all(remote, found.id, after.unit, through ?? Number.MAX_SAFE_INTEGER, after.unit, after.seq, most))
+      rows.push(...read)
+      const last = read.at(-1)
+      if (read.length === most && last) after = { unit: last.id, seq: last.seq }
+      else if (through === undefined) break
+      else after = { unit: through, seq: Number.MAX_SAFE_INTEGER }
+      yield
+    }
     const more = rows.length > limit ? rows.pop() : undefined
     const bundled: RecordUnit[] = []
     let current: { id: number; unit: RecordUnit } | undefined
@@ -1810,10 +1841,13 @@ export class RecordStore {
       if (session === null) return
       await beginWriting(this.db, STORE_WRITE_WAIT_MS)
       try {
-        if ("holdings" in held) {
-          this.prepared("DELETE FROM remote_session_units WHERE remote = ? AND session = ?").run(remote, session)
-          for (const [key, head] of Object.entries(held.holdings)) this.noteRemoteHead(remote, session, harness, key, head)
-        } else for (const unit of held.units) this.noteRemoteHead(remote, session, harness, unit.key, unit.versions.at(-1)?.seq ?? -1)
+        if ("holdings" in held) this.prepared("DELETE FROM remote_session_units WHERE remote = ? AND session = ?").run(remote, session)
+        const heads = "holdings" in held ? Object.entries(held.holdings) : held.units.map((unit): [string, number] => [unit.key, unit.versions.at(-1)?.seq ?? -1])
+        // A push's batch names up to 10,000 units: the loop turns between parts of it, the write lock kept.
+        for (let from = 0; from < heads.length; from += REMOTE_HEADS_A_TURN) {
+          if (from > 0) await new Promise((resolve) => setImmediate(resolve))
+          for (const [key, head] of heads.slice(from, from + REMOTE_HEADS_A_TURN)) this.noteRemoteHead(remote, session, harness, key, head)
+        }
         this.db.exec("COMMIT")
       } catch (error) {
         this.rollback()
@@ -1882,9 +1916,9 @@ export class RecordStore {
   }
 
   private noteRemoteHead(remote: string, session: number, harness: string, key: string, head: number): void {
-    const unit = this.unitByKey(harness, key)
-    if (!unit || head < 0) return
-    this.prepared("INSERT INTO remote_session_units (remote, session, unit, head) VALUES (?, ?, ?, ?) ON CONFLICT (remote, session, unit) DO UPDATE SET head = max(head, excluded.head)").run(remote, session, unit.id, head)
+    if (head < 0) return
+    this.prepared("INSERT INTO remote_session_units (remote, session, unit, head) SELECT ?, ?, id, ? FROM units WHERE harness = ? AND key = ? ON CONFLICT (remote, session, unit) DO UPDATE SET head = max(head, excluded.head)")
+      .run(remote, session, head, harness, key)
   }
 
   /** Of `hashes`, the chunks this store lacks. */

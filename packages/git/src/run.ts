@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process"
+import type { spawn, ChildProcess } from "node:child_process"
+import { processRunner, type ProcessRunner } from "./process-runner.js"
 import { existsSync, readlinkSync } from "node:fs"
 import { availableParallelism } from "node:os"
 import { delimiter, join } from "node:path"
@@ -25,6 +26,10 @@ export interface GitTrace {
 }
 
 export interface GitRuntime {
+  /** The owner supplies process ownership; standalone Git uses its own group runner. */
+  processes?: Pick<ProcessRunner, "spawn" | "close">
+  /** The owner stopped: cancel running commands and refuse queued or new ones. */
+  signal?: AbortSignal
   /** Runs a background command below foreground work, such as `nice -n 19`. */
   background?: (command: string, args: readonly string[]) => [string, string[]]
   trace?: (trace: GitTrace) => void
@@ -92,6 +97,8 @@ export const PARALLEL_CHECKOUT = ["-c", `checkout.workers=${CHECKOUT_WORKERS}`, 
  * `Repository`. A host makes one; two in a process share nothing.
  */
 export class Git {
+  readonly processes: Pick<ProcessRunner, "spawn" | "close">
+  readonly #children = new Set<ChildProcess>()
   readonly #runtime: GitRuntime
   readonly #repositories: Repositories
   readonly #readsWaiting: Array<() => void> = []
@@ -103,6 +110,7 @@ export class Git {
 
   constructor(runtime: GitRuntime = {}) {
     this.#runtime = runtime
+    this.processes = trackProcesses(runtime.processes ?? processRunner, runtime.signal, this.#children)
     this.#repositories = new Repositories(this)
   }
 
@@ -132,6 +140,8 @@ export class Git {
 
   /** Runs one `git` command. A failure is a `GitError`; cancelling rejects with the signal's reason. */
   async run(options: RunOptions): Promise<RunResult> {
+    const owner = this.#runtime.signal
+    if (owner) options = { ...options, signal: options.signal ? AbortSignal.any([owner, options.signal]) : owner }
     options.signal?.throwIfAborted()
     const queued = performance.now()
     const release = options.read ? await this.#readSlot() : undefined
@@ -159,8 +169,17 @@ export class Git {
    * foreground work.
    */
   async output(cwd: string, args: readonly string[], background = false): Promise<string> {
-    const result = await this.run({ cwd, args, background, maxBytes: 16 * 1024 * 1024 })
-    if (result.truncated) throw new GitError({ message: `git ${args[0] ?? ""} wrote more than 16 MB.`, command: args[0], code: result.code })
+    return this.#output({ cwd, args, background })
+  }
+
+  /** `output` for a read: it waits for one of the read slots and never refreshes the index. */
+  readOutput(cwd: string, args: readonly string[]): Promise<string> {
+    return this.#output({ cwd, args, read: true })
+  }
+
+  async #output(options: RunOptions): Promise<string> {
+    const result = await this.run({ ...options, maxBytes: 16 * 1024 * 1024 })
+    if (result.truncated) throw new GitError({ message: `git ${options.args[0] ?? ""} wrote more than 16 MB.`, command: options.args[0], code: result.code })
     return result.stdout.toString("utf8").trim()
   }
 
@@ -221,8 +240,9 @@ export class Git {
   }
 
   /** Ends every repository's helper process, for an owner that is stopping. */
-  close(): void {
+  async close(): Promise<void> {
     this.#repositories.close()
+    await Promise.all([...this.#children].map((child) => this.processes.close(child)))
   }
 
   async #readSlot(): Promise<() => void> {
@@ -248,7 +268,7 @@ export class Git {
     const running = this.#running
 
     return new Promise<RunResult>((resolve, reject) => {
-      const child = spawn(command, argv, { cwd: options.cwd, env, stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true })
+      const child = this.processes.spawn(command, argv, { cwd: options.cwd, env, stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true })
       const live = { command: subcommand, cwd: options.cwd, started }
       running.add(live)
       const chunks: Buffer[] = []
@@ -274,13 +294,14 @@ export class Git {
         finish(outcome, code)
         reject(error)
       }
+      const stopChild = () => { void this.processes.close(child).catch((error: Error) => fail(error, "failed", null)) }
       const cancel = () => {
         ended = "cancelled"
-        child.kill("SIGTERM")
+        stopChild()
       }
       const timer = setTimeout(() => {
         ended = "timeout"
-        child.kill("SIGTERM")
+        stopChild()
       }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
       options.signal?.addEventListener("abort", cancel, { once: true })
 
@@ -291,7 +312,7 @@ export class Git {
           if (room > 0) chunks.push(chunk.subarray(0, room))
           bytes = maxBytes
           truncated = true
-          child.kill("SIGTERM")
+          stopChild()
           return
         }
         chunks.push(chunk)
@@ -316,13 +337,12 @@ export class Git {
         child.stdin.on("error", () => {})
         if (options.input instanceof Readable) {
           options.input.on("error", (error) => {
-            child.kill("SIGTERM")
-            fail(error, "failed", null)
+            void this.processes.close(child).then(() => fail(error, "failed", null), (cleanup: Error) => fail(cleanup, "failed", null))
           })
           options.input.pipe(child.stdin)
         } else child.stdin.end(options.input)
       }
-      child.on("close", (code) => {
+      child.on("close", (code) => { void this.processes.close(child).then(() => {
         if (settled) return
         const stderr = Buffer.concat(errors).toString("utf8")
         if (ended === "cancelled") return fail(options.signal?.reason ?? new DOMException("Cancelled", "AbortError"), "cancelled", code)
@@ -338,9 +358,21 @@ export class Git {
         settled = true
         finish("ok", code)
         resolve({ code: code ?? 0, stdout, stderr, truncated })
-      })
+      }, (error: Error) => fail(error, "failed", code)) })
     })
   }
+}
+
+function trackProcesses(runner: Pick<ProcessRunner, "spawn" | "close">, signal: AbortSignal | undefined, children: Set<ChildProcess>): Pick<ProcessRunner, "spawn" | "close"> {
+  // SAFETY: the injected runner receives the same arguments and returns the same child for every stdio overload.
+  const launch = ((...args: Parameters<typeof spawn>) => {
+    signal?.throwIfAborted()
+    const child = runner.spawn(...args)
+    children.add(child)
+    child.once("close", () => { void runner.close(child).then(() => children.delete(child), () => {}) })
+    return child
+  }) as typeof spawn
+  return { spawn: launch, close: (child) => runner.close(child) }
 }
 
 function resolveGit(): string {

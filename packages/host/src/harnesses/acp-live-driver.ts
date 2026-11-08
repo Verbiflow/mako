@@ -68,6 +68,9 @@ export function createAcpLiveDriver(
     approvalAnswerDigest: source.approvalAnswerDigest,
     nativeAgents: source.agents.kind === "observed" ? { kind: "observed", via: source.agents.via } : source.agents,
     nativeRouting: source.nativeRouting,
+    layer: source.layer,
+    modelRoutes: source.modelRoutes,
+    ...(source.accountContinuation && { accountContinuation: source.accountContinuation }),
     questions: source.questions,
     fork: fork.kind === "native" ? { kind: fork.kind, point: fork.point, via: fork.via } : fork,
     contextBreakdown: { kind: "unavailable", reason: "ACP's `usage_update` carries the context used and its size, nothing itemized." },
@@ -112,6 +115,7 @@ export function createAcpLiveDriver(
           kind: "supported",
           lands: source.steering.wire === "interrupting-prompt" ? "interrupt" : "step",
           ...source.steering.hears && { hears: source.steering.hears },
+          ...source.steering.landing && { landing: source.steering.landing },
           via: source.steering.via,
           steer: async (...args) => (await engine()).steer(...args),
         }

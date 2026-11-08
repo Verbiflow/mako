@@ -1,9 +1,11 @@
-import { execFile, spawn } from "node:child_process"
+import { hostCommand, hostSpawn } from "../base/host-command.js"
+import { hostStopping } from "../base/host-stopping.js"
+import { setTimeout as wait } from "node:timers/promises"
+import { spawn } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import { inside, workingDirectories } from "./app-probe.js"
 import { STEPS_FOLDER_VARIABLE, stepsOf, type StepRecord } from "./check-steps.js"
@@ -12,8 +14,9 @@ import { FIT_RUNS } from "../contracts/thread-app.js"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
 import { ContainerEngine, containersBy, type Container, type ContainerLook } from "./container-runtime.js"
 import { onLinux, onMac } from "../base/platform.js"
+import { childInput } from "@mako/sessions/child-input"
 
-const run = promisify(execFile)
+const run = hostCommand
 
 /** Stop asks nicely this long before it kills. */
 /**
@@ -23,6 +26,10 @@ const run = promisify(execFile)
  */
 const STOP_GRACE_MS = 15_000
 const POLL_MS = 100
+/** How far a look for a run's last process backs off: what's left of a check can go on for as long as it likes. */
+const GONE_POLL_MOST_MS = 2_000
+/** How long one look at the process table answers for the next: windows ask for every app's marks every few seconds. */
+const SHARED_TABLE_MS = 1_000
 /** Between tries of a readiness command: closely while a start is usually done, then less often for one that never comes up. */
 const readyWait = (elapsedMs: number) => (elapsedMs < 30_000 ? 500 : elapsedMs < 300_000 ? 2_000 : 10_000)
 /** One try of a readiness command that hangs is stopped after this. */
@@ -67,6 +74,8 @@ const WRAPPER = 'command=$1; exit_file=$2; shift 2; IFS= read -r go || exit 125;
  * shells carry the Thread's values but never this.
  */
 const RUN_MARK = "MAKO_APP_RUN"
+/** Which run of its app a process belongs to: its children keep it wherever they're reparented (`strays`). */
+const RUN_KEY_MARK = "MAKO_APP_RUN_KEY"
 
 export type RunKind = "process" | "check" | "prepare"
 
@@ -266,6 +275,8 @@ export interface ThreadProcessDependencies {
   cameUp?: (folder: string, at: number) => Promise<void>
   /** The container runtime's running containers, or undefined when none answers; the engine's API by default. */
   containers?: () => Promise<ContainerLook | undefined>
+  /** How long a stopped process has after SIGTERM before SIGKILL; `STOP_GRACE_MS` without it. */
+  stopGraceMs?: number
   now?: () => number
 }
 
@@ -290,6 +301,10 @@ export class ThreadProcesses {
   private readonly now: () => number
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly projects = new Map<AppKey, string>()
+  /** Each app's checkout as read or written here: every window's marks ask for all of them every few seconds. */
+  private readonly checkouts = new Map<AppKey, string | undefined>()
+  /** The last process table asked about, indexed (`membersOf`). */
+  private indexed: { rows: Row[]; index: TableIndex } | undefined
   /** The peak written for each run, by `<app>:<up>`, so a look writes only what grew. */
   private readonly peaks = new Map<string, { bytes: number; steady: boolean }>()
   /** Each process's last footprint reading, by `<pid>:<start>`, with its resident size then. */
@@ -297,12 +312,20 @@ export class ThreadProcesses {
   private measured: MemoryLook | undefined
   private measuring: Promise<MemoryLook> | undefined
   /**
-   * The process table for looks that only show or measure: one under way is
-   * shared, so the Room's overview and memory look read it once. Never after
-   * a spawn or a signal, which a read already under way wouldn't see.
+   * The process table for looks that only show or measure: one under way, or
+   * read in the last `SHARED_TABLE_MS`, is shared, so every window's marks,
+   * the Room, the memory look and the trace read it once. Never after a spawn
+   * or a signal, which a read from before wouldn't see (`tableChanged`).
    */
-  private sharedTable: Promise<Row[]> | undefined
+  private sharedTable: { at: number; rows: Promise<Row[]> } | undefined
+  /** The apps' overview, shared as the table is (`overview`). */
+  private sharedOverview: { at: number; apps: Promise<AppOverview[]> } | undefined
   private readonly containers: () => Promise<ContainerLook | undefined>
+  private readonly exitListeners = new Set<(app: AppKey, key: string) => void>()
+  /** By `runTag`: a run's process that SIGKILL didn't end (`unending`). */
+  private readonly unended = new Map<string, string>()
+  /** By `runTag`: runs being stopped, whose detached children end with them, with every process seen to be theirs (`stopTree`). */
+  private readonly stopping = new Map<string, Set<string>>()
 
   constructor(dependencies: ThreadProcessDependencies) {
     this.dependencies = dependencies
@@ -324,8 +347,8 @@ export class ThreadProcesses {
       for (const spec of specs) {
         const key = runKey(spec.kind, spec.name)
         const current = runs[key]
-        if (current && members(rows, current).length) continue
-        if (spec.kind === "prepare" && Object.values(runs).some((record) => record.kind === "process" && members(rows, record).length)) {
+        if (current && this.membersOf(rows, current).length) continue
+        if (spec.kind === "prepare" && Object.values(runs).some((record) => record.kind === "process" && this.membersOf(rows, record).length)) {
           refused.push({ name: spec.name, reason: "Stop the running app before preparing the checkout again." })
           continue
         }
@@ -333,7 +356,7 @@ export class ThreadProcesses {
           refused.push({ name: spec.name, reason: await this.describeHolder(spec.port, app) })
           continue
         }
-        if (spec.kind === "process" && !Object.values(runs).some((record) => record.kind === "process" && members(rows, record).length)) {
+        if (spec.kind === "process" && !Object.values(runs).some((record) => record.kind === "process" && this.membersOf(rows, record).length)) {
           const up = this.now()
           await writeFile(join(this.folder(app), "up"), String(up), { mode: 0o600 })
           await this.dependencies.cameUp?.(this.folder(app), up).catch(() => {})
@@ -349,13 +372,26 @@ export class ThreadProcesses {
     return { started, refused }
   }
 
+  /** Hears each run this host started once its whole process tree is gone, as soon as it can tell: a build slot it held goes then. */
+  onExit(listener: (app: AppKey, key: string) => void): () => void {
+    this.exitListeners.add(listener)
+    return () => this.exitListeners.delete(listener)
+  }
+
   /** Stops the named runs, or all of them, with their whole process trees. */
   async stop(app: AppKey, keys?: string[]): Promise<string[]> {
     return this.locked(app, async () => {
       const runs = await this.runs(app)
       const chosen = Object.entries(runs).filter(([key]) => !keys || keys.includes(key))
-      await Promise.all(chosen.map(([, record]) => stopTree(record)))
+      const stopping = chosen.map(([key, record]) => {
+        const owned = new Set<string>()
+        this.stopping.set(runTag(app, key), owned)
+        return this.endRun(app, key, record, owned)
+      })
+      await Promise.all(stopping).finally(() => this.tableChanged())
       for (const [key] of chosen) {
+        this.stopping.delete(runTag(app, key))
+        await rm(this.file(app, key, "stopping"), { force: true })
         delete runs[key]
         await rm(this.file(app, key, "exit"), { force: true })
         await rm(this.file(app, key, "ready"), { force: true })
@@ -386,7 +422,7 @@ export class ThreadProcesses {
         const failure = ReadyFailureSchema.safeParse(await readFile(this.file(app, key, "unready"), "utf8").then((text) => JSON.parse(text), () => undefined))
         if (failure.success) status.readyFailure = failure.data
       }
-      const held = members(rows, record).reduce((sum, row) => sum + row.rssKb * 1024, 0)
+      const held = this.membersOf(rows, record).reduce((sum, row) => sum + row.rssKb * 1024, 0)
       if (held) status.memoryBytes = held
       return status
     }))
@@ -499,7 +535,7 @@ export class ThreadProcesses {
   async footprint(app: AppKey, folders: string[]): Promise<{ pids: number[]; commands: string[]; leftovers: Leftover[]; since?: number; records: string; folder: string }> {
     const runs = await this.runs(app)
     const rows = await processTable()
-    const pids = new Set(Object.values(runs).flatMap((record) => members(rows, record).map((row) => row.pid)))
+    const pids = new Set(Object.values(runs).flatMap((record) => this.membersOf(rows, record).map((row) => row.pid)))
     const since = await this.upAt(app)
     const leftovers: Leftover[] = []
     if (since !== undefined) {
@@ -540,7 +576,7 @@ export class ThreadProcesses {
       if (!app.success) continue
       const runs = await this.runs(app.data).catch(() => ({}))
       for (const record of Object.values(runs)) {
-        const pid = members(rows, record).find((row) => listeners.includes(row.pid))?.pid
+        const pid = this.membersOf(rows, record).find((row) => listeners.includes(row.pid))?.pid
         if (pid !== undefined) return { pid, command: commandOf(rows, pid), app: app.data, run: { kind: record.kind, name: record.name } }
       }
     }
@@ -551,16 +587,24 @@ export class ThreadProcesses {
   async touch(app: AppKey, checkout?: string): Promise<void> {
     await mkdir(this.folder(app), { recursive: true, mode: 0o700 })
     await writeFile(join(this.folder(app), "used"), String(this.now()), { mode: 0o600 })
-    if (checkout && this.checkoutOf(app) !== checkout) await writeFile(join(this.folder(app), "checkout"), checkout, { mode: 0o600 })
+    if (checkout && this.checkoutOf(app) !== checkout) {
+      await writeFile(join(this.folder(app), "checkout"), checkout, { mode: 0o600 })
+      this.checkouts.set(app, checkout)
+    }
   }
 
-  /** The folder an app last ran in, to name it. */
+  /** The folder an app last ran in, to name it: read from its file once, then as this host writes it. */
   checkoutOf(app: AppKey): string | undefined {
+    if (this.checkouts.has(app)) return this.checkouts.get(app)
+    let checkout: string | undefined
     try {
-      return readFileSync(join(this.folder(app), "checkout"), "utf8") || undefined
+      checkout = readFileSync(join(this.folder(app), "checkout"), "utf8") || undefined
     } catch {
-      return undefined
+      checkout = undefined
     }
+    // An app without a checkout yet is read again until it has one.
+    if (checkout) this.checkouts.set(app, checkout)
+    return checkout
   }
 
   async usedAt(app: AppKey): Promise<number> {
@@ -570,20 +614,33 @@ export class ThreadProcesses {
   }
 
   /** Every app on this Mac with a process running, with what it holds and when it was last used. */
-  async active(): Promise<ActiveApp[]> {
-    const folders = await readdir(this.dependencies.root).catch(() => [])
+  active(): Promise<ActiveApp[]> {
+    return this.appsRunning(() => readdir(this.dependencies.root).catch(() => []), (app) => this.runs(app).catch(() => ({})))
+  }
+
+  /**
+   * `active` for what mustn't take an error for nothing running: a records folder or a record that can't be read
+   * throws, so an empty answer means nothing runs.
+   */
+  activeRead(): Promise<ActiveApp[]> {
+    return this.appsRunning(() => readdir(this.dependencies.root).catch(ifMissing([])), (app) => this.runs(app), (app, key, rows) => this.stillStopping(app, key, rows))
+  }
+
+  private async appsRunning(listed: () => Promise<string[]>, runsOf: (app: AppKey) => Promise<Record<string, Run>>, stopping?: (app: AppKey, key: string, rows: Row[]) => Promise<Row[]>): Promise<ActiveApp[]> {
+    const folders = await listed()
     if (!folders.length) return []
-    const rows = await processTable()
+    const rows = await this.sharedProcessTable()
     const found: ActiveApp[] = []
     for (const folder of folders) {
       const app = AppKeySchema.safeParse(folder)
       if (!app.success) continue
-      const runs = await this.runs(app.data).catch(() => ({}))
+      const runs = await runsOf(app.data)
       let memoryBytes = 0
       const alive: ActiveApp["runs"] = []
       const pids: number[] = []
-      for (const record of Object.values(runs)) {
-        const held = members(rows, record)
+      for (const [key, record] of Object.entries(runs)) {
+        const tree = this.membersOf(rows, record)
+        const held = tree.length ? tree : await stopping?.(app.data, key, rows) ?? []
         if (!held.length) continue
         alive.push({ kind: record.kind, name: record.name })
         pids.push(...held.map((row) => row.pid))
@@ -594,8 +651,22 @@ export class ThreadProcesses {
     return found
   }
 
-  /** Every app on this Mac with records, from one look at the process table, for marking them all at once. */
-  async overview(): Promise<AppOverview[]> {
+  /**
+   * Every app on this Mac with records, from one look at the process table, for marking them all at once. Every
+   * window asks every few seconds, so a look under way or read within `SHARED_TABLE_MS` answers for all of them.
+   */
+  overview(): Promise<AppOverview[]> {
+    const known = this.sharedOverview
+    if (known && performance.now() - known.at < SHARED_TABLE_MS) return known.apps
+    const shared = { at: performance.now(), apps: this.readOverview() }
+    this.sharedOverview = shared
+    shared.apps.catch(() => {
+      if (this.sharedOverview === shared) this.sharedOverview = undefined
+    })
+    return shared.apps
+  }
+
+  private async readOverview(): Promise<AppOverview[]> {
     const rows = await this.sharedProcessTable()
     const found: AppOverview[] = []
     for (const folder of await readdir(this.dependencies.root).catch(() => [])) {
@@ -648,8 +719,8 @@ export class ThreadProcesses {
   async paused<T>(app: AppKey, work: () => Promise<T>): Promise<T> {
     const runs = Object.values(await this.runs(app))
     const rows = await processTable()
-    const held = runs.flatMap((record) => members(rows, record))
-    const groups = [...new Set(runs.filter((record) => members(rows, record).length).map((record) => record.pid))]
+    const held = runs.flatMap((record) => this.membersOf(rows, record))
+    const groups = [...new Set(runs.filter((record) => this.membersOf(rows, record).length).map((record) => record.pid))]
     const signal = (name: NodeJS.Signals) => {
       for (const group of groups) {
         try {
@@ -666,11 +737,13 @@ export class ThreadProcesses {
         }
       }
     }
+    this.tableChanged()
     signal("SIGSTOP")
     try {
       return await work()
     } finally {
       signal("SIGCONT")
+      this.tableChanged()
     }
   }
 
@@ -734,10 +807,26 @@ export class ThreadProcesses {
   }
 
   private sharedProcessTable(): Promise<Row[]> {
-    this.sharedTable ??= processTable().finally(() => {
-      this.sharedTable = undefined
+    const known = this.sharedTable
+    if (known && performance.now() - known.at < SHARED_TABLE_MS) return known.rows
+    const shared = { at: performance.now(), rows: processTable() }
+    this.sharedTable = shared
+    shared.rows.catch(() => {
+      if (this.sharedTable === shared) this.sharedTable = undefined
     })
-    return this.sharedTable
+    return shared.rows
+  }
+
+  /** A run's processes in `rows`, through the index of the table last asked about (`TableIndex`). */
+  private membersOf(rows: Row[], record: Run): Row[] {
+    if (this.indexed?.rows !== rows) this.indexed = { rows, index: new TableIndex(rows) }
+    return this.indexed.index.members(record)
+  }
+
+  /** A process started or was signalled: the next look reads the table again. */
+  private tableChanged(): void {
+    this.sharedTable = undefined
+    this.sharedOverview = undefined
   }
 
   private async measure(): Promise<MemoryLook> {
@@ -774,7 +863,7 @@ export class ThreadProcesses {
     }
     if (!apps.some((entry) => entry.runs.some((record) => groupAlive(record.pid)))) return { found }
     const [rows, containerLook] = await Promise.all([this.sharedProcessTable(), this.containerLook()])
-    const held = apps.map(({ app, runs }) => ({ app, runs: runs.map((record) => ({ record, rows: members(rows, record) })) }))
+    const held = apps.map(({ app, runs }) => ({ app, runs: runs.map((record) => ({ record, rows: this.membersOf(rows, record) })) }))
     const footprints = await this.footprintsOf(held.flatMap((entry) => entry.runs.flatMap((one) => one.rows)))
     const bytesOf = (row: Row) => footprints.get(row.pid)?.bytes ?? row.rssKb * 1024
     const peakOf = (row: Row) => footprints.get(row.pid)?.peakBytes ?? bytesOf(row)
@@ -905,6 +994,7 @@ export class ThreadProcesses {
   async discard(app: AppKey): Promise<void> {
     await this.stop(app)
     await this.locked(app, () => rm(this.folder(app), { recursive: true, force: true }))
+    this.checkouts.delete(app)
   }
 
   /** Names what holds a port, for an agent that expected it free. */
@@ -925,7 +1015,7 @@ export class ThreadProcesses {
   }
 
   private async state(app: AppKey, key: string, record: Run, rows: Row[]): Promise<RunState> {
-    if (members(rows, record).length) {
+    if (this.membersOf(rows, record).length) {
       if (record.ready !== undefined) return (await stat(this.file(app, key, "ready")).catch(() => undefined)) ? { kind: "running" } : { kind: "starting" }
       if (record.port === undefined || (await this.dependencies.listening(record.port))) return { kind: "running" }
       return { kind: "starting" }
@@ -939,9 +1029,111 @@ export class ThreadProcesses {
     return { kind: "ended" }
   }
 
+  private get graceMs(): number {
+    return this.dependencies.stopGraceMs ?? STOP_GRACE_MS
+  }
+
+  /** A run's wrapper exited, which only says to look: what it started can outlive it. A run that took its key meanwhile has its own end to hear. */
+  private async heardEnd(app: AppKey, key: string, pid: number, run: Run | undefined): Promise<void> {
+    if (run) await this.untilGone(app, key, run)
+    const taken = (await this.runs(app).catch(() => undefined))?.[key]
+    if (taken && taken.pid !== pid) return
+    for (const listener of this.exitListeners) listener(app, key)
+  }
+
+  /** Until a run the last host left, or one this host started, has nothing left of it (`untilGone`). */
+  async whenGone(app: AppKey, key: string): Promise<void> {
+    const run = (await this.runs(app))[key]
+    if (!run) return
+    const owned = await this.stoppedBefore(app, key)
+    if (owned) this.stopping.set(runTag(app, key), owned)
+    await this.untilGone(app, key, run)
+  }
+
+  /** What a stop that a host didn't live to finish had seen of a run. */
+  private async stoppedBefore(app: AppKey, key: string): Promise<Set<string> | undefined> {
+    const text = await readFile(this.file(app, key, "stopping"), "utf8").catch(ifMissing(undefined))
+    return text === undefined ? undefined : new Set(z.array(z.string()).parse(JSON.parse(text)))
+  }
+
+  /** The processes such a stop saw that are still alive. */
+  private async stillStopping(app: AppKey, key: string, rows: Row[]): Promise<Row[]> {
+    const owned = await this.stoppedBefore(app, key)
+    return owned ? rows.filter((row) => owned.has(rowIdentity(row))) : []
+  }
+
+  /** Stops a run with all it's seen to own in `owned`, kept beside its record as it grows: for a check, a next host goes on from there. */
+  private endRun(app: AppKey, key: string, run: Run, owned: Set<string>): Promise<void> {
+    if (run.kind !== "check") return stopTree(run, this.graceMs, owned)
+    return stopTree(run, this.graceMs, owned, (rows) => this.strays(app, key, run, rows), async () => {
+      const path = this.file(app, key, "stopping")
+      const temporary = `${path}.${process.pid}.tmp`
+      await writeFile(temporary, JSON.stringify([...owned]), { mode: 0o600 })
+      await rename(temporary, path)
+    })
+  }
+
+  /**
+   * Until a run is over: its tree gone, as a run reads as running while its tree does (`state`), and a look that fails
+   * says nothing, so it looks again. A finished check's detached children are left alone: it didn't ask for its daemon
+   * to die, and nobody else did. Being stopped is being asked: then nothing of the run is over until its mark finds none
+   * left, nor any process the stop saw of it, whatever it's become since. One that outlives SIGKILL is said (`unending`)
+   * and the wait goes on, since what can't be proved gone keeps its slot.
+   */
+  private async untilGone(app: AppKey, key: string, run: Run): Promise<void> {
+    const tag = runTag(app, key)
+    for (let wait = POLL_MS; ; wait = Math.min(wait * 2, GONE_POLL_MOST_MS)) {
+      const rows = await processTable().catch(() => undefined)
+      if (rows && !members(rows, run).length) {
+        const owned = run.kind === "check" ? this.stopping.get(tag) : undefined
+        const left = owned ? await this.strays(app, key, run, rows).then((strays) => [...strays, ...rows.filter((row) => owned.has(rowIdentity(row)))], () => undefined) : []
+        if (left && !left.length) {
+          this.stopping.delete(tag)
+          this.unended.delete(tag)
+          return rm(this.file(app, key, "stopping"), { force: true })
+        }
+        if (left && owned) await this.endRun(app, key, run, owned).then(
+          () => this.unended.delete(tag),
+          () => this.unended.set(tag, `${run.name} check's process ${left[0]!.pid} (${left[0]!.command.slice(0, 80)}) won't end`),
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, wait).unref())
+    }
+  }
+
+  /** What keeps a build slot held though its check ended, in words: a process that wouldn't die. */
+  unending(): string[] {
+    return [...this.unended.values()]
+  }
+
+  /**
+   * A check's processes its tree no longer reaches: detached and reparented, found by the mark each inherited, with
+   * whatever they started. Without the mark, by a system that won't show it, a process is known only while it's in the tree.
+   */
+  private async strays(app: AppKey, key: string, run: Run, rows: Row[]): Promise<Row[]> {
+    const later = rows.filter((row) => row.startedMs >= run.startedMs && row.pid !== process.pid)
+    // Reparented to whoever took it, which Linux lets be other than init: any whose parent didn't start with the run.
+    const since = new Set(later.map((row) => row.pid))
+    const orphans = later.filter((row) => !since.has(row.ppid))
+    const marks = await runMarks(orphans, RUN_KEY_MARK)
+    const found = new Set(orphans.filter((row) => marks.get(row.pid) === runTag(app, key)).map((row) => row.pid))
+    for (let grew = found.size > 0; grew;) {
+      grew = false
+      for (const row of later)
+        if (!found.has(row.pid) && found.has(row.ppid)) {
+          found.add(row.pid)
+          grew = true
+        }
+    }
+    return later.filter((row) => found.has(row.pid))
+  }
+
   /** Starts the run once `record` has saved it, so no host can lose track of it. */
   private async spawn(app: AppKey, spec: RunSpec, record: (run: Run) => Promise<void>): Promise<void> {
+    this.tableChanged()
     const key = runKey(spec.kind, spec.name)
+    this.stopping.delete(runTag(app, key))
+    await rm(this.file(app, key, "stopping"), { force: true })
     const log = this.file(app, key, "log")
     const exit = this.file(app, key, "exit")
     await rm(exit, { force: true })
@@ -959,7 +1151,7 @@ export class ThreadProcesses {
       const [shell, args] = spec.background ? belowAgents("/bin/sh", ["-c", WRAPPER, "mako-thread", spec.command, exit]) : ["/bin/sh", ["-c", WRAPPER, "mako-thread", spec.command, exit]]
       const child = spawn(shell, args, {
         cwd: spec.cwd,
-        env: { ...env, [RUN_MARK]: app },
+        env: { ...env, [RUN_MARK]: app, [RUN_KEY_MARK]: runTag(app, key) },
         detached: true,
         stdio: ["pipe", output.fd, output.fd],
       })
@@ -967,16 +1159,22 @@ export class ThreadProcesses {
         child.once("spawn", () => resolve(child.pid!))
         child.once("error", reject)
       })
+      let saved: Run | undefined
+      const signal = hostStopping()?.signal
+      child.once("exit", () => {
+        if (!signal?.aborted) void this.heardEnd(app, key, pid, saved).catch((error) => { if (!signal?.aborted) throw error })
+      })
       child.unref()
-      const release = child.stdin!
-      release.on("error", () => {})
+      const release = childInput(child)!
       try {
         const row = (await processTable()).find((candidate) => candidate.pid === pid)
         if (!row) throw new Error(`${spec.name} ended before it started, stopped by something outside Mako; see ${log}`)
         const run: Run = { kind: spec.kind, name: spec.name, command: spec.command, cwd: spec.cwd, pid, startedMs: row.startedMs, at: this.now() }
         if (spec.port !== undefined) run.port = spec.port
         if (spec.ready !== undefined) run.ready = spec.ready
+        saved = run
         await record(run)
+        this.tableChanged()
         release.end("go\n")
         if (spec.ready !== undefined) void this.watchReady(app, key, spec.ready, spec, pid)
       } finally {
@@ -1002,6 +1200,7 @@ export class ThreadProcesses {
    * ending stays "starting" until the app is restarted.
    */
   private async watchReady(app: AppKey, key: string, ready: string, spec: RunSpec, pid: number): Promise<void> {
+    const signal = hostStopping()?.signal
     const alive = () => {
       try {
         process.kill(pid, 0)
@@ -1013,8 +1212,9 @@ export class ThreadProcesses {
     const began = this.now()
     const ours = async () => alive() && (await this.runs(app))[key]?.pid === pid
     while (await ours()) {
+      if (signal?.aborted) return
       const tried = await new Promise<ReadyFailure | undefined>((done) => {
-        const child = spawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: ["ignore", "pipe", "pipe"], detached: true })
+        const child = hostSpawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: ["ignore", "pipe", "pipe"], detached: true })
         let output = ""
         const keep = (chunk: Buffer) => {
           output = (output + chunk.toString()).slice(-READY_OUTPUT_CHARS)
@@ -1037,6 +1237,7 @@ export class ThreadProcesses {
           done(code === 0 ? undefined : { code, output })
         })
       })
+      if (signal?.aborted) return
       if (!tried) {
         if (await ours()) {
           await writeFile(this.file(app, key, "ready"), String(this.now()), { mode: 0o600 })
@@ -1045,12 +1246,12 @@ export class ThreadProcesses {
         return
       }
       if (await ours()) await writeFile(this.file(app, key, "unready"), JSON.stringify(tried), { mode: 0o600 })
-      await sleep(readyWait(this.now() - began))
+      await wait(readyWait(this.now() - began), undefined, { signal }).catch((error) => { if (!signal?.aborted) throw error })
     }
   }
 
   /** `steps` is the folder a check run of steps keeps each step's records in. */
-  private file(app: AppKey, key: string, extension: "log" | "exit" | "ready" | "unready" | "steps"): string {
+  private file(app: AppKey, key: string, extension: "log" | "exit" | "ready" | "unready" | "steps" | "stopping"): string {
     if (!/^(process|check|prepare)-[a-z][a-z0-9-]*$/.test(key)) throw new Error(`Not a run name: ${key}`)
     return join(this.folder(app), `${key}.${extension}`)
   }
@@ -1066,7 +1267,7 @@ export class ThreadProcesses {
   }
 
   private async runs(app: AppKey): Promise<Record<string, Run>> {
-    const text = await readFile(join(this.folder(app), "runs.json"), "utf8").catch(() => undefined)
+    const text = await readFile(join(this.folder(app), "runs.json"), "utf8").catch(ifMissing(undefined))
     return text === undefined ? {} : RunsSchema.parse(JSON.parse(text)).runs
   }
 
@@ -1172,6 +1373,18 @@ export async function freeMemory(): Promise<{ freeBytes: number; totalBytes: num
 }
 
 /** Every process on the machine, with when it started; `ps` is on macOS and Linux alike. */
+/** A process and no later one with its pid. */
+const rowIdentity = (row: Row) => `${row.pid}:${row.startedMs}`
+
+/** What a run's processes carry in `RUN_KEY_MARK`. */
+const runTag = (app: AppKey, key: string) => `${app}/${key}`
+
+/** For a read's `catch`: `value` when the file isn't there; any other failure stays one, since it says nothing of what's there. */
+const ifMissing = <T>(value: T) => (error: NodeJS.ErrnoException): T => {
+  if (error.code === "ENOENT") return value
+  throw error
+}
+
 async function processTable(): Promise<Row[]> {
   const { stdout } = await run("ps", ["-A", "-o", "pid=,ppid=,pgid=,rss=,lstart=,command="], {
     env: { ...process.env, LC_ALL: "C" },
@@ -1194,26 +1407,59 @@ async function processTable(): Promise<Row[]> {
  * different process under the leader's pid means the group is gone.
  */
 function members(rows: Row[], record: Run): Row[] {
-  const reused = rows.some((row) => row.pid === record.pid && row.startedMs !== record.startedMs)
-  if (reused) return []
-  const later = rows.filter((row) => row.startedMs >= record.startedMs && row.pid !== process.pid && row.pid > 1)
-  const found = new Map(later.filter((row) => row.pgid === record.pid).map((row) => [row.pid, row]))
-  for (let grew = found.size > 0; grew;) {
-    grew = false
-    for (const row of later)
-      if (!found.has(row.pid) && found.has(row.ppid)) {
-        found.set(row.pid, row)
-        grew = true
-      }
-  }
-  return [...found.values()]
+  return new TableIndex(rows).members(record)
 }
 
-async function stopTree(record: Run): Promise<void> {
+/**
+ * A process table looked up by pid, group and parent, built once per table: a busy Mac's table is long, and every
+ * look asks for each run of every app.
+ */
+class TableIndex {
+  private readonly byPid = new Map<number, Row>()
+  private readonly byGroup = new Map<number, Row[]>()
+  private readonly byParent = new Map<number, Row[]>()
+
+  constructor(rows: Row[]) {
+    const add = (map: Map<number, Row[]>, key: number, row: Row) => {
+      const known = map.get(key)
+      if (known) known.push(row)
+      else map.set(key, [row])
+    }
+    for (const row of rows) {
+      this.byPid.set(row.pid, row)
+      if (row.pid === process.pid || row.pid <= 1) continue
+      add(this.byGroup, row.pgid, row)
+      add(this.byParent, row.ppid, row)
+    }
+  }
+
+  /** A run's group and every descendant that started after it; none when its pid now names another process. */
+  members(record: Run): Row[] {
+    const leader = this.byPid.get(record.pid)
+    if (leader && leader.startedMs !== record.startedMs) return []
+    const later = (row: Row) => row.startedMs >= record.startedMs
+    const found = new Map((this.byGroup.get(record.pid) ?? []).filter(later).map((row) => [row.pid, row]))
+    const queue = [...found.values()]
+    for (let at = 0; at < queue.length; at += 1)
+      for (const child of this.byParent.get(queue[at]!.pid) ?? [])
+        if (later(child) && !found.has(child.pid)) {
+          found.set(child.pid, child)
+          queue.push(child)
+        }
+    return [...found.values()]
+  }
+}
+
+/**
+ * SIGTERM, then after `graceMs` SIGKILL, to a run's tree and `more`, each process held in `owned` by its identity from
+ * the moment it's seen, and `kept` before it's signalled: one that leaves the tree or loses its mark is still the run's.
+ * Throws if any outlives SIGKILL.
+ */
+async function stopTree(record: Run, graceMs: number, owned: Set<string>, more?: (rows: Row[]) => Promise<Row[]>, kept?: () => Promise<void>): Promise<void> {
   const signaled = new Set<string>()
   const send = (rows: Row[], signal: NodeJS.Signals) => {
     for (const row of rows) {
-      const identity = `${row.pid}:${row.startedMs}`
+      const identity = rowIdentity(row)
       if (signal === "SIGTERM" && signaled.has(identity)) continue
       signaled.add(identity)
       try {
@@ -1223,18 +1469,25 @@ async function stopTree(record: Run): Promise<void> {
       }
     }
   }
-  let rows = members(await processTable(), record)
+  const look = async () => {
+    const rows = await processTable()
+    const known = owned.size
+    for (const row of [...members(rows, record), ...await more?.(rows) ?? []]) owned.add(rowIdentity(row))
+    if (owned.size > known) await kept?.()
+    return rows.filter((row) => owned.has(rowIdentity(row)))
+  }
+  let rows = await look()
   send(rows, "SIGTERM")
-  const deadline = Date.now() + STOP_GRACE_MS
+  const deadline = Date.now() + graceMs
   while (rows.length && Date.now() < deadline) {
     await sleep(POLL_MS)
-    rows = members(await processTable(), record)
+    rows = await look()
     send(rows, "SIGTERM")
   }
   for (let attempt = 0; rows.length && attempt < 20; attempt += 1) {
     send(rows, "SIGKILL")
     await sleep(POLL_MS)
-    rows = members(await processTable(), record)
+    rows = await look()
   }
   if (rows.length) throw new Error(`${record.name} still has ${rows.length} process(es) after SIGKILL: ${rows.map((row) => row.pid).join(", ")}`)
 }
@@ -1259,10 +1512,10 @@ async function listeningPids(port: number): Promise<number[]> {
  * of is left out. macOS shows the environment of this user's processes
  * except Apple's own programs; Linux, of this user's.
  */
-async function runMarks(rows: Row[]): Promise<Map<number, string>> {
+async function runMarks(rows: Row[], mark = RUN_MARK): Promise<Map<number, string>> {
   const found = new Map<number, string>()
   if (!rows.length) return found
-  const markIn = (variables: string) => new RegExp(`(?:^|\\s)${RUN_MARK}=(\\S+)`).exec(variables)?.[1] ?? ""
+  const markIn = (variables: string) => new RegExp(`(?:^|\\s)${mark}=(\\S+)`).exec(variables)?.[1] ?? ""
   if (onLinux()) {
     await Promise.all(rows.map(async (row) => {
       const text = await readFile(`/proc/${row.pid}/environ`, "utf8").catch(() => undefined)
@@ -1275,9 +1528,10 @@ async function runMarks(rows: Row[]): Promise<Map<number, string>> {
     env: { ...process.env, LC_ALL: "C" },
     maxBuffer: PROCESS_TABLE_BYTES,
   }).catch((error) => z.object({ stdout: z.string() }).catch({ stdout: "" }).parse(error))
+  const byPid = new Map(rows.map((row) => [row.pid, row]))
   for (const line of stdout.split("\n")) {
     const match = /^\s*(\d+) (.*)$/.exec(line)
-    const row = match && rows.find((candidate) => candidate.pid === Number(match[1]))
+    const row = match && byPid.get(Number(match[1]))
     if (!row || !match[2]!.startsWith(row.command)) continue
     const variables = match[2]!.slice(row.command.length)
     if (/\s[A-Za-z_][A-Za-z0-9_]*=/.test(variables)) found.set(row.pid, markIn(variables))

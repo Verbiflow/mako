@@ -12,10 +12,12 @@ import { othersRunning, startHost, until } from "./host-process.mjs"
  * installer or npm into this user's home, at the version the harness declares
  * tested. Nothing here names a harness or a command; a definition that can't
  * install on Linux, or installs another version, fails the image's build.
+ * `only`: the providers to install, as the image that runs on a person's own
+ * machine is given them; every one the host has without it.
  *
- *   node install-harnesses.mjs <record.json>
+ *   node install-harnesses.mjs <record.json> [<provider>...]
  */
-const record = process.argv[2]
+const [record, ...only] = process.argv.slice(2)
 assert.ok(record, "Pass where to record what was installed")
 // The image holds the harnesses, not the Mako state installing them leaves
 // in this home, so the proof's host starts as on a fresh machine.
@@ -24,7 +26,9 @@ assert.ok(!existsSync(makoHome), `${makoHome} exists: this prepares a fresh home
 const scratch = await mkdtemp(join(tmpdir(), "mako-install-"))
 const host = await startHost({ dataRoot: join(scratch, "data"), output: join(scratch, "host-output.log") })
 try {
-  const providers = (await host.call("mako:harness-descriptors")).map((harness) => harness.provider)
+  const known = (await host.call("mako:harness-descriptors")).map((harness) => harness.provider)
+  for (const provider of only) assert.ok(known.includes(provider), `The host has no harness ${provider}; it has ${known.join(", ")}`)
+  const providers = only.length ? only : known
   // The first read starts a check of every runtime and answers what it holds so far.
   const before = await until(() => host.call("mako:harness-updates"), (updates) => providers.every((provider) => updates[provider]?.checkedAt), "every harness's runtime read")
   const installed = {}

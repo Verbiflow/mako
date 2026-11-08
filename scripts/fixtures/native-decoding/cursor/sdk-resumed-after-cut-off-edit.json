@@ -1,0 +1,198 @@
+{
+  "harness": "cursor",
+  "source": "Written for Mako's resume account from the 2026-11-03 host-stall-fix run: the SDK resumed it from a checkpoint before its edits",
+  "native": {
+    "version": "1.2.0",
+    "origin": "written"
+  },
+  "about": "The SDK resumed a run from a checkpoint older than two edits it had run, the second cut off; the child sent the model an account of them, which joins the turn as the user's resumed line, never a new prompt.",
+  "session": {
+    "settings": {
+      "model": "claude-opus-5-5"
+    }
+  },
+  "steps": [
+    {
+      "message": {
+        "event": "message",
+        "turn": "5b8a1f3e-2c4d-4e6f-9a1b-3c5d7e9f1a2b",
+        "seq": 0,
+        "message": {
+          "agent_id": "ea4f172c-c2e5-8d4f-9ba1-8443522dfb5f",
+          "run_id": "run-0a042b57-4ba5-41a5-b96f-a456a715c424",
+          "type": "status",
+          "status": "RUNNING"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "5b8a1f3e-2c4d-4e6f-9a1b-3c5d7e9f1a2b",
+        "seq": 1,
+        "message": {
+          "agent_id": "ea4f172c-c2e5-8d4f-9ba1-8443522dfb5f",
+          "run_id": "run-0a042b57-4ba5-41a5-b96f-a456a715c424",
+          "type": "tool_call",
+          "call_id": "toolu_01BqPB",
+          "name": "edit",
+          "status": "running",
+          "args": {
+            "path": "packages/host/src/attribution/evidence.ts"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu_01BqPB",
+            "title": "Edit evidence.ts",
+            "name": "edit",
+            "status": "running",
+            "input": "{\n  \"path\": \"packages/host/src/attribution/evidence.ts\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "5b8a1f3e-2c4d-4e6f-9a1b-3c5d7e9f1a2b",
+        "seq": 2,
+        "message": {
+          "agent_id": "ea4f172c-c2e5-8d4f-9ba1-8443522dfb5f",
+          "run_id": "run-0a042b57-4ba5-41a5-b96f-a456a715c424",
+          "type": "tool_call",
+          "call_id": "toolu_01BqPB",
+          "name": "edit",
+          "status": "completed",
+          "args": {
+            "path": "packages/host/src/attribution/evidence.ts"
+          },
+          "result": {
+            "status": "success",
+            "value": {
+              "linesAdded": 1,
+              "linesRemoved": 1,
+              "diffString": "--- a/packages/host/src/attribution/evidence.ts\n+++ b/packages/host/src/attribution/evidence.ts\n-  private touch(session: string, call: string | undefined, extents)\n+  private touch(session: string, moved: { interval?: Interval; call?: string }, extents)"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu_01BqPB",
+            "status": "completed",
+            "output": "--- a/packages/host/src/attribution/evidence.ts\n+++ b/packages/host/src/attribution/evidence.ts\n-  private touch(session: string, call: string | undefined, extents)\n+  private touch(session: string, moved: { interval?: Interval; call?: string }, extents)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "5b8a1f3e-2c4d-4e6f-9a1b-3c5d7e9f1a2b",
+        "seq": 3,
+        "message": {
+          "agent_id": "ea4f172c-c2e5-8d4f-9ba1-8443522dfb5f",
+          "run_id": "run-0a042b57-4ba5-41a5-b96f-a456a715c424",
+          "type": "tool_call",
+          "call_id": "toolu_01JUPL",
+          "name": "edit",
+          "status": "running",
+          "args": {
+            "path": "packages/host/src/attribution/evidence.ts"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu_01JUPL",
+            "title": "Edit evidence.ts",
+            "name": "edit",
+            "status": "running",
+            "input": "{\n  \"path\": \"packages/host/src/attribution/evidence.ts\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "resumed",
+        "turn": "5b8a1f3e-2c4d-4e6f-9a1b-3c5d7e9f1a2b",
+        "text": "[mako · reconnected: you go on from your last saved step, before 2 calls you had already run]\nThe connection to the model dropped mid-turn, and this turn resumed from your last saved step. The calls below ran after that step and their effects are in place, but your history doesn't show them.\n\n1. edit: `packages/host/src/attribution/evidence.ts`\n   Finished.\n   Its result:\n   ```\n   --- a/packages/host/src/attribution/evidence.ts\n   +++ b/packages/host/src/attribution/evidence.ts\n   -  private touch(session: string, call: string | undefined, extents)\n   +  private touch(session: string, moved: { interval?: Interval; call?: string }, extents)\n   ```\n\n2. edit: `packages/host/src/attribution/evidence.ts`\n   Started, and no result came back: it may have run in full, in part, or not at all.\n\nIn the checkout since that step:\n- mako: Files changed: mako/packages/host/src/attribution/evidence.ts.\n\nGo on from this state: check what an unfinished call did before running it again, and treat everything here as your own work, not someone else's.",
+        "calls": 2
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "user",
+            "text": "[mako · reconnected: you go on from your last saved step, before 2 calls you had already run]\nThe connection to the model dropped mid-turn, and this turn resumed from your last saved step. The calls below ran after that step and their effects are in place, but your history doesn't show them.\n\n1. edit: `packages/host/src/attribution/evidence.ts`\n   Finished.\n   Its result:\n   ```\n   --- a/packages/host/src/attribution/evidence.ts\n   +++ b/packages/host/src/attribution/evidence.ts\n   -  private touch(session: string, call: string | undefined, extents)\n   +  private touch(session: string, moved: { interval?: Interval; call?: string }, extents)\n   ```\n\n2. edit: `packages/host/src/attribution/evidence.ts`\n   Started, and no result came back: it may have run in full, in part, or not at all.\n\nIn the checkout since that step:\n- mako: Files changed: mako/packages/host/src/attribution/evidence.ts.\n\nGo on from this state: check what an unfinished call did before running it again, and treat everything here as your own work, not someone else's."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "5b8a1f3e-2c4d-4e6f-9a1b-3c5d7e9f1a2b",
+        "seq": 4,
+        "message": {
+          "agent_id": "ea4f172c-c2e5-8d4f-9ba1-8443522dfb5f",
+          "run_id": "run-0a042b57-4ba5-41a5-b96f-a456a715c424",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "The rename to `moved` is mine and landed; the report() call site is the edit that was cut off. Fixing it now."
+              }
+            ]
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "5b8a1f3e-2c4d-4e6f-9a1b-3c5d7e9f1a2b:text:0",
+            "text": "The rename to `moved` is mine and landed; the report() call site is the edit that was cut off. Fixing it now."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "result",
+        "turn": "5b8a1f3e-2c4d-4e6f-9a1b-3c5d7e9f1a2b",
+        "result": {
+          "runId": "run-0a042b57-4ba5-41a5-b96f-a456a715c424",
+          "status": "finished"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu_01JUPL",
+            "status": "failed",
+            "output": "Cursor did not run this call. A hook in .cursor/hooks.json or the runtime rejected it before it ran and told the agent why; the SDK has no approval prompt."
+          }
+        }
+      ]
+    }
+  ]
+}

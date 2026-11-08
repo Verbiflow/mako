@@ -5,7 +5,8 @@ import { compactionEvent } from "./events.js"
 import type { DecodedBlock, DecodedEntry } from "./format.js"
 import type { RecordRef } from "./entries.js"
 import type { LiveUpdate } from "./live-content.js"
-import { liveTurnEntries } from "./live-entries.js"
+import { liveTurnEntrySteps } from "./live-entries.js"
+import { atOnce, type Steps } from "./slices.js"
 import type { CursorToolResult } from "./providers/cursor-records.js"
 import { reportedEffects } from "./tool-effect-reading.js"
 
@@ -244,8 +245,20 @@ export function cursorRunEntries(
   events: Iterable<CursorSdkRunEvent>,
   replay: CursorSdkReplay,
   /** Where the run's events are kept, and who hears each saved item's rows there. */
-  source?: { file: string; recorded: (item: DecodedEntry | DecodedBlock, record: RecordRef | undefined) => void }
+  source?: CursorRunSource
 ): DecodedEntry[] {
+  return atOnce(cursorRunEntrySteps(events, replay, source))
+}
+
+/** Where a run's events are kept, and who hears each saved item's rows there. */
+export type CursorRunSource = { file: string; recorded: (item: DecodedEntry | DecodedBlock, record: RecordRef | undefined) => void }
+
+/** `cursorRunEntries` as `Steps`, an event at a time: a Fin's run is one exchange of thousands of events, replayed at each checkpoint. */
+export function* cursorRunEntrySteps(
+  events: Iterable<CursorSdkRunEvent>,
+  replay: CursorSdkReplay,
+  source?: CursorRunSource
+): Steps<DecodedEntry[]> {
   const projection = new CursorSdkProjection(replay.runId)
   const updates: LiveUpdate[] = []
   const at: (string | undefined)[] = []
@@ -269,6 +282,7 @@ export function cursorRunEntries(
   }
   mark(-1, undefined)
   for (const [position, { message, index, at: time, seq }] of listed.entries()) {
+    yield
     const record: RecordRef | undefined = source && seq !== undefined ? { file: source.file, rows: [{ table: "run_events", key: { run_id: replay.runId, seq } }] } : undefined
     if (message.type === "user") {
       const text = message.message.content.map((part) => part.text).join("")
@@ -283,7 +297,7 @@ export function cursorRunEntries(
   }
   const ending = replay.ending
   if (ending) add(projection.finish(ending.outcome, cursorUnfinishedToolNote(ending.outcome, ending.error), replay.settled), ending.at)
-  const entries = liveTurnEntries(updates, at, source && records, source?.recorded)
+  const entries = yield* liveTurnEntrySteps(updates, at, source && records, source?.recorded)
   if (replay.model) for (const entry of entries) if (entry.kind === "assistant") entry.model = replay.model
   return entries
 }

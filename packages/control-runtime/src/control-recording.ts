@@ -1,8 +1,8 @@
+import { command } from "./processes.js"
 import { z } from "zod"
 import { mediaExecutable, recordingVideoEncoding } from "./control-media.js"
 import { RecordingEncoder } from "./recording-encoder.js"
-import { spawn, execFile } from "node:child_process"
-import { promisify } from "node:util"
+import { spawn } from "./processes.js"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import {
@@ -33,7 +33,7 @@ import {
 } from "@mako/control/control"
 import { controlRecordingsRoot } from "@mako/control/program"
 
-const execute = promisify(execFile)
+const execute = command
 /** Whether this FFmpeg can rewrite packet timestamps without decoding. */
 function streamTimestampFilter() {
   return execute(mediaExecutable("ffmpeg"), ["-hide_banner", "-bsfs"], { timeout: 5000, maxBuffer: 65536 })

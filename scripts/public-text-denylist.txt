@@ -1,0 +1,12 @@
+# Names of the hosted service's vendors and private projects, which nothing
+# committed here, no commit message and no pull request may add
+# (`check-public-text.mjs`). One per line, matched as a whole word in any case.
+# A line written /like this/ is a case-sensitive regular expression instead.
+e2b
+cloudflare
+workerd
+wrangler
+/(?<![A-Za-z0-9_])R2(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])r2\.(?:dev|cloudflarestorage)/
+wayfinder
+mako-cloud
+axiom

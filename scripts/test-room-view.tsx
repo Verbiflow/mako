@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 
 /**
- * The Status view's Room, rendered from the rail scene: a row per app with
+ * The Inbox's Room, rendered from the rail scene: a row per app with
  * its memory and what it's doing, each project's fit, and the memory line;
  * stopping asks first only for apps that aren't the one in view.
  */

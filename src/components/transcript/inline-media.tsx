@@ -55,9 +55,11 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
           className="group/tile pressable relative grid w-full cursor-zoom-in place-items-center overflow-hidden media-surface border border-hairline bg-shell"
         >
           {error ? (
-            <span className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-3 text-label text-faint">
-              <ImageOffIcon className="size-4" aria-hidden />
-              <span className="max-w-full truncate">{name}</span>
+            <span data-media-unavailable title={`${error}\n${openPath ?? path}`} className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-3 text-center text-label text-faint">
+              <ImageOffIcon className="mb-0.5 size-4" aria-hidden />
+              <span className="max-w-full truncate text-muted-foreground">{name}</span>
+              <span className="line-clamp-2 max-w-full break-words">{error}</span>
+              {error.includes(openPath ?? path) ? null : <span className="max-w-full truncate" dir="rtl"><bdi>{openPath ?? path}</bdi></span>}
             </span>
           ) : picture ? (
             <img
@@ -87,7 +89,7 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
           {tile.more ? (
             <span className="media-more absolute inset-0 grid place-items-center text-title font-medium tabular-nums">+{tile.more}</span>
           ) : (
-            <span className="media-control pointer-events-none absolute bottom-1.5 left-1.5 max-w-[calc(100%-0.75rem)] truncate rounded-md px-2 py-0.5 text-left text-label opacity-0 transition-opacity duration-150 group-hover/tile:opacity-100 group-focus-visible/tile:opacity-100">{name}</span>
+            <span className="media-control pointer-events-none absolute bottom-1.5 left-1.5 max-w-[calc(100%-0.75rem)] truncate px-2 py-0.5 text-left text-label opacity-0 transition-opacity duration-150 group-hover/tile:opacity-100 group-focus-visible/tile:opacity-100">{name}</span>
           )}
         </button>
       </div>
@@ -96,7 +98,7 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
   if (error)
     return (
       <div ref={hostRef} data-inline-file-preview={path} className="not-prose my-3">
-        <MediaUnavailable name={name} reason={error} onRetry={onRetry} />
+        <MediaUnavailable name={name} reason={error} path={openPath ?? path} onRetry={onRetry} />
       </div>
     )
   const box = mediaBox(known?.width, known?.height, ratio)
@@ -127,11 +129,11 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
         ) : (
           <div className="size-full overflow-hidden media-surface border border-hairline bg-shell"><Skeleton className="block size-full rounded-none" /></div>
         )}
-        <span className={cn("media-control pointer-events-none absolute left-1.5 max-w-[calc(100%-6rem)] truncate rounded-md px-2 py-1 text-label opacity-0 transition-opacity duration-150 group-hover/media:opacity-100", format === "image" ? "bottom-1.5" : "top-1.5")}>{name}</span>
+        <span className={cn("media-control pointer-events-none absolute left-1.5 max-w-[calc(100%-6rem)] truncate px-2 py-1 text-label opacity-0 transition-opacity duration-150 group-hover/media:opacity-100", format === "image" ? "bottom-1.5" : "top-1.5")}>{name}</span>
         {file ? (
           <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 transition-opacity duration-150 group-hover/media:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100">
             {format === "video" && onOpen ? (
-              <button type="button" aria-label={`Expand ${name}`} title="Expand" onClick={onOpen} className="media-control pressable grid size-7 place-items-center rounded-md">
+              <button type="button" aria-label={`Expand ${name}`} title="Expand" onClick={onOpen} className="media-control pressable grid size-7 place-items-center">
                 <ExpandIcon className="size-3.5" />
               </button>
             ) : null}

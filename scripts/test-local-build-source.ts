@@ -3,7 +3,6 @@ import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import {
   mkdir,
-  mkdtemp,
   readdir,
   readFile,
   realpath,
@@ -13,14 +12,15 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
+import { uninstalledPackages } from "@mako/host/application/local-update-dependencies"
 import { copyBuildSource, syncBuildCheckout, LocalUpdates, ensureBuildSpace, buildCopyBytes, PACKAGED_APP_BYTES, DISK_MARGIN_BYTES } from "@mako/host/application/local-updates"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const gitRunner = new Git()
 
-const root = await mkdtemp(join(tmpdir(), "mako-source-copy-"))
+const root = testScratch("mako-source-copy-")
 try {
   const source = join(root, "source")
   const isolated = join(root, "isolated")
@@ -76,8 +76,10 @@ try {
     "node_modules/@mako/git": { resolved: "packages/git", link: true },
     "node_modules/@esbuild/linux-x64": { version: "0.28.2", optional: true },
   } }))
-  // Pulled, but npm install hasn't run since: the build would fail on the missing package.
-  await assert.rejects(syncBuildCheckout(syncSource, syncCheckout), /hasn't installed what its package-lock\.json lists \(@mako\/git\)\. Run npm install there/)
+  // Pulled, but npm install hasn't run since: the copy is taken anyway and says what it lacks, so the build installs
+  // that there, never in the person's checkout.
+  await syncBuildCheckout(syncSource, syncCheckout)
+  assert.deepEqual(await uninstalledPackages(syncCheckout), ["@mako/git"])
   await writeFile(join(syncSource, "node_modules/.package-lock.json"), JSON.stringify({ packages: {
     "node_modules/@mako/git": { resolved: "packages/git", link: true },
   } }))
@@ -156,9 +158,10 @@ try {
   const checkFailure = checking.snapshot().local
   assert.equal(checkFailure.kind, "error")
   if (checkFailure.kind === "error") {
-    assert.match(checkFailure.message, /failed during checking: test:application/)
-    assert.match(checkFailure.message, /APPLICATION_FIXTURE_FAILURE: cancel button remained blocked/)
-    assert.ok(checkFailure.message.length < 1800, "Build diagnostics remain bounded")
+    assert.match(checkFailure.message, /^Checking \(test:application\) failed on the checkout at [0-9a-f]{8}\. Fix the checkout, then build again\./)
+    assert.equal(checkFailure.failure?.blame, "code")
+    assert.match(checkFailure.failure?.details ?? "", /APPLICATION_FIXTURE_FAILURE: cancel button remained blocked/)
+    assert.ok((checkFailure.failure?.details ?? "").length <= 2000, "Build diagnostics remain bounded")
   }
 
   // The performance check runs alone after the others, and reads its verdicts
@@ -251,8 +254,9 @@ if (mode === "slower") { process.stderr.write("Rows that failed against the base
   const slowerAgain = await settled("Retry that measures slower")
   assert.equal(slowerAgain.kind, "error")
   if (slowerAgain.kind === "error") {
-    assert.match(slowerAgain.message, /^The update failed its performance check: test:performance: this row is slower than the code its baseline measured, beside it on this Mac: merge\/merge large \(same\): \+60% beside 3c2c7d6d, between \+40% and \+80%, 15 rounds, 0 busy\. /)
-    assert.match(slowerAgain.message, /Rows that failed against the baseline \(25% slower allowed\)/)
+    assert.match(slowerAgain.message, /^The performance check found a timing clearly slower than the code before it, measured beside it on this Mac: merge\/merge large \(same\): \+60% beside 3c2c7d6d, between \+40% and \+80%, 15 rounds, 0 busy\. That's the code, not the Mac/)
+    assert.equal(slowerAgain.failure?.blame, "code")
+    assert.match(slowerAgain.failure?.details ?? "", /Rows that failed against the baseline \(25% slower allowed\)/)
   }
 
   // Built again on a busy Mac, it waits; an install pending holds it; once
@@ -293,7 +297,10 @@ if (mode === "slower") { process.stderr.write("Rows that failed against the base
   await slowFinished
   const slower = slow.snapshot().local
   assert.equal(slower.kind, "error")
-  if (slower.kind === "error") assert.match(slower.message, /^The update failed during checking: test:performance: this row is slower than the code its baseline measured, beside it on this Mac: merge\/merge large \(same\): \+60%/)
+  if (slower.kind === "error") {
+    assert.equal(slower.failure?.step, "checking")
+    assert.match(slower.message, /^The performance check found a timing clearly slower than the code before it, measured beside it on this Mac: merge\/merge large \(same\): \+60%/)
+  }
 
   // The disk guard refuses below what the copy, a packaged app and the margin
   // need, says both numbers, and runs before anything is copied.

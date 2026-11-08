@@ -1,6 +1,6 @@
 import { useHarnessIdentity, useHarnessLabels } from "@/lib/harness-label"
 import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
-import { carriedHistories, promptDelivery, recoverableRequests, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
+import { carriedHistories, promptDelivery, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
 import { FailureRow } from "@/components/transcript/failure-row"
 import { FailedRequestsContext } from "@/components/transcript/failed-requests"
 import { agentActivity, startLabel } from "@/state/agent-activity"
@@ -16,10 +16,10 @@ import { WorktreeOpening } from "@/components/viewer/worktree-opening"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
 import { BackgroundWorkLine } from "./background-work-line"
+import { CrewCard } from "./crew-card"
 import { useEffect, useMemo, useState } from "react"
-import { Disclosure } from "@/components/ui/notice"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
-import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
+import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
 import { asksInSession, descriptorFor } from "@/state/descriptors"
@@ -59,9 +59,10 @@ const NO_RECOVERIES = { onTurns: new Map<string, LiveRequest>(), apart: EMPTY_QU
 
 /**
  * `asks`: whether the panel draws the agent's approval and question under the transcript. The phone pins them in its
- * own dock above its composer instead (`web-client/dock.tsx`), and says so with `false`.
+ * own dock above its composer instead (`web-client/dock.tsx`), and says so with `false`. `compact`: the phone's crew
+ * card in reach of a thumb, where the panel has one.
  */
-export function AcpPanel({ asks = true }: { asks?: boolean } = {}) {
+export function AcpPanel({ asks = true, compact = false }: { asks?: boolean; compact?: boolean } = {}) {
   const scope = useConversationScope()
   const session = useAcp((state) => scopedLiveAcp(state, scope)?.session ?? null)
   const starting = useAcp((state) => scopedAcp(state, scope)?.kind === "starting")
@@ -80,7 +81,7 @@ export function AcpPanel({ asks = true }: { asks?: boolean } = {}) {
   if (starting) {
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-surface">
-        <Blocks starting continued={continued} />
+        <Blocks starting continued={continued} compact={compact} />
       </div>
     )
   }
@@ -88,7 +89,7 @@ export function AcpPanel({ asks = true }: { asks?: boolean } = {}) {
 
   return (
     <div data-live-conversation={session.id} className="flex min-h-0 flex-1 flex-col bg-surface">
-      <Blocks continued={continued} />
+      <Blocks continued={continued} compact={compact} />
       {scope ? (
         <PaneWaiting />
       ) : !asks ? null : (
@@ -121,7 +122,7 @@ function PaneWaiting() {
   })
   if (!waiting) return null
   return (
-    <p className="flex shrink-0 items-center gap-1.5 border-t border-hairline px-4 py-2 text-label text-caution">
+    <p className="flex shrink-0 items-center gap-1.5 px-4 py-2 text-label text-attention">
       <ShieldQuestionIcon className="size-3.5 shrink-0" />
       Waiting for your answer. Click here to answer.
     </p>
@@ -149,7 +150,7 @@ function HistoryReadNote({ state }: { state: "reading" | { failed: string } }) {
   )
 }
 
-function Blocks({ starting = false, continued = false }: { starting?: boolean; continued?: boolean }) {
+function Blocks({ starting = false, continued = false, compact = false }: { starting?: boolean; continued?: boolean; compact?: boolean }) {
   const scope = useConversationScope()
   const session = useAcp((state) => scopedLiveAcp(state, scope)?.session ?? null)
   const projection = useAcp((state) => scopedAcp(state, scope)?.projection)
@@ -272,7 +273,8 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
             preparing={preparing && session?.status !== "running"}
             hosted={exchanges.length > 0}
           />
-          {running ? null : <BackgroundWorkLine />}
+          {/* The Fins stand through every turn and transition; only the background line waits for the turn's end. */}
+          <CrewCard compact={compact} fallback={running ? null : <BackgroundWorkLine />} />
         </>
       }
     />
@@ -349,7 +351,7 @@ function AcpActivity({
             <button
               type="button"
               onClick={() => skipWorktree(making)}
-              className="pressable ml-1 shrink-0 rounded-md px-1.5 py-0.5 text-label text-faint animate-in fade-in-0 duration-200 ease-[var(--ease-out)] hover:bg-fill-hover hover:text-foreground"
+              className="pressable ml-1 shrink-0 px-1.5 py-0.5 text-label text-faint animate-in fade-in-0 duration-200 ease-[var(--ease-out)] hover:bg-fill-hover hover:text-foreground"
             >
               Use the project folder instead
             </button>
@@ -483,7 +485,7 @@ export function GonePermission({ permission }: { permission: LivePermissionReque
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
   const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
   return (
-    <div data-permission-gone={permission.id} className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
+    <div data-permission-gone={permission.id} className="shrink-0 bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         <CircleAlertIcon aria-hidden className="size-3.5 shrink-0 text-caution" />
         <span className="min-w-0 truncate">{provider} stopped before you answered</span>
@@ -500,7 +502,7 @@ export function GonePermission({ permission }: { permission: LivePermissionReque
             setContinuing(true)
             void continueTurn(key, "provider-exited").finally(() => setContinuing(false))
           }}
-          className="pressable flex items-center gap-1.5 rounded-md border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50"
+          className="pressable flex items-center gap-1.5 border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50"
         >
           <PlayIcon className="size-3 fill-current" strokeWidth={0} />
           {continuing ? "Continuing…" : "Continue turn"}
@@ -509,7 +511,7 @@ export function GonePermission({ permission }: { permission: LivePermissionReque
           type="button"
           disabled={canceling}
           onClick={() => void acp.cancel()}
-          className="pressable rounded-md border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
+          className="pressable border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
         >
           Stop
         </button>
@@ -525,15 +527,15 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
   const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
   return (
-    <div data-permission={permission.id} className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
+    <div data-permission={permission.id} className="shrink-0 bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         {permission.kind ? (
           <ToolGlyph
             kind={tool.kind}
-            className="size-3.5 shrink-0 text-caution/90"
+            className="size-3.5 shrink-0 text-attention/90"
           />
         ) : (
-          <ShieldQuestionIcon className="size-3.5 shrink-0 text-caution/90" />
+          <ShieldQuestionIcon className="size-3.5 shrink-0 text-attention/90" />
         )}
         <span className={cn("min-w-0 truncate", !makoTool && !permission.detail && "font-mono")}>{makoTool ?? bareCommand(permission.title)}</span>
       </p>
@@ -555,7 +557,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
               data-permission-option={option.kind ?? "other"}
               onClick={() => acp.answerPermission(option.optionId)}
               className={cn(
-                "pressable flex items-center gap-1.5 rounded-md border px-2 py-1 text-label transition-colors",
+                "pressable flex items-center gap-1.5 border px-2 py-1 text-label transition-colors",
                 allow && !always
                   ? "border-hairline bg-foreground text-background hover:opacity-90"
                   : always
@@ -575,7 +577,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
           )
         })}
         {permission.kind === "authentication" ? (
-          <button type="button" onClick={() => acp.answerPermission(null)} className="pressable rounded-md border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground">
+          <button type="button" onClick={() => acp.answerPermission(null)} className="pressable border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground">
             Cancel sign-in
           </button>
         ) : null}
@@ -627,9 +629,9 @@ function QuestionPermission({
       answers[question.id]?.some((answer) => answer.trim().length > 0)
   )
   return (
-    <div className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-3">
+    <div className="shrink-0 bg-surface/60 px-4 py-3">
       <p className="flex items-center gap-1.5 pb-2 text-ui text-foreground/90">
-        <ShieldQuestionIcon className="size-3.5 shrink-0 text-caution/90" />
+        <ShieldQuestionIcon className="size-3.5 shrink-0 text-attention/90" />
         <span className="min-w-0 truncate">{permission.title}</span>
       </p>
       <div className="max-h-72 space-y-3 overflow-y-auto">
@@ -666,7 +668,7 @@ function QuestionPermission({
                         }))
                       }
                       className={cn(
-                        "pressable rounded-md border px-2 py-1 text-label",
+                        "pressable border px-2 py-1 text-label",
                         selected
                           ? "border-foreground/20 bg-fill-selected text-foreground"
                           : "border-hairline text-muted-foreground hover:bg-fill-hover hover:text-foreground"
@@ -699,7 +701,7 @@ function QuestionPermission({
                     [question.id]: [event.target.value],
                   }))
                 }
-                className="h-8 w-full rounded-md border border-hairline bg-surface px-2 text-ui text-foreground placeholder:text-faint focus:outline-none"
+                className="h-8 w-full border border-hairline bg-surface px-2 text-ui text-foreground placeholder:text-faint focus:outline-none"
               />
             ) : null}
           </fieldset>
@@ -710,7 +712,7 @@ function QuestionPermission({
           type="button"
           disabled={submitting}
           onClick={() => answer(null)}
-          className="pressable rounded-md border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground"
+          className="pressable border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground"
         >
           {dismissLabel}
         </button>
@@ -730,7 +732,7 @@ function QuestionPermission({
               )
             )
           }
-          className="pressable rounded-md bg-foreground px-2 py-1 text-label text-background disabled:opacity-40"
+          className="pressable bg-foreground px-2 py-1 text-label text-background disabled:opacity-40"
         >
           Send answers
         </button>
@@ -739,28 +741,3 @@ function QuestionPermission({
   )
 }
 
-/**
- * Every message of the conversation that ended without an answer, newest
- * first, for the conversation menu: the archive behind the rows the
- * transcript draws where each one failed.
- */
-export function RetainedRequests() {
-  const requests = useAcp(
-    (state) => {
-      const current = activeAcp(state)
-      return current ? recoverableRequests(current) : EMPTY_QUEUE
-    },
-    (left, right) =>
-      left.length === right.length &&
-      left.every((request, index) => request === right[index])
-  )
-  const conversation = useAcp((state) => activeLiveAcp(state)?.key)
-  if (!conversation || !requests.length) return null
-  return (
-    <Disclosure summary={`Saved messages (${requests.length})`} className="px-2 py-2" bodyClassName="flex flex-col gap-3 pt-2">
-      {[...requests].reverse().map((request) => (
-        <FailureRow key={request.id} conversationId={conversation} request={request} quoted compact />
-      ))}
-    </Disclosure>
-  )
-}

@@ -2,7 +2,9 @@ import { join } from "node:path"
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { RESTART_RETIRED_MOVE, carryingWords, quietSwitch, retiredMove } from "../contracts/conversation-control.js"
 import type { Interruption, LiveRequest, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
+import { holdDue, holdOf, sooner, transferDue } from "../contracts/request-hold.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, endWithTurns, isActiveNativeAgent, isBusyProviderWork } from "../contracts/native-agents.js"
 import type { ConversationMemory } from "../contracts/provider-residency.js"
@@ -12,6 +14,7 @@ import { personPromptedAt } from "../contracts/worked-at.js"
 import type { JournalFacts } from "../threads/index.js"
 import { isTurnStart, reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { Entry } from "@mako/sessions/entries"
+import { StepsStopped } from "@mako/sessions/slices"
 import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { clearAutoContinue } from "./live-auto-continue.js"
 import { LiveJournal, journalIds, storedRequest } from "./live-journal.js"
@@ -258,12 +261,14 @@ export class LiveRecords {
     const started = performance.now()
     let previous: LiveSnapshot | null
     try {
-      previous = await journal.readSliced()
+      previous = await journal.readSliced(() => this.stopping())
     } catch (error) {
       journal.discard()
+      // Cut by the host's stop: not read, and nothing's wrong with it.
+      if (error instanceof StepsStopped) return undefined
       throw error
     }
-    if (this.stopped) {
+    if (this.stopping()) {
       journal.discard()
       return undefined
     }
@@ -321,7 +326,7 @@ export class LiveRecords {
     if (sinceSweep >= BULK_LOADS && !this.bulkSaid.has(by)) {
       this.bulkSaid.add(by)
       hostWarn("residency", "one reader is loading conversations in bulk", {
-        by, loads: sinceSweep, loaded: this.residents.size, budget: this.memoryBudget().bytes,
+        by, ...(by === UNNAMED_READER && { from: callers(new Error().stack) }), loads: sinceSweep, loaded: this.residents.size, budget: this.memoryBudget().bytes,
         hint: "a list or a job must read the listing (LiveSummary), never a journal; see BULK_LOADS",
       })
     }
@@ -331,6 +336,13 @@ export class LiveRecords {
   /** Every reader that loaded a conversation from disk this host life, most first. */
   private loads(): ConversationMemory["loads"] {
     return [...this.loadsBy].map(([by, count]) => ({ by, count })).sort((left, right) => right.count - left.count).slice(0, 10)
+  }
+
+  /** The harness Sessions a conversation is bound to, from memory or its listing: never reads its journal in. */
+  nativeIds(id: string): readonly { provider: string; nativeId: string }[] {
+    const resident = this.residents.get(id)
+    if (!resident) return this.recovered.get(id)?.nativeIds ?? []
+    return (resident.snapshot.control?.bindings ?? []).flatMap((binding) => (binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []))
   }
 
   /** Lets go of a conversation now when nothing is using it, as the memory budget would. */
@@ -564,6 +576,11 @@ export class LiveRecords {
   }
 
   /** Nothing is swept from here on; the host is stopping. */
+  /** Whether the host has begun to stop, these conversations or the host while it still starts. */
+  stopping(): boolean {
+    return this.stopped || Boolean(this.dependencies.stopping?.())
+  }
+
   stop(): void {
     this.stopped = true
     clearTimeout(this.sweepTimer)
@@ -652,19 +669,29 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
                 }
               : action
           ),
-          transfers: previous.control.transfers.map((transfer) =>
-            transfer.state.kind === "preparing" ||
-            transfer.state.kind === "queued" ||
-            strandedTransfers.has(transfer.input.id)
+          // One under way has an unknown outcome and fails. One that waited behind another switch, or for its time,
+          // never started: it goes once its conversation is read in (`LiveConversations` `loaded`), or at its time.
+          // One whose message waits in the queue (a Stop held it, or a failed close took it back) waits with that
+          // message; a stranded one's retry carries the words its message has now.
+          transfers: previous.control.transfers.map((transfer) => {
+            // A move has no message to wait with, and what it was decided on went with the last host.
+            if (quietSwitch(transfer) && (transfer.state.kind === "queued" || transfer.state.kind === "preparing")) return retiredMove(transfer, RESTART_RETIRED_MOVE)
+            const own = previous.requests.find((request) => request.id === transfer.input.id && (request.status === "queued" || request.status === "held"))
+            if (own && (transfer.state.kind === "queued" || transfer.state.kind === "preparing"))
+              return { ...transfer, state: { kind: "queued" as const } }
+            return transfer.state.kind === "preparing" ||
+              (transfer.state.kind === "queued" && !transfer.behind && !transfer.retry) ||
+              strandedTransfers.has(transfer.input.id)
               ? {
                   ...transfer,
+                  ...(own && { input: carryingWords(transfer.input, own) }),
                   state: {
                     kind: "failed" as const,
                     error: restartError,
                   },
                 }
               : transfer
-          ),
+          }),
         }
       : undefined,
     session: {
@@ -759,8 +786,13 @@ function residentWeight(weights: ContentWeights, { snapshot }: Resident): number
 }
 
 /** The listing's line for a conversation, loaded or not. */
+/** The functions a stack names past this file's, nearest first: work with no name of its own is known by who called it. */
+function callers(stack: string | undefined): string {
+  return (stack ?? "").split("\n").slice(1).filter((line) => !line.includes("live-records")).slice(0, 4).map((line) => /at (?:async )?(\S+)/.exec(line)?.[1]).filter(Boolean).join(" < ")
+}
+
 function residentSummary(snapshot: LiveSnapshot): LiveSummary {
-  const wakes = wakeAt(snapshot.requests)
+  const wakes = sooner(wakeAt(snapshot.requests), transferDue(snapshot.control))
   const promptedAt = personPromptedAt(snapshot.requests, snapshot.control?.actions)
   return {
     hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
@@ -782,7 +814,10 @@ function residentSummary(snapshot: LiveSnapshot): LiveSummary {
 /** The soonest a held request sends itself, if one waits for a time. */
 export function wakeAt(requests: readonly LiveRequest[]): number | undefined {
   let soonest: number | undefined
-  for (const request of requests)
-    if (request.status === "held" && request.wake && (soonest === undefined || request.wake.at < soonest)) soonest = request.wake.at
+  for (const request of requests) {
+    const hold = holdOf(request)
+    const at = hold && holdDue(hold)
+    if (at !== undefined && (soonest === undefined || at < soonest)) soonest = at
+  }
   return soonest
 }

@@ -10,7 +10,7 @@ import { releaseHold } from "./live-ledger.js"
 import type { LiveRecords } from "./live-records.js"
 import type { LeftTurn, LiveRestarts } from "./live-restarts.js"
 import { revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
-import { interruptRequests } from "./live-settlement.js"
+import { interruptRequests, unhandedRequest } from "./live-settlement.js"
 import type { LiveTransfers } from "./live-transfers.js"
 
 type ClosingAccess = Pick<LiveAccess,
@@ -36,15 +36,17 @@ export class LiveClosing {
     this.parts = parts
   }
 
-  close(id: string): Promise<void> {
+  close(id: string, forExit = false): Promise<void> {
     const resident = this.access.require(id)
+    // A Close under way answers for one asked meanwhile, and no longer: what opened since is the next Close's to close.
     if (resident.closeOperation) return resident.closeOperation
-    const operation = this.closeResident(resident, id)
+    const operation = this.closeResident(resident, id, forExit)
     resident.closeOperation = operation
-    void operation.catch(() => {
+    const done = () => {
       if (resident.closeOperation === operation)
         resident.closeOperation = undefined
-    })
+    }
+    void operation.then(done, done)
     return operation
   }
 
@@ -64,13 +66,14 @@ export class LiveClosing {
       )
         return
       resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => request.status === "queued" ? { ...request, status: "held" } : request) }
-      // A child's turn its lead waits on goes on in the next host, as a quit leaves it; the person's own stop where they are.
-      const cut = this.isChild(resident) ? this.cutForNextHost(resident) : undefined
+      // A Fin's turn its Apex waits on, and an Apex's turn its open Fins' work rests on, go on in the next host, as a
+      // quit leaves them; the person's own stop where they are.
+      const cut = this.inTree(resident) ? this.cutForNextHost(resident) : undefined
       if (cut) left.push(cut)
       this.access.flush(resident)
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
-        await Promise.race([this.close(id), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("A provider did not finish closing. Mako stayed open; wait for it to settle before trying again.")), 30_000) })])
+        await Promise.race([this.close(id, true), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("A provider did not finish closing. Mako stayed open; wait for it to settle before trying again.")), 30_000) })])
       } finally { clearTimeout(timer) }
     }))
     this.parts.restarts.leave(left)
@@ -88,6 +91,8 @@ export class LiveClosing {
    * continuation will tell the agent.
    */
   private cutForNextHost(resident: Resident): LeftTurn | undefined {
+    // One never handed its harness is no turn to continue: it waits, as those queued do, to be sent again.
+    resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map(unhandedRequest) }
     const running = resident.snapshot.requests.find((request) => request.status === "dispatching")
     if (!running) return undefined
     const stopped = stoppedWork(resident.snapshot, true)
@@ -101,26 +106,31 @@ export class LiveClosing {
     }
     recordCutOff(resident, running.id, this.access.dependencies.root)
     if (autoContinueCandidate(resident.snapshot.requests, true)?.id !== running.id) return undefined
-    return { conversationId: resident.snapshot.session.id, requestId: running.id, ...(this.isChild(resident) && { always: true as const }) }
+    return { conversationId: resident.snapshot.session.id, requestId: running.id, ...(this.inTree(resident) && { always: true as const }) }
   }
 
-  /** Whether a conversation's Thread is a child's (`ThreadStore.edges`). */
-  private isChild(resident: Resident): boolean {
+  /** Whether a conversation's Thread is a Fin, or an Apex with Fins still open (`ThreadStore.edges`). */
+  private inTree(resident: Resident): boolean {
     const threads = this.access.dependencies.threads
     const placed = threads?.journalPlacement(resident.snapshot.session.id)
-    return placed ? threads?.edges().of(placed.thread) !== undefined : false
+    if (!placed || !threads) return false
+    const edges = threads.edges()
+    return edges.of(placed.thread) !== undefined || edges.children(placed.thread).some((edge) => edge.closedAt === undefined)
   }
 
   private async closeResident(
     resident: Resident,
-    id: string
+    id: string,
+    forExit: boolean
   ): Promise<void> {
     const { dependencies } = this.access
     const { transfers } = this.parts
     this.access.clearHibernationTimer(resident)
     resident.generation += 1
     const pending = transfers.pending(resident)
-    if (pending)
+    // A switch that only waits (behind another, or for its time) did nothing yet: Mako's exit leaves it for the next
+    // host, as it leaves queued messages; one under way, or any the person's close finds, fails.
+    if (pending && !(forExit && pending.state.kind === "queued"))
       transfers.save(resident, {
         ...pending,
         state: {
@@ -292,7 +302,8 @@ export class LiveClosing {
       }
     } finally {
       resident.closing = false
-      this.access.drain(resident)
+      // Mako's exit starts nothing: what still waits is the next host's.
+      if (!forExit) this.access.drain(resident)
       this.parts.records.scheduleSweep()
     }
   }

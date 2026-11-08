@@ -1,7 +1,7 @@
 import { request } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import { LineAssembler } from "@mako/sessions/daemon-wire"
-import { WHOLE_LIVE_FORM, type LiveForm } from "@mako/protocol/live-form"
+import { WHOLE_LIVE_FORM, type WindowLiveForm } from "@mako/protocol/live-form"
 import { CORRELATION_HEADER, LIVE_FORM_HEADER, RuntimeEventHeadSchema, RuntimeFailureSchema, RuntimeInfoSchema, RuntimeReadySchema, encodeRuntimeCall, runtimeFailureError, type RuntimeFailure, type RuntimePacket, type RuntimeValue } from "../contracts/runtime.js"
 import { decodeRuntimeValue, runtimeSuccessValue, splitRuntimeEventLine, type EncodedValue } from "../contracts/runtime-value.js"
 import { HostCallTimeoutError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
@@ -286,14 +286,25 @@ function readRuntimePacket(line: string): RuntimePacket {
   return { ...RuntimeEventHeadSchema.parse(JSON.parse(event.head)), payload: event.payload }
 }
 
+/** How an event stream ended, as its reader saw it: what ended it, what it had heard, and how long it had been quiet. */
+export type RuntimeStreamEnd = { why: string; livedMs: number; heardBytes: number; quietMs: number }
+
 /**
  * `heard`: called for every chunk the stream carries, the host's 15-second heartbeat too. `live`: the live form its
  * reader reads (`@mako/protocol/live-form`); a batch in the compact one is read by `expandLiveBatch`. Form 1 when unsaid.
  */
-export function subscribeRuntime(socket: string, client: string, receive: (packet: RuntimePacket) => void, disconnected: () => void, options: { observer?: boolean; history?: boolean; eventLimit?: number; heard?: () => void; live?: LiveForm } = {}) {
+export function subscribeRuntime(socket: string, client: string, receive: (packet: RuntimePacket) => void, disconnected: (end: RuntimeStreamEnd) => void, options: { observer?: boolean; history?: boolean; eventLimit?: number; heard?: () => void; live?: WindowLiveForm } = {}) {
   let closed = false
   let ended = false
-  const end = () => { if (!ended && !closed) { ended = true; disconnected() } }
+  const openedAt = Date.now()
+  let heardAt = openedAt
+  let heardBytes = 0
+  const end = (why: string) => {
+    if (ended || closed) return
+    ended = true
+    const now = Date.now()
+    disconnected({ why, livedMs: now - openedAt, heardBytes, quietMs: now - heardAt })
+  }
   const headers = new Map([["x-mako-window", client]])
   if (options.observer) headers.set("x-mako-observer", "1")
   if (options.history) headers.set("x-mako-history", "1")
@@ -301,23 +312,25 @@ export function subscribeRuntime(socket: string, client: string, receive: (packe
   if (options.live !== undefined && options.live !== WHOLE_LIVE_FORM) headers.set(LIVE_FORM_HEADER, String(options.live))
   const req = request({ ...OWN_CONNECTION, socketPath: socket, path: "/events", method: "POST", headers: Object.fromEntries(headers) }, (response) => {
     const lines = new LineAssembler(32 * 1024 * 1024)
-    if (response.statusCode !== 200) { response.destroy(); end(); return }
+    if (response.statusCode !== 200) { response.destroy(); end(`the host answered ${response.statusCode}`); return }
     response.on("data", (chunk: Buffer) => {
       // Any bytes, the host's heartbeat included: the host is there and answering.
       options.heard?.()
+      heardAt = Date.now()
+      heardBytes += chunk.byteLength
       const complete = lines.push(chunk)
-      if (!complete) { response.destroy(); end(); return }
+      if (!complete) { response.destroy(); end("a line past what a reader takes"); return }
       for (const line of complete) {
         if (!line.trim()) continue
         try { receive(readRuntimePacket(line)) }
-        catch { response.destroy(); end(); return }
+        catch (error) { response.destroy(); end(`a line it couldn't read: ${error instanceof Error ? error.message : "unknown"}`); return }
       }
     })
-    response.on("error", end)
-    response.on("end", end)
-    response.on("close", end)
+    response.on("error", (error) => end(`reset: ${error.message}`))
+    response.on("end", () => end("the host ended it"))
+    response.on("close", () => end("the connection closed"))
   })
-  req.on("error", end)
+  req.on("error", (error) => end(`couldn't attach: ${error.message}`))
   req.end()
   return () => { closed = true; req.destroy() }
 }

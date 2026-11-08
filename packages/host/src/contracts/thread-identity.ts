@@ -6,6 +6,8 @@ import { z } from "zod"
  * native sessions over its life. Each ID is a random UUID minted by the
  * per-user Thread store, never derived from a directory, path, title, native
  * ID or conversation ID, so it survives reopen, restart, rename and handoff.
+ * A Thread a split made takes one derived from the two IDs it came from
+ * (`splitThreadId`), so every store that splits the same Thread names it alike.
  * The brands keep a journal's conversation ID from being passed as either.
  */
 export const ThreadIdSchema = z.string().uuid().brand<"ThreadId">()
@@ -27,6 +29,8 @@ export const SERVICE_ACTORS = [
   "handoff",
   /** Mako carrying a Session onto its Thread's own branch, which the agent asked for. */
   "workspace",
+  /** Mako waking a Fin on the pull request its report said it waits on (`contracts/pull-waits.ts`). */
+  "pull-watch",
 ] as const
 
 /**

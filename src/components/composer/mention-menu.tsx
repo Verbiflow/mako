@@ -488,7 +488,7 @@ export function MentionMenu({
       aria-label={title}
       data-mention-menu={kind}
       data-loading={loading ? "" : undefined}
-      className="animate-enter absolute bottom-full left-0 z-20 mb-1.5 w-full overflow-hidden rounded-lg bg-popover ring-1 ring-border"
+      className="animate-enter absolute bottom-full left-0 z-20 mb-1.5 w-full overflow-hidden bg-popover ring-1 ring-border"
     >
       <div className="flex h-8 items-center gap-2 border-b border-hairline px-3">
         {capabilities ? (
@@ -554,7 +554,7 @@ export function MentionMenu({
                     aria-disabled={row.inert || undefined}
                     onClick={() => row.inert || onPick(row.value, row.context)}
                     className={cn(
-                      "flex min-h-7 w-full items-center gap-2.5 rounded-md px-2 py-1 text-left",
+                      "flex min-h-7 w-full items-center gap-2.5 px-2 py-1 text-left",
                       // Direct-child glyphs rest quiet; the fin sits one level
                       // down so it keeps the foreground, which is the point.
                       "[&>svg]:shrink-0 [&>svg]:text-faint",
@@ -665,7 +665,7 @@ function LoadingRows() {
       <Eyebrow className="px-1 pt-0.5 pb-1"><Shimmer text="Reading skills and MCP servers…" /></Eyebrow>
       {[["w-24", "w-2/5"], ["w-32", "w-1/4"], ["w-20", "w-1/3"]].map(([name, detail]) => (
         <div key={name} className="flex h-7 items-center gap-2.5 px-1">
-          <Skeleton className="size-3.5 rounded-sm" />
+          <Skeleton className="size-3.5" />
           <Skeleton className={`h-2.5 ${name}`} />
           <Skeleton className={`h-2.5 opacity-60 ${detail}`} />
         </div>
@@ -690,7 +690,7 @@ function SettingsLink({
         event.preventDefault()
         window.dispatchEvent(new CustomEvent("mako:settings", { detail: section }))
       }}
-      className="pressable rounded px-1 text-label text-muted-foreground hover:text-foreground"
+      className="pressable px-1 text-label text-muted-foreground hover:text-foreground"
     >
       {children}
     </button>

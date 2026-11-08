@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import type { ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpEditing, ProviderMcpSource, ProviderSkillSource } from "../tools/index.js"
 import type { ProviderArtifactPreview } from "../workspaces/index.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
@@ -19,8 +20,10 @@ import { HarnessAccounts } from "./accounts.js"
 import { AccountRoot } from "./accounts-common.js"
 import { join } from "node:path"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
-import type { DomainSecrets } from "../base/host-secrets.js"
+import { detachedSecrets, type DomainSecrets } from "../base/host-secrets.js"
 import { unwatchedWork, type HostWork } from "../base/event-loop.js"
+import { ModelConnections, modelConnectionsPath } from "./model-connections.js"
+import { declaredModelRoutes } from "./model-routes.js"
 
 export interface ProviderHost {
   /** Every installed harness, with what it said it has no capability for. */
@@ -55,6 +58,8 @@ export interface ProviderHost {
   discovery: DiscoveryProcesses
   /** The installed version each launch would start, bound to the runtime readings once the harnesses open. */
   launchReadings: LaunchReadings
+  /** The gateways, local servers and endpoints the person connected, routed into each launch whose harness's adapter takes them. */
+  modelConnections: ModelConnections
 }
 
 /** What the host a harness serves gives it: where its files go, its secrets and the person's screen. */
@@ -84,8 +89,12 @@ export function approvalRoot(context: Pick<HarnessContext, "dataRoot">): string 
 
 export type ProviderModule = (host: ProviderHost, context: HarnessContext) => void
 
-/** A host with no harness installed yet, keeping its accounts in its user root's (`AccountRoot`). */
-export function createProviderHost({ userRoot, work = unwatchedWork }: Pick<HarnessContext, "userRoot"> & { work?: HostWork }): ProviderHost {
+/**
+ * A host with no harness installed yet, keeping its accounts and model
+ * connections in its user root's (`AccountRoot`); without `secrets`, a
+ * connection's key lasts only as long as the process.
+ */
+export function createProviderHost({ userRoot, secrets = detachedSecrets(), work = unwatchedWork }: Pick<HarnessContext, "userRoot"> & { secrets?: DomainSecrets; work?: HostWork }): ProviderHost {
   const accountCapabilities = new ProviderRegistry<ProviderAccountCapability>()
   const accounts = new HarnessAccounts(accountCapabilities, new AccountRoot(userRoot))
   const harnesses = new ProviderRegistry<HarnessRecord>()
@@ -97,6 +106,18 @@ export function createProviderHost({ userRoot, work = unwatchedWork }: Pick<Harn
     (provider) => profiles.get(provider)?.label ?? provider,
     launchReadings
   )
+  const liveDrivers = new LiveDrivers(accountAdmission(accounts), work, floor)
+  const modelConnections = new ModelConnections(modelConnectionsPath(userRoot), secrets.secrets, {
+    harnesses: () => liveDrivers.list().map((driver) => ({ harness: driver.provider, routes: declaredModelRoutes(driver.modelRoutes) })),
+  })
+  // Every harness's launches and discoveries get the routes its own adapter takes; no harness is named here.
+  accounts.routeLaunches(async (provider, env) => {
+    const adapter = liveDrivers.get(provider)?.modelRoutes
+    if (adapter?.kind !== "accepts") return env
+    const thread = env.MAKO_THREAD_ID
+    const launch = await modelConnections.routes(adapter, thread ? { thread, repository: env.PWD || "this-device", correlationId: `${thread}:${env.MAKO_SESSION_ID ?? provider}:${randomUUID()}` } : undefined)
+    return launch.routes.length ? adapter.apply(env, launch) : env
+  })
   return {
     harnesses,
     hooks: new ProviderRegistry(),
@@ -105,7 +126,7 @@ export function createProviderHost({ userRoot, work = unwatchedWork }: Pick<Harn
     skillEditing: new ProviderRegistry(),
     mcpEditing: new ProviderRegistry(),
     artifactPreviews: new ProviderRegistry(),
-    liveDrivers: new LiveDrivers(accountAdmission(accounts), work, floor),
+    liveDrivers,
     decoders: new ProviderRegistry(),
     nativeRunners: new ProviderRegistry(),
     acpSources: new ProviderRegistry(),
@@ -121,5 +142,6 @@ export function createProviderHost({ userRoot, work = unwatchedWork }: Pick<Harn
     accounts,
     discovery: new DiscoveryProcesses(),
     launchReadings,
+    modelConnections,
   }
 }

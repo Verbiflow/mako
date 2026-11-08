@@ -1,13 +1,15 @@
+import { windowRoutesStore } from "@/state/window-routes"
 import { childGroup, childStateOf, rollup, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { AgentsDirected, AgentsRedirected, AgentsRedirectInput } from "@mako/host/contracts/agents"
+import type { ThreadRef } from "@/lib/types"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { useMemo } from "react"
 import { toast } from "sonner"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
 import { acp, acpStore, useAcp, type AcpState } from "@/state/acp"
-import type { AcpConversation } from "@/state/acp-state"
+import { finSources, newestSaid, threadChildren, type AcpConversation } from "@/state/acp-state"
 import { createHook, createStore } from "@/state/store"
 import { currentOnScreen } from "@/state/thread-sessions"
 import { threads } from "@/state/threads"
@@ -15,45 +17,67 @@ import { threadsStore, useThreads } from "@/state/thread-store"
 import { threadGroupsStore } from "@/state/thread-groups"
 
 const NO_CHILDREN: readonly NativeAgent[] = []
-const byThread = new WeakMap<AcpState["conversations"], Map<string, readonly NativeAgent[]>>()
-const listedByThread = new WeakMap<AcpState["conversations"], Map<string, Rollup>>()
+const listedByThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, Rollup> }>()
+
+export { threadChildren }
 
 /**
- * A Thread's Fins, as its conversations' rosters carry them (`childEntry`, never a harness's roster), in
- * `orderedChildren`' order. Every Session of an Apex carries the same Fins, so the first that holds any says them;
- * the array is the roster's own while that roster is unchanged, so a row reading it repaints only when they change.
+ * What opens for a Fin's row: its live conversation in this window (its own device's, or listed from the device it
+ * runs on), else its saved transcript here. Undefined for one this window can't open, a Fin on a device whose row
+ * isn't listed: its row draws as not openable, and nothing sets a view with nothing behind it.
  */
-export function threadChildren(state: AcpState, thread: string | undefined): readonly NativeAgent[] {
-  if (!thread) return NO_CHILDREN
-  let index = byThread.get(state.conversations)
-  if (!index) {
-    index = new Map()
-    for (const conversation of Object.values(state.conversations)) {
-      if (conversation.kind !== "live" || !conversation.threadId || index.has(conversation.threadId)) continue
-      const children = rosterChildren(conversation.nativeAgents)
-      if (children.length) index.set(conversation.threadId, children)
-    }
-    byThread.set(state.conversations, index)
-  }
-  return index.get(thread) ?? NO_CHILDREN
+export type FinOpening = { kind: "conversation"; key: string } | { kind: "saved"; ref: ThreadRef } | { kind: "native"; ref: ThreadRef }
+
+export function finOpening(state: AcpState, child: NativeAgent): FinOpening | undefined {
+  const thread = child.child?.thread
+  if (!thread) return undefined
+  // Its conversation as its row names it; else, for a Fin on another device, that device's newest listed Session
+  // (`finSources`, the one ranking every roster reads); else any conversation of its Thread held here.
+  const source = finSources(state).get(thread)
+  const conversation = (child.child?.conversation ? state.conversations[child.child.conversation] : undefined) ?? (source?.kind === "device" ? source.listed : undefined) ?? childConversation(state, thread)
+  if (conversation) return { kind: "conversation", key: conversation.key }
+  const saved = threadsStore.get().threads.find((ref) => ref.threadId === thread)
+  if (saved) return { kind: "saved", ref: saved }
+  if (child.child?.path && child.child.nativeId) return { kind: "native", ref: { harness: child.provider, nativeId: child.child.nativeId, path: child.child.path, title: child.title, threadId: thread } }
+  return undefined
 }
 
-/** As its host listed it (`LiveSummary.children`): an Apex's count before this window holds its roster. */
+/** Whether a Fin's row opens anything here (`finOpening`), for the row to draw itself by. */
+export function useFinOpenable(child: NativeAgent): boolean {
+  return useAcp((state) => finOpening(state, child) !== undefined)
+}
+
+/** As its host listed it (`LiveSummary.children`): an Apex's count before this window holds its roster, its newest Session's. */
 function listedRollup(state: AcpState, thread: string): Rollup | undefined {
-  let index = listedByThread.get(state.conversations)
-  if (!index) {
-    index = new Map()
-    for (const conversation of Object.values(state.conversations))
-      if (conversation.kind === "live" && conversation.threadId && conversation.children && !index.has(conversation.threadId)) index.set(conversation.threadId, conversation.children)
-    listedByThread.set(state.conversations, index)
+  let held = listedByThread.get(state.conversations)
+  if (!held || held.order !== state.threadSessions) {
+    held = { order: state.threadSessions, index: newestSaid(state, (conversation) => (conversation.children ? [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: conversation.children, fullness: 0 }] : [])) }
+    listedByThread.set(state.conversations, held)
   }
-  return index.get(thread)
+  return held.index.get(thread)
 }
 
 /** A Thread's Fins counted by group: one selector for the rail's badge, the strip's count and the phone's row. */
 export function threadRollup(state: AcpState, thread: string | undefined): Rollup {
   const children = threadChildren(state, thread)
   return children.length || !thread ? rollup(children) : (listedRollup(state, thread) ?? rollup(children))
+}
+
+const askingOf = new WeakMap<readonly NativeAgent[], readonly NativeAgent[]>()
+
+/**
+ * A Thread's Fins that wait on the person, in its roster's order, the same array while its roster is. Empty until this
+ * window holds the roster; the Inbox reads the roster of every Apex whose count says one waits (`useInboxRosters`).
+ */
+export function threadAsking(state: AcpState, thread: string | undefined): readonly NativeAgent[] {
+  const children = threadChildren(state, thread)
+  let held = askingOf.get(children)
+  if (!held) {
+    const asking = children.filter((agent) => childGroup(childStateOf(agent)) === "needs")
+    held = asking.length ? asking : NO_CHILDREN
+    askingOf.set(children, held)
+  }
+  return held
 }
 
 export function useThreadRollup(thread: string | undefined): Rollup {
@@ -93,11 +117,14 @@ export function stopCounts(children: readonly NativeAgent[]): StopCounts {
   return { working: reached.filter((child) => childGroup(childStateOf(child)) === "working").length, reached: reached.length }
 }
 
-/** The Apex's conversation the person talks to: the one on screen if it's the Apex's, else any of its Sessions with Fins. */
+/**
+ * The Apex's conversation the person talks to: the one on screen if it's the Apex's, else its newest Session with Fins,
+ * the one that hears them move (`newestSaid`).
+ */
 export function apexConversation(state: AcpState, thread: string): AcpConversation | undefined {
   const active = state.activeKey ? state.conversations[state.activeKey] : undefined
   if (active?.threadId === thread) return active
-  return Object.values(state.conversations).find((conversation) => conversation.threadId === thread && conversation.kind === "live" && rosterChildren(conversation.nativeAgents).length > 0)
+  return newestSaid(state, (conversation) => (rosterChildren(conversation.nativeAgents).length ? [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: conversation, fullness: 0 }] : [])).get(thread)
 }
 
 /** A Fin's own conversation in this window, when it has one: what opens when its tab is pressed. */
@@ -128,19 +155,17 @@ export const useApexView = createHook(apexViewStore)
 
 /** Open `child` in place, inside the Apex's Thread: its live conversation, else its saved transcript. */
 export function openFinInApex(apex: string, apexTitle: string, child: NativeAgent): void {
+  const { routes } = windowRoutesStore.get()
+  if (routes?.fin) return routes.fin(apex, child)
   const thread = child.child?.thread
   if (!thread) return
+  // What will open is found first: a row with nothing behind it opens nothing, and sets no view.
   const state = acpStore.get()
-  const conversation = (child.child?.conversation ? state.conversations[child.child.conversation] : undefined) ?? childConversation(state, thread)
+  const opening = finOpening(state, child)
+  if (!opening) return
   apexViewStore.set({ open: { apex, apexTitle, child: thread, shown: false } })
-  if (conversation) {
-    acp.activate(conversation.key)
-    return
-  }
-  const saved = threadsStore.get().threads.find((ref) => ref.threadId === thread)
-  if (saved) void threads.view(saved, "native")
-  else if (child.child?.path && child.child.nativeId)
-    void threads.view({ harness: child.provider, nativeId: child.child.nativeId, path: child.child.path, title: child.title, threadId: thread }, "native")
+  if (opening.kind === "conversation") acp.activate(opening.key)
+  else void threads.view(opening.ref, "native")
 }
 
 /** Back to the Apex: the Session last shown in it. */
@@ -156,7 +181,7 @@ export function backToApex(): void {
   if (conversation) acp.activate(conversation.key)
 }
 
-/** Keeps the Fin view honest: it ends once anything else is on screen. */
+/** Keeps the Fin view honest: it ends once anything else is on screen, a saved conversation with no Thread of its own too. */
 export function watchApexView(): () => void {
   const sync = () => {
     const open = apexViewStore.get().open
@@ -164,7 +189,7 @@ export function watchApexView(): () => void {
     const here = currentOnScreen().thread
     if (here === open.child) {
       if (!open.shown) apexViewStore.set({ open: { ...open, shown: true } })
-    } else if (open.shown && here !== undefined) apexViewStore.set({ open: null })
+    } else if (open.shown && (here !== undefined || threadsStore.get().viewing)) apexViewStore.set({ open: null })
   }
   const stops = [acpStore.subscribe(sync), threadsStore.subscribe(sync), apexViewStore.subscribe(sync)]
   return () => stops.forEach((stop) => stop())
@@ -182,6 +207,16 @@ export function useApexTitle(liveId: string | undefined, threadPath: string | un
   const listed = useThreads((state) => (thread ? state.threads.find((ref) => ref.threadId === thread)?.title : undefined))
   const live = useAcp((state) => (thread ? Object.values(state.conversations).find((conversation) => conversation.threadId === thread)?.title : undefined))
   return opened ?? listed ?? live
+}
+
+/** The harness the Apex of a Fin's Thread runs on, from what this window holds of it, for its avatar. */
+export function useApexHarness(liveId: string | undefined, threadPath: string | undefined): string | undefined {
+  const apex = useAcp((state) => (liveId ? state.conversations[liveId]?.parent?.thread : undefined))
+  const savedApex = useThreads((state) => (threadPath && !apex ? state.threads.find((ref) => ref.path === threadPath)?.parent?.thread : undefined))
+  const thread = apex ?? savedApex
+  const live = useAcp((state) => (thread ? Object.values(state.conversations).find((conversation) => conversation.threadId === thread)?.harness : undefined))
+  const listed = useThreads((state) => (thread && !live ? state.threads.find((ref) => ref.threadId === thread)?.harness : undefined))
+  return live ?? listed
 }
 
 /**
@@ -222,16 +257,10 @@ export const addresseeStore = createStore<AddresseeState>({ to: {} })
 
 export const useAddressee = createHook(addresseeStore)
 
-/** A stopped Fin's delegation is over: nothing is sent or moved to it. */
-export function finStopped(agent: NativeAgent): boolean {
-  const state = childStateOf(agent)
-  return state.kind === "ended" && state.outcome === "stopped"
-}
-
-/** A Fin as the composer names it; undefined for a stopped one, or one from a host that can't take a message for it (no `child.name`). */
+/** A Fin as the composer names it, a stopped one too, which a message resumes; undefined for one from a host that can't take a message for it (no `child.name`). */
 export function addresseeOf(agent: NativeAgent): Addressee | undefined {
   const child = agent.child
-  if (!child?.name || finStopped(agent)) return undefined
+  if (!child?.name) return undefined
   return { fin: child.thread, name: child.name, title: agent.title, provider: agent.provider }
 }
 

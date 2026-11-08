@@ -87,7 +87,7 @@ function SideConversationPanel({ conversation, harness, side }: { conversation: 
       aria-label="Side question"
       data-side-panel
       data-side-by={side?.by}
-      className="side-panel animate-enter shrink-0 border-b border-hairline"
+      className="side-panel animate-enter shrink-0"
     >
       <header className="flex h-8 items-center gap-2 px-3 text-label">
         <MessageCircleDashedIcon className={cn("size-3.5 shrink-0 text-faint", answering && "side-panel-glyph")} aria-hidden />
@@ -185,7 +185,7 @@ function Exchange({ exchange, onRetry }: { exchange: SideExchange; onRetry?: () 
           <p className="mt-1 flex flex-wrap items-center gap-x-2 text-label text-caution">
             <span>{exchange.error ?? "The side question failed."}</span>
             {onRetry ? (
-              <button type="button" onClick={onRetry} className="pressable inline-flex items-center gap-1 rounded px-1 text-muted-foreground hover:bg-fill-hover hover:text-foreground">
+              <button type="button" onClick={onRetry} className="pressable inline-flex items-center gap-1 px-1 text-muted-foreground hover:bg-fill-hover hover:text-foreground">
                 <RotateCcwIcon className="size-3" aria-hidden />
                 Ask again
               </button>

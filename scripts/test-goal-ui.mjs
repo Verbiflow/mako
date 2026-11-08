@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // `/goal` in the window, against the mock bridge: the Mako command in the
 // `/` menu, the goal bar's Pause, Resume and Clear, the question before a
@@ -18,7 +18,7 @@ if (process.versions.electron) {
 } else {
   const { createServer } = await import("vite")
   const { default: electronPath } = await import("electron")
-  const root = await mkdtemp(join(tmpdir(), "mako-goal-ui-"))
+  const root = testScratch("mako-goal-ui-")
   const threadUrl = process.env.MAKO_THREAD_URL
   const server = threadUrl ? undefined : await createServer({
     cacheDir: join(root, "cache"),
@@ -41,7 +41,6 @@ if (process.versions.electron) {
   } finally {
     if (server) await server.close()
   }
-  console.log(`Goal UI evidence: ${root}`)
 }
 
 async function check() {
@@ -197,16 +196,16 @@ async function check() {
     assert.equal(await draft(), "/goal The parser tests pass --budget lots", "a bad budget keeps the draft")
     await erase()
     await send("/goal The parser tests pass --budget 200k")
-    await until(`${bar}?.textContent.includes('0 / 200k')`, "the budget, before any of it is spent")
+    await until(`${bar}?.textContent.includes('0 / 200K')`, "the budget, before any of it is spent")
     assert.match(await evaluate(`${bar}.textContent`), /The parser tests pass(?!.*--budget)/, "the objective is shown without the budget")
-    await until(`${bar}?.textContent.includes('124k / 200k')`, "the count toward the budget")
+    await until(`${bar}?.textContent.includes('124K / 200K')`, "the count toward the budget")
     assert.equal(await evaluate(`${bar}.querySelector('span.tabular-nums[title]').title`), "1 turn · 124,000 of 200,000 tokens", "the whole count, on hover")
     await capture("bar-budget.png", "section[aria-label=\"Goal\"]")
     await until(`${bar}?.dataset.goalStatus === 'budget-limited'`, "the goal out of budget")
     const spent = await evaluate(`${bar}.textContent`)
     assert.match(spent, /Out of budget/)
-    assert.match(spent, /208k \/ 200k/)
-    assert.match(spent, /It spent its 200k-token budget\. To keep going, set the goal again with a larger budget\./)
+    assert.match(spent, /208K \/ 200K/)
+    assert.match(spent, /It spent its 200K-token budget\. To keep going, set the goal again with a larger budget\./)
     assert.equal(await evaluate(`[...${bar}.querySelectorAll('button')].some(b => b.textContent.trim() === 'Resume')`), false, "a goal out of budget can't be resumed")
     await capture("bar-out-of-budget.png", "section[aria-label=\"Goal\"]")
     await click("section[aria-label=\"Goal\"] button[aria-expanded]")

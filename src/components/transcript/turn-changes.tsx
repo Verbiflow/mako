@@ -149,7 +149,7 @@ function TurnChangesRow({ summary, conversation, requestId, workspace, undoable 
             data-review-turn=""
             title="Review what this turn changed in Changes"
             onClick={() => reviewTurn(workspace, { conversation, requestId, prompt: promptOf(conversation, requestId) })}
-            className="pressable -mx-1 shrink-0 rounded px-1 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground focus-visible:text-foreground"
+            className="pressable -mx-1 shrink-0 px-1 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground focus-visible:text-foreground"
           >
             Review
           </button>
@@ -168,7 +168,7 @@ function TurnChangesRow({ summary, conversation, requestId, workspace, undoable 
             data-undo-turn=""
             title="Take this turn's lines back out, keeping yours and other threads'"
             onClick={() => setUndo(promptOf(conversation, requestId))}
-            className="pressable -mx-1 shrink-0 rounded px-1 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground focus-visible:text-foreground"
+            className="pressable -mx-1 shrink-0 px-1 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground focus-visible:text-foreground"
           >
             Undo
           </button>
