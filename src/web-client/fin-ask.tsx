@@ -60,7 +60,7 @@ export function FinAskCard({ apex, ask, more, answerTyped, from }: { apex: strin
                 <CheckIcon className="size-4 shrink-0" />
                 {approvalWords(ask.ask).allow}
               </button>
-              <button type="button" data-fin-answer="refuse" data-refuse disabled={Boolean(sent)} data-chosen={sent?.allow === false || undefined} onClick={() => send({ allow: false })} className="web-ask-option">
+              <button type="button" data-fin-answer="refuse" data-refuse={!ask.ask.named || undefined} disabled={Boolean(sent)} data-chosen={sent?.allow === false || undefined} onClick={() => send({ allow: false })} className="web-ask-option">
                 <XIcon className="size-4 shrink-0" />
                 {approvalWords(ask.ask).refuse}
               </button>
