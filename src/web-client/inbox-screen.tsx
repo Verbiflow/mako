@@ -4,7 +4,7 @@ import { MakoMark } from "@/components/ui/mako-mark"
 import { cn } from "@/lib/utils"
 import { useAccountList } from "./account-list"
 import { FinAskCard } from "./fin-ask"
-import { useWebFinAsks, waitingThreads } from "./inbox"
+import { useWebFinAsks, waitingThreads, asksBesidePlaced } from "./inbox"
 import { ThreadRow } from "./list"
 import { useArchiving } from "./archive-thread"
 import { isUnread, useReadState } from "./read-state"
@@ -23,8 +23,9 @@ export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefin
   const hidden = useArchiving((state) => state.hidden)
   const threads = useMemo(() => folded.threads.filter((thread) => !hidden.has(thread.id)), [folded, hidden])
   const read = useReadState((state) => state)
-  const fins = useWebFinAsks()
-  const waiting = waitingThreads(threads, fins)
+  const asks = useWebFinAsks()
+  const fins = asksBesidePlaced(asks, folded.placed)
+  const waiting = waitingThreads(threads, asks, folded.placed)
   const toRead = threads.filter((thread) => thread.standing === "failed" || (thread.standing === "idle" && isUnread(read, thread)))
   const count = fins.length + waiting.length
   const empty = !count && !toRead.length

@@ -21,7 +21,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { archivedByKeys, liveArchiveKeys } from "../contracts/thread-lifecycle.js"
 import { namedUuid } from "./cloud-moves.js"
 import { syncTier } from "./sync-window.js"
-import { needsYouWaiting, type Waiting } from "@mako/protocol/attention"
+import { asks, needsYouWaiting, type Waiting } from "@mako/protocol/attention"
 
 /** A rail row as the report reads it: a session one of this Mac's harnesses keeps, placed in its Thread and Session. */
 export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "workspace" | "worktrees" | "lineage" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived" | "locked" | "heldBy" | "parent">
@@ -50,7 +50,9 @@ export type ReportSources = {
   /** When a conversation last moved (its journal's last write), if known; read again only once its revision moved. */
   lastMoved(conversationId: string, revision: number): number | undefined
   placement(conversationId: string): ThreadPlacement | undefined
-  /** Whether a Thread is a child's (`ThreadStore.edges`): it goes up inside its parent's Thread, never as a row. */
+  /** The Session's place among its Thread's Sessions as this host's store keeps them (`ReportedSession.order`); undefined where unknown. */
+  sessionOrder?(placement: ThreadPlacement): number | undefined
+  /** Whether a Thread is a child's whose Apex is here (`listedUnderApex`): it goes up inside its parent's Thread, never as a row. */
   childThread?(thread: ThreadId): boolean
   /**
    * Who may execute each of these Sessions (`ThreadStore.executionsOf`), asked once a report for every row's Session,
@@ -125,6 +127,16 @@ function preferred(left: ReportedSession, right: ReportedSession): ReportedSessi
 export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn" | "waitingFor" | "background" | "promptedAt" | "asking" | "fins">
 
 /**
+ * What a conversation waits on the person for, by the one rule every surface asks by: what it names (an approval, a
+ * question, `waitingOn`), else, while its lifecycle has it waiting on the person with nothing more to say, needs-you.
+ * Undefined when nothing it says asks (`asks`, the protocol's own predicate).
+ */
+export function personWaiting(said: Waiting | undefined, working: LifecycleWork["status"] | undefined): Waiting | undefined {
+  const waiting = said ?? (working === "waiting" ? needsYouWaiting(undefined) : undefined)
+  return waiting && asks(waiting.for) ? waiting : undefined
+}
+
+/**
  * What a list shows of one of this host's conversations that its own turns move, as its row says it: each conversation's
  * row is made with this (`ownedSessions`), and each of its batches is checked against it (`SessionPublisher.own`), so
  * whether a batch moved anything a list shows is decided by the row's own rule, never a second one. `working` is the
@@ -157,7 +169,7 @@ export function conversationShown(conversation: {
   if (state === "working" && session.status !== "running" && session.status !== "starting" && conversation.background) shown.background = conversation.background
   if (state === "waiting") {
     // A native agent of its waiting on the person says nothing more than that it does.
-    const on = conversation.waitingOn(session.id) ?? needsYouWaiting(undefined)
+    const on = personWaiting(conversation.waitingOn(session.id), working) ?? needsYouWaiting(undefined)
     shown.waitingOn = on.line
     shown.waitingFor = on.for
   }
@@ -304,6 +316,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     if (session.nativeId) row.nativeId = session.nativeId
     const forkOf = forks?.get(placed.session)
     if (forkOf) row.forkOf = forkOf
+    const order = sources.sessionOrder?.(placed)
+    if (order !== undefined) row.order = order
     Object.assign(row, rail(session.cwd || undefined, undefined, (summary.nativeIds ?? []).map((id) => id.provider), session.harness))
     // A harness or ID the protocol can't carry is left out, never the rest.
     const parsed = ReportedSessionSchema.safeParse(row)
@@ -367,6 +381,12 @@ export function syncOrder(left: ReportedSession, right: ReportedSession, threads
   return byThread || right.activityAt.localeCompare(left.activityAt)
 }
 
+/** A Session's place among its Thread's Sessions, as the store that owns the Thread keeps them: what its row says as `order`. */
+export function sessionOrderIn(sessions: readonly string[] | undefined, session: string): number | undefined {
+  const at = sessions?.indexOf(session) ?? -1
+  return at >= 0 ? at : undefined
+}
+
 /** Whether two rows show the same but for when they last moved. */
 function sameShown(left: ReportedSession, right: ReportedSession): boolean {
   return left.session === right.session && left.thread === right.thread && left.threadTitle === right.threadTitle && left.conversation === right.conversation &&
@@ -375,7 +395,7 @@ function sameShown(left: ReportedSession, right: ReportedSession): boolean {
     left.nativeId === right.nativeId && left.capture?.path === right.capture?.path && left.background === right.background &&
     left.project?.folder === right.project?.folder && sameHead(left.project?.head, right.project?.head) &&
     left.worktree?.branch === right.worktree?.branch && (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0") &&
-    left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere && left.forkOf === right.forkOf &&
+    left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere && left.forkOf === right.forkOf && left.order === right.order &&
     JSON.stringify(left.asking) === JSON.stringify(right.asking) && JSON.stringify(left.fins) === JSON.stringify(right.fins)
 }
 

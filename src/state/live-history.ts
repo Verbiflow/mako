@@ -1,5 +1,6 @@
 import { getMako } from "@/lib/bridge"
 import { acpStore, replaceAcpConversation } from "@/state/acp-state"
+import { receiveLive } from "@/state/live-door"
 import { projectAcp, projectLive } from "@/state/live-projection"
 import { responseText, type Exchange } from "@/lib/exchanges"
 import type { LiveSnapshot } from "@/lib/types"
@@ -177,7 +178,7 @@ async function restoreReleasedTurn(id: string, turnId: string): Promise<void> {
         page.base.entries.length !== turn.base.end - turn.base.start)))
     throw new Error("The reloaded turn did not match this conversation view.")
   const next = restoreTurn(current, turn, page)
-  replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
+  receiveLive(id, { from: "answer" }, () => replaceAcpConversation(id, { ...next, projection: projectAcp(next) }))
 }
 
 function restoreTurn<T extends { blocks: Entry[]; base?: LiveSnapshot["base"]; history?: LiveSnapshot["history"]; releasedTurns?: ReleasedTurn[] }>(
@@ -213,7 +214,7 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
       const blocks = current.blocks.slice()
       blocks[local] = value
       const next = { ...current, blocks }
-      replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
+      receiveLive(id, { from: "answer" }, () => replaceAcpConversation(id, { ...next, projection: projectAcp(next) }))
     } else {
       const base = current.base
       if (!base) return
@@ -222,7 +223,7 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
       const entries = base.entries.slice()
       entries[local] = value
       const next = { ...current, base: { ...base, entries } }
-      replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
+      receiveLive(id, { from: "answer" }, () => replaceAcpConversation(id, { ...next, projection: projectAcp(next) }))
     }
     } finally { release() }
   })().finally(() => loading.delete(key))

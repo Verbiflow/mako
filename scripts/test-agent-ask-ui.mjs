@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 // What an agent asked below full access through Mako's tools, on the production components and the mock bridge's Apex
 // scene with an ask in its conversation (`&ask=move`): the desk's card above the composer and the phone's in the dock
@@ -20,7 +21,18 @@ if (process.versions.electron) {
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-agent-ask-ui", main: fileURLToPath(import.meta.url) }))
   const { createServer } = await import("vite")
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
+  const timestamped = []
+  server.httpServer.on("request", (request) => {
+    if (request.url?.startsWith("/src/state/notifications.ts?t=")) timestamped.push(request.url)
+  })
   await server.listen()
+  if (process.argv.includes("--warm-server")) {
+    // Reproduce a reused dev server: its next page imports the invalidated module with Vite's timestamp.
+    await server.transformRequest("/src/state/acp-live.ts")
+    const notifications = await server.moduleGraph.getModuleByUrl("/src/state/notifications.ts")
+    assert.ok(notifications, "the UI's notification module is in Vite's graph")
+    server.moduleGraph.invalidateModule(notifications, new Set(), Date.now(), true)
+  }
   const env = { ...process.env, MAKO_ASK_UI_ROOT: root, MAKO_ASK_UI_URL: server.resolvedUrls.local[0] }
   delete env.ELECTRON_RUN_AS_NODE
   try {
@@ -32,6 +44,7 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
+  if (process.argv.includes("--warm-server")) assert.ok(timestamped.length, "the fresh profile loaded Vite's timestamped notification module")
   console.log(`Agent ask UI evidence: ${process.env.MAKO_ASK_UI_SHOTS ?? join(root, "shots")}`)
 }
 
@@ -45,9 +58,11 @@ async function check() {
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const base = process.env.MAKO_ASK_UI_URL
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false, contextIsolation: true } })
+  atSize(window, 1440, 900)
   const page = window.webContents
   const errors = []
   page.on("console-message", (event) => {
@@ -112,8 +127,8 @@ async function check() {
   await evaluate("document.querySelector('[data-rail-top-row=inbox]').click(); true")
   await until("Boolean(document.querySelector('[data-inbox]'))", "the Inbox")
   // The Fin's conversation held in this window, as it is once opened: its ask is in what the Inbox reads.
-  await evaluate("import('/src/state/live-recovery.ts').then(({ hydrateLive }) => hydrateLive('1ead1ead-5000-4000-8000-000000000004')).then(() => true)")
-  await until("import('/src/state/acp-state.ts').then(({ acpStore }) => Boolean(acpStore.get().conversations['1ead1ead-5000-4000-8000-000000000004']?.control?.asks?.length))", "the Fin's ask, held")
+  await evaluate("window.mockState.hydrateLive('1ead1ead-5000-4000-8000-000000000004').then(() => true)")
+  await until("Boolean(window.mockState.liveState().conversations['1ead1ead-5000-4000-8000-000000000004']?.control?.asks?.length)", "the Fin's ask, held")
   await new Promise((done) => setTimeout(done, 300))
   assert.equal(await evaluate("document.querySelectorAll('[data-inbox-kind=agent-ask]').length"), 0, "a Fin's ask isn't the person's until its Apex leaves it")
   console.log("PASS: a Fin's ask goes through its Apex, not straight to the person's Inbox")
@@ -140,7 +155,7 @@ async function check() {
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the rail")
   await until("Boolean(window.apexScene)", "the scene")
   await evaluate("window.apexScene.raiseAgentAsk(); true")
-  await until("import('/src/state/notifications.ts').then(({ notificationsStore }) => notificationsStore.get().items.some((item) => item.body.includes('move this Thread to the cloud')))", "the notice of a new ask")
+  await until("window.mockState.notifications().items.some((item) => item.body.includes('move this Thread to the cloud'))", "the notice of a new ask")
   console.log("PASS: a new ask is said as it arrives")
 
   // A laptop's browser: the desk's composer draws the card, and the answer reaches the host.

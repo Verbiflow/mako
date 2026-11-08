@@ -1,8 +1,9 @@
 import { toast } from "sonner"
 import type { AgentsRespondInput } from "@mako/host/contracts/agents"
 import { askWords, finAskWaiting, openAsk, rosterChildren } from "@mako/host/contracts/children"
-import type { FinAsk, NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
+import type { FinAsk, NativeAgent } from "@mako/host/contracts/native-agents"
 import { getMako, hasBridge } from "@/lib/bridge"
+import { conversationRoster, type AcpState, type LiveAcpConversation } from "@/state/acp-state"
 
 /** One of an Apex's Fins asking the person, as the Apex's roster carries it: theirs to answer from the Apex's Thread. */
 export interface PersonAsk {
@@ -28,9 +29,12 @@ export function personAsks(children: readonly NativeAgent[]): PersonAsk[] {
   return asks
 }
 
-/** The first of a conversation's Fins' asks that's the person's, as its Thread's mark says it: "Sheet motion: Approve: npm ci". */
-export function finAskLine(conversation: { nativeAgents?: NativeAgentRoster }): string | undefined {
-  const ask = personAsks(rosterChildren(conversation.nativeAgents))[0]
+/**
+ * The first of a conversation's Fins' asks that's the person's, as its Thread's mark says it: "Sheet motion: Approve:
+ * npm ci". Its Thread's Fins as they stand (`conversationRoster`), whichever of its Sessions it is.
+ */
+export function finAskLine(state: AcpState, conversation: Pick<LiveAcpConversation, "threadId" | "nativeAgents">): string | undefined {
+  const ask = personAsks(rosterChildren(conversationRoster(state, conversation)))[0]
   return ask && finAskWaiting(ask.ask, ask.title, askWords(ask)).line
 }
 
