@@ -139,16 +139,22 @@ const check = {
     opened += calls
     const step = () => {
       const next = phases.shift()
-      if (!next) return
+      if (!next) {
+        playing = undefined
+        return
+      }
       batch(next)
       playing = setTimeout(step, everyMs)
     }
     step()
-    return phases.length * everyMs
+  },
+  get streaming() {
+    return playing !== undefined
   },
   /** Settles the newest call and ends the turn's answer. */
   settle() {
     clearTimeout(playing)
+    playing = undefined
     batch([
       { kind: "tool-update", id: `live-${opened - 1}`, status: "completed", output: "ok" },
       { kind: "text", id: "done", text: "Both notes are written." },
