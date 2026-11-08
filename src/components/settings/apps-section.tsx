@@ -74,7 +74,7 @@ async function changeWithAgent(setup: ProjectAppSetup) {
 export function AppsSection() {
   const chosen = useAppSetup((state) => state.chosen)
   return chosen ? (
-    <ProjectApp key={chosen} root={chosen} onBack={() => appSetupStore.set({ chosen: undefined, tab: "recipe" })} />
+    <ProjectApp key={chosen} root={chosen} onBack={() => appSetupStore.set({ chosen: undefined })} />
   ) : (
     <ProjectList onOpen={(root) => appSetupStore.set({ chosen: root })} />
   )
