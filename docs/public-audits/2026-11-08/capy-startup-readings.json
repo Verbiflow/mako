@@ -1,0 +1,570 @@
+{
+  "measuredAt": "2026-11-08",
+  "machine": {
+    "model": "Mac15,10",
+    "logicalCpus": 14,
+    "memoryGiB": 36,
+    "macOS": "26.6.2",
+    "loadAverageDuringRun": [
+      6.88,
+      8.63,
+      10.01
+    ]
+  },
+  "settleSeconds": 5,
+  "cpuSampleSeconds": 15,
+  "makoPackage": {
+    "revision": "06f53ffebdc3dbe297dc382e7a11b191619af305",
+    "electron": "43.4.0"
+  },
+  "rendererBuild": "f74a33558ea46ea9c095b43d1c10eaa83cd3f23d",
+  "capy": {
+    "version": "0.7.2",
+    "electron": "44.10.0",
+    "build": "ffebce626d04b937d731ce0c140ed4e174b99ed2",
+    "asarSha256": "5e2d9d27e04a38e1257beb32f7bd6d04749e5f5a826d414aeb0935de669a9450"
+  },
+  "runs": {
+    "baseline-mako": [
+      {
+        "run": "cold: no host, empty profile",
+        "windowMs": 2559,
+        "navigationMs": 2549,
+        "fcpMs": 2857,
+        "lcpMs": 2857,
+        "domContentLoadedMs": 2661,
+        "readyMs": 2775,
+        "longFramesBeforeReady": 1,
+        "blockingBeforeReadyMs": 0,
+        "renderer": {
+          "taskMs": 181,
+          "scriptMs": 88,
+          "layoutMs": 6,
+          "styleMs": 29,
+          "heapMB": 13,
+          "nodes": 433
+        },
+        "processes": 8,
+        "footprintMB": 992,
+        "rssMB": 1092,
+        "idleCpuPercent": 20.6,
+        "byKind": {
+          "Mako": {
+            "count": 1,
+            "rssMB": 238,
+            "footprintMB": 118,
+            "idleCpuPercent": 0.13
+          },
+          "helper": {
+            "count": 5,
+            "rssMB": 628,
+            "footprintMB": 757,
+            "idleCpuPercent": 17.13
+          },
+          "renderer": {
+            "count": 1,
+            "rssMB": 223,
+            "footprintMB": 117,
+            "idleCpuPercent": 3.33
+          },
+          "(git)": {
+            "count": 1,
+            "rssMB": 3,
+            "footprintMB": 0,
+            "idleCpuPercent": 0
+          }
+        }
+      },
+      {
+        "run": "warm desktop, host running (1)",
+        "windowMs": 537,
+        "navigationMs": 528,
+        "fcpMs": 820,
+        "lcpMs": 864,
+        "domContentLoadedMs": 645,
+        "readyMs": 757,
+        "longFramesBeforeReady": 1,
+        "blockingBeforeReadyMs": 0,
+        "renderer": {
+          "taskMs": 205,
+          "scriptMs": 105,
+          "layoutMs": 8,
+          "styleMs": 18,
+          "heapMB": 18,
+          "nodes": 642
+        },
+        "processes": 7,
+        "footprintMB": 901,
+        "rssMB": 1020,
+        "idleCpuPercent": 21.4,
+        "byKind": {
+          "Mako": {
+            "count": 1,
+            "rssMB": 232,
+            "footprintMB": 107,
+            "idleCpuPercent": 0.13
+          },
+          "helper": {
+            "count": 5,
+            "rssMB": 574,
+            "footprintMB": 688,
+            "idleCpuPercent": 17.87
+          },
+          "renderer": {
+            "count": 1,
+            "rssMB": 214,
+            "footprintMB": 106,
+            "idleCpuPercent": 3.4
+          }
+        }
+      },
+      {
+        "run": "warm desktop, host running (2)",
+        "windowMs": 550,
+        "navigationMs": 540,
+        "fcpMs": 816,
+        "lcpMs": 852,
+        "domContentLoadedMs": 649,
+        "readyMs": 754,
+        "longFramesBeforeReady": 1,
+        "blockingBeforeReadyMs": 0,
+        "renderer": {
+          "taskMs": 195,
+          "scriptMs": 102,
+          "layoutMs": 8,
+          "styleMs": 18,
+          "heapMB": 18,
+          "nodes": 680
+        },
+        "processes": 6,
+        "footprintMB": 880,
+        "rssMB": 740,
+        "idleCpuPercent": 28.67,
+        "byKind": {
+          "Mako": {
+            "count": 1,
+            "rssMB": 140,
+            "footprintMB": 107,
+            "idleCpuPercent": 0.13
+          },
+          "helper": {
+            "count": 4,
+            "rssMB": 461,
+            "footprintMB": 666,
+            "idleCpuPercent": 25.2
+          },
+          "renderer": {
+            "count": 1,
+            "rssMB": 140,
+            "footprintMB": 107,
+            "idleCpuPercent": 3.33
+          }
+        }
+      },
+      {
+        "run": "warm profile, host started again",
+        "windowMs": 1186,
+        "navigationMs": 1174,
+        "fcpMs": 1470,
+        "lcpMs": 1470,
+        "domContentLoadedMs": 1294,
+        "readyMs": 1393,
+        "longFramesBeforeReady": 2,
+        "blockingBeforeReadyMs": 0,
+        "renderer": {
+          "taskMs": 213,
+          "scriptMs": 82,
+          "layoutMs": 6,
+          "styleMs": 40,
+          "heapMB": 13,
+          "nodes": 433
+        },
+        "processes": 8,
+        "footprintMB": 1005,
+        "rssMB": 1104,
+        "idleCpuPercent": 41,
+        "byKind": {
+          "Mako": {
+            "count": 1,
+            "rssMB": 236,
+            "footprintMB": 116,
+            "idleCpuPercent": 0.13
+          },
+          "helper": {
+            "count": 5,
+            "rssMB": 645,
+            "footprintMB": 769,
+            "idleCpuPercent": 37.07
+          },
+          "renderer": {
+            "count": 1,
+            "rssMB": 219,
+            "footprintMB": 120,
+            "idleCpuPercent": 3.8
+          },
+          "(ps)": {
+            "count": 1,
+            "rssMB": 3,
+            "footprintMB": 0,
+            "idleCpuPercent": 0
+          }
+        }
+      }
+    ],
+    "after-mako": [
+      {
+        "run": "cold: no host, empty profile",
+        "windowMs": 2499,
+        "navigationMs": 2492,
+        "fcpMs": 2796,
+        "lcpMs": 2804,
+        "domContentLoadedMs": 2610,
+        "readyMs": 2725,
+        "longFramesBeforeReady": 1,
+        "blockingBeforeReadyMs": 0,
+        "renderer": {
+          "taskMs": 196,
+          "scriptMs": 95,
+          "layoutMs": 6,
+          "styleMs": 35,
+          "heapMB": 14,
+          "nodes": 431
+        },
+        "processes": 9,
+        "footprintMB": 987,
+        "rssMB": 1096,
+        "idleCpuPercent": 22.6,
+        "byKind": {
+          "Mako": {
+            "count": 1,
+            "rssMB": 237,
+            "footprintMB": 116,
+            "idleCpuPercent": 0.07
+          },
+          "helper": {
+            "count": 5,
+            "rssMB": 630,
+            "footprintMB": 750,
+            "idleCpuPercent": 18.93
+          },
+          "renderer": {
+            "count": 1,
+            "rssMB": 226,
+            "footprintMB": 121,
+            "idleCpuPercent": 3.6
+          },
+          "lsof": {
+            "count": 2,
+            "rssMB": 4,
+            "footprintMB": 0,
+            "idleCpuPercent": 0
+          }
+        }
+      },
+      {
+        "run": "warm desktop, host running (1)",
+        "windowMs": 486,
+        "navigationMs": 477,
+        "fcpMs": 789,
+        "lcpMs": 797,
+        "domContentLoadedMs": 592,
+        "readyMs": 711,
+        "longFramesBeforeReady": 1,
+        "blockingBeforeReadyMs": 0,
+        "renderer": {
+          "taskMs": 206,
+          "scriptMs": 108,
+          "layoutMs": 7,
+          "styleMs": 18,
+          "heapMB": 18,
+          "nodes": 585
+        },
+        "processes": 7,
+        "footprintMB": 924,
+        "rssMB": 1024,
+        "idleCpuPercent": 20.27,
+        "byKind": {
+          "Mako": {
+            "count": 1,
+            "rssMB": 233,
+            "footprintMB": 115,
+            "idleCpuPercent": 0.07
+          },
+          "helper": {
+            "count": 5,
+            "rssMB": 562,
+            "footprintMB": 687,
+            "idleCpuPercent": 17
+          },
+          "renderer": {
+            "count": 1,
+            "rssMB": 228,
+            "footprintMB": 122,
+            "idleCpuPercent": 3.2
+          }
+        }
+      },
+      {
+        "run": "warm desktop, host running (2)",
+        "windowMs": 525,
+        "navigationMs": 516,
+        "fcpMs": 804,
+        "lcpMs": 832,
+        "domContentLoadedMs": 625,
+        "readyMs": 721,
+        "longFramesBeforeReady": 2,
+        "blockingBeforeReadyMs": 0,
+        "renderer": {
+          "taskMs": 196,
+          "scriptMs": 100,
+          "layoutMs": 7,
+          "styleMs": 18,
+          "heapMB": 19,
+          "nodes": 672
+        },
+        "processes": 6,
+        "footprintMB": 969,
+        "rssMB": 846,
+        "idleCpuPercent": 50.87,
+        "byKind": {
+          "Mako": {
+            "count": 1,
+            "rssMB": 212,
+            "footprintMB": 116,
+            "idleCpuPercent": 0.07
+          },
+          "helper": {
+            "count": 4,
+            "rssMB": 467,
+            "footprintMB": 733,
+            "idleCpuPercent": 47.67
+          },
+          "renderer": {
+            "count": 1,
+            "rssMB": 167,
+            "footprintMB": 120,
+            "idleCpuPercent": 3.13
+          }
+        }
+      },
+      {
+        "run": "warm profile, host started again",
+        "windowMs": 1135,
+        "navigationMs": 1126,
+        "fcpMs": 1406,
+        "lcpMs": 1406,
+        "domContentLoadedMs": 1239,
+        "readyMs": 1332,
+        "longFramesBeforeReady": 2,
+        "blockingBeforeReadyMs": 0,
+        "renderer": {
+          "taskMs": 203,
+          "scriptMs": 92,
+          "layoutMs": 6,
+          "styleMs": 33,
+          "heapMB": 16,
+          "nodes": 607
+        },
+        "processes": 8,
+        "footprintMB": 1001,
+        "rssMB": 1093,
+        "idleCpuPercent": 23.73,
+        "byKind": {
+          "Mako": {
+            "count": 1,
+            "rssMB": 236,
+            "footprintMB": 116,
+            "idleCpuPercent": 0.13
+          },
+          "helper": {
+            "count": 5,
+            "rssMB": 632,
+            "footprintMB": 759,
+            "idleCpuPercent": 20.4
+          },
+          "renderer": {
+            "count": 1,
+            "rssMB": 224,
+            "footprintMB": 126,
+            "idleCpuPercent": 3.2
+          },
+          "lsof": {
+            "count": 1,
+            "rssMB": 1,
+            "footprintMB": 0,
+            "idleCpuPercent": 0
+          }
+        }
+      }
+    ],
+    "baseline-capy": [
+      {
+        "run": "first launch, empty profile",
+        "windowMs": 2170,
+        "navigationMs": 2152,
+        "fcpMs": null,
+        "lcpMs": 2764,
+        "domContentLoadedMs": 2258,
+        "readyMs": 2739,
+        "longFramesBeforeReady": 2,
+        "blockingBeforeReadyMs": 106,
+        "renderer": {
+          "taskMs": 379,
+          "scriptMs": 220,
+          "layoutMs": 3,
+          "styleMs": 5,
+          "heapMB": 36,
+          "nodes": 221
+        },
+        "processes": 4,
+        "footprintMB": 693,
+        "rssMB": 785,
+        "idleCpuPercent": 8.93,
+        "byKind": {
+          "Capy": {
+            "count": 1,
+            "rssMB": 349,
+            "footprintMB": 195,
+            "idleCpuPercent": 0.07
+          },
+          "helper": {
+            "count": 2,
+            "rssMB": 162,
+            "footprintMB": 372,
+            "idleCpuPercent": 5.27
+          },
+          "renderer": {
+            "count": 1,
+            "rssMB": 275,
+            "footprintMB": 126,
+            "idleCpuPercent": 3.6
+          }
+        }
+      },
+      {
+        "run": "warm profile (1)",
+        "windowMs": 686,
+        "navigationMs": 668,
+        "fcpMs": null,
+        "lcpMs": 1324,
+        "domContentLoadedMs": 778,
+        "readyMs": 1299,
+        "longFramesBeforeReady": 3,
+        "blockingBeforeReadyMs": 115,
+        "renderer": {
+          "taskMs": 406,
+          "scriptMs": 218,
+          "layoutMs": 3,
+          "styleMs": 4,
+          "heapMB": 36,
+          "nodes": 221
+        },
+        "processes": 4,
+        "footprintMB": 693,
+        "rssMB": 777,
+        "idleCpuPercent": 8.6,
+        "byKind": {
+          "Capy": {
+            "count": 1,
+            "rssMB": 347,
+            "footprintMB": 193,
+            "idleCpuPercent": 0.07
+          },
+          "helper": {
+            "count": 2,
+            "rssMB": 150,
+            "footprintMB": 370,
+            "idleCpuPercent": 5
+          },
+          "renderer": {
+            "count": 1,
+            "rssMB": 280,
+            "footprintMB": 130,
+            "idleCpuPercent": 3.53
+          }
+        }
+      },
+      {
+        "run": "warm profile (2)",
+        "windowMs": 642,
+        "navigationMs": 625,
+        "fcpMs": 1033,
+        "lcpMs": 1033,
+        "domContentLoadedMs": 712,
+        "readyMs": 1061,
+        "longFramesBeforeReady": 2,
+        "blockingBeforeReadyMs": 54,
+        "renderer": {
+          "taskMs": 334,
+          "scriptMs": 164,
+          "layoutMs": 2,
+          "styleMs": 4,
+          "heapMB": 30,
+          "nodes": 184
+        },
+        "processes": 4,
+        "footprintMB": 692,
+        "rssMB": 747,
+        "idleCpuPercent": 8.8,
+        "byKind": {
+          "Capy": {
+            "count": 1,
+            "rssMB": 349,
+            "footprintMB": 196,
+            "idleCpuPercent": 0
+          },
+          "helper": {
+            "count": 2,
+            "rssMB": 150,
+            "footprintMB": 370,
+            "idleCpuPercent": 5.87
+          },
+          "renderer": {
+            "count": 1,
+            "rssMB": 248,
+            "footprintMB": 126,
+            "idleCpuPercent": 2.93
+          }
+        }
+      }
+    ]
+  },
+  "entryGraph": {
+    "before": {
+      "bytes": 1486628,
+      "files": [
+        "assets/contracts-BR8DJ2fC.js",
+        "assets/desktop-DUq-PSI0.js",
+        "assets/error-boundary-CDo6Oq7A.js",
+        "assets/file-viewer-presentation-pptx-BdfsZtG_.js",
+        "assets/index-Cz7Mj0rT.js",
+        "assets/jsx-runtime-DREnUpxT.js",
+        "assets/kit-PrtgKg-T.js",
+        "assets/mako-mark-DBFRMT2n.js",
+        "assets/prefs-ogaYEHUe.js",
+        "assets/react-BatatxyT.js",
+        "assets/react-dom-6yoXceVp.js",
+        "assets/rolldown-runtime-Dd_uD5pT.js",
+        "assets/schemas-Ck9mlleb.js"
+      ]
+    },
+    "after": {
+      "bytes": 1149990,
+      "files": [
+        "assets/contracts-BR8DJ2fC.js",
+        "assets/desktop-BrtDhC8G.js",
+        "assets/error-boundary-DxlsBlVX.js",
+        "assets/index-DdjDHpHC.js",
+        "assets/jsx-runtime-DREnUpxT.js",
+        "assets/kit-PrtgKg-T.js",
+        "assets/mako-mark-DBFRMT2n.js",
+        "assets/prefs-ogaYEHUe.js",
+        "assets/preload-helper-HclGiUj8.js",
+        "assets/react-BatatxyT.js",
+        "assets/react-dom-6yoXceVp.js",
+        "assets/rolldown-runtime-Dd_uD5pT.js",
+        "assets/schemas-Ck9mlleb.js"
+      ]
+    }
+  }
+}

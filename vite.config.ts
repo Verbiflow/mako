@@ -39,7 +39,9 @@ export default defineConfig({
       inject: false,
       autoPresets: false,
       copyAssets: { baseDir: "file-viewer" },
-      chunkStrategy: "renderer",
+      // Let the bundler share helpers across lazy viewers. The renderer groups
+      // also capture Vite's preload helper, making startup import PowerPoint.
+      chunkStrategy: "none",
     }),
   ],
   resolve: {
