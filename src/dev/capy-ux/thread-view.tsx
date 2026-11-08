@@ -1,4 +1,5 @@
-import { useLayoutEffect, useRef, type ReactNode } from "react"
+import type { ReactNode } from "react"
+import { useEnd } from "./use-end"
 import { ArrowUpIcon, ChevronDownIcon, ChevronRightIcon, CircleDotIcon, CornerDownRightIcon, FileCodeIcon, GitBranchIcon, GitPullRequestIcon, LaptopIcon, PanelRightIcon, PlayIcon, PlusIcon, ShieldIcon, XIcon } from "lucide-react"
 import type { Rollup } from "@mako/host/contracts/children"
 import { rollupLine } from "@mako/host/contracts/children"
@@ -27,7 +28,7 @@ export function TabStrip({ place, fins, onPlace }: { place: Place; fins: Fin[]; 
   const composer = THREADS.find((thread) => thread.id === "composer")!
   const tabs: Tab[] = [
     { key: APEX_ID, title: APEX.title, harness: APEX.harness, state: APEX.mark, place: { kind: "thread", id: APEX_ID } },
-    ...(sheet ? [{ key: sheet.agent.nativeId, title: sheet.agent.title, harness: sheet.agent.provider, state: sheet.mark, place: { kind: "fin", id: sheet.agent.nativeId } as Place }] : []),
+    ...(sheet ? [{ key: sheet.agent.nativeId, title: sheet.agent.title, harness: sheet.agent.provider, state: sheet.mark, place: { kind: "fin", id: sheet.agent.nativeId } satisfies Place }] : []),
     { key: composer.id, title: composer.title, harness: composer.harness, state: composer.mark, place: { kind: "thread", id: composer.id } },
     { key: "file", title: "sheet.tsx", file: true, place: null },
   ]
@@ -60,7 +61,7 @@ export function TabStrip({ place, fins, onPlace }: { place: Place; fins: Fin[]; 
 }
 
 function Chip({ children, className }: { children: ReactNode; className?: string }) {
-  return <span className={cn("flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-label text-muted-foreground hover:bg-fill-hover", className)}>{children}</span>
+  return <span className={cn("flex h-6 shrink-0 items-center gap-1.5 px-1.5 text-label text-muted-foreground hover:bg-fill-hover", className)}>{children}</span>
 }
 
 function Header({ crumb, title, harness, earlier, model, branch, changes, pr, fins, counts, place }: { crumb?: ReactNode; title: string; harness: string; earlier?: string[]; model: string; branch: string; changes?: [number, number]; pr?: number; fins?: boolean; counts?: Rollup; place: string }) {
@@ -70,12 +71,12 @@ function Header({ crumb, title, harness, earlier, model, branch, changes, pr, fi
       <div className="flex items-center gap-3">
         <h1 className="min-w-0 flex-1 truncate text-title font-semibold text-foreground">{title}</h1>
         {pr ? (
-          <button type="button" className="pressable flex h-7 items-center gap-1.5 rounded-md px-2 text-label text-muted-foreground shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover">
+          <button type="button" className="pressable flex h-7 items-center gap-1.5 px-2 text-label text-muted-foreground shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover">
             <GitPullRequestIcon className="size-3.5" />#{pr}
             <span className="flex items-center gap-1 text-faint"><CircleDotIcon className="size-3 text-caution" />checks running</span>
           </button>
         ) : null}
-        <button type="button" className="pressable flex h-7 items-center gap-1.5 rounded-md px-2 text-label text-muted-foreground shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover">
+        <button type="button" className="pressable flex h-7 items-center gap-1.5 px-2 text-label text-muted-foreground shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover">
           <PlayIcon className="size-3" />Run app
         </button>
       </div>
@@ -116,7 +117,7 @@ function Header({ crumb, title, harness, earlier, model, branch, changes, pr, fi
 function You({ children }: { children: ReactNode }) {
   return (
     <div className="flex justify-end">
-      <p className="max-w-[78%] rounded-xl rounded-br-md bg-raised px-3.5 py-2 text-prose leading-[1.55] text-foreground">{children}</p>
+      <p className="max-w-[78%] bg-raised px-3.5 py-2 text-prose leading-[1.55] text-foreground">{children}</p>
     </div>
   )
 }
@@ -137,29 +138,17 @@ function Event({ children }: { children: ReactNode }) {
   return <p className="flex items-center gap-2 text-label text-faint"><CornerDownRightIcon className="size-3.5" />{children}</p>
 }
 
-/** A transcript held at its end, as a chat is. */
-export function useEnd<T extends HTMLElement>() {
-  const ref = useRef<T>(null)
-  useLayoutEffect(() => {
-    const element = ref.current
-    if (!element) return
-    const crew = element.querySelector<HTMLElement>("[data-crew]")
-    element.scrollTop = crew ? crew.offsetTop - element.offsetTop - 96 : element.scrollHeight
-  })
-  return ref
-}
-
 export function Composer({ placeholder, harness, model }: { placeholder: string; harness: string; model: string }) {
   return (
     <div className="shrink-0 px-6 pb-4 pt-2">
-      <div className="mx-auto max-w-[var(--container-content)] rounded-xl bg-surface p-2 shadow-[inset_0_0_0_1px_var(--border)]">
+      <div className="mx-auto max-w-[var(--container-content)] bg-surface p-2 shadow-[inset_0_0_0_1px_var(--border)]">
         <p className="px-2 pb-6 pt-1.5 text-ui text-faint">{placeholder}</p>
         <div className="flex items-center gap-1">
-          <span className="flex size-7 items-center justify-center rounded-md text-faint"><PlusIcon className="size-4" /></span>
+          <span className="flex size-7 items-center justify-center text-faint"><PlusIcon className="size-4" /></span>
           <Chip><HarnessIcon harness={harness} className="size-3.5" /><span className="font-medium text-foreground/85">{model}</span><span className="text-faint">High</span></Chip>
           <Chip><ShieldIcon className="size-3.5" />Ask before acting</Chip>
           <span className="flex-1" />
-          <span className="flex size-7 items-center justify-center rounded-md bg-foreground text-background"><ArrowUpIcon className="size-4" /></span>
+          <span className="flex size-7 items-center justify-center bg-foreground text-background"><ArrowUpIcon className="size-4" /></span>
         </div>
       </div>
     </div>
@@ -193,7 +182,7 @@ export function FinView({ fin, onBack, onAnswer }: { fin: Fin; onBack: () => voi
     <div className="flex min-h-0 flex-1 flex-col bg-surface">
       <Header
         crumb={
-          <button type="button" onClick={onBack} className="pressable -ml-1 mb-1 flex items-center gap-1.5 rounded px-1 text-label text-faint hover:text-foreground">
+          <button type="button" onClick={onBack} className="pressable -ml-1 mb-1 flex items-center gap-1.5 px-1 text-label text-faint hover:text-foreground">
             <ApexMark className="size-3.5" />Mobile polish<ChevronRightIcon className="size-3" /><span className="text-muted-foreground">Fin</span>
           </button>
         }
@@ -206,19 +195,19 @@ export function FinView({ fin, onBack, onAnswer }: { fin: Fin; onBack: () => voi
       />
       <div ref={end} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-[var(--container-content)] flex-col gap-5 px-6 py-6">
-          <div className="rounded-xl bg-raised/60 px-4 py-3 shadow-[inset_0_0_0_1px_var(--hairline)]">
+          <div className="bg-raised/60 px-4 py-3 shadow-[inset_0_0_0_1px_var(--hairline)]">
             <p className="mb-1 flex items-center gap-1.5 text-label text-faint"><ApexMark className="size-3.5" />Brief from Mobile polish</p>
             <p className="text-ui text-foreground/90">{fin.agent.detail}</p>
           </div>
           <Says harness={fin.agent.provider}>The sheet animates from its own height, so in split view it starts off screen. I'll measure the container instead, then run the iPad case.</Says>
           <Event>Mobile polish passed on your words: "The sheet still jumps when the keyboard opens in split view."</Event>
           {ask?.kind === "approval" ? (
-            <div className="rounded-xl px-4 py-3 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--caution)_35%,transparent)]">
-              <p className="flex items-center gap-2 text-ui font-medium text-foreground"><LiveMark harness={fin.agent.provider} state="needs" cut="var(--surface)" />Approve <code className="rounded-sm bg-raised px-1 font-mono text-code">npm ci</code></p>
+            <div className="px-4 py-3 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--caution)_35%,transparent)]">
+              <p className="flex items-center gap-2 text-ui font-medium text-foreground"><LiveMark harness={fin.agent.provider} state="needs" cut="var(--surface)" />Approve <code className="bg-raised px-1 font-mono text-code">npm ci</code></p>
               <p className="mt-1 pl-7 text-label text-faint">Installs the locked packages in this Fin's worktree. Mobile polish can't approve this for you.</p>
               <div className="mt-2.5 flex gap-1.5 pl-7">
                 {(ask.options ?? []).map((option, index) => (
-                  <button key={option.label} type="button" onClick={() => onAnswer(fin, index)} className={cn("pressable h-7 rounded-md px-2.5 text-label font-medium", index === 0 ? "bg-foreground text-background" : "text-foreground/85 shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover")}>
+                  <button key={option.label} type="button" onClick={() => onAnswer(fin, index)} className={cn("pressable h-7 px-2.5 text-label font-medium", index === 0 ? "bg-foreground text-background" : "text-foreground/85 shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover")}>
                     {option.label}
                   </button>
                 ))}
@@ -249,7 +238,7 @@ export function InboxView({ asks, fins, onAnswer, onOpenFin }: { asks: Ask[]; fi
               const fin = fins.find((candidate) => candidate.agent.nativeId === ask.id)
               const order = ask.options.map((_, index) => index).sort((left, right) => (left === ask.recommended ? -1 : right === ask.recommended ? 1 : 0))
               return (
-                <article key={ask.id} className="rounded-xl px-4 py-3 shadow-[inset_0_0_0_1px_var(--hairline)] hover:bg-fill-hover/50">
+                <article key={ask.id} className="px-4 py-3 shadow-[inset_0_0_0_1px_var(--hairline)] hover:bg-fill-hover/50">
                   <p className="flex items-center gap-2 text-label text-faint">
                     <LiveMark harness={ask.harness} state="needs" cut="var(--surface)" />
                     {ask.fin ? (
@@ -269,7 +258,7 @@ export function InboxView({ asks, fins, onAnswer, onOpenFin }: { asks: Ask[]; fi
                     {order.map((index) => {
                       const option = ask.options[index]!
                       return (
-                        <button key={option.label} type="button" onClick={() => fin && onAnswer(fin, index)} className={cn("pressable flex h-7 items-center gap-1.5 rounded-md px-2.5 text-label font-medium", index === order[0] ? "bg-foreground text-background" : "text-foreground/85 shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover")}>
+                        <button key={option.label} type="button" onClick={() => fin && onAnswer(fin, index)} className={cn("pressable flex h-7 items-center gap-1.5 px-2.5 text-label font-medium", index === order[0] ? "bg-foreground text-background" : "text-foreground/85 shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover")}>
                           {option.label}
                           {index === ask.recommended ? <span className={cn("font-normal", index === order[0] ? "text-background/70" : "text-faint")}>Recommended</span> : null}
                         </button>
@@ -284,7 +273,7 @@ export function InboxView({ asks, fins, onAnswer, onOpenFin }: { asks: Ask[]; fi
           <section className="flex flex-col gap-1">
             <h2 className="mb-1 text-label font-medium text-muted-foreground">To read</h2>
             {[...unread, ...failed].map((thread) => (
-              <div key={thread.id} className="flex items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-fill-hover">
+              <div key={thread.id} className="flex items-center gap-2 px-1.5 py-1.5 hover:bg-fill-hover">
                 <LiveMark harness={thread.harness} state={thread.mark} cut="var(--surface)" />
                 <span className="shrink-0 text-ui text-foreground">{thread.title}</span>
                 <span className="min-w-0 flex-1 truncate text-label text-faint">{thread.line}</span>

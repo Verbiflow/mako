@@ -13,7 +13,8 @@ import { fixtureHarnesses } from "../harness-fixtures"
 import { installMockBridge } from "../mock-bridge"
 import { apexSnapshots, APEX_CONVERSATION } from "../mock-apex-thread"
 import { asksOf, crewRollup, finsOf, FIXTURE_FINS, type Fin, type MarkState } from "./data"
-import { LiveMark, Pips, CrewBar, markWord } from "./marks"
+import { LiveMark, Pips, CrewBar } from "./marks"
+import { markWord } from "./mark-word"
 import { Sidebar, type Place } from "./sidebar"
 import { ApexView, FinView, InboxView, TabStrip } from "./thread-view"
 import { PhoneApex, PhoneList } from "./phone"
@@ -53,7 +54,7 @@ function initialPlace(fins: Fin[]): Place {
   return { kind: "thread", id: "mobile-polish" }
 }
 
-function Desk() {
+export function Desk() {
   const { fins, counts, answer } = useCrew()
   const [place, setPlace] = useState<Place>(() => initialPlace(fins))
   const asks = asksOf(fins)
@@ -76,7 +77,7 @@ function Desk() {
   )
 }
 
-function Phone() {
+export function Phone() {
   const { fins, counts, answer } = useCrew()
   const [screen, setScreen] = useState(search.get("screen") === "apex" ? "apex" : "list")
   return (
@@ -102,7 +103,7 @@ const STATES: { state: MarkState; harness: string; note: string }[] = [
   { state: "done", harness: "claude", note: "The mark alone." },
 ]
 
-function Legend() {
+export function Legend() {
   const { fins, counts } = useCrew()
   return (
     <div className="min-h-screen bg-surface p-10 font-sans text-foreground antialiased">
@@ -111,7 +112,7 @@ function Legend() {
       <div className="mt-8 grid grid-cols-2 gap-x-10 gap-y-6">
         {STATES.map(({ state, harness, note }) => (
           <div key={state} className="flex items-center gap-5">
-            <span className="flex size-14 items-center justify-center rounded-xl bg-shell">
+            <span className="flex size-14 items-center justify-center bg-shell">
               <LiveMark harness={harness} state={state} lit={state === "working"} className="scale-[2]" />
             </span>
             <span className="flex flex-col">
@@ -121,7 +122,7 @@ function Legend() {
           </div>
         ))}
       </div>
-      <div className="mt-10 flex items-center gap-6 rounded-xl bg-shell p-5">
+      <div className="mt-10 flex items-center gap-6 bg-shell p-5">
         <span className="flex flex-col gap-2">
           <span className="text-ui font-medium">An Apex's crew</span>
           <span className="text-label text-muted-foreground">One pip per Fin, needs-you first; the working ones pulse in a wave.</span>

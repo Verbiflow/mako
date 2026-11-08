@@ -7,7 +7,7 @@ import { HarnessIcon } from "@/components/ui/provider-icon"
 import { cn } from "@/lib/utils"
 import { APEX_ID, AUTOMATIONS, PULL_REQUESTS, THREADS, type Fin, type MarkState } from "./data"
 import { CrewCard } from "./crew"
-import { useEnd } from "./thread-view"
+import { useEnd } from "./use-end"
 import { LiveMark, Pips } from "./marks"
 
 function Big({ harness, state }: { harness: string; state: MarkState }) {
@@ -24,7 +24,7 @@ function PhoneRow({ harness, state, title, line, end, below, onClick, nested }: 
       <Big harness={harness} state={state} />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-[15px] font-medium leading-5 text-foreground">{title}</span>
+          <span className="min-w-0 flex-1 truncate text-prose font-medium leading-5 text-foreground">{title}</span>
           {end}
         </span>
         {line ? <span className="block min-w-0 truncate text-label text-muted-foreground">{line}</span> : null}
@@ -48,10 +48,10 @@ export function PhoneList({ fins, counts, asks, onOpenApex }: { fins: Fin[]; cou
     <div className="flex h-full flex-col bg-shell">
       <div className="h-[47px] shrink-0" />
       <header className="flex items-center gap-3 px-4 pb-2">
-        <h1 className="flex-1 text-[28px] font-semibold leading-9 tracking-[-0.5px] text-foreground">Threads</h1>
+        <h1 className="flex-1 text-title font-semibold leading-9 tracking-[-0.5px] text-foreground">Threads</h1>
         <span className="flex size-8 items-center justify-center rounded-full bg-raised text-ui font-medium text-foreground">A</span>
       </header>
-      <div className="mx-4 mb-3 flex h-9 items-center gap-2 rounded-lg bg-raised px-3 text-ui text-faint">
+      <div className="mx-4 mb-3 flex h-9 items-center gap-2 bg-raised px-3 text-ui text-faint">
         <SearchIcon className="size-4" />Search Threads, Fins and pull requests
       </div>
       <div className="flex gap-2 px-4 pb-3">
@@ -89,25 +89,25 @@ export function PhoneApex({ fins, counts, onBack, onAnswer }: { fins: Fin[]; cou
         <button type="button" onClick={onBack} aria-label="Threads" className="pressable flex size-9 items-center justify-center text-muted-foreground"><ChevronLeftIcon className="size-6" /></button>
         <LiveMark harness="claude" state="working" lit cut="var(--surface)" />
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-[15px] font-semibold leading-5 text-foreground">Mobile polish</span>
+          <span className="truncate text-prose font-semibold leading-5 text-foreground">Mobile polish</span>
           <span className="truncate text-label text-faint">Claude Code · mobile-polish · This Mac</span>
         </span>
       </header>
       <div ref={end} className="min-h-0 flex-1 overflow-y-auto">
         <div className="flex flex-col gap-4 px-3 py-4">
           <div className="flex justify-end px-1">
-            <p className="max-w-[85%] rounded-xl rounded-br-md bg-raised px-3 py-2 text-[15px] leading-[1.45] text-foreground">The sheet still jumps when the keyboard opens in split view.</p>
+            <p className="max-w-[85%] bg-raised px-3 py-2 text-prose leading-[1.45] text-foreground">The sheet still jumps when the keyboard opens in split view.</p>
           </div>
           <div className="flex flex-col gap-1 px-1">
             <span className="flex items-center gap-1.5 text-label text-faint"><HarnessIcon harness="claude" className="size-3" />Claude Code</span>
-            <p className="text-[15px] leading-[1.55] text-foreground">That's Sheet motion's: it's measuring the container in split view now. Two Fins need a word from you.</p>
+            <p className="text-prose leading-[1.55] text-foreground">That's Sheet motion's: it's measuring the container in split view now. Two Fins need a word from you.</p>
           </div>
           <CrewCard fins={fins} counts={counts} apex="Mobile polish" onAnswer={onAnswer} onOpen={() => undefined} compact />
         </div>
       </div>
       <div className="shrink-0 border-t border-hairline px-3 pb-8 pt-2">
         <div className="flex items-center gap-2 rounded-full bg-raised py-1.5 pl-4 pr-1.5">
-          <span className="flex-1 text-[15px] text-faint">Message Mobile polish</span>
+          <span className="flex-1 text-prose text-faint">Message Mobile polish</span>
           <span className="flex size-8 items-center justify-center rounded-full bg-foreground text-background"><ArrowUpIcon className="size-4" /></span>
         </div>
       </div>

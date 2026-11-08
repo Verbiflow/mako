@@ -7,13 +7,14 @@ import { cn } from "@/lib/utils"
 import type { Fin } from "./data"
 import { CrewBar, LiveMark, Took } from "./marks"
 
-const HEADINGS: Record<ChildGroup, string> = {
+const HEADINGS = {
   needs: "Needs you",
   working: "Working",
+  idle: "Idle",
   queued: "Queued",
   failed: "Failed",
   done: "Done",
-}
+} satisfies Record<ChildGroup, string>
 
 function Who({ fin }: { fin: Fin }) {
   return (
@@ -31,7 +32,7 @@ function Asking({ fin, apex, onAnswer, onOpen, compact }: { fin: Fin; apex: stri
   const recommended = ask && "recommended" in ask ? ask.recommended : undefined
   const order = options.map((_, index) => index).sort((left, right) => (left === recommended ? -1 : right === recommended ? 1 : 0))
   return (
-    <div className="rounded-lg bg-[color-mix(in_oklab,var(--caution)_7%,transparent)] px-3 py-2.5 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--caution)_22%,transparent)]">
+    <div className="bg-[color-mix(in_oklab,var(--caution)_7%,transparent)] px-3 py-2.5 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--caution)_22%,transparent)]">
       <div className="flex items-center gap-2">
         <LiveMark harness={fin.agent.provider} state={fin.mark} cut="var(--surface)" />
         <button type="button" onClick={() => onOpen(fin)} className="pressable min-w-0 truncate text-ui font-medium text-foreground hover:underline">
@@ -53,7 +54,7 @@ function Asking({ fin, apex, onAnswer, onOpen, compact }: { fin: Fin; apex: stri
               title={"detail" in option ? option.detail : undefined}
               onClick={() => onAnswer(fin, index)}
               className={cn(
-                "pressable flex h-7 items-center gap-1.5 rounded-md px-2.5 text-label font-medium",
+                "pressable flex h-7 items-center gap-1.5 px-2.5 text-label font-medium",
                 primary ? "bg-foreground text-background hover:bg-foreground/90" : "text-foreground/85 shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover"
               )}
             >
@@ -80,7 +81,7 @@ function Line({ fin, onOpen, compact }: { fin: Fin; onOpen: (fin: Fin) => void; 
     <button
       type="button"
       onClick={() => onOpen(fin)}
-      className={cn("pressable group flex w-full items-center gap-2 rounded-md px-1.5 text-left hover:bg-fill-hover", compact ? "min-h-11 py-1.5" : "h-8")}
+      className={cn("pressable group flex w-full items-center gap-2 px-1.5 text-left hover:bg-fill-hover", compact ? "min-h-11 py-1.5" : "h-8")}
     >
       <LiveMark harness={fin.agent.provider} state={fin.mark} cut="var(--surface)" />
       <span className={cn("flex min-w-0 flex-1", compact ? "flex-col" : "items-center gap-2")}>
@@ -105,16 +106,17 @@ function Line({ fin, onOpen, compact }: { fin: Fin; onOpen: (fin: Fin) => void; 
  * then what works and on what, what waits its turn, and what's done. Nothing folds into "and N more".
  */
 export function CrewCard({ fins, counts, apex, onAnswer, onOpen, compact }: { fins: Fin[]; counts: Rollup; apex: string; onAnswer: (fin: Fin, option: number) => void; onOpen: (fin: Fin) => void; compact?: boolean }) {
-  const groups = (["needs", "working", "queued", "failed", "done"] as ChildGroup[]).filter((group) => fins.some((fin) => fin.group === group))
+  const order = ["needs", "working", "idle", "queued", "failed", "done"] satisfies ChildGroup[]
+  const groups = order.filter((group) => fins.some((fin) => fin.group === group))
   return (
-    <section data-crew aria-label={`${apex}'s Fins`} className="rounded-xl bg-surface shadow-[inset_0_0_0_1px_var(--hairline)]">
+    <section data-crew aria-label={`${apex}'s Fins`} className="bg-surface shadow-[inset_0_0_0_1px_var(--hairline)]">
       <header className={cn("flex items-center gap-3 border-b border-hairline", compact ? "px-3 py-2.5" : "px-4 py-3")}>
         <ApexMark className="size-4 text-muted-foreground" />
         <span className="shrink-0 whitespace-nowrap text-ui font-medium text-foreground">{counts.total} Fins</span>
         <span className="min-w-0 truncate text-label text-muted-foreground">{rollupLine(counts)}</span>
         <CrewBar counts={counts} className={cn("ml-auto shrink-0", compact ? "w-16" : "w-24")} />
         {!compact ? (
-          <button type="button" className="pressable flex h-7 items-center gap-1.5 rounded-md px-2 text-label text-faint hover:bg-fill-hover hover:text-foreground">
+          <button type="button" className="pressable flex h-7 items-center gap-1.5 px-2 text-label text-faint hover:bg-fill-hover hover:text-foreground">
             <SquareIcon className="size-2.5 fill-current" aria-hidden />
             Stop all
           </button>

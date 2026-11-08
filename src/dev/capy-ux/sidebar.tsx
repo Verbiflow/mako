@@ -13,7 +13,7 @@ function NavRow({ icon, label, end, active, onClick }: { icon: ReactNode; label:
       type="button"
       onClick={onClick}
       data-active={active || undefined}
-      className="pressable group flex h-7 w-full items-center gap-2.5 rounded-md pl-2 pr-1.5 text-left text-ui text-foreground/85 hover:bg-fill-hover data-active:bg-raised data-active:text-foreground"
+      className="pressable group flex h-7 w-full items-center gap-2.5 pl-2 pr-1.5 text-left text-ui text-foreground/85 hover:bg-fill-hover data-active:bg-raised data-active:text-foreground"
     >
       <span className="flex size-4 items-center justify-center text-muted-foreground [&_svg]:size-4">{icon}</span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -36,7 +36,7 @@ function Row({ thread, active, onOpen }: { thread: RailThread; active: boolean; 
       type="button"
       onClick={onOpen}
       data-active={active || undefined}
-      className="pressable group flex h-7 w-full items-center gap-2 rounded-md pl-1.5 pr-2 text-left hover:bg-fill-hover data-active:bg-raised"
+      className="pressable group flex h-7 w-full items-center gap-2 pl-1.5 pr-2 text-left hover:bg-fill-hover data-active:bg-raised"
     >
       <LiveMark harness={thread.harness} state={thread.mark} lit={active} cut={active ? "var(--raised)" : undefined} />
       <span className={cn("min-w-0 flex-1 truncate text-ui", active ? "font-medium text-foreground" : "text-foreground/85")}>{thread.title}</span>
@@ -59,7 +59,7 @@ function ApexRow({ thread, fins, counts, active, opened, onOpen, onOpenFin }: { 
         type="button"
         onClick={onOpen}
         data-active={active || undefined}
-        className="pressable group flex w-full flex-col gap-1 rounded-md py-1.5 pl-1.5 pr-2 text-left hover:bg-fill-hover data-active:bg-raised"
+        className="pressable group flex w-full flex-col gap-1 py-1.5 pl-1.5 pr-2 text-left hover:bg-fill-hover data-active:bg-raised"
       >
         <span className="flex w-full items-center gap-2">
           <LiveMark harness={thread.harness} state={thread.mark} lit={active} cut={active ? "var(--raised)" : undefined} />
@@ -77,9 +77,9 @@ function ApexRow({ thread, fins, counts, active, opened, onOpen, onOpenFin }: { 
           type="button"
           onClick={() => onOpenFin(fin.agent.nativeId)}
           data-active={opened === fin.agent.nativeId || undefined}
-          className="pressable relative flex h-7 w-full items-center gap-2 rounded-md pl-7 pr-2 text-left hover:bg-fill-hover data-active:bg-raised"
+          className="pressable relative flex h-7 w-full items-center gap-2 pl-7 pr-2 text-left hover:bg-fill-hover data-active:bg-raised"
         >
-          <span aria-hidden className="absolute bottom-1/2 left-[15px] top-0 w-2.5 rounded-bl-md border-b border-l border-hairline" />
+          <span aria-hidden className="absolute bottom-1/2 left-[15px] top-0 w-2.5 border-b border-l border-hairline" />
           <LiveMark harness={fin.agent.provider} state={fin.mark} />
           <span className="min-w-0 flex-1 truncate text-ui text-foreground/85">{fin.agent.title}</span>
           <span className="shrink-0 text-label font-medium text-caution">Needs you</span>
@@ -106,7 +106,7 @@ export function Sidebar({ place, fins, counts, asks, onPlace, phone }: { place: 
             {["#ff5f57", "#febc2e", "#28c840"].map((color) => <span key={color} className="size-3 rounded-full opacity-90" style={{ background: color }} />)}
           </span>
           <span className="flex-1" />
-          <button type="button" aria-label="Hide the sidebar" className="pressable flex size-7 items-center justify-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground">
+          <button type="button" aria-label="Hide the sidebar" className="pressable flex size-7 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground">
             <PanelLeftIcon className="size-4" />
           </button>
         </div>

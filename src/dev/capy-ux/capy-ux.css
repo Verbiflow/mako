@@ -39,8 +39,8 @@
   animation: lm-turn 1.15s linear infinite, lm-tail 2.3s ease-in-out infinite;
   animation-delay: var(--sync-turn, 0ms), var(--sync-tail, 0ms);
 }
-/* The one Thread on screen wears ember: the live dot's colour, once per pane. */
-.lm[data-state="working"][data-lit] .lm-arc { stroke: var(--ember); }
+/* The Thread on screen uses the brand accent once per pane. */
+.lm[data-state="working"][data-lit] .lm-arc { stroke: var(--sea); }
 
 /* Background: the turn ended and its Fins or a watcher still run. The same comet at half speed, quieter. */
 .lm[data-state="background"] .lm-track { stroke: color-mix(in oklab, var(--foreground) 9%, transparent); }
