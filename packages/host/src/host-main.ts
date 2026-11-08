@@ -4,6 +4,7 @@ import { processHostConfig } from "./host-config.js"
 import { createHost } from "./create-host.js"
 import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "./base/host-lifecycle.js"
 import { acquireHostLock } from "./base/host-lock.js"
+import { takeHostStart } from "./base/host-start.js"
 import { settleRuntime } from "./transport/index.js"
 import { hostLog, hostWarn, installHostLog, logsRoot } from "./base/host-log.js"
 import { installCrashReporting } from "./base/crash.js"
@@ -65,7 +66,9 @@ const lifecycle = hostLifecycle({
     await log.flush()
   },
 })
-const host = createHost(config, { lifecycle, crashes, logPath: log.path })
+// The lock is held: this start's generation on the data root is taken now, one past the last, before anything says it.
+const start = takeHostStart(environment.dataRoot)
+const host = createHost(config, { lifecycle, crashes, logPath: log.path, start })
 stopOnSignals(lifecycle)
 await host.start().catch(async (error: Error) => {
   // The launcher shows this process's output; the log keeps the stack.

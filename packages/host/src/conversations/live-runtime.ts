@@ -251,6 +251,8 @@ export function launchAccount(resident: Resident, harness: string): () => string
   }
 }
 export interface Dependencies {
+  /** This host's start on its data root (`takeHostStart`), which its epoch carries; none, an epoch no window orders. */
+  start?: import("../base/host-start.js").HostStart
   /** This machine's build slots now, for the note a heavy suite started while each is in use hears (`build-slots-full`). */
   builds?(): CallThread["builds"]
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */

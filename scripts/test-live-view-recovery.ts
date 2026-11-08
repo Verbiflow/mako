@@ -103,7 +103,8 @@ const window = (id: string) => {
   // dropped once that host's snapshot lands, not replayed against it forever (one reread every 280 ms for hours).
   const quitting = conversation(3, 5)
   const id = quitting.session.id
-  let epoch = "host-1", up = true, reads = 0
+  // Host starts as a host names them: their generation on one data root (`LiveConversations.epoch`).
+  let epoch = "g1.viewhost.a", up = true, reads = 0
   mock.method(getMako(), "liveRead", async (asked: string) => {
     if (asked === id) reads++
     await sleep(50)
@@ -113,14 +114,14 @@ const window = (id: string) => {
   })
   await hydrateLive(id)
   up = false
-  applyLiveBatch({ id, revision: 9, epoch: "host-1", historyChanged: true, updates: [] })
+  applyLiveBatch({ id, revision: 9, epoch: "g1.viewhost.a", historyChanged: true, updates: [] })
   await sleep(150)
-  epoch = "host-2"
+  epoch = "g2.viewhost.b"
   up = true
   reads = 0
   assert.ok(await hydrateLive(id))
   await sleep(2000)
-  assert.equal(window(id).epoch, "host-2")
+  assert.equal(window(id).epoch, "g2.viewhost.b")
   assert.equal(reads, 1, `the gone host's batch asks nothing more of the new one (${reads} reads)`)
   console.log("PASS: a batch from a host that quit is dropped once the host that started answers")
 }

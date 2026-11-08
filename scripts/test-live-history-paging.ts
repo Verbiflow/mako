@@ -128,7 +128,10 @@ const { acpStore } = await import("../src/state/acp-state")
 const { hydrateLive, loadEarlierLive, applyLiveSnapshot, applyLiveBatch } = await import("../src/state/live-recovery")
 const { loadLiveHistoryDetail, completeLiveAnswer } = await import("../src/state/live-history")
 installMockBridge()
-const source = { ...auditSnapshot(80, "claude", 256, 4096), epoch: "view-epoch" }
+// Host starts as a host names them (`LiveConversations.epoch`): their generation on one data root, in the order they ran.
+const startNamed = (generation: number) => `g${generation}.pagingroot.s${generation}`
+let steers = 3
+const source = { ...auditSnapshot(80, "claude", 256, 4096), epoch: startNamed(1) }
 const id = source.session.id
 const reader = new LiveHistoryReader()
 let gate: Promise<void> | undefined
@@ -204,7 +207,7 @@ try {
   arrived = requested.resolve
   const stale = loadEarlierLive(id)
   await requested.promise
-  const reopened = await read<LiveSnapshot>(reader, { ...source, revision: 1, epoch: "new-host" }, { kind: "snapshot" })
+  const reopened = await read<LiveSnapshot>(reader, { ...source, revision: 1, epoch: startNamed(2) }, { kind: "snapshot" })
   applyLiveSnapshot(reopened)
   late.resolve()
   await stale
@@ -219,7 +222,7 @@ try {
       ? { type: "user" as const, text: "Steer", steeringFor: "question" }
       : { type: "text" as const, id: `part-${n}`, text: `Part ${n}.` })]
   source.requests = []
-  applyLiveSnapshot(await read<LiveSnapshot>(reader, { ...source, revision: 10, epoch: "copy" }, { kind: "snapshot" }))
+  applyLiveSnapshot(await read<LiveSnapshot>(reader, { ...source, revision: 10, epoch: startNamed(3) }, { kind: "snapshot" }))
   const copyView = acpStore.get().conversations[id]!
   const exchange = copyView.projection!.exchanges[0]!
   assert.equal(exchange.prompt, undefined)
@@ -237,7 +240,7 @@ try {
       const label = `${harness}${namesEarlier ? "" : " (no earlierRequests)"}`
       const prompt = `${harness}-running`
       const steer = `${harness}-steer`
-      const long: LiveSnapshot = { ...source, epoch: `steer-${label}`, revision: 30, base: null, baseCoveredBlocks: 0,
+      const long: LiveSnapshot = { ...source, epoch: startNamed((steers += 1)), revision: 30, base: null, baseCoveredBlocks: 0,
         session: { ...source.session, harness, status: "running" },
         requests: [
           { id: `${harness}-earlier`, text: "Earlier question", attachments: [], status: "completed" },
@@ -278,7 +281,7 @@ try {
   console.log("PASS: long turn then steer shows the running prompt once on every harness, with or without earlierRequests")
   source.blocks = []
   // A host start after the steers' above: a window never goes back to a start it has heard a newer one of.
-  source.epoch = "after-steers"
+  source.epoch = startNamed((steers += 1))
   source.revision = 20
   source.base = { ref: { harness: "claude", nativeId: "cache", path: "fixture" }, start: 0, hasEarlier: false, total: 1,
     entries: [{ type: "tool", id: "native-cache", name: "read", status: "completed", output: "native".repeat(1000) }] }

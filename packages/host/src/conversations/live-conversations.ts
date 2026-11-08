@@ -159,12 +159,12 @@ export class LiveConversations {
    * One generation per host life. Every batch and snapshot carries it so a
    * renderer can tell a revision numbered by this host from one numbered by
    * the host before it, and re-snapshot instead of merging across the seam.
-   * Every batch carries it: when this host started, in base 36 (nine characters, so one sorts after another by its
-   * text as its host started later), a `.`, then 48 random bits, in 17 characters rather than a UUID's 36. A window
-   * orders two by their start (`olderThan`): a reply of the host before, answered late, never takes back what this
-   * one said. A `.` is no base64url character, so an epoch of a build before this one reads as unordered.
+   * With its start on its data root (`Dependencies.start`): `g<generation>.<data root>.<48 random bits>`, which a
+   * window orders by generation where both are of one data root (`olderThan`), so a reply of the host before, answered
+   * late, never takes back what this one said, whatever any clock says. Without one, and in a build before this, 72
+   * random bits, which no window orders: a reply it can't place is read again rather than taken.
    */
-  readonly epoch = `${Date.now().toString(36).padStart(9, "0")}.${randomBytes(6).toString("base64url")}`
+  readonly epoch: string
   /** The one timer for held messages' times (`armWakes`): when it fires, and the timer. */
   private wakeTimer: { at: number; timer: ReturnType<typeof setTimeout> } | undefined
   private wakesStopped = false
@@ -172,6 +172,9 @@ export class LiveConversations {
 
   constructor(dependencies: Dependencies) {
     this.dependencies = dependencies
+    this.epoch = dependencies.start
+      ? `g${dependencies.start.generation}.${dependencies.start.root}.${randomBytes(6).toString("base64url")}`
+      : randomBytes(9).toString("base64url")
     this.admission = dependencies.admission ?? new Admission()
     this.assets = new LiveAssets(join(dependencies.root, "assets"))
     this.restarts = new LiveRestarts(dependencies.root, dependencies.emit)

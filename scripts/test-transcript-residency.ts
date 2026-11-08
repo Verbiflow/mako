@@ -59,7 +59,8 @@ const idle = async () => { for (let n = 0; n < 8; n++) await new Promise(resolve
 const source = auditSnapshot(120, "fixture", 8192, 32)
 source.session = { ...source.session, id: auditId(9876), status: "ready" }
 source.requests = source.requests.map(request => ({ ...request, status: "completed" }))
-source.epoch = "residency"
+// Host starts as a host names them: their generation on one data root (`LiveConversations.epoch`).
+source.epoch = "g1.residency0.a"
 const host = new LiveHistoryReader()
 const snapshot = host.capture(source, { blocks: 0, base: 0 })
 applyLiveSnapshot(snapshot)
@@ -120,7 +121,7 @@ try {
   })
   const oldRange = loadReleasedLiveTurn(source.session.id, staleTurn.id)
   await started
-  const newer = { ...source, epoch: "replacement-source", revision: source.revision + 1,
+  const newer = { ...source, epoch: "g2.residency0.b", revision: source.revision + 1,
     blocks: source.blocks.map((block, index) => index === staleTurn.blocks.start + 2 ? { type: "text" as const, text: "New source answer" } : block) }
   applyLiveSnapshot(host.capture(newer, { blocks: 0, base: 0 }))
   unblock()

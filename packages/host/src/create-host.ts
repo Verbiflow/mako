@@ -29,6 +29,8 @@ export interface HostOwner {
   crashes: CrashReports
   /** Where the process keeps the lines the host logs. */
   logPath: string
+  /** This start of the host on its data root, taken while it holds the data root's lock (`takeHostStart`). */
+  start?: import("./base/host-start.js").HostStart
 }
 
 export interface Host {

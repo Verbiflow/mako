@@ -855,6 +855,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     notice: (message) => emit({ type: "notice", level: "error", message }),
   })
   const opened = await openConversations({
+    ...(owner.start && { start: owner.start }),
     streams,
     finDefaults,
     finCapacity,
