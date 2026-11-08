@@ -215,6 +215,7 @@ export function SettingsDialog({
                             <button
                               key={entry.id}
                               type="button"
+                              data-settings-section={entry.id}
                               aria-current={selected ? "page" : undefined}
                               onClick={() => {
                                 if (term) entry.onSearch?.(term)

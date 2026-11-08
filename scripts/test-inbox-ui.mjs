@@ -98,8 +98,8 @@ async function checkWindow() {
     }
   }
   const move = (x, y) => page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x, y })
-  const click = async (selector, label) => {
-    const point = await evaluate(`(() => { const node = ${label === undefined ? `document.querySelector(${JSON.stringify(selector)})` : `[...document.querySelectorAll(${JSON.stringify(selector)})].find((node) => node.querySelector('span')?.textContent === ${JSON.stringify(label)})`}; if (!node) throw new Error('Missing click target ' + ${JSON.stringify(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
+  const click = async (selector) => {
+    const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target ' + ${JSON.stringify(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
     await move(point.x, point.y)
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
@@ -173,7 +173,7 @@ async function checkWindow() {
     await until(`Boolean(document.querySelector('[aria-label="Search settings"]'))`, "fresh Settings")
     await replaceInput('[aria-label="Search settings"]', term)
     if (term === "Drive" && !(await evaluate(`document.querySelector('[role="dialog"] main').textContent.includes('Choose a project to see its files')`))) searchFailures.push("Settings Drive auto-selection loses Setup intent")
-    await click('[role="dialog"] nav button', "Apps")
+    await click('[data-settings-section="apps"]')
     await until(`Boolean(document.querySelector('[data-app-project="mako"]'))`, `${term} project picker`)
     if (term === "Drive" && !(await evaluate(`document.querySelector('[role="dialog"] main').textContent.includes('Choose a project to see its files')`))) searchFailures.push("Settings Drive picker loses Setup intent")
     await click('[data-app-project="mako"]')
