@@ -588,8 +588,13 @@ export type BrokerResult = {
   rejected?: string
 }
 
-function needKey(borrower: Borrower, correlationId: string): string {
-  return `${borrower.account}\0${borrower.thread}\0${correlationId}`
+/**
+ * A need's key: its whole borrower (account, repository, Thread and place) and its correlation ID. The same Thread asking
+ * from another repository or place is another borrower, decided afresh, never handed the first one's answer.
+ */
+export function needKey(borrower: Borrower, correlationId: string): string {
+  const place = borrower.place.kind === "device" ? `device:${borrower.place.device}` : `machine:${borrower.place.machine}`
+  return `${borrower.account}\0${borrower.repository}\0${borrower.thread}\0${place}\0${correlationId}`
 }
 
 function borrowerKey(borrower: Borrower): string {

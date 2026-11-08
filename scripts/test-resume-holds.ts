@@ -29,6 +29,9 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * And nothing the resume reads is read whole: every conversation it reads in from its journal (`LiveRecords.load` of
  * one not in memory) must have been read in first. A settled Apex whose Fin's report was kept but not yet heard when
  * the host died is read as the report is sent again (its queue is the receipt), so it's read in first too.
+ *
+ * A host told to stop while it reads them ends at its next step: under a `TIMES`th of the whole sliced resume's time
+ * (the yardstick, in this run), resuming nothing, and the next host takes it all up as if it hadn't started.
  */
 const FINS = 8
 /** Blocks added to each Fin's journal, and their size: about 18 MB a journal. */
@@ -107,6 +110,8 @@ async function leftByTheLastHost(at: string): Promise<{ fins: Map<string, string
 
 interface Taken {
   holdMs: number
+  /** From the host's opening to its resume settling. */
+  resumeMs: number
   /** What each Fin was sent once the host was back, in order. */
   sent: Record<string, string[]>
   /** Each Fin's requests as they stand once the host settles: a continuation's ID is new each time, so what it is stands for it. */
@@ -155,10 +160,13 @@ async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: b
   const script: Script = () => "Done after the restart."
   let world: AgentsWorld | undefined
   let holdMs = 0
+  let resumeMs = 0
   const whole = await readWhole(async () => {
     holdMs = await longestHold(async () => {
+      const opened = performance.now()
       world = new AgentsWorld({ root: at, script, finLimit: () => FINS * 2, ...(inSlices && { resumeInSlices: true }) })
       await world.resumed
+      resumeMs = performance.now() - opened
     })
   })
   assert.ok(world)
@@ -172,7 +180,30 @@ async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: b
     requests[name] = (world.live.snapshot(conversation)?.requests ?? []).map((request) => [request.status, request.actor?.kind ?? "person", String(request.continues?.auto ?? false), withoutTimes(request.text)])
   }
   await world.close()
-  return { holdMs, sent, requests }
+  return { holdMs, resumeMs, sent, requests }
+}
+
+/**
+ * A host told to stop as it reads what the last one left in slices: it ends at its next step and resumes nothing. The
+ * next host, on the same folder, takes it all up as `expected` was.
+ */
+async function stopMidRead(at: string, fins: ReadonlyMap<string, string>, expected: Taken, yardstickMs: number): Promise<void> {
+  let stop = false
+  const world = new AgentsWorld({ root: at, script: () => "Done after the restart.", finLimit: () => FINS * 2, resumeInSlices: true, stopping: () => stop })
+  // A slice in: the first journal is being read.
+  await new Promise((resolve) => setImmediate(resolve))
+  stop = true
+  const stopped = performance.now()
+  await world.resumed
+  const stopMs = performance.now() - stopped
+  assert.equal(world.prompts.length, 0, "a host stopped as it read resumed nothing")
+  await world.close()
+  const limit = yardstickMs / TIMES
+  console.log(`stopped as it read: ended in ${Math.round(stopMs)} ms (limit ${Math.round(limit)} ms, a ${TIMES}th of the ${Math.round(yardstickMs)} ms the whole sliced resume took)`)
+  assert.ok(stopMs < limit, `a stop as it read took ${Math.round(stopMs)} ms to end, not under ${Math.round(limit)} ms`)
+  const next = await takeUp(at, fins, true)
+  assert.deepEqual(next.requests, expected.requests, "the next host takes it up: every Fin's requests as when resumed at once")
+  assert.deepEqual(next.sent, expected.sent, "and every Fin is sent what it was")
 }
 
 /**
@@ -210,6 +241,7 @@ try {
   const { fins } = await leftByTheLastHost(left)
   cpSync(left, join(root, "at-once"), { recursive: true })
   cpSync(left, join(root, "in-slices"), { recursive: true })
+  cpSync(left, join(root, "stopped"), { recursive: true })
   const atOnce = await takeUp(join(root, "at-once"), fins, false)
   const inSlices = await takeUp(join(root, "in-slices"), fins, true)
 
@@ -220,6 +252,7 @@ try {
   const limit = atOnce.holdMs / TIMES
   console.log(`resumed ${FINS} Fins, ${continued} sent on: at once the loop held ${Math.round(atOnce.holdMs)} ms, in slices ${Math.round(inSlices.holdMs)} ms (limit ${Math.round(limit)} ms, a ${TIMES}th of at once)`)
   assert.ok(inSlices.holdMs < limit, `resuming in slices held the loop ${Math.round(inSlices.holdMs)} ms, not under ${Math.round(limit)} ms, a ${TIMES}th of the ${Math.round(atOnce.holdMs)} ms at once`)
+  await stopMidRead(join(root, "stopped"), fins, atOnce, inSlices.resumeMs)
   console.log("resume holds: ok")
 } catch (error) {
   console.error(error)

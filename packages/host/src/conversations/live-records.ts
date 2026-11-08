@@ -14,6 +14,7 @@ import { personPromptedAt } from "../contracts/worked-at.js"
 import type { JournalFacts } from "../threads/index.js"
 import { isTurnStart, reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { Entry } from "@mako/sessions/entries"
+import { StepsStopped } from "@mako/sessions/slices"
 import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { clearAutoContinue } from "./live-auto-continue.js"
 import { LiveJournal, journalIds, storedRequest } from "./live-journal.js"
@@ -260,12 +261,14 @@ export class LiveRecords {
     const started = performance.now()
     let previous: LiveSnapshot | null
     try {
-      previous = await journal.readSliced()
+      previous = await journal.readSliced(() => this.stopping())
     } catch (error) {
       journal.discard()
+      // Cut by the host's stop: not read, and nothing's wrong with it.
+      if (error instanceof StepsStopped) return undefined
       throw error
     }
-    if (this.stopped) {
+    if (this.stopping()) {
       journal.discard()
       return undefined
     }
@@ -573,6 +576,11 @@ export class LiveRecords {
   }
 
   /** Nothing is swept from here on; the host is stopping. */
+  /** Whether the host has begun to stop, these conversations or the host while it still starts. */
+  stopping(): boolean {
+    return this.stopped || Boolean(this.dependencies.stopping?.())
+  }
+
   stop(): void {
     this.stopped = true
     clearTimeout(this.sweepTimer)
