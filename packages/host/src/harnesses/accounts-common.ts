@@ -1,6 +1,6 @@
+import { hostCommand } from "../base/host-command.js"
 import { lock } from "proper-lockfile"
 import { z } from "zod"
-import { execFile } from "node:child_process"
 import { createHmac, randomBytes } from "node:crypto"
 import { existsSync } from "node:fs"
 import {
@@ -14,13 +14,12 @@ import {
 } from "node:fs/promises"
 import { userInfo } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
-import { promisify } from "node:util"
 import type { JsonValue } from "../contracts/json.js"
 import { securityKeychain } from "../base/keychain.js"
 import { withFileLock } from "../base/file-lock.js"
 import { publishFile } from "../base/published-files.js"
 import { onMac } from "../base/platform.js"
-const run = promisify(execFile)
+const run = hostCommand
 
 const credentialSalt = randomBytes(32)
 /** Host-only equality token; neither credentials nor an offline token hash crosses IPC. */

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { spawnProviderProcess } from "./provider-process.js"
 import { readFile, realpath, stat } from "node:fs/promises"
 import { basename } from "node:path"
 import { z } from "zod"
@@ -1271,11 +1271,11 @@ function spawnUpdate(
   timeoutMs: number
 ): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnProviderProcess(command, args, {
       env: environmentForExecutable(command, env),
-      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
-    })
+    }, { kind: "runtime-update", owner: basename(command) })
+    endChildInput(child)
     let output = ""
     const collect = (chunk: Buffer) => {
       output = (output + chunk.toString("utf8")).slice(-OUTPUT_TAIL)

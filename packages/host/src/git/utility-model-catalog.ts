@@ -1,3 +1,4 @@
+import { hostFetch } from "../base/host-stopping.js"
 import { z } from "zod"
 import type { UtilityCatalog, UtilityCatalogInput, UtilityConnection, UtilityModel, UtilityProvider } from "../contracts/utility-models.js"
 import type { UtilityModelStore } from "./utility-model-store.js"
@@ -93,7 +94,7 @@ export class UtilityModelCatalog {
   private readonly store: UtilityModelStore
   private readonly request: typeof fetch
 
-  constructor(store: UtilityModelStore, request: typeof fetch = fetch) {
+  constructor(store: UtilityModelStore, request: typeof fetch = hostFetch) {
     this.store = store
     this.request = request
   }

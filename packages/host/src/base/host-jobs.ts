@@ -1,3 +1,4 @@
+import { hostStopping } from "./host-stopping.js"
 import type { HostJob } from "../contracts/runtime.js"
 import { unwatchedWork, type HostWork } from "./event-loop.js"
 import type { Foreground } from "./foreground.js"
@@ -138,6 +139,7 @@ export class HostJobs {
     try {
       await this.work.run(job.state.name, () => job.run())
     } catch (error) {
+      if (hostStopping()?.signal.aborted) return
       job.state.failures += 1
       job.state.lastError = error instanceof Error ? error.message : String(error)
       hostWarn("jobs", `${job.state.name} failed`, { error: job.state.lastError })

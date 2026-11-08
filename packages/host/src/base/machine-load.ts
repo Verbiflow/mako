@@ -1,7 +1,6 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "./host-command.js"
 import { readFile } from "node:fs/promises"
 import { availableParallelism, cpus, loadavg } from "node:os"
-import { promisify } from "node:util"
 import { onMac } from "./platform.js"
 
 /**
@@ -13,7 +12,7 @@ import { onMac } from "./platform.js"
  * updater's performance check).
  */
 
-const run = promisify(execFile)
+const run = hostCommand
 
 export type MemoryPressure = "normal" | "warning" | "critical"
 /** macOS's thermal pressure: above nominal, the system slows the cores to cool down. */
