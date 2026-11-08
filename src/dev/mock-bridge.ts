@@ -56,6 +56,7 @@ import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environmen
 import { playSetupTurn } from "./mock-setup-turn"
 import { MOCK_GITHUB_USER_ID, mockCloudAccount } from "./mock-cloud-account"
 import { mockCarriedFiles } from "./mock-carried-files"
+import { mockSetup } from "./mock-setup"
 import { mockSimulators } from "./mock-simulators"
 import { mockGitHubToken } from "./mock-github-token"
 import { mockModelConnections } from "./mock-model-connections"
@@ -1743,6 +1744,7 @@ export function installMockBridge() {
     ...mockCloudAccount(emit),
     ...mockSimulators(emit),
     ...mockCarriedFiles(),
+    ...mockSetup(),
     ...mockGitHubToken(),
     ...mockModelConnections(),
     providerConnections: async () => [],

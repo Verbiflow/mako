@@ -4,6 +4,7 @@ import type { WaitingFor } from "@mako/protocol/attention"
 import { CLOUD_FOLDER_WHERE, listedOwner, listedPromptedAt, listedSummary, type ListedOwner } from "@mako/host/contracts/listed-conversations"
 import { byLastWorked, staleTarget, type OpenedBy, type SessionFacts } from "@mako/host/contracts/session-choice"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
+import { runPlace, type RunPlace } from "@mako/host/contracts/account-devices"
 import type { AccountListState, WebDevice } from "./account-list"
 import type { Owner } from "./start"
 
@@ -15,6 +16,8 @@ export interface WebSession {
   summary: LiveSummary
   /** Where it runs, in words: "Studio", "the cloud". */
   where: string
+  /** It runs on a machine of the person's own (a `runtime` device): its rows and bar wear a server, not a laptop. */
+  machine?: true
   /** When the cloud last heard from its device, while that device is quiet. */
   quietSince?: string
   waiting: readonly WaitingMessage[]
@@ -40,6 +43,8 @@ export interface WebThread {
   workingSince?: number
   /** Where it runs: one place, or several when its Sessions run on more than one. */
   where: string
+  /** Every Session of it runs on a machine of the person's own. */
+  machine?: true
   /** The project folder's name, when its Sessions agree on one. */
   project?: string
   /** Its newest activity, in ms since the epoch. */
@@ -79,7 +84,7 @@ function standingOf(state: ListedState, quiet: boolean, moving: boolean): Thread
   return state === "moving" ? "moving" : state
 }
 
-function projectOf(folder: string | undefined): string | undefined {
+export function projectOf(folder: string | undefined): string | undefined {
   if (!folder) return undefined
   const parts = folder.split("/").filter(Boolean)
   return parts.at(-1)
@@ -89,15 +94,17 @@ function projectOf(folder: string | undefined): string | undefined {
 export function sessionOf(row: ListedSession, list: Pick<AccountListState, "devices" | "quiet" | "waiting">): WebSession {
   const where = whereOf(row, list.devices)
   const quietSince = row.runsOn.kind === "device" ? list.quiet.get(row.runsOn.deviceId) : undefined
+  const deviceKind = row.runsOn.kind === "device" ? list.devices.get(row.runsOn.deviceId)?.kind : undefined
   const session: WebSession = {
     row,
     owner: listedOwner(row),
-    summary: listedSummary(row, row.runsOn.kind === "cloud" ? CLOUD_FOLDER_WHERE : where, quietSince),
+    summary: listedSummary(row, row.runsOn.kind === "cloud" ? CLOUD_FOLDER_WHERE : where, quietSince, deviceKind),
     where,
     waiting: list.waiting.get(row.session) ?? [],
     facts: listedFacts(row, quietSince !== undefined),
   }
   if (quietSince) session.quietSince = quietSince
+  if (runPlace(row.runsOn.kind === "cloud", deviceKind) === "machine") session.machine = true
   return session
 }
 
@@ -155,6 +162,7 @@ function fold(id: string, sessions: WebSession[], archived?: ArchivedThread): We
   if (standing === "waiting" && waitingFor) thread.waitingFor = waitingFor
   if (standing === "working" && workingSince !== undefined) thread.workingSince = workingSince
   if (projects.size === 1) thread.project = [...projects][0]!
+  if (sessions.every((session) => session.machine)) thread.machine = true
   const quietSince = sessions.find((session) => session.quietSince)?.quietSince
   if (quietSince && sessions.every((session) => session.quietSince)) thread.quietSince = quietSince
   if (archived) thread.archived = { move: archived.move, archivedAt: archived.archivedAt }
@@ -213,7 +221,25 @@ export function ownerOf(session: WebSession): Owner {
   return session.owner.kind === "cloud" ? { kind: "cloud", threadId: session.owner.threadId } : { kind: "mac", deviceId: session.owner.deviceId }
 }
 
-/** A Session's one line under its title: the Mac's name, when it isn't the cloud, and the project. */
+/** Where a Thread or Session runs, said in one line (`placeLine`): its words, and the glyph at their head. */
+export interface PlaceLine {
+  text: string
+  place: RunPlace
+}
+
+/**
+ * Where a Thread runs and its project, in the one order every screen says them: the device's name, then the project
+ * ("build-box · mako"), with the place's glyph: a cloud, a server for a machine of the person's own, a laptop for a Mac.
+ * The cloud isn't named (its glyph says it), and neither is the device where `named` is false (the list, while the
+ * account has one); with nothing else to say, where it runs.
+ */
+export function placeLine(where: string, project: string | undefined, { named = true, machine = false }: { named?: boolean; machine?: boolean } = {}): PlaceLine {
+  const cloud = where === CLOUD_WHERE
+  const text = [cloud || !named ? undefined : where, project].filter(Boolean).join(" · ") || (cloud ? "Cloud" : where)
+  return { text, place: cloud ? "cloud" : machine ? "machine" : "device" }
+}
+
+/** A Session's one line under its title: where it runs and the project (`placeLine`). */
 export function subtitle(thread: WebThread, session: WebSession): string {
-  return [session.where === CLOUD_WHERE ? undefined : session.where, thread.project].filter(Boolean).join(" · ") || (session.where === CLOUD_WHERE ? "Cloud" : session.where)
+  return placeLine(session.where, thread.project, { machine: session.machine }).text
 }

@@ -214,6 +214,7 @@ function takeSnapshot(snapshot: LiveSnapshot, replyBindingId?: string | null, co
     title: snapshot.session.title,
     threadPath: snapshot.threadPath,
     elsewhere: existing?.elsewhere,
+    elsewhereKind: existing?.elsewhereKind,
     // Read from its copy, its device is still off; a snapshot from the device itself says it's back.
     quietSince: snapshot.copy ? existing?.quietSince : undefined,
     cloudContinue: snapshot.copy ? existing?.cloudContinue : undefined,
@@ -780,6 +781,7 @@ function admitSummary(summary: LiveSummary, reconnect: boolean): void {
       hydrated: false,
       nativePaths: summary.nativePaths,
       elsewhere: summary.elsewhere ?? previous.elsewhere,
+      elsewhereKind: summary.elsewhereKind ?? previous.elsewhereKind,
       waitingOn: summary.waitingOn,
       threadTitle: summary.threadTitle,
       quietSince: summary.quietSince,
@@ -827,6 +829,7 @@ function admitSummary(summary: LiveSummary, reconnect: boolean): void {
     nativePaths: summary.nativePaths,
     threadPath: summary.threadPath,
     elsewhere: summary.elsewhere,
+    elsewhereKind: summary.elsewhereKind,
     waitingOn: summary.waitingOn,
     threadTitle: summary.threadTitle,
     quietSince: summary.quietSince,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, FolderTreeIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, FolderTreeIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, ServerIcon, XIcon } from "lucide-react"
 import { sessionStanding, type OpenedBy } from "@mako/host/contracts/session-choice"
 import { forkedFrom, sessionBrief, sessionDetail, sessionName } from "@/lib/session-words"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
@@ -45,6 +45,7 @@ import { useCopyMissing } from "./copies"
 import { FinOfApexContext, OpenChildContext, childSession } from "./fin-of-apex"
 import { PhoneFinCount } from "./apex-fins"
 import { transcriptChunk } from "./chunks"
+import { TranscriptLoading } from "./transcript-loading"
 import { ApexMark } from "@/components/ui/apex-mark"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 
@@ -110,7 +111,7 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
           backLabel={thread.title}
           title={child.agent.title}
           subtitle={subtitle(thread, session)}
-          place={session.row.runsOn.kind === "cloud" ? "cloud" : "device"}
+          place={session.row.runsOn.kind === "cloud" ? "cloud" : session.machine ? "machine" : "device"}
           headingRef={heading}
         />
         <FinOfApexContext value={thread.title}>
@@ -125,7 +126,7 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
           onBack={wide ? undefined : onBack}
           title={thread.title}
           subtitle={syncing ?? subtitle(thread, session)}
-          place={session.row.runsOn.kind === "cloud" ? "cloud" : session.quietSince ? "quiet" : "device"}
+          place={session.row.runsOn.kind === "cloud" ? "cloud" : session.quietSince ? "quiet" : session.machine ? "machine" : "device"}
           headingRef={heading}
           actions={
             thread.archived ? undefined : (
@@ -270,9 +271,9 @@ function ServerCards({ session }: { session: WebSession }) {
   )
 }
 
-function ThreadBar({ onBack, backLabel, title, subtitle, place, headingRef, actions }: { onBack: (() => void) | undefined; backLabel?: string; title: string; subtitle: string | undefined; place?: "cloud" | "device" | "quiet"; headingRef: React.Ref<HTMLHeadingElement>; actions?: React.ReactNode }) {
+function ThreadBar({ onBack, backLabel, title, subtitle, place, headingRef, actions }: { onBack: (() => void) | undefined; backLabel?: string; title: string; subtitle: string | undefined; place?: "cloud" | "device" | "machine" | "quiet"; headingRef: React.Ref<HTMLHeadingElement>; actions?: React.ReactNode }) {
   // Where it runs, as the desk's strip and the list's rows draw it: a Mac asleep or offline under the moon.
-  const Place = place === "cloud" ? CloudIcon : place === "quiet" ? MoonIcon : LaptopIcon
+  const Place = place === "cloud" ? CloudIcon : place === "quiet" ? MoonIcon : place === "machine" ? ServerIcon : LaptopIcon
   return (
     <header className="web-bar web-bar-thread flex shrink-0 items-center gap-1 px-1.5">
       {onBack && backLabel ? (
@@ -294,7 +295,7 @@ function ThreadBar({ onBack, backLabel, title, subtitle, place, headingRef, acti
         </h1>
         {subtitle ? (
           <p className="flex min-w-0 items-center gap-1 text-label text-faint">
-            {place ? <Place aria-hidden className="size-3 shrink-0" /> : null}
+            {place ? <Place aria-hidden data-place={place} className="size-3 shrink-0" /> : null}
             <span className="truncate">{subtitle}</span>
           </p>
         ) : null}
@@ -608,13 +609,3 @@ export function ArchivedThread({ thread }: { thread: WebThread }) {
   )
 }
 
-export function TranscriptLoading() {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 px-5 pt-8" aria-busy aria-label="Opening the conversation">
-      <span className="skeleton ml-auto h-12 w-3/5" />
-      <span className="skeleton h-3.5 w-4/5" />
-      <span className="skeleton h-3.5 w-2/3" />
-      <span className="skeleton h-3.5 w-3/4" />
-    </div>
-  )
-}

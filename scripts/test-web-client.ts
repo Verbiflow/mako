@@ -6,7 +6,7 @@ import { test } from "node:test"
 import type { ListedFin, ListedSession } from "@mako/protocol/thread-listing"
 import { threadChildren } from "../src/state/apex-fins"
 import { rollup } from "@mako/host/contracts/children"
-import { foldThreads, openingSession } from "../src/web-client/threads"
+import { foldThreads, openingSession, subtitle } from "../src/web-client/threads"
 import { parseRoute, routeHref, type WebRoute } from "../src/web-client/route"
 import { typedRepository } from "../src/web-client/account"
 import { Gateway, GatewayError } from "../src/web-client/gateway"
@@ -249,21 +249,30 @@ test("a connection token is renewed before it runs out, never on every ask, howe
 })
 
 test("a row says one fact under its title: what it waits on, that it failed or works, else its project", () => {
+  // A machine of the person's own beside the Mac, as #468's Settings › Devices adds one.
+  const BUILD_BOX = uuid(960)
   const rows = [
     row(10, { thread: uuid(110), state: "waiting", waitingOn: "Approve: npm test" }),
     row(11, { thread: uuid(111), state: "failed" }),
     row(12, { thread: uuid(112), state: "working" }),
     row(13, { thread: uuid(113), runsOn: { kind: "device", deviceId: STUDIO }, folder: "/Users/ana/web" }),
     row(14, { thread: uuid(114) }),
+    row(15, { thread: uuid(115), runsOn: { kind: "device", deviceId: BUILD_BOX }, folder: "/srv/mako" }),
   ]
-  const { threads } = foldThreads({ rows, devices, quiet: new Map(), waiting: new Map(), archived: [] })
+  const withMachine = new Map([...devices, [BUILD_BOX, { id: BUILD_BOX, kind: "runtime", name: "build-box", platform: "Linux x64" }]])
+  const { threads } = foldThreads({ rows, devices: withMachine, quiet: new Map(), waiting: new Map(), archived: [] })
   const said = (id: number, named = false) => rowDetail(threads.find((thread) => thread.id === uuid(id))!, named)
   assert.deepEqual(said(110), { text: "Approve: npm test", tone: "attention" })
   assert.deepEqual(said(111), { text: "Failed", tone: "negative" })
   assert.deepEqual(said(112), { text: "Working", tone: "working" })
   assert.deepEqual(said(113), { text: "web", tone: "faint", place: "device" }, "one Mac: its name goes without saying")
-  assert.deepEqual(said(113, true), { text: "web · Studio", tone: "faint", place: "device" }, "several: the Mac is named")
+  assert.deepEqual(said(113, true), { text: "Studio · web", tone: "faint", place: "device" }, "several: the Mac is named, then the project, as the bar says them")
+  const studio = threads.find((thread) => thread.id === uuid(113))!
+  assert.equal(said(113, true).text, subtitle(studio, studio.sessions[0]!), "the list's row and the Thread's bar say where it runs in one order")
   assert.deepEqual(said(114, true), { text: "api", tone: "faint", place: "cloud" }, "the cloud is its glyph, never a word again")
+  assert.deepEqual(said(115, true), { text: "build-box · mako", tone: "faint", place: "machine" }, "a machine: its name, then the project, under a server")
+  const machine = threads.find((thread) => thread.id === uuid(115))!
+  assert.equal(said(115, true).text, subtitle(machine, machine.sessions[0]!), "the list's row and the Thread's bar say a machine's place in one order")
 })
 
 test("a Thread starts on a Mac that's on, the one last used first, else the cloud; a Mac that's off is listed, not chosen", () => {

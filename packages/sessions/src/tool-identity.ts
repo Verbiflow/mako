@@ -655,6 +655,15 @@ function unwrap(source: ToolSource, name: string, wrapper: ArgumentWrapper | Scr
 function unwrapArguments(source: ToolSource, name: string, wrapper: ArgumentWrapper): ToolIdentity | undefined {
   const args = sourceArguments(source)
   const tool = textOf(args?.[wrapper.tool])
+  // A file in place of the arguments, or of the whole call, until the harness reports what it read there.
+  const file = args && wrapper.files && !(wrapper.args in args)
+    ? (wrapper.files.args ? textOf(args[wrapper.files.args]) : undefined) ?? (wrapper.files.call ? textOf(args[wrapper.files.call]) : undefined)
+    : undefined
+  if (!tool && file) {
+    const identity = describe(source, name, { kind: "mcp" }, undefined)
+    identity.target = `arguments in ${file}`
+    return identity
+  }
   if (!args || !tool) {
     const title = wrapper.titleRoute ? nameFromTitle(source.title) : undefined
     const route = title ? mcpName(title, ["s: t"]) : undefined
@@ -672,6 +681,7 @@ function unwrapArguments(source: ToolSource, name: string, wrapper: ArgumentWrap
   identity.via = name
   identity.tool ??= tool
   if (inputText) identity.input = inputText
+  else if (file) identity.target = `arguments in ${file}`
   return identity
 }
 

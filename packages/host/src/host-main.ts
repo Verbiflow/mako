@@ -2,8 +2,7 @@ import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import { processHostConfig } from "./host-config.js"
 import { createHost } from "./create-host.js"
-import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "./base/host-lifecycle.js"
-import { acquireHostLock } from "./base/host-lock.js"
+import { acquireSuccessorLock, hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "./base/host-lifecycle.js"
 import { takeHostStart } from "./base/host-start.js"
 import { settleRuntime } from "./transport/index.js"
 import { hostLog, hostWarn, installHostLog, logsRoot } from "./base/host-log.js"
@@ -32,7 +31,9 @@ hostLog("host", "starting", {
   dataRoot: environment.dataRoot,
   compileCache: compileCacheStatus(),
 })
-const lock = await acquireHostLock(environment.dataRoot, { predecessor: takePredecessor() })
+const lock = await acquireSuccessorLock(environment.dataRoot, takePredecessor(), {
+  log: (message, fields) => hostWarn("host", message, fields),
+})
 // A host from before this lock holds only Electron's, and answers on the socket once it listens.
 // A socket that neither answers nor refuses counts as occupied.
 const olderHost = lock.kind === "held"
@@ -44,7 +45,9 @@ if (lock.kind === "taken" || olderHost) {
     holder: lock.kind === "taken" ? lock.holder : null,
     olderHost,
   })
-  console.error("Mako is already running. Close the existing desk host before starting another desktop or web host.")
+  console.error(lock.kind === "taken" && "stuck" in lock
+    ? `Mako's previous host is stuck and couldn't be ended: ${lock.stuck}.`
+    : "Mako is already running. Close the existing desk host before starting another desktop or web host.")
   // Exiting drops queued log writes; this line is the only record a detached launch leaves.
   await log.flush()
   exit(1, false)

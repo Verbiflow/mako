@@ -2,13 +2,15 @@
 import { createRoot } from "react-dom/client"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { applyLiveBatch, applyLiveSnapshot } from "@/state/live-recovery"
+import { applyLiveBatch, applyLiveSnapshot, hydrateLive, unloadLive } from "@/state/live-recovery"
 import { getMako } from "@/lib/bridge"
 import { acp } from "@/state/acp"
+import { acpStore } from "@/state/acp-state"
 import { threadsStore } from "@/state/thread-store"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import { WebClient, WebClientContext } from "@/web-client/client"
 import { accountListStore } from "@/web-client/account-list"
+import { syncingStore } from "@/web-client/syncing"
 import { applyTheme } from "@/web-client/theme"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
@@ -34,6 +36,7 @@ getMako().onEvent((event) => {
 })
 
 const DEVICE = "00000000-0000-4000-8000-0000000000d1"
+const STUDIO = "00000000-0000-4000-8000-0000000000d2"
 const now = new Date().toISOString()
 
 function row(session: string, thread: string, conversation: string, title: string, harness: string, state: ListedSession["state"], minutes: number): ListedSession {
@@ -49,7 +52,12 @@ accountListStore.set({
     row("00000000-0000-4000-8000-0000000000a2", "00000000-0000-4000-8000-0000000000b2", "00000000-0000-4000-8000-0000000000c2", "Fix the flaky login test", "cursor", "idle", 20),
     row("00000000-0000-4000-8000-0000000000a3", "00000000-0000-4000-8000-0000000000b3", "00000000-0000-4000-8000-0000000000c3", "Composer focus after paste", "claude", "idle", 64),
   ],
-  devices: new Map([[DEVICE, { id: DEVICE, kind: "desktop", name: "Studio", platform: "darwin" }]]),
+  // `?machine`: they run on a machine of the person's own, beside a Mac, so its rows and bar wear a server and its name.
+  devices: new Map(
+    search.has("machine")
+      ? [[DEVICE, { id: DEVICE, kind: "runtime", name: "build-box", platform: "Linux x64 · Ubuntu 24.04" }], [STUDIO, { id: STUDIO, kind: "desktop", name: "Studio", platform: "darwin" }]]
+      : [[DEVICE, { id: DEVICE, kind: "desktop", name: "Studio", platform: "darwin" }]]
+  ),
 })
 
 // A stand-in for the started client, without its constructor's gateway: its conversations are in the store already,
@@ -62,11 +70,29 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   push: { seen: async () => undefined },
   conversations: async () => ({
     open: (session: { row: { conversation: string } }) => {
-      acp.activate(session.row.conversation, false)
+      const conversation = session.row.conversation
+      acp.activate(conversation, false)
+      // One this page doesn't hold (`phoneApex.forget()`, as a reload leaves it) is read from its owner, "Syncing…"
+      // meanwhile, as `WebConversations.open` reads it. One it holds isn't read again here: the checks that move it by
+      // batches would see a read put it back.
+      if ((acpStore.get().conversations[conversation]?.projection?.exchanges.length ?? 0) > 0) return () => undefined
+      syncingStore.set({ conversation })
+      void hydrateLive(conversation).finally(() => syncingStore.set({ conversation: undefined }))
       return () => undefined
     },
   }),
 })
+
+// The owner's answer to a read takes `?answer=` ms, over the network (default: at once).
+const ANSWER_MS = Number(search.get("answer") ?? 0)
+const mako = getMako()
+const answered = mako.liveSnapshot.bind(mako)
+mako.liveSnapshot = async (id) => {
+  if (ANSWER_MS) await new Promise((resolve) => setTimeout(resolve, ANSWER_MS))
+  return answered(id)
+}
+/** `forget()`: the Apex's transcript let go, as a reload leaves it, so its next open reads it from its owner. */
+Reflect.set(window, "phoneApex", { forget: () => unloadLive(APEX_CONVERSATION) })
 
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
