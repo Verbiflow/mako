@@ -3902,6 +3902,8 @@ followed stream how much of it came compact. `test-live-form.ts` and
 protocol's conformance runs mixed watchers, an old link and a resumed one
 against any gateway.
 
+A host's own windows hear rosters as what changed, form 3 (`ROSTER_LIVE_FORM`): the entries new or changed, those gone and a seal over the resulting roster, every field in order. The writer falls back to a whole roster when a patch costs more or cannot preserve order. A window applies it only against the preceding revision in the same host start; a failed seal or missing base follows the existing guarded snapshot recovery (`receiveLive`, `hydrateLive`, `readLive`), including for listed Sessions. There is no separate roster revision or read history. Other readers keep hearing rosters whole (`LiveForm` stays 2). `test:roster-delta` checks the contract, real renderer recovery and generated lifecycles.
+
 One update can be followed from its owner to every device. One batch in
 `TRACE_EVERY` (25) of a conversation, and each that starts or ends a turn or
 asks or answers the person, carries `emittedAt` and a trace (`traceOf`,

@@ -581,9 +581,11 @@ function takeBatch(heard: HeardLiveBatch): void {
   else {
     const current = acpStore.get().conversations[heard.id]
     const held = current?.kind === "live" && sameEpoch(current, heard) && heard.revision === (current.revision ?? 0) + 1 ? current : undefined
-    const read = expandLiveBatch(heard, held ? { blocks: held.hydrated ? held.blocks : [], requests: held.requests ?? [], ...(held.control && { control: held.control }) } : { blocks: [] })
+    const read = expandLiveBatch(heard, held ? { blocks: held.hydrated ? held.blocks : [], requests: held.requests ?? [], ...(held.control && { control: held.control }), ...(held.nativeAgents && { nativeAgents: held.nativeAgents }) } : { blocks: [] })
     for (const patch of read.unheld) settleMessage(patch.id, true)
     applyBatch(read.batch, heard, read.unread)
+    // A listed Session can read the rest without its roster. If the seal failed, read it whole as a gap is.
+    if (read.unreadRoster && held) refreshListed(heard.id)
   }
   noteTaken(heard.id)
 }

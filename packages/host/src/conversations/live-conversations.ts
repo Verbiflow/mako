@@ -18,6 +18,7 @@ import {
   LIVE_FRAME_MS,
   requestsDelta,
   compactLiveBatch,
+  rosteredLiveBatch,
   sessionDelta,
   sharedFields,
   sharedSession,
@@ -2040,7 +2041,8 @@ export class LiveConversations {
     }
     // Readers hold `previous`; its updates were reduced against the blocks it held only when nothing replaced them since.
     const compact = compactLiveBatch(batch, { blocks: previous.blocks === delivered ? delivered : [], requests: previous.requests, ...(previous.control && { control: previous.control }) })
-    this.dependencies.emit({ type: "live-batch", batch, compact })
+    const rostered = rosteredLiveBatch(compact, previous.nativeAgents)
+    this.dependencies.emit({ type: "live-batch", batch, compact, ...(rostered && { rostered }) })
     this.relocations.changed(resident)
     // A turn that ended, as it ended, failed included: what its record holds is all it will.
     if (previous.session.status === "running" && settled(snapshot.session.status))
