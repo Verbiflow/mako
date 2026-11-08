@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * Appshots in the production desk with the fixture bridge (`?mock`): the
@@ -53,9 +54,11 @@ async function check() {
   const root = process.env.MAKO_APPSHOT_ROOT
   const evidence = process.env.MAKO_APPSHOT_EVIDENCE
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const watchdog = setTimeout(() => app.exit(1), 180_000)
   const window = new BrowserWindow({ width: 1360, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1360, 900)
   const page = window.webContents
   page.debugger.attach("1.3")
   page.on("console-message", (details) => {

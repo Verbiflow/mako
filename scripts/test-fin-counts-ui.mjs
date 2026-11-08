@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /*
  * Every surface that counts an Apex's Fins, drawn from one roster, says the same numbers in the same words: the
@@ -75,9 +76,11 @@ async function check() {
   await mkdir(join(root, "shots"), { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const base = process.env.MAKO_FIN_COUNTS_URL
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
+  atSize(window, 1440, 900)
   const page = window.webContents
   const evaluate = (code) => page.executeJavaScript(code)
   const until = async (code, what = code) => {

@@ -44,6 +44,11 @@ export const FinAskSchema = z.object({
   recommended: z.number().int().nonnegative().optional(),
   /** What whoever answers does, in one sentence. */
   action: z.string().max(400).optional(),
+  /**
+   * An approval answered in its own words: its first option allows and its second keeps things as they are, as an
+   * agent's ask through Mako's tools does ("Move to the cloud", "Keep here"), where a harness's says "Allow once".
+   */
+  named: z.literal(true).optional(),
 })
 export type FinAsk = z.infer<typeof FinAskSchema>
 

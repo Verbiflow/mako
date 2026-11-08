@@ -1,4 +1,5 @@
 import { conversationWork, type AcpState } from "@/state/acp-state"
+import { agentAskOf } from "@/state/agent-asks"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
@@ -93,6 +94,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
           Boolean(conversation.waitingOn) ||
           // One of its Fins asking them, as an ask of its own would.
           (conversation.session.status !== "failed" && finAskLine(state, conversation) !== undefined) ||
+          (conversation.session.status !== "failed" && agentAskOf(conversation) !== undefined) ||
           (conversation.session.status !== "running" && signInPause(conversation.requests ?? []))
             ? "needs-permission"
             : conversation.session.status === "failed" && autoContinuePending(conversation.requests)

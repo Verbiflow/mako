@@ -5,6 +5,7 @@ import { childEntry, ThreadParentSchema } from "@mako/host/contracts/agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { NativeAgentSchema, type NativeAgent } from "@mako/host/contracts/native-agents"
 import { limitNoticeId } from "@mako/host/contracts/fin-fallback"
+import type { AgentAsk } from "@mako/host/contracts/agent-asks"
 import type { LiveBatch, LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
 
 /**
@@ -14,8 +15,8 @@ import type { LiveBatch, LiveSnapshot, LiveSummary } from "@mako/host/contracts/
  * answered by then would be asked again.
  * In the real renderer (`applyLiveBatch`, `applyLiveSnapshot`, `hydrateLiveSummaries`, `applyThreadActivity`, the
  * notification store and its visibility), over every source of an ask:
- * - an Apex Thread of two Sessions, older and newest, each with its own approval or question and its own sign-out;
- * - two Fins asking approvals and questions, heard by the newest Session alone, as the host sends them (`finReaders`);
+ * - an Apex Thread of two Sessions, older and newest, each with its own approval, question or tool ask and its own sign-out;
+ * - two Fins asking approvals, questions and tool asks, heard by the newest Session alone, as the host sends them (`finReaders`);
  * - a Session another device runs, listed here, asking as its account's list says;
  * - an app outside Mako waiting on the person.
  * Asks open, are answered, and replace one another in any order; a Session starts and ends turns; reads of a Session
@@ -28,7 +29,7 @@ import type { LiveBatch, LiveSnapshot, LiveSummary } from "@mako/host/contracts/
  */
 /** The window's bridge: each read of a Session waits in the run's queue to be answered, late and in any order. */
 let readSnapshot: (id: string) => Promise<LiveSnapshot> = async () => { throw new Error("no run") }
-Object.defineProperty(globalThis, "window", { value: { mako: { liveSnapshot: (id: string) => readSnapshot(id), livePermission: async () => {} } }, configurable: true })
+Object.defineProperty(globalThis, "window", { value: { mako: { liveSnapshot: (id: string) => readSnapshot(id), livePermission: async () => {}, answerAgentAsk: async () => {} } }, configurable: true })
 Object.assign(globalThis, { requestAnimationFrame: (run: () => void) => setTimeout(run, 16), cancelAnimationFrame: clearTimeout })
 const { acpStore } = await import("../src/state/acp-state")
 const { applyLiveBatch, applyLiveSnapshot, hydrateLive, hydrateLiveSummaries, listLive, recaptureLive, unlistLive, unloadLive } = await import("../src/state/live-recovery")
@@ -36,6 +37,7 @@ const { installNotificationEnvironment, notificationsStore, reconcileVisible, su
 const { applyThreadGroupChange } = await import("../src/state/thread-groups")
 const { applyThreadActivity } = await import("../src/state/threads")
 const { answerLiveApproval } = await import("../src/state/live-approvals")
+const { answerAgentAsk } = await import("../src/state/agent-asks")
 const { readBackLive } = await import("../src/state/live-recovery")
 const { receivingLive } = await import("../src/state/live-door")
 const { watchDoor } = await import("./live-door-watch")
@@ -54,9 +56,12 @@ function random(seed: number): () => number {
   }
 }
 
-/** What an ask asks for, by the protocol's own kinds (`asks`): needs-you is a Fin's limit notice or a remote one's wait. */
-type Kind = "approval" | "question" | "needs-you"
+/** The generated asks: provider approvals and questions, agent tool asks, and a Fin's limit or remote wait. */
+type Kind = "approval" | "question" | "needs-you" | "agent"
 type Ask = { id: string; kind: Kind }
+const agentAsk = (id: string): AgentAsk => ({ id, at: 1, want: { kind: "move", move: id, handsOff: true } })
+// A tool ask is needs-you on its own conversation and a named approval on its Fin's path.
+const noticeKind = (ask: Ask, fin = false) => ask.kind === "agent" ? fin ? "approval" : "needs-you" : ask.kind
 /** One Session of the Apex Thread, as its host has it at one revision. */
 type SessionState = { own?: Ask; signIn?: number; running: boolean }
 const SESSIONS = ["older", "newest"] as const
@@ -92,7 +97,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   }), { source: "live" }, {})
   let counter = 0
   const next = (prefix: string) => `${prefix}${(counter += 1)}`
-  const counts = { asked: 0, answered: 0, replaced: 0, turns: 0, lateReads: 0, staleReads: 0, oldStartReads: 0, restarts: 0, legacyStarts: 0, needsYou: 0, recaptures: 0, batchesDuringReads: 0, listings: 0, listingsDuringReads: 0, strays: 0, opened: 0, letGo: 0, removed: 0, looked: 0, several: 0 }
+  const counts = { asked: 0, answered: 0, replaced: 0, turns: 0, lateReads: 0, staleReads: 0, oldStartReads: 0, restarts: 0, legacyStarts: 0, needsYou: 0, agentAsks: 0, recaptures: 0, batchesDuringReads: 0, listings: 0, listingsDuringReads: 0, strays: 0, opened: 0, letGo: 0, removed: 0, looked: 0, several: 0 }
 
   // The host: each Session's state by its start and revision, the Fins (told to the newest alone), the remote Session,
   // the outside app. A restart is a new start (`E<n>`), its numbers begun again, what it holds carried over.
@@ -130,14 +135,18 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
       const entry = quiet(fin)
       // Needs-you of a Fin: its tree's limit notice, which asks nothing but that it's seen.
       if (ask?.kind === "needs-you") return NativeAgentSchema.parse({ ...entry, child: { ...entry.child!, limitNotice: { id: ask.id, line: `Out of usage ${ask.id}`, harness: "claude" } } })
-      return ask ? NativeAgentSchema.parse({ ...entry, child: { ...entry.child!, state: { kind: "blocked", question: `Fin ${fin} asks ${ask.id}`, on: "person", ask: { kind: ask.kind, id: ask.id, options: [{ label: "Yes" }, { label: "No" }] } } } }) : entry
+      return ask ? NativeAgentSchema.parse({ ...entry, child: { ...entry.child!, state: { kind: "blocked", question: `Fin ${fin} asks ${ask.id}`, on: "person", ask: { kind: noticeKind(ask, true), ...(ask.kind === "agent" && { named: true }), id: ask.id, options: [{ label: "Yes" }, { label: "No" }] } } } }) : entry
     }),
   })
   const permissions = (state: SessionState) => {
-    if (!state.own) return []
+    if (!state.own || state.own.kind === "agent") return []
     // SAFETY: a permission request as the window reads it: its id, its words, and for a question, the question.
     return [{ id: state.own.id, observationId: state.own.id, sessionId: "s", title: `Run ${state.own.id}`, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }], ...(state.own.kind === "question" && { questions: [{ question: `Which ${state.own.id}?` }] }) } as never]
   }
+  const control = (state: SessionState): NonNullable<LiveSnapshot["control"]> => ({
+    activeBindingId: "00000000-0000-4000-8000-000000000001", bindings: [], transfers: [], merges: [],
+    asks: state.own?.kind === "agent" ? [agentAsk(state.own.id)] : [],
+  })
   const requests = (state: SessionState) => {
     if (!state.signIn) return []
     // SAFETY: a message held on a sign-out as the window reads it: its id, its state and its hold.
@@ -148,7 +157,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     const state = host.history[session].get(at(epoch, revision))!
     // The older Session never hears the Fins: its roster is theirs as it read them in, before any asked.
     const fins = session === "newest" ? host.finsAt.get(at(epoch, revision))! : {}
-    return { session: sessionOf(session, state), threadId: thread, sessionId: ids[session], epoch, revision, createdAt: session === "older" ? 1 : 2, blocks: [], requests: requests(state), permissions: permissions(state), base: null, nativeAgents: roster(fins) }
+    return { session: sessionOf(session, state), threadId: thread, sessionId: ids[session], epoch, revision, createdAt: session === "older" ? 1 : 2, blocks: [], requests: requests(state), permissions: permissions(state), control: control(state), base: null, nativeAgents: roster(fins) }
   }
   /** What the window holds of each Session: not at all, listed, or shown. */
   const held = (session: Session) => acpStore.get().conversations[keys[session]]?.kind === "live"
@@ -173,7 +182,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   }
   const listRemote = (initial = false) => {
     const ask = host.remote
-    const summary: LiveSummary = { session: { id: remote, harness: "codex", cwd: "/elsewhere", title: "Elsewhere", status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }, revision: counter, createdAt: 3, elsewhere: "another Mac", ...(ask && { waitingOn: `Wait ${ask.id}`, attention: { kind: ask.kind, key: ask.id } }) }
+    const summary: LiveSummary = { session: { id: remote, harness: "codex", cwd: "/elsewhere", title: "Elsewhere", status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }, revision: counter, createdAt: 3, elsewhere: "another Mac", ...(ask && { waitingOn: `Wait ${ask.id}`, attention: { kind: noticeKind(ask), key: ask.id } }) }
     if (initial) listLive([summary])
     else hydrateLiveSummaries([summary], true)
   }
@@ -213,27 +222,27 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
         unknown.add(subjects[session])
         continue
       }
-      if (state.own) open.add(`${subjects[session]}:${state.own.kind}:${state.own.id}`)
+      if (state.own) open.add(`${subjects[session]}:${noticeKind(state.own)}:${state.own.id}`)
       // A sign-out waits behind its own approval or question, and is said once that's answered.
       if (state.signIn && !state.own) open.add(`${subjects[session]}:needs-you:sign-in:${state.signIn}`)
     }
     const newestAt = heldAt("newest")
     const fins = (newestAt && host.finsAt.get(at(newestAt.epoch, newestAt.revision))) || {}
     const finsKnown = newestAt !== undefined
-    if (host.remote) open.add(`${subjects.remote}:${host.remote.kind}:${host.remote.id}`)
+    if (host.remote) open.add(`${subjects.remote}:${noticeKind(host.remote)}:${host.remote.id}`)
     if (host.outside !== undefined) open.add(`${subjects.outside}:needs-you:external:${host.outside}`)
     const where = () => `seed ${seed}, after ${what}:\n${trail.slice(-16).join("\n")}\nshown ${JSON.stringify(shown.map((item) => `${item.id}${item.seen ? " (seen)" : ""}`))}`
     for (const ask of open) assert.ok(shown.some((item) => item.id === ask), `${where()}\nan open ask has no notice: ${ask}`)
     for (const fin of FINS) {
       const ask = fins[fin]
-      if (ask) assert.ok(shown.some((item) => item.id.endsWith(`:${ask.kind}:fin:${finIds[fin]}:${ask.id}`)), `${where()}\nFin ${fin}'s open ${ask.id} has no notice`)
+      if (ask) assert.ok(shown.some((item) => item.id.endsWith(`:${noticeKind(ask, true)}:fin:${finIds[fin]}:${ask.id}`)), `${where()}\nFin ${fin}'s open ${ask.id} has no notice`)
     }
     for (const item of shown) {
       if (item.seen) continue
       const fin = item.id.includes(":fin:")
       if (fin) {
         if (!finsKnown) continue
-        assert.ok(FINS.some((each) => fins[each] && item.id.endsWith(`:${fins[each]!.kind}:fin:${finIds[each]}:${fins[each]!.id}`)), `${where()}\na notice stands for a Fin's ask that isn't open: ${item.id}`)
+        assert.ok(FINS.some((each) => fins[each] && item.id.endsWith(`:${noticeKind(fins[each]!, true)}:fin:${finIds[each]}:${fins[each]!.id}`)), `${where()}\na notice stands for a Fin's ask that isn't open: ${item.id}`)
       } else if (!unknown.has(item.subject.id)) assert.ok(open.has(item.id), `${where()}\na notice stands for an ask that isn't open: ${item.id}`)
     }
     if (open.size + FINS.filter((fin) => fins[fin]).length > 1) counts.several += 1
@@ -257,17 +266,18 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     if (roll < 0.3) {
       // An ask opens, or one replaces another: a Session's own, a sign-out, a Fin's, the remote Session's, the outside app's.
       const source = choose(["own", "own", "sign-in", "fin", "fin", "remote", "outside"] as const)
-      // A Session's own asks are its permissions, approvals and questions; its needs-you is a sign-out.
-      const kind = choose(source === "own" ? ["approval", "question"] as const : ["approval", "question", "needs-you"] as const)
+      // A Session asks through its provider or Mako's tools; a Fin can ask either way too.
+      const kind = choose(source === "own" ? ["approval", "question", "agent"] as const : source === "fin" ? ["approval", "question", "agent", "needs-you"] as const : ["approval", "question", "needs-you"] as const)
       const id = next("q")
       const ask: Ask = { id: kind === "needs-you" && source === "fin" ? limitNoticeId({ harness: "claude", account: id, until: 1 }, 0) : id, kind }
+      if (kind === "agent") counts.agentAsks += 1
       if (kind === "needs-you" && (source === "fin" || source === "remote")) counts.needsYou += 1
       if (source === "own") {
         if (now(session).own) counts.replaced += 1
         else counts.asked += 1
         trail.push(`the ${session} Session asks ${ask.kind} ${ask.id}`)
         const state = { ...now(session), own: ask }
-        change(session, { own: ask }, { permissions: permissions(state) })
+        change(session, { own: ask }, { permissions: permissions(state), control: control(state) })
       } else if (source === "sign-in") {
         if (now(session).signIn) continue
         counts.asked += 1
@@ -303,11 +313,12 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
         // The person answers it in this window, half the time: the answer's receipt is read back late, as it lands.
         const here = held(session) && pick() < 0.5
         trail.push(`the ${session} Session's ${own.id} answered${here ? " in this window" : ""}`)
-        change(session, { own: undefined }, { permissions: [] })
+        change(session, { own: undefined }, { permissions: [], control: control({ ...now(session), own: undefined }) })
         if (here) {
           // SAFETY: the answer as the approval card sends it; this window's bridge takes any.
           const allow = { outcome: "selected", optionId: "allow" } as never
-          void answerLiveApproval(keys[session], own.id, allow)
+          if (own.kind === "agent") void answerAgentAsk(keys[session], agentAsk(own.id), true)
+          else void answerLiveApproval(keys[session], own.id, allow)
         }
       } else if (source === "sign-in" && now(session).signIn) {
         counts.answered += 1

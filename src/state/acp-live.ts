@@ -22,6 +22,8 @@ import { setThreadAttention, setThreadRunning, threadsStore } from "@/state/thre
 import { describeProviderFailure } from "@mako/host/contracts/provider-failure"
 import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
+import { agentAskLine } from "@mako/host/contracts/agent-asks"
+import { agentAskOf } from "@/state/agent-asks"
 import { asks, requestWaiting, type Waiting } from "@mako/host/contracts/notifications"
 import { bareCommand } from "@mako/sessions/tool-identity"
 import { askWords, finAskWaiting, rosterChildren } from "@mako/host/contracts/children"
@@ -87,11 +89,11 @@ function permissionWaiting(permission: LivePermissionRequest): Waiting {
 }
 
 /**
- * The asks each conversation said itself, by what each is (its permission's id, a sign-out's start), with the notice it
+ * The asks each conversation said itself, by what each is (its provider or agent ask's id, a sign-out's start), with the notice it
  * was said as: each is taken back by that notice alone once it no longer waits (`retireNotice`), whatever else waits on
  * the same subject, its Fins' asks included.
  */
-const askedPermissions = new Map<string, { id: string; notice: string }>()
+const announcedOwnAsks = new Map<string, string>()
 const announcedSignIns = new Map<string, { at: number; notice: string }>()
 /** What a Session another device runs last asked here (`noteListedOutcome`), by the notice it was said as. */
 const listedAsks = new Map<string, string>()
@@ -117,25 +119,28 @@ function noteLiveOutcome(
   const wasBusy = previousStatus === "running" || previousStatus === "starting"
   if (busy && !wasBusy)
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id)
-  // Its own ask, an approval or a question: one it no longer waits on (answered, or another in its place) goes by its
-  // notice alone. A Fin's ask is said on its Apex once it's the person's (`noteFinAsks`): one its Apex answers is never theirs.
-  const asked = askedPermissions.get(conversation.key)
-  if (asked && asked.id !== permission?.id) {
-    askedPermissions.delete(conversation.key)
-    retireNotice(asked.notice)
+  // A provider's permission or the agent's tool ask: retire only the notice for the ask that stopped waiting.
+  // A Fin's ask is announced on its Apex once it belongs to the person (`noteFinAsks`).
+  const agentAsk = agentAskOf(conversation)
+  const own = permission ?? agentAsk
+  const waiting = permission ? permissionWaiting(permission) : agentAsk ? { for: "needs-you" as const, line: agentAskLine(agentAsk.want) } : undefined
+  const notice = own && waiting ? noticeId(subject, waiting.for, own.id) : undefined
+  const asked = announcedOwnAsks.get(conversation.key)
+  if (asked && asked !== notice) {
+    announcedOwnAsks.delete(conversation.key)
+    retireNotice(asked)
   }
-  if (permission && asked?.id !== permission.id && !conversation.parent) {
-    const waiting = permissionWaiting(permission)
-    askedPermissions.set(conversation.key, { id: permission.id, notice: noticeId(subject, waiting.for, permission.id) })
-    noteOutcome({ kind: waiting.for, subject, marker: permission.id, detail: waiting.line, quiet })
+  if (own && waiting && notice && asked !== notice && !conversation.parent) {
+    announcedOwnAsks.set(conversation.key, notice)
+    noteOutcome({ kind: waiting.for, subject, marker: own.id, detail: waiting.line, quiet })
   }
-  const pause = permission ? undefined : signInPause(conversation.requests ?? [])
+  const pause = own ? undefined : signInPause(conversation.requests ?? [])
   const signIn = announcedSignIns.get(conversation.key)
   if (signIn && signIn.at !== pause?.hold.at) {
     announcedSignIns.delete(conversation.key)
     retireNotice(signIn.notice)
   }
-  if (permission) return
+  if (own) return
   if (session.status === "closed") {
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id)
     return

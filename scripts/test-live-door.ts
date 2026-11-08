@@ -15,7 +15,7 @@ import type { LiveBatch, LiveSnapshot, LiveSummary } from "@mako/host/contracts/
 const reads: ((snapshot: LiveSnapshot) => void)[] = []
 let answer: ((id: string) => LiveSnapshot) | undefined
 const read = (id: string) => answer ? Promise.resolve(answer(id)) : new Promise<LiveSnapshot>((done) => reads.push(done))
-const legacy = { liveSnapshot: read, livePermission: async () => {}, liveEarlier: (id: string) => read(id), liveTransfer: (id: string) => read(id), liveAcknowledgeAction: async () => {},
+const legacy = { liveSnapshot: read, livePermission: async () => {}, liveEarlier: (id: string) => read(id), liveTransfer: (id: string) => read(id), liveAcknowledgeAction: async () => {}, answerAgentAsk: async () => {},
   // A rewind answers with the fork it makes; a capture, with the conversation that holds its session, which may be one
   // already there.
   liveRewind: (_id: string, input: { id: string }) => read(input.id), liveCapture: (id: string) => read(id),
@@ -33,10 +33,12 @@ const { acpStore, removeAcpConversation, updateAcpConversation } = await import(
 const recovery = await import("../src/state/live-recovery")
 const { letGoLive, readingLive, receiveLive, receivingLive } = await import("../src/state/live-door")
 const { answerLiveApproval } = await import("../src/state/live-approvals")
+const { answerAgentAsk } = await import("../src/state/agent-asks")
 const { threadMoveStepped, threadReturnStepped } = await import("../src/state/cloud-moves")
 const { threadContinueStepped } = await import("../src/state/cloud-continues")
 const { submitTransfer } = await import("../src/state/live-transfers")
 const { acp } = await import("../src/state/acp")
+const { restorePendingStart } = await import("../src/state/acp-start")
 const { acknowledgeLiveAction } = await import("../src/state/live-actions")
 const { watchDoor, watchReads } = await import("./live-door-watch")
 
@@ -141,6 +143,28 @@ async function through(what: string, id: string, act: () => void | Promise<void>
   reads.length = 0
 }
 
+// Agent tool asks (#461) arrive in control alone. Answer receipts use the same guarded read-back on both bridges.
+for (const [name, bridge] of [["legacy", legacy], ["framed", framed]] as const) {
+  Object.assign(globalThis.window, { mako: bridge })
+  const id = `agent-ask-${name}`, epoch = "g1.agentask.a"
+  const ask = { id: "move-ask", at: 1, want: { kind: "move" as const, move: "move-1", handsOff: true } }
+  const control: NonNullable<LiveSnapshot["control"]> = { activeBindingId: "00000000-0000-4000-8000-000000000001", bindings: [], merges: [], transfers: [], asks: [ask] }
+  recovery.applyLiveSnapshot(snapshot(id, epoch, 1))
+  await through(`${name}: a control-only agent ask`, id, () => recovery.applyLiveBatch(batch(id, epoch, 2, { control })))
+  assert.equal(held(id)?.kind === "live" && held(id)?.control?.asks?.[0]?.id, ask.id)
+  answer = (asked) => ({ ...snapshot(asked, epoch, 3), control: { ...control, asks: [] } })
+  await through(`${name}: an agent answer read back without its event`, id, async () => { assert.equal(await answerAgentAsk(id, ask, true), true) })
+  assert.deepEqual(held(id)?.kind === "live" && held(id)?.control?.asks, [], "the receipt retires the agent ask")
+  answer = undefined
+  const answering = answerAgentAsk(id, ask, false)
+  await settle()
+  assert.equal(reads.length, 1, "one read-back, without replaying the answer")
+  recovery.unlistLive([id])
+  reads.shift()!({ ...snapshot(id, epoch, 4), control: { ...control, asks: [] } })
+  await answering
+  assert.equal(held(id), undefined, "an agent answer read back after unlisting doesn't recreate its conversation")
+}
+
 // #524's tenth review: while a fresh read (asked for a reply it couldn't place) is out, a listing says a newer start
 // that asks the person. The read no longer speaks alone, so its answer isn't the last word: the listed start is read,
 // and its approval shown. On either bridge.
@@ -239,6 +263,27 @@ for (const kind of ["fork", "relocated fork", "transfer"] as const) {
   else await recovery.readLive(fork, () => legacy.liveFork(source, { id: fork }))
   answer = undefined
   assert.equal(held(target)?.revision, 3, `${kind}: a read begun after unlisting can take the conversation`)
+}
+// A read can confirm durable acceptance even when a newer batch overtakes its snapshot. Restoring that start must
+// settle its outbox command without replaying the start or replacing the newer state.
+{
+  Object.assign(globalThis.window, { mako: legacy })
+  const id = "start-receipt", epoch = "g1.startreceipt.a"
+  const receipt: LiveSnapshot = { ...snapshot(id, epoch, 1), requests: [{ id: "start-request", text: "Go", attachments: [], createdAt: 1, status: "completed" }] }
+  recovery.applyLiveSnapshot(receipt)
+  let settled = false
+  const restoring = restorePendingStart({ kind: "start", draftKey: "start-receipt", args: ["codex", "/fixture", {
+    conversationId: id, initialRequest: { id: "start-request", text: "Go", attachments: [] },
+  }] }).then(() => { settled = true })
+  await settle()
+  assert.equal(reads.length, 1, "the durable start's receipt is being read")
+  recovery.applyLiveBatch(batch(id, epoch, 2))
+  reads.shift()!(receipt)
+  await settle()
+  assert.equal(settled, true, "an overtaken receipt still confirms acceptance without another start")
+  assert.equal(reads.length, 0, "no replay or second receipt read")
+  assert.equal(held(id)?.revision, 2, "the newer batch still stands")
+  await restoring
 }
 assert.deepEqual(door.strays, [], "nothing went around the door")
 assert.deepEqual(bypassed(), [], "and nothing read around the window's one read")

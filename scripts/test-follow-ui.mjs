@@ -183,6 +183,21 @@ async function check() {
         for (let step = 0; step < 10; step += 1) await wheel(at.x, at.y, 300)
         await wait(250)
       })
+      // Up, then exactly as far back, and the hand stops: inside one wheel window its net is nothing, which fingers at
+      // rest also come to, and main left the end it came back to unfollowed. Clear of the crew card, so no wheel goes
+      // to its list.
+      await open()
+      await keeps("read up, then wheeled exactly back to the end", async () => {
+        const at = await evaluate(`(() => { const box = ${VIEW}.getBoundingClientRect(); return { x: box.left + 200, y: box.top + 60 } })()`)
+        await wheel(at.x, at.y, -900)
+        // Soon enough that the way back lands inside the wheel's window with the move up: on the runner, 250 ms here
+        // put the third wheel past it one run in six, and main's net then followed again.
+        await wait(100)
+        assert.ok((await reading()).away > 96, `${form}: the wheel left the end`)
+        for (let step = 0; step < 3; step += 1) await wheel(at.x, at.y, 300)
+        assert.ok((await reading()).away <= 1, `${form}: the wheel came back to the end`)
+        await wait(250)
+      })
       // What a hand does: a trackpad at rest lets go of nothing, and a move on purpose lets go at once.
       const { traces } = JSON.parse(await readFile(resolve("scripts/fixtures/wheel-traces.json"), "utf8"))
       for (const [name, trace] of Object.entries(traces)) {

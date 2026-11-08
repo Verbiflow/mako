@@ -43,18 +43,6 @@ export type ThreadsMoveResult =
   | { outcome: "kept-here" | "stayed" | "failed" | "unsettled"; reason: string }
   | ThreadMoveRefused
 
-/** An agent below full access asked to move its Thread; the person answers above its composer. */
-export interface ThreadMoveAsk {
-  id: string
-  conversationId: string
-  harness: string
-  title?: string
-  to: "cloud"
-  /** Its Thread works in its own worktree, so a running turn hands off; otherwise it goes onto its own branch first, once its turns end. */
-  handsOff: boolean
-  at: number
-}
-
 /** What the MCP door shows the model of the operation; its input schema is the host call's. */
 export interface ThreadToolDefinition {
   channel: "mako:threads-move"

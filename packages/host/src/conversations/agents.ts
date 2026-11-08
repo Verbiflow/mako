@@ -4891,7 +4891,7 @@ function nativeAsk(pending: PendingAsk): FinAsk {
     : pending.questions.length === 1
       ? pending.questions[0]!.options.map((option) => ({ label: option.label.slice(0, 200), ...(option.description && { detail: option.description.slice(0, 600) }) }))
       : []
-  return { kind: pending.kind, id: pending.request, ...(options.length && { options: options.filter((option) => option.label).slice(0, ASK_OPTIONS) }) }
+  return { kind: pending.kind, id: pending.request, ...(options.length && { options: options.filter((option) => option.label).slice(0, ASK_OPTIONS) }), ...(pending.named && { named: true as const }) }
 }
 
 /**

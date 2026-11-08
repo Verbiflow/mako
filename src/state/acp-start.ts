@@ -249,6 +249,12 @@ const startRetries = new Map<string, ReturnType<typeof setTimeout>>()
 const startDeliveries = new Map<string, Promise<boolean>>()
 const retryDelays = new Map<string, number>()
 
+/** A durable start receipt confirms acceptance even when its state was overtaken while the read was out. */
+function startAccepted(snapshot: LiveSnapshot | null, input: LiveStartOptions): boolean {
+  return Boolean(snapshot && (!input.initialRequest || snapshot.requests.some((request) => request.id === input.initialRequest?.id) ||
+    snapshot.control?.transfers.some((transfer) => transfer.input.id === input.initialRequest?.id)))
+}
+
 export async function restorePendingStart(command: Extract<OutboxCommand, { kind: "start" }>): Promise<void> {
   const [harness, cwd, input] = command.args
   const starting: StartingAcpConversation = { kind: "starting", key: input.conversationId, draftKey: command.draftKey,
@@ -256,13 +262,10 @@ export async function restorePendingStart(command: Extract<OutboxCommand, { kind
     blocks: [], queued: [], hiddenUserPrompt: null, createdAt: Date.now(), updatedAt: Date.now(), unconfirmedStart: input }
   const existing = acpStore.get().conversations[input.conversationId]
   if (existing?.kind === "live") {
-    const adopted = { done: false }
-    await readLive(existing.key, () => readLiveSnapshot(existing.key).catch(() => null), (snapshot) => {
-      if (input.initialRequest && !snapshot.requests.some((request) => request.id === input.initialRequest?.id)) return
-      adoptStart(starting, snapshot, input)
-      adopted.done = true
+    const snapshot = await readLive(existing.key, () => readLiveSnapshot(existing.key).catch(() => null), (snapshot) => {
+      if (startAccepted(snapshot, input)) adoptStart(starting, snapshot, input)
     })
-    if (adopted.done) {
+    if (startAccepted(snapshot, input)) {
       settleMessage(commandId(command))
       return
     }
@@ -316,25 +319,20 @@ async function attemptStart(starting: StartingAcpConversation, input: LiveStartO
     retryDelays.delete(starting.key)
     return true
   } catch (error) {
-    // What the host took of this start: its first message, or a transfer of it, or anything when it sent none.
-    const tookIt = (snapshot: LiveSnapshot) => !input.initialRequest || snapshot.requests.some((request) => request.id === input.initialRequest?.id) ||
-      Boolean(snapshot.control?.transfers.some((transfer) => transfer.input.id === input.initialRequest?.id))
-    // Adopted as its read is answered, so nothing the host says meanwhile is taken for older.
-    const adopted = { done: false }
+    // The receipt confirms the operation separately from whether its snapshot can update the window's state.
+    // A newer batch may overtake it while it is out; that must not turn a durably accepted start into a failure.
     const adopt = (snapshot: LiveSnapshot) => {
-      if (!tookIt(snapshot)) return
-      adoptStart(starting, snapshot, input)
-      adopted.done = true
+      if (startAccepted(snapshot, input)) adoptStart(starting, snapshot, input)
     }
-    await readLive(starting.key, () => readLiveSnapshot(starting.key).catch(() => null), adopt)
-    if (!adopted.done && input.resume && input.threadPath) {
+    let snapshot = await readLive(starting.key, () => readLiveSnapshot(starting.key).catch(() => null), adopt)
+    if (!startAccepted(snapshot, input) && input.resume && input.threadPath) {
       const path = input.threadPath
-      await readLive(undefined, async () => {
+      snapshot = await readLive(undefined, async () => {
         const resolved = await getMako().resolveContinuation(path).catch(() => null)
         return resolved?.transport === "attached" ? resolved.snapshot : null
       }, adopt)
     }
-    if (adopted.done) {
+    if (startAccepted(snapshot, input)) {
       settleMessage(input.initialRequest?.id ?? input.conversationId)
       retryDelays.delete(starting.key)
       return true

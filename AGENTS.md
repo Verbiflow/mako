@@ -323,8 +323,10 @@ message being sent, or the next in line (`nextQueued`) about to go, never a
 message nothing will send; a stopped Fin never reads working, and only
 working Fins hold room against the Mac and the tree (`test:fin-states`). A
 Fin's harness asking (`askApex`) wakes its Apex, told whether it may
-answer: an approval under an Apex below full access is the person's at once,
-and the Apex hears so in the digest's "waits on the person" (`Report.told`).
+answer, and so does its agent asking through Mako's tools (an `AgentAsk`, kept
+in its conversation and read as a pending approval, `LiveAsks.pending`, which
+`agents_answer` and the person answer through `LiveConversations.permission`):
+an approval under an Apex below full access is the person's at once, and the Apex hears so in the digest's "waits on the person" (`Report.told`).
 One the Apex may answer that it leaves for `APEX_ANSWER_MS` (a minute) goes
 to the person too (`escalate`), as an Apex mid-turn on a harness that hears
 a digest only at its turn's end would leave it; the Apex hears they were
@@ -1550,8 +1552,10 @@ Three rules hold this together, and each has a specific failure it prevents:
   user scrolling may release follow mode; virtualizer size adjustments must not.
   Follow changes only as the reader moves: up leaves the end, down into it
   follows again, and a scroll's end decides nothing. A move counts from 24 px
-  (`LEFT_END`), a wheel's as its net travel over 500 ms, so a trackpad's rest
-  jitter never lets go while a flick up does at once. A wheel taken by a
+  (`LEFT_END`), a wheel's as its travel within 500 ms since it last turned, so
+  a trackpad's rest jitter never lets go while a flick up does at once, and a
+  wheel up then as far back down follows the end again (its net was nothing,
+  which read as rest, and the end went unfollowed). A wheel taken by a
   scroller inside the transcript (the crew card's list, a code block) stays
   with it until it settles, as the browser's own gesture does. Input ends when
   it settles (`INPUT_SETTLE_MS`), for input that moved nothing and a browser

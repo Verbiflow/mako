@@ -3,7 +3,7 @@ import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { ContinuationResolution, LiveAction, LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
-import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation } from "@/state/acp-state"
+import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation, type LiveAcpConversation } from "@/state/acp-state"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { noteFinAsks, noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
@@ -651,7 +651,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
     }
     replaceAcpConversation(batch.id, next)
     notifyCompletion(current.requests, requests)
-    if (changesSession(batch) || batch.permissions || requests)
+    if (changesSession(batch) || batch.permissions || requests || agentAsksMoved(current, next))
       syncThreadStatus(next, current.session.status, current.threadPath)
     if (batch.nativeAgents) noteFinAsks(next)
     return
@@ -761,10 +761,16 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
   if (next && (batch.session ?? batch.sessionChanges)?.settings) acknowledgeComposerSettings(next)
   if (
     next?.kind === "live" &&
-    (changesSession(batch) || batch.permissions || changedRequests)
+    (changesSession(batch) || batch.permissions || changedRequests || agentAsksMoved(current, next))
   )
     syncThreadStatus(next, current.session.status, current.threadPath)
   if (next?.kind === "live" && batch.nativeAgents) noteFinAsks(next)
+}
+
+/** An agent's ask raised or answered: a batch of control alone says it, and it's said to the person as an approval is. */
+function agentAsksMoved(before: Pick<LiveAcpConversation, "control">, after: Pick<LiveAcpConversation, "control">): boolean {
+  const ids = (conversation: Pick<LiveAcpConversation, "control">) => conversation.control?.asks?.map((ask) => ask.id).join() ?? ""
+  return ids(before) !== ids(after)
 }
 
 function notifyCompletion(
