@@ -194,7 +194,7 @@ function continued(outcome: ThreadContinueOutcome): ThreadsMoveResult {
 }
 
 /** `mako:threads-move`, and the person's answers to agents' asks. */
-export function declareThreadMoveMethods(methods: MethodTable, tool: () => ThreadMoveTool | undefined): void {
+export function declareThreadMoveMethods(methods: MethodTable, tool: () => Pick<ThreadMoveTool, "move" | "asks" | "answer"> | undefined): void {
   methods.handle("mako:threads-move", (caller: AgentCaller, input: ThreadsMoveInput) =>
     caller.kind === "person" && machineCall() ? refused("not-yours", NOT_THE_PERSON) : (tool()?.move(caller, input) ?? refused("unavailable", "This host doesn't move Threads.")))
   methods.handle("mako:thread-move-asks", () => tool()?.asks() ?? [])
