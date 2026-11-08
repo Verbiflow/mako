@@ -404,9 +404,9 @@ requests Fins wait on`, which runs only while something is watched: each
 read a minute after it's first watched, doubling while unchanged up to
 `PULL_WATCH_MAX_MS` (8 min), a minute again once it changes. A reading's
 outcome (`pullOutcome`, `contracts/pull-waits.ts`) matched to `until`
-(checks settled, or one failed since the report while others run; a review
-submitted since, by anyone but the author; merged or closed, which end any
-wait) is claimed once per Fin, report and pull request
+(current-head checks settled, or one failed while others run, even before
+the report; a review submitted since, by anyone but the author; merged or
+closed, which end any wait) is claimed once per Fin, report and pull request
 (`ThreadStore.claimPullWake`, `agent_pull_wakes`) and delivered to the Fin,
 never its Apex, through `deliver` under a named request as Mako's words
 (the `pull-watch` service actor): one line, "Mako: PR acme/app#371 checks
@@ -771,6 +771,16 @@ sender's: the driver's `SteerCapability.hears`, seen on a real run
 (`scripts/probe-steer-semantics.ts`). `test:orch-deliver` covers each choice
 across harnesses, and `eval:orch-tools`' `deliver` cases
 (`cases-deliver.ndjson`) whether an agent picks the right one.
+A request keeps its `admissionOrder` in the journal, independent of queue
+priority and wall clocks. If a queued agent message follows newer instructions
+already handed over (including accepted steers), its handoff note restates
+those instructions and preserves their precedence (`agent-message-order.ts`).
+Older journals use their saved admission times when available. This conveys
+instruction order; it does not enforce a hold on external operations.
+`agents_send` with `reply: "none"` marks an informational message durably. A
+successful notification synthesizes no result and preserves an existing wait;
+failures, questions and explicit reports still report. A completed task turn
+without a report or final response is failed, never a successful result.
 
 A turn a provider starts itself (`provider-turn`) carries what settled
 (`TurnCause`: name, outcome, exit code, duration, a monitor's output, a

@@ -527,6 +527,7 @@ const inputs = {
             z.literal("interrupt"),
           ])
           .optional(),
+        reply: z.literal("none").optional(),
         context: z.array(z.object({ thread: z.string() })).optional(),
         clientKey: z.string(),
       }),
@@ -1699,6 +1700,7 @@ const inputs = {
         modeId: z.string().optional(),
         account: z.string().optional(),
         grants: z.array(z.string()).optional(),
+        notification: z.literal(true).optional(),
       }),
     ]),
   "mako:live-turn-changes": () =>

@@ -827,7 +827,7 @@ export class LiveConversations {
     targetBindingId?: string,
     displayText?: string,
     actor?: Actor,
-    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants"> = {}
+    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants" | "notification"> = {}
   ): LiveRequest {
     this.admission.assert()
     const resident = this.records.require(id)
@@ -841,6 +841,7 @@ export class LiveConversations {
       actor: this.threads.actor(actor),
       id: requestId,
       createdAt: Date.now(),
+      admissionOrder: resident.snapshot.requests.reduce((last, request) => Math.max(last, request.admissionOrder ?? 0), resident.snapshot.requests.length) + 1,
       text,
       attachments,
       tuning,
@@ -922,6 +923,7 @@ export class LiveConversations {
         tuning,
         displayText,
         ...marks.grants && { grants: marks.grants },
+        ...marks.notification && { notification: marks.notification },
       }, actor)
       return request
     }
@@ -1565,9 +1567,9 @@ export class LiveConversations {
    * Stops the running turn and sends this message as the next one, ahead of what was queued, which follows it in
    * order; with no turn running it goes as the next message, like any. Answers whether it stopped a turn.
    */
-  interrupt(id: string, requestId: string, text: string, attachments: PromptAttachment[], actor?: Actor, grants?: string[]): boolean {
+  interrupt(id: string, requestId: string, text: string, attachments: PromptAttachment[], actor?: Actor, grants?: string[], notification?: true): boolean {
     const running = this.activeRequest(id)
-    this.submit(id, requestId, text, attachments, undefined, undefined, undefined, actor, { ...grants && { grants } })
+    this.submit(id, requestId, text, attachments, undefined, undefined, undefined, actor, { ...grants && { grants }, ...notification && { notification } })
     if (!running) return false
     this.stopFor(id, running, requestId, "person")
     return true

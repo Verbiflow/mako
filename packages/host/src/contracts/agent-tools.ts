@@ -272,6 +272,8 @@ export interface AgentsSendInput {
   text?: string
   /** For a working Fin; `queue` when absent. */
   deliver?: FinDeliver
+  /** An informational message: no automatic completion reply; explicit reports, questions and failures still report. */
+  reply?: "none"
   /** Threads this message refers to, each attached as a person's chip attaches one. */
   context?: AgentContextInput[]
   /** A repeat with the same key is the same message. */
@@ -735,6 +737,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         forward: "true: pass on the person's message this turn answers, as their words.",
         text: "Your own words: beneath the person's with forward, else the whole message.",
         deliver: `For a working ${FIN_WORD}: queue (default), steer or interrupt.`,
+        reply: "none: information that needs no reply; failures, questions and explicit reports still reach you.",
         context: `Threads this message refers to, as [{ thread }], each a thread:<harness>:<id> ref, a Thread ID or a ${FIN_WORD}'s name: attached as the person's @ chip attaches one.`,
         clientKey: "Your own key for this message: a repeat with it is the same message.",
       },

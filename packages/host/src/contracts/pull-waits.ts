@@ -31,7 +31,8 @@ export type PullOutcome =
 /**
  * The outcome a wait since `since` (its report's time) sees in `reading`, matched to `until`: merged or closed ends
  * every wait; `review` takes a review submitted since, by anyone but the author; `checks` takes its checks settled,
- * once one of them finished since, or a check that failed since while others run. Undefined while nothing it waits
+ * or a check that failed while others run, even if it finished before the report. The reader supplies the current
+ * head's checks: registering a wait doesn't mean the Fin already knows their outcome. Undefined while nothing it waits
  * for happened.
  */
 export function pullOutcome(reading: PullReading, until: PullWaitUntil | undefined, since: number): PullOutcome | undefined {
@@ -49,12 +50,9 @@ export function pullOutcome(reading: PullReading, until: PullWaitUntil | undefin
   if (!checks.length) return undefined
   const running = checks.filter((check) => check.state === "running" || check.state === "unknown").length
   const failed = checks.filter((check) => check.state === "failed")
-  // Checks that all finished before the wait began are an earlier push's, or what the Fin already knew.
-  if (!running) return checks.some((check) => check.at === undefined || check.at >= since)
-    ? { kind: "settled", passed: checks.length - failed.length, failed: failed.map((check) => check.name) }
-    : undefined
-  const fresh = failed.filter((check) => check.at !== undefined && check.at >= since).sort((left, right) => left.at! - right.at!)[0]
-  return fresh ? { kind: "failed", check: fresh.name, running } : undefined
+  if (!running) return { kind: "settled", passed: checks.length - failed.length, failed: failed.map((check) => check.name) }
+  const first = failed[0]
+  return first ? { kind: "failed", check: first.name, running } : undefined
 }
 
 const NAMED_CHECKS = 4

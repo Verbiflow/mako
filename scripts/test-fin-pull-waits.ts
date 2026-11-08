@@ -35,11 +35,11 @@ const check = (name: string, state: PullReading["checks"][number]["state"], at?:
   const green = reading({ checks: [check("lint", "passed", SINCE + 5), check("e2e", "passed", SINCE + 9)] })
   assert.deepEqual(pullOutcome(green, "checks", SINCE), { kind: "settled", passed: 2, failed: [] })
   const stale = reading({ checks: [check("lint", "passed", SINCE - 50), check("e2e", "failed", SINCE - 10)] })
-  assert.equal(pullOutcome(stale, "checks", SINCE), undefined, "checks that all finished before the wait began are an earlier push's")
+  assert.deepEqual(pullOutcome(stale, "checks", SINCE), { kind: "settled", passed: 1, failed: ["e2e"] }, "current-head checks already settled when the wait was registered still answer it")
   const first = reading({ checks: [check("lint", "failed", SINCE + 5), check("e2e", "running")] })
   assert.deepEqual(pullOutcome(first, "checks", SINCE), { kind: "failed", check: "lint", running: 1 }, "the first failure, while others run")
   const known = reading({ checks: [check("lint", "failed", SINCE - 5), check("e2e", "running")] })
-  assert.equal(pullOutcome(known, "checks", SINCE), undefined, "a failure from before the wait woke it already")
+  assert.deepEqual(pullOutcome(known, "checks", SINCE), { kind: "failed", check: "lint", running: 1 }, "a current-head failure already present when the wait was registered still answers it")
   assert.equal(pullOutcome(reading(), "checks", SINCE), undefined, "no checks yet: a push GitHub hasn't started on")
 
   const approved = reading({ reviews: [{ login: "ada", state: "approved", at: SINCE + 20 }] })
@@ -248,7 +248,7 @@ try {
   await world.restart()
   assert.deepEqual(world.agents.pulls.keys(), ["acme/app#371"], "a new host watches what the last one did")
 
-  const at = now() + 1_000
+  const at = now() - 10_000
   pull = reading({ checks: [check("lint", "failed", at), check("e2e", "failed", at + 10)] })
   await world.agents.pulls.tick()
   const note = `Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e). ${URL}`
@@ -270,6 +270,23 @@ try {
   await world.settle(300)
   assert.equal(finTexts.filter((text) => text === note).length, 1, "the outcome reached the Fin once, across a restart")
   assert.notEqual(stateOf("ci")?.kind, "idle", "its turn after the note is past the wait")
+  // A new report may renew an unchanged wait after all checks finished (#544 and #470). It is a new wait,
+  // answered from the current head's state, even after restart and even when every check predates that report.
+  const finishedAt = now() - 10_000
+  pull = reading({ checks: [check("lint", "passed", finishedAt), check("e2e", "passed", finishedAt)] })
+  await world.agents.report(world.caller(ciConversation), {
+    status: "progress", summary: "Rerun accepted; waiting for checks.", clientKey: "renewed-after-completion",
+    waitingOn: [{ kind: "pull-request", ref: URL, until: "checks" }],
+  })
+  await world.restart()
+  await world.agents.pulls.tick()
+  await world.settle(300)
+  const greenNote = `Mako: PR acme/app#371 checks settled: all 2 passed. ${URL}`
+  assert.equal(finTexts.filter((text) => text === greenNote).length, 1, "a renewed wait wakes on checks that finished before its report")
+  await world.restart()
+  await world.agents.pulls.tick()
+  await world.settle(300)
+  assert.equal(finTexts.filter((text) => text === greenNote).length, 1, "the renewed wait's receipt survives restart")
   await world.close()
 } finally {
   rmSync(root, { recursive: true, force: true })
