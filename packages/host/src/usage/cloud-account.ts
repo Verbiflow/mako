@@ -1,3 +1,4 @@
+import { stoppingSignal } from "../base/host-stopping.js"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -521,7 +522,7 @@ export class CloudAccounts {
       show(shown)
       let interval = grant.interval ?? SLOW_DOWN_SECONDS
       for (;;) {
-        await delay(interval * 1000, undefined, { signal })
+        await delay(interval * 1000, undefined, { signal: stoppingSignal(signal) })
         if (Date.now() >= deadline) return this.#joinEnded({ kind: "timed-out", message: "The code expired before it was confirmed. Join again for a new one." })
         const polled = await this.#fetch("devices.code-token", new URL("/oauth/token", cloud), {
           method: "POST",
@@ -1409,7 +1410,7 @@ export class CloudAccounts {
     const trace = this.#traces.follow(correlationId)
     let response: CloudResponse
     try {
-      response = await fetchWith(url, { ...init, headers: { ...init.headers, [CORRELATION_HEADER]: correlationId }, dispatcher: this.#pool })
+      response = await fetchWith(url, { ...init, signal: stoppingSignal(init.signal), headers: { ...init.headers, [CORRELATION_HEADER]: correlationId }, dispatcher: this.#pool })
     } catch (error) {
       // How far it got: whether it ever left this Mac, and on which connection, which the cloud's log can't say.
       report("unreachable", undefined, { error: errorMessage({ error }), reached: trace.describe() })

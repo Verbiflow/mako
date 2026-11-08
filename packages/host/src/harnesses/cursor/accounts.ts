@@ -1,3 +1,4 @@
+import { hostFetch } from "../../base/host-stopping.js"
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -113,7 +114,7 @@ class CursorUsageError extends Error {
 }
 
 async function post(path: string, bearer: string, body: JsonValue = {}): Promise<string> {
-  const response = await fetch(`${API}${path}`, {
+  const response = await hostFetch(`${API}${path}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${bearer}`,
@@ -376,7 +377,9 @@ export function createCursorAccountCapability(
       return {
         kind: "task",
         async run(events, signal) {
-          await store.save(await auth.mintBrowserKey(events.page, signal))
+          const credential = await auth.mintBrowserKey(events.page, signal)
+          signal.throwIfAborted()
+          await store.save(credential)
         },
       }
     },

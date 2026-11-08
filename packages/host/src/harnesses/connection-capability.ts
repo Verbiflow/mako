@@ -33,7 +33,7 @@ export interface ProviderConnectionCapability extends ProviderCapability {
    * host waits for the calls it's answering before it exits, so a check
    * waiting on a process that never answers would keep it from stopping.
    */
-  stop?(): void
+  stop?(): void | Promise<void>
 }
 
 export async function describeConnection(

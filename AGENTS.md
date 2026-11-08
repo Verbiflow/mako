@@ -101,10 +101,13 @@ the configuration (`processHostConfig` in `host-config.ts`; no socket exits
 `createHost(config, owner)` in `create-host.ts` is the host. Its `start()` opens
 each domain in `electron/domains/` in dependency order, declares every method,
 then listens on the socket; its `stop()` releases everything in one fixed
-order. It waits for the calls it's answering, so a harness's sign-in check
-under way ends as stop begins (`ProviderConnectionCapability.stop`): Cursor's
-waited on a child that never answered until CI killed the host 15 s in
-(`test:stop-provider-checks`). A stop still running at 2 s and 10 s logs
+order. Before draining host calls, `HostStopping` cancels outside work: the
+owners registered together in `core.ts`, provider children, commands and
+HTTP requests (including response bodies). Keep local commits and stores
+open through that drain. Register new outside waiters with that scope;
+borrowed SDK checks cancel their operation without taking the client's
+ownership. An unfinished login reports that Mako quit and asks for a new
+sign-in; a saved result stays saved (`test:stop-provider-checks`). A stop still running at 2 s and 10 s logs
 `stopping is slow` with its step and the named work open. A host that can't start says why on stderr and in `host.log`, stops
 through its lifecycle and exits 1.
 

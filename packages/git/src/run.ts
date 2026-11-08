@@ -25,6 +25,8 @@ export interface GitTrace {
 }
 
 export interface GitRuntime {
+  /** The owner stopped: cancel running commands and refuse queued or new ones. */
+  signal?: AbortSignal
   /** Runs a background command below foreground work, such as `nice -n 19`. */
   background?: (command: string, args: readonly string[]) => [string, string[]]
   trace?: (trace: GitTrace) => void
@@ -132,6 +134,8 @@ export class Git {
 
   /** Runs one `git` command. A failure is a `GitError`; cancelling rejects with the signal's reason. */
   async run(options: RunOptions): Promise<RunResult> {
+    const owner = this.#runtime.signal
+    if (owner) options = { ...options, signal: options.signal ? AbortSignal.any([owner, options.signal]) : owner }
     options.signal?.throwIfAborted()
     const queued = performance.now()
     const release = options.read ? await this.#readSlot() : undefined

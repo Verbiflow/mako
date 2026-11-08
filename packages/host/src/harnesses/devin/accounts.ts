@@ -1,3 +1,4 @@
+import { hostFetch } from "../../base/host-stopping.js"
 import { existsSync } from "node:fs"
 import { chmod, mkdir, readdir, readFile, readlink, rename, rm, symlink } from "node:fs/promises"
 import { join } from "node:path"
@@ -130,7 +131,7 @@ async function fetchDevinStatus(path: string): Promise<DevinStatus | null> {
   if (!apiKey) return null
   const server =
     devinCredential(contents, "api_server_url") ?? "https://server.codeium.com"
-  const response = await fetch(
+  const response = await hostFetch(
     `${server}/exa.seat_management_pb.SeatManagementService/GetUserStatus`,
     {
       method: "POST",

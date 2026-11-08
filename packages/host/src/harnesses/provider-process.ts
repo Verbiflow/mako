@@ -1,3 +1,4 @@
+import { hostStopping } from "../base/host-stopping.js"
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process"
 import { statSync } from "node:fs"
 import { basename } from "node:path"
@@ -43,16 +44,21 @@ export function spawnProviderProcess(
 ): ChildProcessWithoutNullStreams {
   if (options.cwd !== undefined && !workingDirectoryExists(options.cwd))
     throw new MissingWorkingDirectoryError(options.cwd)
+  const stopping = hostStopping()
+  stopping?.signal.throwIfAborted()
   const group = !onWindows()
   const child = spawn(command, args, { detached: group, ...options, stdio: ["pipe", "pipe", "pipe"] })
   const pid = child.pid
   if (tracked && pid) trackProviderPid({ pid, executable: child.spawnfile, ...tracked })
   const label = tracked?.kind ?? basename(command)
   const releasePipes = pipeRelease(child, label)
+  const unfollowStop = stopping?.register(`${label} (pid ${pid})`, () => closeProviderProcess(child, "SIGTERM", 100))
+  child.once("error", () => { if (!child.pid) unfollowStop?.() })
   // One exit listener for all of Mako's cleanup: an SDK that owns the
   // process adds its own (Claude's adds seven), and past ten Node reports a
   // leak that would hide a real one.
   child.once("exit", () => {
+    unfollowStop?.()
     if (tracked && pid) untrackProviderPid(pid)
     releasePipes()
     if (group && pid) endGroup(pid, label)

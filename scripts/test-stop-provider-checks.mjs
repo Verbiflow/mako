@@ -31,6 +31,7 @@ await symlink(program, join(bin, "mako-host"))
 
 // Cursor's SDK child, as one wedged after its hello: every request after it goes unanswered, and its stdin closing
 // changes nothing. It notes each request and its pid.
+const loginAsked = join(scratch, "login-asked.log")
 const asked = join(scratch, "cursor-asked.log")
 const child = join(scratch, "cursor-child.mjs")
 await writeFile(child, `import { appendFileSync } from "node:fs"
@@ -50,10 +51,22 @@ process.stdin.on("end", () => {})
 setInterval(() => {}, 1_000)
 `)
 
+// A real provider-login process, with a page but no eventual sign-in.
+const loginChild = join(bin, "claude-login")
+await writeFile(loginChild, `#!${process.execPath}
+import { appendFileSync } from "node:fs"
+appendFileSync(${JSON.stringify(loginAsked)}, String(process.pid) + "\\n")
+process.stdout.write("https://example.com/sign-in\\n")
+process.stdin.resume()
+process.stdin.on("end", () => {})
+setInterval(() => {}, 1_000)
+`, { mode: 0o700 })
+
 const env = {
   ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("MAKO_") && !key.startsWith("CURSOR_"))),
   PATH: `${bin}:${process.env.PATH}`,
   CURSOR_SDK_CHILD: child,
+  CLAUDE_CODE_EXECUTABLE: loginChild,
 }
 
 /** A host on its own home and data root, stopped after `meanwhile`: how its stop went, and its log. */
@@ -117,4 +130,23 @@ for (const deadline = Date.now() + limit; Date.now() < deadline && pids.some(ali
 assert.deepEqual(pids.filter(alive), [], "no Cursor child is left running")
 assert.doesNotMatch(waiting.log, /auth probe failed/, "the check its stop ended isn't logged as a failure")
 assert.doesNotMatch(waiting.log, /stopping is slow/, "nor is the stop slow")
-console.log("stop provider checks: a stop ends a sign-in check waiting on a child that never answers")
+let loginWait
+const signingIn = await stopAfter("login", async (host) => {
+  const login = await host.call("mako:account-login-start", "claude")
+  assert.equal(login.url, "https://example.com/sign-in")
+  loginWait = assert.rejects(host.call("mako:account-login-wait", login.id), /Mako quit before sign-in finished; sign in again/)
+  // The call must reach the host before SIGTERM: a later call is only an admission test.
+  for (const deadline = Date.now() + 5_000; ; await delay(20)) {
+    const log = await readFile(host.log, "utf8")
+    if (log.includes("waiting for sign-in")) break
+    assert.ok(Date.now() < deadline, "the host admitted the login waiter before SIGTERM")
+  }
+})
+await loginWait
+assert.equal(signingIn.stopped.code, 0, `the host stopped cleanly with a login pending: ${JSON.stringify(signingIn.stopped)}`)
+assert.ok(signingIn.stopped.stopMs < limit, `a login pending took ${Math.round(signingIn.stopped.stopMs)} ms, limit ${Math.round(limit)} ms`)
+const loginPids = (await readFile(loginAsked, "utf8")).trim().split("\n").map(Number)
+for (const deadline = Date.now() + limit; Date.now() < deadline && loginPids.some(alive); ) await delay(20)
+assert.deepEqual(loginPids.filter(alive), [], "no login child survives the host")
+assert.doesNotMatch(signingIn.log, /stopping is slow|auth probe failed/)
+console.log(`stop provider checks: a wedged auth check and a pending login both end before the call drain (login ${Math.round(signingIn.stopped.stopMs)} ms)`)

@@ -1,3 +1,4 @@
+import { hostStopping } from "../base/host-stopping.js"
 import { Git, type GitTrace } from "@mako/git"
 import { belowAgents } from "../base/background-priority.js"
 import { hostLog } from "../base/host-log.js"
@@ -30,6 +31,7 @@ function reportWrite(run: GitTrace): void {
  */
 export function hostGit(traceAll: boolean): Git {
   return new Git({
+    signal: hostStopping()?.signal,
     background: belowAgents,
     trace: (run) => {
       reportWrite(run)

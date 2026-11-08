@@ -1,3 +1,4 @@
+import type { HostStopping } from "./base/host-stopping.js"
 import { randomBytes } from "node:crypto"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
 import type { RecordsLink } from "@mako/sessions/record-sync"
@@ -90,6 +91,7 @@ export interface CoreShell {
   machineGitHubPerson?(): Promise<GitHubPerson | undefined>
   owner: HostOwner
   methods: HostMethods
+  stopping: HostStopping
   jobs: HostJobs
   /** Held while a harness starts: routine work waits for it. */
   foreground: Foreground
@@ -1516,6 +1518,30 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   void ready().then((pool) => workspaceAutomations.watch(pool.active.workspace))
   void telemetry.started(shell.jobs, performance.now())
 
+  // One pre-drain phase for every owner that can wait on a process, a peer or the network.
+  // Local stores stay open until both these cancellations and the calls using them have settled.
+  const outside = {
+    "provider connection checks": async () => { await Promise.all(providerHost.connections.list().map((connection) => connection.stop?.())) },
+    "account sign-ins": () => harnesses.logins.stop(),
+    "native starts": () => runs.stop(),
+    "profile discovery": () => harnesses.profiles.stop(),
+    "provider discovery": () => providerHost.discovery.stop(),
+    "live conversations": () => opened.stop(),
+    "Git commands": () => git.close(),
+    "application updates": () => application.dispose(),
+    "cloud continuations": () => cloudContinues?.close(),
+    "cloud calls": () => late.cloud?.stop(),
+    "terminal calls": () => shell.terminals.current()?.dispose(),
+    "plugin calls": () => plugins?.close(),
+    "builds": () => { for (const build of builds) build.close() },
+    "browser and computer calls": () => control.stop(),
+    "file calls": () => files.stop(),
+    "workspace automations": () => workspaceAutomations.stop(),
+    "harness updates": () => harnesses.updates.stop(),
+    "catalog calls": () => catalog.stop(),
+  } satisfies Record<string, () => void | Promise<void>>
+  for (const [name, cancel] of Object.entries(outside)) shell.stopping.register(name, cancel)
+
   return {
     route: async (channel, args) => {
       // A window whose folder is a conversation's on its machine reads and changes it there, and is told what only
@@ -1679,34 +1705,20 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         unwatchSaves?.()
         unfollowEffects?.()
         unfollowBounds?.()
-        await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
         const callsDrained = methods.close()
-        // A sign-in check under way ends now: the calls drained above may be waiting on one.
-        for (const connection of providerHost.connections.list()) connection.stop?.()
-        // The native launcher closes its own admission before anything it uses goes.
-        const providersDrained = Promise.all([runs.stop(), harnesses.profiles.stop(), providerHost.discovery.stop()])
-        void providersDrained.catch(() => {})
-        git.close()
-        application.dispose()
-        shell.closeSocket()
+        const outsideDrained = shell.stopping.stop()
+        void outsideDrained.catch(() => {})
+        await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
         wake.stop()
         repositories.stop()
         sleepHandOff?.stop()
         keepAwake?.stop()
-        cloudContinues?.close()
-        late.cloud?.stop()
-        shell.terminals.current()?.dispose()
-        plugins?.close()
-        for (const build of builds) build.close()
-        control.stop()
-        files.stop()
-        workspaceAutomations.stop()
-        harnesses.updates.stop()
-        catalog.stop()
         step = "waiting for the calls under way and the providers' drains"
-        await Promise.all([callsDrained, providersDrained, telemetry.close(), usage.close()])
+        await Promise.all([callsDrained, outsideDrained, telemetry.close(), usage.close()])
+        // Deliver their stopping answers before the socket's generic reconnect farewell.
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        shell.closeSocket()
         step = "closing the conversations"
-        await opened.stop()
         cloudConversations?.dispose()
         late.agentServers?.close()
         threads.close()
