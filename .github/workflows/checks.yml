@@ -326,6 +326,10 @@ jobs:
       - run: npm run test:agents-cli
       - run: npm run test:thread-move-tool
       - run: npm run test:orch-update
+      # A Fin placed on another device: two hosts through the protocol's gateway, its start settled by its op, its
+      # notices kept until its Apex's device takes them (off, restarted, sent twice, from a stale owner), and its Apex's
+      # operations on it routed there.
+      - run: npm run test:fins-placed
 
   # Every harness's decode, live host, projection, recorder, merge and saved-open paths, measured beside the commit
   # this change goes onto, in turns on this runner (`perf-reference.ts`): HEAD^1 is a pull request's base in the merge

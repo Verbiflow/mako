@@ -49,7 +49,7 @@ import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
-import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Report, type ThreadParent } from "../contracts/agents.js"
+import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
@@ -240,6 +240,11 @@ export interface QueuedSpawn {
   tree: string
   record: string
   at: number
+  /**
+   * It starts on another device (`agent_placings`): kept apart from the spawns that start here, in a table a build
+   * from before placement never reads, so such a build sharing this store neither starts it here nor drops it.
+   */
+  away?: true
 }
 
 /** A Thread's name and where it came from, as a list of many Threads reads it (`titlesOf`). */
@@ -585,6 +590,8 @@ CREATE TABLE IF NOT EXISTS thread_reports (
 CREATE INDEX IF NOT EXISTS thread_reports_child ON thread_reports(child_thread, at);
 CREATE INDEX IF NOT EXISTS thread_reports_waiting ON thread_reports(at) WHERE delivered_at IS NULL;
 CREATE TABLE IF NOT EXISTS agent_spawns (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS agent_placings (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS agent_cancels (op TEXT PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS fin_moves (child_thread TEXT PRIMARY KEY, record TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS limit_notices (root_thread TEXT NOT NULL, id TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY (root_thread, id));
 CREATE TABLE IF NOT EXISTS agent_answers (
@@ -653,7 +660,7 @@ export interface WaitingReport {
   report: Report
   wake?: string
 }
-const QueuedSpawnRowSchema = z.object({ op: z.string(), tree: z.string(), record: z.string(), at: z.number() })
+const QueuedSpawnRowSchema = z.object({ op: z.string(), tree: z.string(), record: z.string(), at: z.number(), away: z.number() })
 const EnvironmentRowSchema = z.object({ app: z.string(), host: z.string(), port: z.number(), used_at: z.number() })
 class EnvironmentTaken extends Error {}
 function environmentValues(row: z.infer<typeof EnvironmentRowSchema>): ThreadEnvironmentValues {
@@ -991,6 +998,10 @@ export class ThreadStore {
       const previous = kept ? ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record)) : undefined
       if (byOp && !previous) return ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(byOp).record))
       if (previous && (previous.parent !== edge.parent || previous.op !== edge.op)) return previous
+      // The end of an edge that lives on another device has a row here only so the edge and its reports can name it:
+      // a Thread with no Session, which nothing lists.
+      if (edge.remote) this.keepAwayThread(edge.parent, edge.startedBy)
+      if (edge.placed) this.keepAwayThread(edge.child, edge.startedBy)
       if (!this.sql("SELECT id FROM threads WHERE id = ?").get(edge.parent) || !this.sql("SELECT id FROM threads WHERE id = ?").get(edge.child))
         throw new Error("A parent edge names a Thread that isn't in the Thread store")
       const run: FollowedRun | undefined = edge.run && previous?.run?.ended ? { ...edge.run, ended: previous.run.ended } : edge.run
@@ -1006,6 +1017,11 @@ export class ThreadStore {
         .run(next.child, next.parent, next.name, next.op, next.run?.harness ?? null, next.run?.nativeId ?? null, JSON.stringify(next), next.createdAt, next.closedAt ?? null)
       return next
     })
+  }
+
+  /** A row for a Thread another device owns (an edge's other end), made once; one this device has is left as it is. */
+  private keepAwayThread(thread: string, actor: Actor): void {
+    this.sql("INSERT OR IGNORE INTO threads (id, owner_id, created_at, created_by) VALUES (?, ?, ?, ?)").run(thread, this.localPrincipal, this.now(), JSON.stringify(actor))
   }
 
   /** A Fin's logical turn as its fallback left it (`FinTurn`); undefined between turns, or for one this build can't read. */
@@ -1148,6 +1164,49 @@ export class ThreadStore {
       this.sql("UPDATE thread_parents SET record = ?, closed_at = NULL WHERE child_thread = ?").run(JSON.stringify(next), child)
       return next
     })
+  }
+
+  /**
+   * A Fin placed elsewhere, as its Apex's device keeps how it stands: whether it's at work, how many times this
+   * device set it to work, and a stop its device hasn't confirmed (`Placed`); a member given as undefined is dropped.
+   * The edge as it stands after; undefined when there's none, or it isn't placed.
+   */
+  keepPlaced(child: string, standing: Partial<Pick<Placed, "working" | "epoch" | "stop" | "said">>): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(child)
+      if (!kept) return undefined
+      const previous = ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record))
+      if (!previous.placed) return undefined
+      const next: ThreadParent = { ...previous, placed: { ...previous.placed, ...standing } }
+      this.sql("UPDATE thread_parents SET record = ? WHERE child_thread = ?").run(JSON.stringify(next), child)
+      return next
+    })
+  }
+
+  /** The newest of its Apex's messages a Fin here heard, its Apex on another device (`RemoteParent.heard`): it only rises. */
+  keepHeard(child: string, heard: number): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(child)
+      if (!kept) return undefined
+      const previous = ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record))
+      if (!previous.remote || (previous.remote.heard ?? 1) >= heard) return previous
+      const next: ThreadParent = { ...previous, remote: { ...previous.remote, heard } }
+      this.sql("UPDATE thread_parents SET record = ? WHERE child_thread = ?").run(JSON.stringify(next), child)
+      return next
+    })
+  }
+
+  /**
+   * A start for an Apex on another device that its Apex stopped (`mako:agents-cancel`), kept by its op in a table of
+   * its own: the start is refused here whenever it arrives, after a restart too.
+   */
+  cancelStart(op: string, at: number): void {
+    this.write(() => this.sql("INSERT OR IGNORE INTO agent_cancels (op, at) VALUES (?, ?)").run(op, at))
+  }
+
+  startCancelled(op: string): boolean {
+    this.syncVersion()
+    return this.sql("SELECT op FROM agent_cancels WHERE op = ?").get(op) !== undefined
   }
 
   /** A Fin moved to another harness: its edge says what it runs on now (`Agents.move`), nothing else of it changes. */
@@ -1402,21 +1461,31 @@ export class ThreadStore {
   queuedSpawns(): QueuedSpawn[] {
     this.syncVersion()
     // In the order they came: two spawns of one millisecond keep it.
-    return this.sql("SELECT op, tree, record, at FROM agent_spawns ORDER BY at, rowid").all().map((row) => QueuedSpawnRowSchema.parse(row))
+    return this.sql(`SELECT op, tree, record, at, 0 AS away, rowid AS place FROM agent_spawns
+      UNION ALL SELECT op, tree, record, at, 1 AS away, rowid AS place FROM agent_placings ORDER BY at, away, place`).all().map((row) => {
+      const { op, tree, record, at, away } = QueuedSpawnRowSchema.parse(row)
+      return { op, tree, record, at, ...(away === 1 && { away: true as const }) }
+    })
   }
 
   /** Holds a spawn for its tree's budget; a repeat of one held keeps its place. */
   queueSpawn(spawn: QueuedSpawn): void {
-    this.write(() => this.sql("INSERT OR IGNORE INTO agent_spawns (op, tree, record, at) VALUES (?, ?, ?, ?)").run(spawn.op, spawn.tree, spawn.record, spawn.at))
+    this.write(() => this.sql(`INSERT OR IGNORE INTO ${spawn.away ? "agent_placings" : "agent_spawns"} (op, tree, record, at) VALUES (?, ?, ?, ?)`).run(spawn.op, spawn.tree, spawn.record, spawn.at))
   }
 
   /** Rewrites a held spawn's record in its place in line: one that couldn't start, kept until its Apex has heard why. */
   keepQueuedSpawn(op: string, record: string): void {
-    this.write(() => this.sql("UPDATE agent_spawns SET record = ? WHERE op = ?").run(record, op))
+    this.write(() => {
+      this.sql("UPDATE agent_spawns SET record = ? WHERE op = ?").run(record, op)
+      this.sql("UPDATE agent_placings SET record = ? WHERE op = ?").run(record, op)
+    })
   }
 
   unqueueSpawn(op: string): void {
-    this.write(() => this.sql("DELETE FROM agent_spawns WHERE op = ?").run(op))
+    this.write(() => {
+      this.sql("DELETE FROM agent_spawns WHERE op = ?").run(op)
+      this.sql("DELETE FROM agent_placings WHERE op = ?").run(op)
+    })
   }
 
   /**

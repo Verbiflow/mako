@@ -28,6 +28,8 @@ import { decodeRuntimeValue, EncodedAnswer } from "../contracts/runtime-value.js
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
+import { placeLink } from "./place-link.js"
+import { PlacedCheckouts } from "./placed-checkouts.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
 import { Agents } from "./agents.js"
 import { continueOn as continuing, type ContinueOn } from "./continue-on.js"
@@ -40,7 +42,7 @@ import { FIN_CEILING } from "../contracts/fin-tuning.js"
 import type { FinCapacity } from "./fin-capacity-host.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { TurnUndoScope } from "../contracts/turn-review.js"
-import type { HostTelemetry } from "../usage/index.js"
+import type { CloudAccount, HostTelemetry } from "../usage/index.js"
 import type { QueuedPromptEdit } from "../contracts/live-queue.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { LiveActionInput } from "../contracts/live-actions.js"
@@ -77,7 +79,7 @@ export { ListedRepositories } from "./listed-repositories.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudContinues } from "./cloud-continues.js"
 export { CloudHandOffs, workingThreads } from "./cloud-handoffs.js"
-export { conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type FinAsking, type ReportSources, type SessionLink } from "./session-report.js"
+export { conversationShown, finAsking, ownedSessions, sessionOrderIn, REPORT_WORK, SessionPublisher, SessionReporter, type FinAsking, type ReportSources, type SessionLink } from "./session-report.js"
 export { MovesUnderWay } from "./moves-under-way.js"
 export { CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, turnOnOf, type TurnOnReading, type TurnOnSources } from "./cloud-turn-on.js"
 export { SessionUploads, declareSyncMethods, readBackfill, syncStatusOf, uploadScope, type UploadSources } from "./session-uploads.js"
@@ -185,6 +187,11 @@ export interface ConversationsDeps {
   builds?(): { slots: number; holders: string[] }
   /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
   finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
+  /**
+   * The Mako account this host is signed in to, through which it reaches the person's other devices: with it a Fin can
+   * be placed on one, and one placed here reports to its Apex's device. Without it Fins start here only.
+   */
+  account?(): Pick<CloudAccount, "deviceId" | "devices" | "session"> | undefined
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -310,6 +317,13 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     resumesUnderAccount: (harness) => host.liveDrivers.get(harness)?.accountContinuation?.kind === "resumes",
     switched: (provider) => deps.telemetry.feature("harness.switched", provider),
   })
+  // The person's other devices, reached through the account; a Fin placed here works in this device's checkout of its project.
+  const away = deps.account && placeLink(deps.account)
+  const checkouts = new PlacedCheckouts({
+    git: deps.git,
+    projects: join(environment.userRoot, "projects"),
+    known: () => [...(threads.store?.worktrees().map((worktree) => worktree.repoRoot) ?? []), ...live.summaries().flatMap((summary) => summary.session.cwd ?? [])],
+  })
   if (threads.store) {
     agents = new Agents({
       store: () => threads.store ?? undefined,
@@ -368,6 +382,9 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       capacity: new MacCapacity(),
       heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],
       readPull: (target) => readPull(target),
+      ...(away && { away }),
+      remoteOf: (cwd) => deps.git.output(cwd, ["remote", "get-url", "origin"]).then((text) => text.trim() || undefined, () => undefined),
+      checkoutOf: (remote) => checkouts.find(remote),
     })
     deps.finCapacity?.subscribe(() => agents?.capacityChanged())
     await agents.resumeInSlices()
@@ -435,6 +452,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     async stop() {
       shared?.dispose()
       agents?.dispose()
+      away?.close()
       await live.stop()
       for (const driver of host.liveDrivers.list()) driver.stop?.()
       native.stop()

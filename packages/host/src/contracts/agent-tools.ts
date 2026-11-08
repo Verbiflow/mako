@@ -1,5 +1,5 @@
 import type { AccessTier } from "./access.js"
-import { APEX_WORD, decisionWords, FIN_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import { type AgentsCancelInput, type AgentsCancelled, type AgentsCapabilities, type AgentsNoticed, type AgentsNoticeInput, type AgentsPlaced, type AgentsPlaceInput, APEX_WORD, decisionWords, FIN_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
@@ -110,6 +110,8 @@ export interface AgentsStarted {
   moved?: string
   /** The person's rule it follows, as its row says it. */
   rule?: string
+  /** Where it runs, when that isn't this device: `device:<name>`, by the device's own name. */
+  place?: string
   next: string
 }
 export type AgentsStartResult = AgentsStarted | AgentRefused
@@ -164,6 +166,10 @@ export interface AgentStrip {
   idleFor?: number
   /** Its open pull requests, from what the host holds (`finPullRequests`). */
   openPRs?: FinPullRequest[]
+  /** Where it runs, when that isn't this device: `device:<name>`. */
+  place?: string
+  /** For an Apex on another device: its device's count of what it has said of the Fin, so an older notice changes nothing after this (`Placed.said`). */
+  said?: { owner: number; seq: number }
   startedAt: number
 }
 /**
@@ -315,7 +321,11 @@ export interface AgentsStopInput {
   child: string
   reason?: string
 }
-export type AgentsStopResult = { stopped: string[] } | AgentRefused
+/**
+ * `pending`: Fins placed on a device that couldn't be reached, whose start's outcome isn't known. Each stop is kept
+ * and sent once its device answers; until then nothing says it stopped.
+ */
+export type AgentsStopResult = { stopped: string[]; pending?: { name: string; why: string }[] } | AgentRefused
 
 export interface AgentsWaitInput {
   /** Names or Thread IDs; absent: every Fin of the caller. */
@@ -381,6 +391,17 @@ export interface AgentOperations {
   wait(caller: AgentCaller, input: AgentsWaitInput): Promise<AgentsWaitResult>
 }
 export type AgentVerb = keyof AgentOperations
+
+/**
+ * What one host answers another about Fins placed across devices, each a host call of its own that no door shows an
+ * agent: what it offers as a place, a start for an Apex elsewhere, and a placed Fin's notice for its Apex's device.
+ */
+export interface PlacementOperations {
+  capabilities(): AgentsCapabilities
+  place(input: AgentsPlaceInput): Promise<AgentsPlaced | AgentRefused>
+  notice(input: AgentsNoticeInput): Promise<AgentsNoticed>
+  cancel(input: AgentsCancelInput): Promise<AgentsCancelled>
+}
 
 /** What the MCP door shows the model of one operation. */
 export interface AgentToolProjection {
@@ -727,7 +748,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_stop",
-      description: `Stop one of this Thread's ${FIN_WORD}s (its running turn, or its process and everything it started), or all of them. A stop pauses it: agents_send resumes it later in the same session, told what changed meanwhile. To stop its turn and redirect it now, agents_send with deliver: interrupt.`,
+      description: `Stop one of this Thread's ${FIN_WORD}s (its running turn, or its process and everything it started), or all of them. A stop pauses it: agents_send resumes it later in the same session, told what changed meanwhile. To stop its turn and redirect it now, agents_send with deliver: interrupt. One on a device that can't be reached comes back under pending, not stopped: the stop is kept and goes once that device answers.`,
       fields: { child: "Its name or Thread ID, or all.", reason: "Why, for its transcript and your digest." },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },

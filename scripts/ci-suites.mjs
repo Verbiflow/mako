@@ -30,6 +30,7 @@ const SUITES = [
   "test:control-driver-install", "test:control-media-sources", "test:control-packages", "test:control-preview",
   "test:control-recording-continuous", "test:cursor-child", "test:desktop-answers", "test:desktop-crashes",
   "test:dev-updates", "test:execution-ownership", "test:file-previews", "test:fin-pips-ui", "test:git",
+  "test:placed-fin-ui",
   "test:git-remote", "test:host", "test:host-shutdown", "test:host-signals", "test:host-single", "test:lazy",
   "test:listed-repositories", "test:live-actions", "test:live-approvals", "test:live-context-children",
   "test:local-signing", "test:mcp", "test:message-queue", "test:mobile-behavior", "test:model-connections-ui",

@@ -95,6 +95,7 @@ import type { ExternalThreadActivity, HostEvent } from "../contracts/host-events
 import type { FileContents, FileReadPurpose } from "../contracts/git-workspace-search.js"
 import type { ThreadFileContext } from "../contracts/conversation-session.js"
 import { listedAsThread, THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "../contracts/thread-list.js"
+import { listedUnderApex } from "../contracts/agents.js"
 
 const TEMPORARY_ROOTS = [
   tmpdir(),
@@ -486,10 +487,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     }
   }
 
-  /** A child's row names its parent's Thread, so it shows inside it and never as a row (`listedAsThread`). */
+  /** A child's row names its parent's Thread, so it shows inside it and never as a row (`listedAsThread`); one whose Apex is on another device is a row of its own (`listedUnderApex`). */
   function withParent(ref: ThreadRef, edges: ThreadEdges | undefined): ThreadRef {
     const edge = ref.threadId ? edges?.of(ref.threadId) : undefined
-    return edge ? { ...ref, parent: { thread: edge.parent, session: edge.parentSession } } : ref
+    return listedUnderApex(edge) ? { ...ref, parent: { thread: edge.parent, session: edge.parentSession } } : ref
   }
 
   function annotate(ref: ThreadRef): ThreadRef {

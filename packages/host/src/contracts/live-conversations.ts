@@ -464,6 +464,8 @@ export interface LiveSummary {
    * machine of the person's own is marked apart from a Mac. Absent for the cloud, and from a host before it.
    */
   elsewhereKind?: string
+  /** `ReportedSession.order`: its Session's place among its Thread's Sessions as its owner keeps them, from a row listed from elsewhere. */
+  order?: number
   /**
    * What a conversation listed from another device waits on, in a line ("Approve: npm test"), while it waits on a
    * person there: the row asks for them as a local one would.
