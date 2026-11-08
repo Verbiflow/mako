@@ -3344,7 +3344,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private waitingOf(edge: ThreadParent, line: string, pending: PendingAsk | undefined): NonNullable<ChildThread["waiting"]> {
     const ask = pending ? nativeAsk(pending) : undefined
     const why = this.personsBecause(edge, ask, line)
-    // What waits on the person for something no answer of its Apex's gives (needs-you: a sign-in, say) is theirs.
+    // What waits on the person for something no answer of its Apex's gives (needs-you: its subagent waiting on them,
+    // say) is theirs.
     const on = !ask ? "person" : !why ? "lead" : ask.kind === "approval" ? "approval" : "person"
     return { question: why ? `${line} (yours to answer: ${why})` : line, on, ...(ask && { ask }) }
   }
@@ -4667,7 +4668,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /**
    * The conversation a Fin's harness's own ask waits in for its answer (`request`, or any): the newest of its Thread's
-   * Sessions holding one. What only waits on the person (a sign-in) holds none, so it never hides an older one's ask.
+   * Sessions holding one. What only waits on the person (needs-you) holds none, so it never hides an older one's ask.
    */
   private answeringConversation(thread: string, request?: string): string | undefined {
     return this.newestOf(thread, (conversation) => {
