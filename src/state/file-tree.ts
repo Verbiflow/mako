@@ -224,7 +224,7 @@ export class FileTreeModel {
 
   /** Forget a folder that's closed, so a refresh doesn't keep asking for it. */
   close(path: string): void {
-    for (const held of [...this.#wanted]) if (held === path || held.startsWith(`${path}/`)) this.#wanted.delete(held)
+    for (const held of this.#wanted) if (held === path || held.startsWith(`${path}/`)) this.#wanted.delete(held)
   }
 
   #publish(): void {

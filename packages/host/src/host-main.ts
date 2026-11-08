@@ -3,7 +3,8 @@ import { join } from "node:path"
 import { processHostConfig } from "./host-config.js"
 import { createHost } from "./create-host.js"
 import { acquireSuccessorLock, hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "./base/host-lifecycle.js"
-import { settleRuntime } from "./transport/index.js"
+import { takeHostStart } from "./base/host-start.js"
+import { probeRuntime, settleRuntime } from "./transport/index.js"
 import { hostLog, hostWarn, installHostLog, logsRoot } from "./base/host-log.js"
 import { installCrashReporting } from "./base/crash.js"
 import { compileCacheStatus } from "./base/compile-cache.js"
@@ -20,6 +21,8 @@ if ("refused" in config) {
   process.exit(config.code)
 }
 const { environment } = config
+/** How long a host waits out a `mako-host` command holding its lock before it refuses to start. */
+const CLI_HOLD_MS = 3_000
 const log = installHostLog(join(logsRoot(environment.dataRoot), "host.log"))
 hostLog("host", "starting", {
   pid: process.pid,
@@ -30,8 +33,12 @@ hostLog("host", "starting", {
   dataRoot: environment.dataRoot,
   compileCache: compileCacheStatus(),
 })
+// A `mako-host` command that took the lock to read (a `status` of a build before this one, a `join` ending) lets go
+// within a moment, so it's waited out, briefly: a host polled with `status` as it started once exited as already
+// running. Whatever answers on the socket is a host, refused at once, and a holder that stays is refused at the bound.
 const lock = await acquireSuccessorLock(environment.dataRoot, takePredecessor(), {
   log: (message, fields) => hostWarn("host", message, fields),
+  brief: { ms: CLI_HOLD_MS, listening: () => probeRuntime(config.socket, { timeoutMs: 1_000 }).then((probe) => probe.state === "ready", () => true) },
 })
 // A host from before this lock holds only Electron's, and answers on the socket once it listens.
 // A socket that neither answers nor refuses counts as occupied.
@@ -68,7 +75,9 @@ const lifecycle = hostLifecycle({
     await log.flush()
   },
 })
-const host = createHost(config, { lifecycle, crashes, logPath: log.path })
+// The lock is held: this start's generation on the data root is taken now, one past the last, before anything says it.
+const start = takeHostStart(environment.dataRoot)
+const host = createHost(config, { lifecycle, crashes, logPath: log.path, start })
 stopOnSignals(lifecycle)
 await host.start().catch(async (error: Error) => {
   // The launcher shows this process's output; the log keeps the stack.

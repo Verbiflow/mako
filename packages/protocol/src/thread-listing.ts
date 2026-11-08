@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
 import { ContinueRepositorySchema, ListedContinueSchema } from "./continue-rows.js"
-import { ASKING_VERSION, CONTINUE_VERSION, FIN_STATES_VERSION, FINS_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, WAITING_FOR_VERSION } from "./version.js"
+import { ASKING_VERSION, CONTINUE_VERSION, FINS_VERSION, FIN_STATES_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, SESSION_ORDER_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 import { WaitingForSchema } from "./attention.js"
 
@@ -276,6 +276,13 @@ export const ReportedSessionSchema = z
     asking: ListedAskingSchema.optional(),
     /** Its Fins, as its owner's roster orders them (`ListedFinSchema`, link version 19 on); absent while it has none. */
     fins: z.array(ListedFinSchema).min(1).max(LISTED_FINS).optional(),
+    /**
+     * Its Session's place among its Thread's Sessions, as its owner's store keeps them: 0 the first, the newest the
+     * highest (link version 22 on). Written only by the owner, which alone holds the Thread's group; a device showing
+     * a Thread it doesn't hold ranks that Thread's rows by it, as it ranks a Thread it holds by its group. Absent from
+     * a host before it, whose rows rank as they arrive.
+     */
+    order: z.number().int().min(0).max(100_000).optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -400,16 +407,22 @@ function finStateOf19(state: ListedFinState): ListedFinState {
 }
 
 /**
- * The rows a link of `version` takes, each with only the fields that version knows: from link version 20, every one
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 22, every one
  * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
  * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= FIN_STATES_VERSION) return [...rows]
+  if (version >= SESSION_ORDER_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
+    // Before version 22 a gateway knows no `order`: the row goes without, and ranks where it arrives.
+    delete older.order
+    if (version >= FIN_STATES_VERSION) {
+      kept.push(older)
+      continue
+    }
     // At version 19 a gateway knows each Fin's state as 19 said it, and refuses a row saying more.
     if (version >= FINS_VERSION) {
       if (older.fins) older.fins = older.fins.map((fin) => ({ ...fin, state: finStateOf19(fin.state) }))
