@@ -1,3 +1,4 @@
+import { stoppingSignal } from "../base/host-stopping.js"
 import { createWriteStream, existsSync } from "node:fs"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -207,7 +208,7 @@ function pullAhead(deps: Partial<Pick<MoveArrivalDeps, "records" | "stage" | "ah
 
 /** The sessions the Thread's records hold in the cloud. */
 async function remoteSessions(link: RecordsLink): Promise<ReceivingSession[]> {
-  const response = await fetchWith(`${link.base}/sessions`, { headers: { authorization: link.authorization }, signal: AbortSignal.timeout(30_000) })
+  const response = await fetchWith(`${link.base}/sessions`, { headers: { authorization: link.authorization }, signal: stoppingSignal(AbortSignal.timeout(30_000)) })
   if (!response.ok) throw new Error(`The Thread's sessions couldn't be listed (GET /sessions answered ${response.status})`)
   return z.object({ sessions: RecordSessionSchema.array() }).parse(await response.json()).sessions.map(({ harness, nativeId }) => ({ harness, nativeId }))
 }
@@ -238,7 +239,7 @@ export type MoveStage = { checkpointMs: number; recordsMs: number; staged: Array
 /** Reads the move's checkpoint from the cloud into `file`. */
 async function readCheckpoint(link: RecordsLink, sha256: string, file: string): Promise<void> {
   const sent = crypto.randomUUID()
-  const response = await fetchWith(`${link.base}/checkpoints/${sha256}`, { headers: { authorization: link.authorization, [CORRELATION_HEADER]: sent }, signal: AbortSignal.timeout(10 * 60_000) })
+  const response = await fetchWith(`${link.base}/checkpoints/${sha256}`, { headers: { authorization: link.authorization, [CORRELATION_HEADER]: sent }, signal: stoppingSignal(AbortSignal.timeout(10 * 60_000)) })
   if (!response.ok || !response.body) {
     // The gateway's own words and correlation ID, so a refusal leads to its log line.
     const problem = z.object({ title: z.string(), correlationId: z.string() }).partial().safeParse(await response.json().catch(() => undefined)).data

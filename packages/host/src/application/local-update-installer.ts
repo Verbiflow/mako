@@ -16,6 +16,7 @@ import { pathToFileURL } from "node:url"
 import { promisify } from "node:util"
 
 const execute = promisify(execFile)
+const unregisterRun: Run = (command, args) => execute(command, args, { timeout: 30_000 })
 
 // A quitting host deletes its whole runtime directory, so the marker sits beside
 // it. Hosts built before September 29 only read the one inside.
@@ -87,8 +88,8 @@ const LSREGISTER =
  * of the installed app, which macOS then reports as "not open anymore".
  * Best-effort: a bundle that was never scanned has nothing to drop.
  */
-export async function unregisterBundle(app: string): Promise<void> {
-  await execute(LSREGISTER, ["-u", app], { timeout: 30_000 }).catch(
+export async function unregisterBundle(app: string, run: Run): Promise<void> {
+  await run(LSREGISTER, ["-u", app]).catch(
     () => undefined
   )
 }
@@ -130,14 +131,14 @@ export async function replacePreparedApplication(
     try {
       await rename(candidate, input.target)
       await input.verify(input.target)
-      if (current) await unregisterBundle(backup)
+      if (current) await unregisterBundle(backup, unregisterRun)
     } catch (error) {
       try {
         if (await appStat(input.target)) {
           const failed = await mkdtemp(join(input.staging, "failed-"))
           const rejected = join(failed, "Mako.app")
           await rename(input.target, rejected)
-          await unregisterBundle(rejected)
+          await unregisterBundle(rejected, unregisterRun)
         }
         if (current) await rename(backup, input.target)
       } catch (rollbackError) {
@@ -333,7 +334,7 @@ export async function pruneRetainedApplications(
       const contents = await readdir(staging).catch(() => null)
       if (!contents || contents.some((entry) => !RETAINED_CONTENTS.has(entry))) continue
       if (await directoryInUse(staging, run)) continue
-      await unregisterBundle(join(staging, "Previous Mako.app"))
+      await unregisterBundle(join(staging, "Previous Mako.app"), unregisterRun)
       await rm(staging, { recursive: true, force: true })
       removed.push(staging)
     }
@@ -555,7 +556,7 @@ async function runInstaller(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 250))
     }
   } catch (error) {
-    await unregisterBundle(join(staging, "Mako.app"))
+    await unregisterBundle(join(staging, "Mako.app"), unregisterRun)
     if (authorized) {
       await writeFile(
         receipt,

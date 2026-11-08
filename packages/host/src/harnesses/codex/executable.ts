@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../../base/host-command.js"
 import { constants } from "node:fs"
 import { access, readFile, readdir, realpath } from "node:fs/promises"
 import { arch, homedir } from "node:os"
 import { basename, dirname, join, parse, resolve } from "node:path"
-import { promisify } from "node:util"
 import {
   environmentForExecutable,
   resolveExecutable,
@@ -12,7 +11,7 @@ import { isJsonObject, stringValue } from "../../base/json-values.js"
 import { nodePlatform, onMac } from "../../base/platform.js"
 import type { JsonValue } from "../../contracts/json.js"
 
-const run = promisify(execFile)
+const run = hostCommand
 
 export function codexExecutableCandidates(env = process.env): string[] {
   if (env.CODEX_EXECUTABLE) {

@@ -1,8 +1,8 @@
+import { hostCommand } from "../../base/host-command.js"
+import { hostFetch } from "../../base/host-stopping.js"
 import type { PrefetchLaunch } from "../start-prefetch.js"
 import { closeProviderProcess, spawnProviderProcess } from "../provider-process.js"
-import { execFile } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { promisify } from "node:util"
 import { ClientError, OpenCode, type OpenCodeClient } from "@opencode/client"
 import { z } from "zod"
 import { environmentForExecutable } from "../../base/executable.js"
@@ -29,7 +29,7 @@ export function openCodeLacksRoute(error: ClientError): boolean {
   return error.reason === "UnexpectedStatus" && NotFound.safeParse(error.cause).success
 }
 
-const run = promisify(execFile)
+const run = hostCommand
 
 /**
  * The launched server's version and process. `/api/info` came in 2.0.6; an
@@ -154,7 +154,7 @@ export async function startOpenCodeApi(input: {
   child.stdin.on("error", () => { void close().catch(() => {}) })
   try {
     const baseUrl = await input.trace.step("handshake", () => watch.step("native API readiness", ready))
-    const transport: typeof fetch = (url, options) => (input.fetch ?? fetch)(url, {
+    const transport: typeof fetch = (url, options) => (input.fetch ?? hostFetch)(url, {
       ...options,
       redirect: "error",
       signal: options?.signal ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal,

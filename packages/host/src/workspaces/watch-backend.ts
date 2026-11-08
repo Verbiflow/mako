@@ -1,4 +1,5 @@
-import { fork, type ChildProcess } from "node:child_process"
+import { hostFork } from "../base/host-command.js"
+import type { ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { SLOW_DELIVERY_MS, WatcherReplySchema, type DropReason, type HistoryMark, type WatchEvent, type WatcherReply, type WatcherRequest } from "../contracts/watcher-child.js"
@@ -204,7 +205,7 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
   }
 
   const start = (why: ChildStart) => {
-    const next = fork(script, [], {
+    const next = hostFork(script, [], {
       execPath: headlessNodeExecutable(),
       // Under tsx (tests, development scripts) the child needs its loader to run TypeScript.
       execArgv: script.endsWith(".ts") ? process.execArgv : [],
@@ -316,7 +317,7 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
   const running = () => {
     clearTimeout(idle)
     if (child) return child
-    const next = fork(script, [], {
+    const next = hostFork(script, [], {
       execPath: headlessNodeExecutable(),
       execArgv: script.endsWith(".ts") ? process.execArgv : [],
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
@@ -400,7 +401,7 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
  */
 export function probeDelivery(script = defaultChildScript(), beats = 5): Promise<number[]> {
   return new Promise((settle) => {
-    const child = fork(script, [], {
+    const child = hostFork(script, [], {
       execPath: headlessNodeExecutable(),
       execArgv: script.endsWith(".ts") ? process.execArgv : [],
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },

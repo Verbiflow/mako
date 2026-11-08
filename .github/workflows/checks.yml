@@ -385,6 +385,15 @@ jobs:
       - uses: ./.github/actions/install-dependencies
       - run: npx tsgo -b packages/host
       - run: npx tsx scripts/ci-update-checks.ts
+        env:
+          MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
+      # What a failed check kept to say why (a host's logs when it was slow to stop).
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: update-checks-evidence
+          path: ${{ runner.temp }}/test-evidence
+          if-no-files-found: ignore
 
   # A long Apex Thread on the desk, the web app and the phone opens at its end with no blank room, and a message sent
   # there, between turns and in one, overlaps no row in any frame it paints (`test:transcript-send-ui`). Geometry

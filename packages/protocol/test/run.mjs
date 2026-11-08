@@ -2063,6 +2063,15 @@ describe("an account's list of Threads, one row per Session", () => {
   const cloud = { kind: "cloud", threadId: "t-0123456789abcdef" }
   const listed = { ...session, runsOn: mac, listedAt: "2026-10-24T20:05:01.000Z" }
 
+  test("a Session's owner changing its order is news, including gaining or losing the field", () => {
+    const ordered = { ...listed, order: 0 }
+    assert.equal(sameListed(ordered, { ...ordered, order: 1 }), false)
+    assert.equal(sameListed(listed, ordered), false)
+    assert.equal(sameListed(ordered, listed), false)
+    assert.equal(sameListed(ordered, { ...ordered, listedAt: "2026-10-25T00:00:00.000Z" }), true)
+    assert.equal(sameListed(listed, { ...listed }), true, "older owners without order still compare as before")
+  })
+
   test("a row holds what a list shows and says where it runs; a report holds nothing else, and a list read passes over what a newer build adds", () => {
     assert.deepEqual(ListedSessionSchema.parse(listed), listed)
     assert.throws(() => ReportedSessionSchema.parse({ ...session, transcript: "…" }), "a report holds no field it doesn't define")
