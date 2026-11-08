@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises"
 import { createServer } from "node:http"
 import { join } from "node:path"
 import { createRequire } from "node:module"
+import { mock } from "node:test"
+import { downloadArtifact } from "@electron/get"
 import { downloadElectron } from "./lib/ci-electron.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
 
@@ -18,8 +20,11 @@ const server = createServer((request, response) => {
   const times = requests.get(request.url) ?? []
   times.push(Date.now())
   requests.set(request.url, times)
+  if (request.url === "/release") return response.end(JSON.stringify({ assets: [{ id: 17, name: filename }] }))
+  if (request.url === "/frontdoor") return response.writeHead(504).end("persistent front door 504")
+  if (request.url === "/asset") assert.equal(request.headers.accept, "application/octet-stream")
   if (request.url === "/missing") response.writeHead(404).end()
-  else if (request.url === "/electron" && times.length <= 2) response.writeHead(504).end("planted 504")
+  else if (["/electron", "/asset"].includes(request.url) && times.length <= 2) response.writeHead(504).end("planted 504")
   else response.end(bytes)
 })
 await new Promise((done) => server.listen(Number(process.env.TEST_DOWNLOAD_PORT ?? 0), "127.0.0.1", done))
@@ -43,10 +48,26 @@ try {
   await assert.rejects(downloadElectron(details("altered", "0".repeat(64))), /checksum/i)
   assert.equal(requests.get("/altered").length, 1, "a bad checksum isn't retried")
 
+  const nativeFetch = globalThis.fetch
+  mock.method(globalThis, "fetch", (url, options) => {
+    const address = new URL(url)
+    const path = address.hostname === "github.com" ? "/frontdoor" : address.hostname === "api.github.com"
+      ? address.pathname.includes("/releases/tags/") ? "/release" : "/asset" : undefined
+    return nativeFetch(path ? `${base}${path}` : url, options)
+  })
+  const fallback = { ...details("fallback"), mirrorOptions: { resolveAssetURL: () => `https://github.com/example/electron/releases/download/v${version}/${filename}` } }
+  const viaApi = await downloadElectron(fallback)
+  assert.deepEqual(await readFile(viaApi), bytes)
+  assert.equal(requests.get("/frontdoor").length, 3)
+  assert.equal(requests.get("/asset").length, 3, "the asset API's transient errors back off too")
+  console.log("PASS: a persistently failing release URL uses the asset API, whose planted 504s also retry")
+
   await new Promise((done) => server.close(done))
+  assert.equal(await downloadArtifact(fallback), viaApi, "the installer's ordinary downloader finds the API-fetched bytes under the original URL's cache key")
   assert.equal(await downloadElectron(details("electron")), file, "a verified cached archive works with its server offline")
   console.log("PASS: a cache hit needs no network; permanent HTTP and checksum failures remain fatal")
 } finally {
+  mock.restoreAll()
   server.closeAllConnections()
   await new Promise((done) => server.close(done))
 }
