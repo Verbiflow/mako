@@ -132,6 +132,7 @@ async function checkWindow() {
   if (await evaluate(`!document.querySelector('[data-project-tab="setup"][aria-selected="true"]')`))
     await click('[data-app-project]')
   await until(`Boolean(document.querySelector('[data-project-tab="setup"][aria-selected="true"]'))`, "the chosen project's Setup, not its recipe")
+  await evaluate(`Promise.all(document.querySelector('[data-project-tab="setup"]').closest('[role="dialog"]').getAnimations().map((animation) => animation.finished)).then(() => true)`)
   await capture("setup-from-rail.png")
   await evaluate(`window.dispatchEvent(new CustomEvent('mako:close-settings'))`)
   await until(`document.querySelector('[data-project-tab="setup"]') === null`, "Setup closed")
