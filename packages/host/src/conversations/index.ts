@@ -141,6 +141,8 @@ export interface ConversationsDeps {
   harnesses: Harnesses
   workspaces: Workspaces
   telemetry: HostTelemetry
+  /** This host's start on its data root, which its epoch carries (`takeHostStart`). */
+  start?: import("../base/host-start.js").HostStart
   /** A new conversation was written and placed, before its harness starts (`Dependencies.opened`). */
   opened?(conversationId: string): void
   /** Since when a conversation of this Mac's waits to hear its account before it runs a turn (`Dependencies.ownerCheck`). */
@@ -216,6 +218,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     opened: deps.opened,
     ownerCheck: deps.ownerCheck,
     memory: memory ?? undefined,
+    ...(deps.start && { start: deps.start }),
     threads: threads.store ?? undefined,
     mcpSnapshot: deps.mcpSnapshot,
     workspaceSnapshots: new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots")),

@@ -3161,16 +3161,34 @@ keep-alive, closed a pooled connection a read had just been written to, and
 the reset read as the host leaving. `test-host-liveness.ts` covers these.
 
 Every `live-batch` and `LiveSummary` carries the host's `epoch`, minted per
-`LiveConversations` instance. Revisions climb within one epoch and a
-restarted host continues from the journal, but a recovering host rewrites
-what it reopens at the same revision and two hosts never share a counter, so
-`live-recovery.ts` merges a batch onto held state only within the epoch;
-across epochs it buffers and takes a snapshot, and a snapshot from another
-epoch replaces the state outright and drops any batch still buffered from
-another epoch: it came from a host that no longer answers, and replayed it
-would ask the new host for a snapshot in its numbering forever (a window once
-reread one conversation every 280 ms for an hour after a restart). An unstamped batch (an older host) still
+`LiveConversations` instance: its start on its data root (`g<generation>.<root>.…`,
+`takeHostStart`, one past the last, kept on disk before it's used), or, from a
+build before starts, none. Revisions climb within one epoch, but a recovering
+host rewrites what it reopens at the same revision and two hosts never share a
+counter, so `live-recovery.ts` merges a batch onto held state only within the
+epoch, and orders what hosts said by their start, then revision (`olderThan`),
+never by a clock. A reply whose order can't be established (a build before
+starts, another data root) never replaces what the window holds: the current
+host is read afresh. A batch of another start buffers and takes a snapshot;
+after it, what waited goes on if it's of a newer start or of the one the stream
+last said, and is otherwise past: replayed, it would ask the new host for a
+snapshot in its numbering forever (a window once reread one conversation every
+280 ms for an hour after a restart). An unstamped batch (an older host) still
 applies by revision. `test-prompt-delivery.tsx` covers both.
+
+What reaches the window about a live conversation goes through one door,
+`receiveLive` (`src/state/live-door.ts`): a batch, one that waited on a
+snapshot, a listing or a reconnect's summaries, an unlisting, its owner's
+connection, a move's, a return's or a continue's step, a snapshot (a read's or
+an action's answer) and a history page. What its host says unasked goes on the
+record of every read of it out (`moved`, `heard`), so no answer of a read
+speaks for what came after it was asked. A reconnect's summary carries no
+permission, so a Session of this host keeps the one it had and is read again.
+`test-ask-notices.ts` generates host restarts, late and stray replies, and
+batches and listings while reads are out (300 runs, in `test:notifications`);
+`test-live-door.ts` drives each way in under a watch of the store that fails on
+any write around the door (`watchDoor`), which the window's suites keep on too
+(`failAroundTheDoor`).
 
 A window reads a conversation's earlier history, released turns and full
 outputs through a view the host captured (`LiveHistoryReader`). A

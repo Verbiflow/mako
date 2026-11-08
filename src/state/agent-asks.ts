@@ -36,11 +36,14 @@ export function agentAskCard(conversationId: string, ask: AgentAsk, harness: str
 
 export async function answerAgentAsk(conversationId: string, ask: AgentAsk, allow: boolean): Promise<boolean> {
   if (!hasBridge()) return false
-  try {
-    await getMako().answerAgentAsk(conversationId, ask.id, allow)
-    return true
-  } catch (error) {
-    toast.error("Mako couldn't record that answer", { description: error instanceof Error ? error.message : String(error) })
-    return false
-  }
+  // Ask selectors also load while threads initialize; recovery is an action dependency, loaded before the RPC.
+  const { readBackLive } = await import("@/state/live-recovery")
+  let failure: unknown
+  try { await getMako().answerAgentAsk(conversationId, ask.id, allow) } catch (error) { failure = error }
+  // The accepted answer may arrive without its event. Read it through the same lifecycle as an approval's receipt;
+  // never replay an answer whose outcome is unknown.
+  await readBackLive(conversationId)
+  if (!failure) return true
+  toast.error("Mako couldn't record that answer", { description: failure instanceof Error ? failure.message : String(failure) })
+  return false
 }

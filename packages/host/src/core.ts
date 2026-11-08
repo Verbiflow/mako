@@ -64,6 +64,7 @@ import { declareApplicationMethods, Updates, type Application } from "./applicat
 import { devHostBuildDirectories } from "./base/dev-host-build.js"
 import type { HostOwner } from "./create-host.js"
 import { backgroundWork } from "./contracts/background-work.js"
+import { withChildren } from "./contracts/native-agents.js"
 import { personPromptedAt } from "./contracts/worked-at.js"
 import { projectFolder, worktreeAt } from "./contracts/worktree-paths.js"
 
@@ -503,6 +504,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }
     return undefined
   }
+  // What a conversation's turn left running: its provider's work as memory holds it, and its Thread's Fins as they stand
+  // now. Only its Thread's newest Session hears them move (`finReaders`), so an older one's roster keeps them as they were.
+  const heldWork = (id: string) => {
+    const held = late.conversations?.live.held(id)
+    if (!held) return undefined
+    const agents = late.conversations?.agents
+    return backgroundWork(held.session, agents ? withChildren(held.nativeAgents, agents.roster(id)) : held.nativeAgents)?.count
+  }
   const sessions = new SessionPublisher({
     rows: () => {
       const live = late.conversations?.live
@@ -532,10 +541,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         },
         head: listedHead,
         repository: (folder) => repositories.of(folder),
-        background: (id) => {
-          const held = live.held(id)
-          return held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined
-        },
+        background: heldWork,
         asking: (id) => finAsking(late.conversations?.agents?.personAsk(id)),
         asked: (id) => live.askWaiting(id),
         fins: (id) => listedFins(late.conversations?.agents?.roster(id)),
@@ -553,7 +559,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         session,
         working: live.workOf(id)?.status,
         waitingOn: (conversation) => live.waitingOn(conversation),
-        background: held ? backgroundWork(held.session, held.nativeAgents)?.count : undefined,
+        background: heldWork(id),
         promptedAt: held ? personPromptedAt(held.requests, held.control?.actions) : undefined,
         asking: (conversation) => finAsking(late.conversations?.agents?.personAsk(conversation)),
         asked: (conversation) => live.askWaiting(conversation),
@@ -851,6 +857,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     notice: (message) => emit({ type: "notice", level: "error", message }),
   })
   const opened = await openConversations({
+    ...(owner.start && { start: owner.start }),
     stopping: () => shell.closing(),
     streams,
     finDefaults,

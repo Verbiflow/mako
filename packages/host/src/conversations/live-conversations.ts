@@ -163,9 +163,12 @@ export class LiveConversations {
    * One generation per host life. Every batch and snapshot carries it so a
    * renderer can tell a revision numbered by this host from one numbered by
    * the host before it, and re-snapshot instead of merging across the seam.
-   * Readers only compare it, and every batch carries it: 72 random bits, in 12 characters rather than a UUID's 36.
+   * With its start on its data root (`Dependencies.start`): `g<generation>.<data root>.<48 random bits>`, which a
+   * window orders by generation where both are of one data root (`olderThan`), so a reply of the host before, answered
+   * late, never takes back what this one said, whatever any clock says. Without one, and in a build before this, 72
+   * random bits, which no window orders: a reply it can't place is read again rather than taken.
    */
-  readonly epoch = randomBytes(9).toString("base64url")
+  readonly epoch: string
   /** The one timer for held messages' times (`armWakes`): when it fires, and the timer. */
   private wakeTimer: { at: number; timer: ReturnType<typeof setTimeout> } | undefined
   private wakesStopped = false
@@ -173,6 +176,9 @@ export class LiveConversations {
 
   constructor(dependencies: Dependencies) {
     this.dependencies = dependencies
+    this.epoch = dependencies.start
+      ? `g${dependencies.start.generation}.${dependencies.start.root}.${randomBytes(6).toString("base64url")}`
+      : randomBytes(9).toString("base64url")
     this.admission = dependencies.admission ?? new Admission()
     this.assets = new LiveAssets(join(dependencies.root, "assets"))
     this.restarts = new LiveRestarts(dependencies.root, dependencies.emit)
@@ -1704,7 +1710,8 @@ export class LiveConversations {
    * The conversation's children moved: a loaded conversation's roster takes
    * them from their engine, which keeps each entry's identity while it's
    * unchanged. A start or an end goes out at once, progress with the frame.
-   * One memory let go of is read back in, so its windows hear the move as it
+   * Only its Thread's newest Session's conversations are told (`finReaders`):
+   * one memory let go of is read back in, so its windows hear the move as it
    * happens; it then stays while its Fins are at work (`finsAtWork`).
    */
   childrenChanged(id: string, progressOnly = false): void {
@@ -1721,9 +1728,14 @@ export class LiveConversations {
     }).catch((error) => hostWarn("live", "a conversation whose Fins moved couldn't be read in", { conversation: id, error: errorMessage({ error }) }))
   }
 
-  /** Whether any of the conversation's Fins is at work, queued or waiting on the person: its roster still moves. */
+  /**
+   * Whether any of the conversation's Fins is at work, queued or waiting on the person, and it hears them: its roster
+   * still moves. An older Session of the Thread hears none of it, so its Fins don't hold it in memory.
+   */
   private finsAtWork(id: string): boolean {
-    return (this.dependencies.agents?.()?.roster(id) ?? []).some((agent) => {
+    const agents = this.dependencies.agents?.()
+    if (agents?.showsFins && !agents.showsFins(id)) return false
+    return (agents?.roster(id) ?? []).some((agent) => {
       const group = childGroup(childStateOf(agent))
       return group === "working" || group === "queued" || group === "needs"
     })

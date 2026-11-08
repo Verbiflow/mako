@@ -2,6 +2,8 @@ import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
 import { applyLiveSnapshot, applyLiveBatch } from "../src/state/live-recovery"
 import { acpStore, activeLiveAcp } from "../src/state/acp-state"
+import { readingLive, receivingLive } from "../src/state/live-door"
+import { failAroundTheDoor } from "./live-door-watch"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
 import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
@@ -12,6 +14,8 @@ import { projectLive } from "../src/state/live-projection"
 import { agentActivity } from "../src/state/agent-activity"
 import type { LiveSnapshot, LiveRequest } from "../src/lib/types"
 import type { Entry } from "@mako/sessions/entries"
+// What the window's own code writes of a conversation goes through the door (`receiveLive`), or the suite fails.
+failAroundTheDoor(acpStore, receivingLive, readingLive)
 
 const id = "11111111-1111-4111-8111-111111111111"
 const request: LiveRequest = {
@@ -123,27 +127,28 @@ assert.equal(
 )
 // Epochs: a batch numbered by another host generation is not merged onto
 // state built by this one, whatever its revision says; a snapshot from the
-// new epoch replaces the state outright and later batches follow it.
+// new epoch replaces the state outright and later batches follow it. Host
+// starts as a host names them: a generation one past the last on one data root.
 acpStore.set({ activeKey: id })
-applyLiveSnapshot({ ...snapshot, revision: 3, epoch: "host-a", requests: [{ ...request, status: "dispatching" }] })
-assert.equal(current().epoch, "host-a")
+applyLiveSnapshot({ ...snapshot, revision: 3, epoch: "g1.promptroot.a", requests: [{ ...request, status: "dispatching" }] })
+assert.equal(current().epoch, "g1.promptroot.a")
 applyLiveBatch({
   id,
   revision: 4,
-  epoch: "host-b",
+  epoch: "g2.promptroot.b",
   updates: [{ kind: "text", text: "from another host" }],
 })
 assert.equal(current().revision, 3, "a batch from another epoch is ignored, not merged")
-assert.equal(current().epoch, "host-a")
+assert.equal(current().epoch, "g1.promptroot.a")
 applyLiveSnapshot({
   ...snapshot,
   revision: 1,
-  epoch: "host-b",
+  epoch: "g2.promptroot.b",
   requests: [{ ...request, status: "uncertain", interruption: { reason: "host-crashed", at: 5 } }],
 })
-assert.equal(current().epoch, "host-b", "a snapshot from a new epoch replaces the state even at a lower revision")
+assert.equal(current().epoch, "g2.promptroot.b", "a snapshot from a new epoch replaces the state even at a lower revision")
 assert.equal(current().revision, 1)
-applyLiveBatch({ id, revision: 2, epoch: "host-b", updates: [{ kind: "text", text: "continues" }] })
+applyLiveBatch({ id, revision: 2, epoch: "g2.promptroot.b", updates: [{ kind: "text", text: "continues" }] })
 assert.equal(current().revision, 2, "the new epoch's own batches apply")
 applyLiveBatch({ id, revision: 3, updates: [{ kind: "text", text: "unstamped" }] })
 assert.equal(current().revision, 3, "an unstamped batch (an older host) still applies by revision")
@@ -428,6 +433,8 @@ console.log(
 
 // A resumed submission can be represented by a transfer rather than a prompt
 // request. Its receipt (including refusal) must retire only its optimistic row.
+// Each case on a host start of its own, as a host names them: a generation one past the last on one data root.
+let promptStarts = 2
 for (const kind of ["queued", "preparing", "failed", "uncertain"] as const) {
   const control = {
     activeBindingId: id, bindings: [], merges: [], transfers: [{
@@ -438,12 +445,13 @@ for (const kind of ["queued", "preparing", "failed", "uncertain"] as const) {
     }],
   }
   for (const viaBatch of [false, true]) {
-    applyLiveSnapshot({ ...snapshot, revision: 1000, epoch: `${kind}-${viaBatch}`, control: undefined })
+    const epoch = `g${(promptStarts += 1)}.promptroot.${kind}`
+    applyLiveSnapshot({ ...snapshot, revision: 1000, epoch, control: undefined })
     stagePrompt(id, request)
     const other = { ...request, id: "33333333-3333-4333-8333-333333333333" }
     stagePrompt(id, other)
-    if (viaBatch) applyLiveBatch({ id, revision: 1001, epoch: `${kind}-${viaBatch}`, updates: [], control })
-    else applyLiveSnapshot({ ...snapshot, revision: 1001, epoch: `${kind}-${viaBatch}`, control })
+    if (viaBatch) applyLiveBatch({ id, revision: 1001, epoch, updates: [], control })
+    else applyLiveSnapshot({ ...snapshot, revision: 1001, epoch, control })
     assert.deepEqual(current().pendingPrompts?.map((prompt) => prompt.id), [other.id])
     assert.equal(current().control?.transfers[0]?.state.kind, kind)
     assert.ok(!current().projection?.messages.some((message) => message.id === request.id))
