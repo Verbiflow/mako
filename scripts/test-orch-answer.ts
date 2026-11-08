@@ -170,7 +170,7 @@ try {
     })
     await until("the Apex to be asked", () => replies.length === 1)
     assert.match(wakes[0]!, /Wants to move this Thread to the cloud/, "the Apex hears what the Fin's agent asked")
-    answered.length || (await until("the ask to be answered", () => answered.length === 1))
+    if (!answered.length) await until("the ask to be answered", () => answered.length === 1)
     assert.deepEqual(answered, [{ ask: "11111111-1111-4111-8111-111111111111", allow: true }], "the Apex's allow is the ask's")
     await until("the Fin to go on", () => state()?.kind === "ended")
     await world.close()

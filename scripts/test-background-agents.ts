@@ -489,7 +489,7 @@ async function launchesBeforeTheirEdge(): Promise<void> {
     limit = 3
     w.agents.capacityChanged()
     // Its Apex hears once the digest is in its queue, which can come before the row is read.
-    await waitFor(() => w.store.queuedSpawns().length === 0 || w.agents.roster(apex.conversation).some((entry) => entry.state.kind === "waiting" && /^Not started: its worktree couldn't be made/.test(entry.state.reason ?? "")), "the refusal to show on its row")
+    await waitFor(() => w.store.queuedSpawns().length === 0 || w.agents.roster(apex.conversation).some((entry) => entry.state.kind === "waiting" && (entry.state.reason ?? "").startsWith("Not started: its worktree couldn't be made")), "the refusal to show on its row")
     await waitFor(() => w.store.queuedSpawns().length === 0, "it to go once its Apex heard", 15_000)
     const told = /"bad" \(Claude\) failed: It didn't start: its worktree couldn't be made/
     await waitFor(() => w.prompts.some((prompt) => prompt.conversation === apex.conversation && told.test(prompt.text)), "its Apex to hear why it didn't start")
