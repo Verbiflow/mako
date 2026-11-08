@@ -8,11 +8,24 @@ import { HeldLeases } from "@mako/host/base/held-leases"
  * only, local expiry, and a release kept until it's confirmed.
  */
 
-const lease = (id: string, expiresAt = 1_000): Lease => ({
-  id, grant: "simulators", grantVersion: 1, borrower: { account: "acct", repository: "acme/shop", thread: "t1", place: { kind: "machine", machine: "m-1" } },
-  resource: { kind: "operation", ref: "ios-simulator" }, source: { kind: "capable", requires: [{ capability: "ios-simulator" }] }, mode: "relay", access: "run",
-  version: "g1", issuedAt: 0, expiresAt, delivery: { transfer: "none", secret: false }, device: "mac", session: { state: "starting", heartbeatMs: 60_000, lastBeat: 0 },
-})
+function lease(id: string, expiresAt = 1_000): Lease {
+  return {
+    id,
+    grant: "simulators",
+    grantVersion: 1,
+    borrower: { account: "acct", repository: "acme/shop", thread: "t1", place: { kind: "machine", machine: "m-1" } },
+    resource: { kind: "operation", ref: "ios-simulator" },
+    source: { kind: "capable", requires: [{ capability: "ios-simulator" }] },
+    mode: "relay",
+    access: "run",
+    version: "g1",
+    issuedAt: 0,
+    expiresAt,
+    delivery: { transfer: "none", secret: false },
+    device: "mac",
+    session: { state: "starting", heartbeatMs: 60_000, lastBeat: 0 },
+  }
+}
 
 {
   // A step that began before a release, an end or another lease holds nothing it brings back.
