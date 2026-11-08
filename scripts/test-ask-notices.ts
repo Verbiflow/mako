@@ -85,7 +85,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   }), { source: "live" }, {})
   let counter = 0
   const next = (prefix: string) => `${prefix}${(counter += 1)}`
-  const counts = { asked: 0, answered: 0, replaced: 0, turns: 0, lateReads: 0, staleReads: 0, oldStartReads: 0, restarts: 0, legacyStarts: 0, opened: 0, letGo: 0, removed: 0, looked: 0, several: 0 }
+  const counts = { asked: 0, answered: 0, replaced: 0, turns: 0, lateReads: 0, staleReads: 0, oldStartReads: 0, restarts: 0, legacyStarts: 0, batchesDuringReads: 0, strays: 0, opened: 0, letGo: 0, removed: 0, looked: 0, several: 0 }
 
   // The host: each Session's state by its start and revision, the Fins (told to the newest alone), the remote Session,
   // the outside app. A restart is a new start (`E<n>`), its numbers begun again, what it holds carried over.
@@ -156,7 +156,11 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     const revision = (host.revision[session] += 1)
     host.history[session].set(stampOf(session), { ...before, ...state })
     if (session === "newest") host.finsAt.set(stampOf(session), fins ?? finsBefore!)
-    if (held(session)) applyLiveBatch({ id: keys[session], revision, epoch: epochOf(host.start), updates: [], ...what })
+    if (!held(session)) return
+    // A batch while a read of the Session is out: taken or waiting on it, the read no longer speaks alone.
+    if (reads.some((read) => read.session === session)) counts.batchesDuringReads += 1
+    lastSent[session] = { start: host.start, revision }
+    applyLiveBatch({ id: keys[session], revision, epoch: epochOf(host.start), updates: [], ...what })
   }
   const listRemote = (initial = false) => {
     const ask = host.remote
@@ -177,6 +181,8 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   }
   const trail: string[] = []
 
+  /** The newest batch the window was sent of each Session, by its start and revision: it holds at least that in the end. */
+  const lastSent: BySession<{ start: number; revision: number } | undefined> = { older: undefined, newest: undefined }
   /** The newest the window has taken of each Session, its start and revision there, held now or not: never gone back past. */
   const newestTaken: BySession<{ start: number; revision: number }> = { older: { start: 0, revision: 1 }, newest: { start: 0, revision: 1 } }
   const check = (what: string) => {
@@ -348,6 +354,14 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
         trail.push(`the window loses the ${session} Session`)
         removeAcpConversation(keys[session])
       }
+    } else if (roll < 0.92) {
+      // A snapshot no read brought, of a start this window can't place (another data root's), saying what the Session
+      // said long ago: it never replaces what the window holds.
+      if (!held(session)) continue
+      counts.strays += 1
+      const state = snapshot(session, epochOf(0), 1)
+      trail.push(`a stray answer of another data root says the ${session} Session as it began`)
+      applyLiveSnapshot({ ...state, epoch: `g1.stray${seed}x.${counter}` })
     } else if (roll < 0.95) {
       // The host restarts: a new start, its numbers begun again, holding what it held. It tells the window by what it sends
       // from then on; reads the last start had out are answered late, as that start had it.
@@ -373,10 +387,25 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     check(trail.at(-1)!)
   }
   // Every read answered, and every Session held again as it stands: everything open has its notice, nothing more.
-  for (let round = 0; reads.length && round < 50; round += 1) {
-    const read = reads.shift()!
+  // Reads it asks again after a while (`hydrateLive`'s backoff) are waited for, and answered too.
+  for (let round = 0, quiet = 0; round < 80 && quiet < 3; round += 1) {
+    const read = reads.shift()
+    if (!read) {
+      quiet += 1
+      await new Promise((waited) => setTimeout(waited, 300))
+      await settle()
+      continue
+    }
+    quiet = 0
     read.answer(snapshot(read.session, read.epoch, read.revision))
     await settle()
+  }
+  // What it was sent of a Session it still holds, it holds, or newer: no batch waiting on a read is dropped by it.
+  for (const session of SESSIONS) {
+    const sent = lastSent[session], heldNow = heldAt(session)
+    if (!sent || !heldNow) continue
+    const taken = { start: epochs.indexOf(heldNow.epoch), revision: heldNow.revision }
+    assert.ok(taken.start > sent.start || (taken.start === sent.start && taken.revision >= sent.revision), `seed ${seed}: the window was sent the ${session} Session's revision ${sent.revision} of start ${sent.start} and holds only ${taken.revision} of start ${taken.start}\n${trail.slice(-16).join("\n")}`)
   }
   for (const session of SESSIONS) if (!held(session)) applyLiveSnapshot(snapshot(session))
   await settle()
@@ -416,6 +445,11 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   const bridgeReads: ((snapshot: LiveSnapshot) => void)[] = []
   readSnapshot = () => new Promise((answer) => bridgeReads.push(answer))
   const unseen = () => notificationsStore.get().items.filter((item) => !item.seen).length
+  /** The approval a Session shows, if any. */
+  const approvalShown = (key: string) => {
+    const conversation = acpStore.get().conversations[key]
+    return conversation?.kind === "live" ? conversation.permission?.id : undefined
+  }
   const fresh = () => {
     visible = new Set()
     notificationsStore.set({ items: [] })
@@ -474,6 +508,108 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     bridgeReads.shift()!(state(key, held, 4, [fin]))
     for (let wait = 0; wait < 6; wait += 1) await turn()
     assert.equal(acpStore.get().conversations[key]?.revision, 4, "and its answer is taken")
+  }
+
+  // While a fresh read is out (one asked for a reply it couldn't place), a batch of a newer start says the Session asks:
+  // the read no longer speaks alone, so its answer of the start it was asked at isn't taken, and the batch's start is
+  // read. (#524's ninth review: the answer was taken, the batch waiting on it dropped, and the approval never shown.)
+  {
+    const key = "fresh-crossed", held = "g1.rootAAAA.a", asked = "g1.rootBBBB.b", newer = "g2.rootBBBB.c"
+    fresh()
+    acpStore.set({ activeKey: key })
+    applyLiveSnapshot(state(key, held, 1, [fin]))
+    applyLiveSnapshot(state(key, asked, 1, [fin]))
+    assert.equal(bridgeReads.length, 1, "a start it can't place is read afresh")
+    applyLiveBatch({ id: key, revision: 1, epoch: newer, updates: [], permissions: [approval] })
+    bridgeReads.shift()!(state(key, asked, 1, [fin]))
+    for (let wait = 0; wait < 6; wait += 1) await turn()
+    assert.notEqual(acpStore.get().conversations[key]?.epoch, asked, "the read's answer isn't taken once a batch came")
+    assert.equal(bridgeReads.length, 1, "the newer start is read")
+    bridgeReads.shift()!(state(key, newer, 1, [fin], [approval]))
+    for (let wait = 0; wait < 6; wait += 1) await turn()
+    assert.equal(acpStore.get().conversations[key]?.epoch, newer)
+    assert.equal(approvalShown(key), "approve", "and its approval is shown")
+    acpStore.set({ activeKey: null })
+  }
+
+  // A reply of a start between the one held and a newer one whose batch waits on it is taken, and the newer start's
+  // batch still goes on after it, never dropped.
+  {
+    const key = "between-starts", held = "g1.betweenroot.a", between = "g2.betweenroot.b", newer = "g3.betweenroot.c"
+    fresh()
+    acpStore.set({ activeKey: key })
+    applyLiveSnapshot(state(key, held, 5, [fin]))
+    applyLiveBatch({ id: key, revision: 1, epoch: newer, updates: [], permissions: [approval] })
+    assert.equal(bridgeReads.length, 1, "a batch of a start it holds none of reads the Session")
+    bridgeReads.shift()!(state(key, between, 1, [fin]))
+    for (let wait = 0; wait < 6; wait += 1) await turn()
+    assert.equal(bridgeReads.length, 1, "the newer start's batch, waiting, goes on and reads again")
+    bridgeReads.shift()!(state(key, newer, 1, [fin], [approval]))
+    for (let wait = 0; wait < 6; wait += 1) await turn()
+    assert.equal(acpStore.get().conversations[key]?.epoch, newer)
+    assert.equal(approvalShown(key), "approve", "and its approval is shown")
+    acpStore.set({ activeKey: null })
+  }
+
+  // While a read for a newer start is out, the stream goes on in a start it can't order against that one (a build's
+  // from before generations): the read's answer is taken, newer than what's held, and the stream's batches go on after
+  // it. Neither start is known current then, so the stream's is read afresh, and taken with its approval.
+  {
+    const key = "stream-start-kept", held = "g1.keptroot.a", newer = "g2.keptroot.b", legacy = "LegacyKept01"
+    fresh()
+    acpStore.set({ activeKey: key })
+    applyLiveSnapshot(state(key, held, 9, [fin]))
+    applyLiveBatch({ id: key, revision: 2, epoch: newer, updates: [] })
+    assert.equal(bridgeReads.length, 1, "a batch of a start it holds none of reads the Session")
+    applyLiveBatch({ id: key, revision: 2, epoch: legacy, updates: [] })
+    applyLiveBatch({ id: key, revision: 3, epoch: legacy, updates: [], permissions: [approval] })
+    bridgeReads.shift()!(state(key, newer, 2, [fin]))
+    for (let wait = 0; wait < 6; wait += 1) await turn()
+    assert.equal(bridgeReads.length, 1, "the stream's start, waiting, goes on and reads again")
+    // Each read answered as it goes out, a read asked again after a while (`hydrateLive`'s backoff) too.
+    let reads = 0
+    for (let quiet = 0; quiet < 2;) {
+      const read = bridgeReads.shift()
+      if (!read) {
+        quiet += 1
+        await new Promise((waited) => setTimeout(waited, 600))
+        continue
+      }
+      reads += 1
+      read(state(key, legacy, 3, [fin], [approval]))
+      for (let wait = 0; wait < 6; wait += 1) await turn()
+    }
+    assert.ok(reads <= 2, `read again, then afresh at most once: ${reads}`)
+    assert.equal(acpStore.get().conversations[key]?.epoch, legacy, "the stream's start is taken")
+    assert.equal(approvalShown(key), "approve", "and its approval is shown")
+    acpStore.set({ activeKey: null })
+  }
+
+  // Two reads out when the stream moves on in another start and the window loses the Session: the first's answer is
+  // past, and what waited on it goes with the Session; the second's, of the stream's start but behind a batch the stream
+  // sent while it was out, is past too, though the window holds nothing to set it against.
+  {
+    const key = "heard-behind", held = "g1.behindroot.a", other = "LegacyOther9", legacy = "LegacyAhead1"
+    fresh()
+    acpStore.set({ activeKey: key })
+    applyLiveSnapshot(state(key, held, 3, [fin]))
+    const first = hydrateLive(key)
+    const second = readBackLive(key)
+    await turn()
+    for (const revision of [2, 3, 4, 5]) applyLiveBatch({ id: key, revision, epoch: legacy, updates: [] })
+    acpStore.set({ activeKey: null })
+    removeAcpConversation(key)
+    bridgeReads.shift()!(state(key, other, 7, [fin]))
+    await first
+    bridgeReads.shift()!(state(key, legacy, 2, [fin]))
+    await second
+    for (let wait = 0; wait < 6; wait += 1) await turn()
+    for (let read = bridgeReads.shift(); read; read = bridgeReads.shift()) {
+      read(state(key, legacy, 5, [fin]))
+      for (let wait = 0; wait < 6; wait += 1) await turn()
+    }
+    const now = acpStore.get().conversations[key]
+    assert.ok(now === undefined || now.revision === 5, `the window holds nothing, or the stream's newest; it holds ${now?.revision} of ${now?.epoch}`)
   }
 
   // Starts with no generation, the newer said by this window's own stream: what it says of that start is taken, and a

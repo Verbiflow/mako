@@ -235,7 +235,7 @@ export function noteFinAsks(conversation: LiveAcpConversation, quiet = false): v
   const key = asksKey(conversation)
   const said = announcedFinAsks.get(key) ?? new Map<string, string>()
   const open = openFinAsks(conversation)
-  for (const [id, notice] of [...said]) {
+  for (const [id, notice] of said) {
     if (open.has(id)) continue
     said.delete(id)
     retireNotice(notice)

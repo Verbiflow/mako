@@ -20,8 +20,11 @@ import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, HeardLiveBatch[]>()
-/** A read of a conversation's snapshot while it's out: the newest revision this window has taken of it since it was asked. */
-type ReadOut = { revision: number; epoch?: string; moved?: true }
+/**
+ * A read of a conversation's snapshot while it's out: the newest revision this window has taken of it since it was
+ * asked, whether anything came for it on the stream meanwhile (`moved`), and the newest batch that came (`heard`).
+ */
+type ReadOut = { revision: number; epoch?: string; moved?: true; heard?: { epoch: string; revision: number } }
 /**
  * The reads out of each conversation (`readBackLive`, `hydrateLive`): each answer older than what this window took of
  * its conversation while it was out is past, whatever this window holds of it by then (it may have let it go, or no
@@ -45,7 +48,10 @@ function readAnswered(id: string, read: ReadOut, snapshot: { revision: number; e
   const out = readsOut.get(id)
   out?.delete(read)
   if (out && !out.size) readsOut.delete(id)
-  if (!snapshot || read.revision < 0) return false
+  if (!snapshot) return false
+  // Behind a batch of its own start the stream sent while it was out, taken or not: past.
+  if (read.heard && snapshot.epoch === read.heard.epoch && snapshot.revision < read.heard.revision) return true
+  if (read.revision < 0) return false
   const order = olderThan(snapshot, read)
   if (order === true) return true
   // A fresh read speaks for the current host only while nothing was taken since it was asked.
@@ -284,13 +290,16 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
       observedChange ? undefined : "hydrate"
     )
   mergedSince.set(id, snapshot.revision)
-  // A batch from another epoch came from a host that no longer answers: replayed, it would ask this host for a
-  // snapshot in its numbering, which never comes, and again after every answer.
-  const buffered = (pending.get(id) ?? []).filter((batch) => sameEpoch(snapshot, batch))
-  pending.delete(id)
-  for (const batch of buffered) applyLiveBatch(batch)
-  noteTaken(id)
+  // Its start is current now. What waited for it: its own start's batches, then any of a newer start or of the one the
+  // stream last said, which go on after it (a reply of a start it can't order is then placed by a fresh read). One of a
+  // start older than it, or one it can't order that the stream has since left, is past: replayed, it would ask this
+  // host for a snapshot in its numbering, which never comes, and again after every answer.
+  const said = currentStarts.get(id)
   if (snapshot.epoch) currentStarts.set(id, snapshot.epoch)
+  const buffered = (pending.get(id) ?? []).filter((batch) => sameEpoch(snapshot, batch) || goesOn(batch, snapshot, said))
+  pending.delete(id)
+  for (const batch of buffered) applyLiveBatch(batch, true)
+  noteTaken(id)
   // An answer its Fins heard while this window held a gap, or held the Session not at all, takes back what was said; an
   // ask that came meanwhile is said, quietly, as its own approval is (`syncThreadStatus`).
   const read = acpStore.get().conversations[id]
@@ -314,11 +323,22 @@ function takeView(existing: Extract<AcpConversation, { kind: "live" }>, snapshot
 }
 
 /**
- * Buffered batches the window already holds, and any from a host that no longer answers (another epoch), wait for
- * nothing; only one past what it holds asks for a newer snapshot.
+ * Whether a batch that waited on a snapshot of another start goes on after it: one of a newer start, or one of a start
+ * it can't order that is the one the window last learned the conversation is of (`said`), the stream's latest word.
+ */
+function goesOn(batch: { epoch?: string; revision: number }, held: { epoch?: string; revision: number }, said: string | undefined): boolean {
+  const order = olderThan(batch, held)
+  return order === false || (order === undefined && batch.epoch === said)
+}
+
+/**
+ * Buffered batches the window already holds wait for nothing, nor do those of another start that are past (`goesOn`);
+ * only one past what it holds asks for a newer snapshot.
  */
 function dropHeld(existing: Extract<AcpConversation, { kind: "live" }>): void {
-  const waiting = pending.get(existing.key)?.filter((batch) => sameEpoch(existing, batch) && batch.revision > (existing.revision ?? 0))
+  const held = { revision: existing.revision ?? 0, ...(existing.epoch && { epoch: existing.epoch }) }
+  const waiting = pending.get(existing.key)?.filter((batch) =>
+    sameEpoch(existing, batch) ? batch.revision > held.revision : goesOn(batch, held, currentStarts.get(existing.key)))
   if (waiting?.length) pending.set(existing.key, waiting)
   else pending.delete(existing.key)
 }
@@ -468,8 +488,16 @@ function batchHistoryFailure(batch: LiveBatch, current: { historyFailure?: strin
  * the revision before it; held anywhere else (buffered, out of order, another epoch) it waits as it came and is read
  * when it's next in line, so a snapshot taken meanwhile is what it's read against.
  */
-export function applyLiveBatch(heard: HeardLiveBatch): void {
-  if (heard.epoch) currentStarts.set(heard.id, heard.epoch)
+export function applyLiveBatch(heard: HeardLiveBatch, replayed = false): void {
+  // Heard on the stream (not one that waited on a snapshot, replayed after it), it says the start the conversation is
+  // of now, and whatever it is (taken, waiting on a read, of another start), a read out of it no longer speaks alone.
+  if (!replayed) {
+    if (heard.epoch) currentStarts.set(heard.id, heard.epoch)
+    for (const read of readsOut.get(heard.id) ?? []) {
+      read.moved = true
+      if (heard.epoch && (read.heard?.epoch !== heard.epoch || read.heard.revision < heard.revision)) read.heard = { epoch: heard.epoch, revision: heard.revision }
+    }
+  }
   if (!isCompactBatch(heard)) applyBatch(heard, heard, false)
   else {
     const current = acpStore.get().conversations[heard.id]
