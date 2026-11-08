@@ -317,6 +317,27 @@ export function installMockBridge() {
     listeners.forEach((listener) => listener(event))
   // `?events`: a UI check sends host events as the host would (another device's Thread listed), through the window's own path.
   if (new URLSearchParams(globalThis.location?.search).has("events")) Reflect.set(globalThis, "makoMockHost", { emit })
+  // A screenshot check can hold a move's phase until both themes have drawn it, rather than racing its timer.
+  let holdMovePhase = false
+  let releaseMovePhase: (() => void) | undefined
+  const nextMovePhase = () => {
+    if (!releaseMovePhase) throw new Error("No mock move phase is waiting")
+    const release = releaseMovePhase
+    releaseMovePhase = undefined
+    release()
+  }
+  const waitMovePhase = () => new Promise<void>((resolve) => {
+    if (holdMovePhase) releaseMovePhase = resolve
+    else setTimeout(resolve, 900)
+  })
+  if (new URLSearchParams(globalThis.location?.search).has("move-steps")) Reflect.set(globalThis, "mockMovePhases", {
+    hold: () => { holdMovePhase = true },
+    next: nextMovePhase,
+    run: () => {
+      holdMovePhase = false
+      if (releaseMovePhase) nextMovePhase()
+    },
+  })
   const emitTerminal = (event: TerminalEvent) =>
     terminalListeners.forEach((listener) => listener(event))
   /**
@@ -3125,7 +3146,7 @@ export function installMockBridge() {
       const steps: ThreadMoveStep[] = handOff ? [{ kind: "packing" }, { kind: "pausing" }, { kind: "handing-over" }, { kind: "resuming" }] : [...main ? [{ kind: "own-branch" } as const] : [], { kind: "packing" }, { kind: "handing-over" }, { kind: "resuming" }]
       for (const next of steps) {
         step(next)
-        await pause(900)
+        await waitMovePhase()
       }
       const carried: MoveCarried | undefined = main ? { repositories: 2, outside: 3, left: [{ path: "/Users/you/.aws/credentials", why: "secret" }] } : undefined
       step({ kind: "moved", conversations: [conversationId], ...handOff && { continued: true }, ...carried && { carried } })
@@ -3197,7 +3218,6 @@ export function installMockBridge() {
     },
     /** A fixture's way back: its steps a moment apart, as a real one takes them. */
     threadReturn: async (conversationId: string, move: string, options?: ThreadReturnOptions) => {
-      const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
       const step = (next: ThreadReturnStep) => emit({ type: "thread-return-step", conversationId, move, step: next })
       if (mockReturnOutdated.value === "project-gone") {
         // Refused before the cloud is asked anything, until the person chooses where the project is now.
@@ -3211,7 +3231,7 @@ export function installMockBridge() {
       }
       for (const next of [{ kind: "packing" }, { kind: "bringing" }] as const) {
         step(next)
-        await pause(900)
+        await waitMovePhase()
       }
       if (mockReturnOutdated.value === "outdated") {
         mockReturnOutdated.value = ""
