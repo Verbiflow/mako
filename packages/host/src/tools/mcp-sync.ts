@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { dirname } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { AuthoringFiles, boundedRead, revisionOf } from "./authoring-files.js"
@@ -18,7 +17,7 @@ interface CachedPreview {
   path?: string
 }
 
-const run = promisify(execFile)
+const run = hostCommand
 const JsonObjectSchema = z.record(z.string(), z.json())
 
 function previewKey(serverId: string, target: McpSyncTarget): string {

@@ -1,12 +1,11 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../../base/host-command.js"
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import type { SetupTool } from "../../contracts/simulator-setup.js"
 import { environmentForExecutable, resolveExecutable } from "../../base/executable.js"
 
-const execute = promisify(execFile)
+const execute = hostCommand
 
 /**
  * The tools Mako installs for simulators, each at the version it was read at (2026-11-03). serve-sim's capture and

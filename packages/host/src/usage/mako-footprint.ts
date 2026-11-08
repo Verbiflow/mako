@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
+import { hostCommand } from "../base/host-command.js"
 import type { MakoFootprint, MakoProcess, RescanFootprint, WatchFootprint } from "../contracts/mako-footprint.js"
 import type { MethodTable } from "../base/methods.js"
 
-const execute = promisify(execFile)
+const execute = hostCommand
 
 export interface ProcessRow {
   pid: number
