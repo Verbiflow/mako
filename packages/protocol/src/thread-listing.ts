@@ -522,6 +522,7 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.thread === right.thread &&
     left.threadTitle === right.threadTitle &&
     left.conversation === right.conversation &&
+    left.order === right.order &&
     left.harness === right.harness &&
     left.title === right.title &&
     left.state === right.state &&
