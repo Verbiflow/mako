@@ -34,7 +34,7 @@ import {
 } from "@/state/thread-viewing"
 import { threadsStore, useThreads } from "@/state/thread-store"
 import { followThreadMoves } from "@/state/thread-moves"
-import { noteOutcome, retireSubject } from "@/state/notifications"
+import { noteOutcome, noticeId, retireNotice, retireSubject } from "@/state/notifications"
 import { offerWindowRenames } from "@/state/thread-titles"
 
 interface ThreadCatalog {
@@ -76,6 +76,8 @@ export type { ThreadStatus }
 
 /** The Sessions that are a conversation's background agents: shown under it, never a Thread of their own, so nothing of theirs notifies. */
 const helpers = new Set<string>()
+/** What an app outside Mako last asked the person, by its Thread's path: the notice it was said as. */
+const externalAsks = new Map<string, string>()
 
 function noteHelpers(list: readonly ThreadRef[]): void {
   for (const ref of list) {
@@ -145,16 +147,19 @@ function noteExternalOutcome(
   if (!provider || helpers.has(path)) return
   const subject = threadSubject(path, provider)
   if (activity?.status === "needs-input") {
-    if (previous?.status !== "needs-input")
-      noteOutcome({
-        kind: "needs-you",
-        subject,
-        marker: `external:${activity.since}`,
-        detail: activity.detail,
-      })
+    if (previous?.status !== "needs-input") {
+      const marker = `external:${activity.since}`
+      externalAsks.set(path, noticeId(subject, "needs-you", marker))
+      noteOutcome({ kind: "needs-you", subject, marker, detail: activity.detail })
+    }
     return
   }
-  if (previous?.status === "needs-input") retireSubject(subject.id, "asks")
+  // What it asked goes by its own notice once it no longer waits on the person.
+  const asked = externalAsks.get(path)
+  if (asked) {
+    externalAsks.delete(path)
+    retireNotice(asked)
+  }
   if (activity?.status === "active") {
     if (previous?.status !== "active") retireSubject(subject.id)
     return

@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * A turn's tool rows never draw over one another, in the Mac's conversation at a laptop's size and in the phone's
@@ -104,9 +105,11 @@ async function checkRows() {
   const root = process.env.MAKO_ROWS_ROOT
   const evidence = process.env.MAKO_ROWS_EVIDENCE
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const watchdog = setTimeout(() => app.exit(1), 240_000)
   const window = new BrowserWindow({ width: 1280, height: 820, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1280, 820)
   const page = window.webContents
   page.debugger.attach("1.3")
   page.on("console-message", (details) => {

@@ -7,7 +7,7 @@ import { childStateOf } from "@mako/host/contracts/children"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { apexViewStore, finOpening, openFinInApex, threadChildren } from "../src/state/apex-fins"
-import { acpStore } from "../src/state/acp-state"
+import { acpStore, conversationRoster, conversationWork, threadChildren as sharedThreadChildren } from "../src/state/acp-state"
 import { listLive } from "../src/state/live-recovery"
 import { foldThreads, placedUnder, threadById } from "../src/web-client/threads"
 import { waitingThreads, webInboxCount } from "../src/web-client/inbox"
@@ -199,3 +199,41 @@ test("rows from a host that says no order rank as they arrive: the first listed 
     assert.equal(threadChildren(acpStore.get(), APEX_THREAD)[0]?.child?.conversation, expected, `${order}: the first listed`)
   }
 })
+
+// A Session's own ask outranks its idle peers; an older Apex's copy of a Fin's ask never outranks the newest roster.
+// The shared selectors that lifecycle and notification readers use must see the placed Fin's selected row too.
+for (const kind of ["approval", "question", "needs-you"] as const) {
+  test(`shared roster and work select a placed Fin's ${kind} in either listing order, with a stale older Apex roster`, () => {
+    const oldApex = row({ ...apexRow, conversation: "c-apex-old", session: uuid(5), state: "idle", order: 0 })
+    const newestApex = row({ ...apexRow, state: "idle", order: 1, fins: [{ ...finOfApex, state: { kind: "idle" } }] })
+    const asking = row({ ...oldFinRow, state: "waiting", waitingOn: "Waiting for you", waitingFor: kind })
+    const idle = row({ ...finRow, state: "idle", waitingOn: undefined, waitingFor: undefined })
+    for (const rows of [[oldApex, newestApex, asking, idle], [idle, asking, newestApex, oldApex]]) {
+      acpStore.set({ activeKey: null, conversations: {}, threadSessions: {} })
+      listLive(rows.map((each) => listedSummary(each, each.thread === APEX_THREAD ? "MacBook" : "Loft", undefined, undefined, listedApexOf(each, rows))))
+      const state = acpStore.get()
+      const children = sharedThreadChildren(state, APEX_THREAD)
+      assert.equal(threadChildren(state, APEX_THREAD), children, "the strip and shared state use the same selector and cached array")
+      assert.equal(children[0]?.child?.conversation, "c-fin-old", "the Fin's own open ask wins over its newer idle Session")
+      assert.deepEqual(childStateOf(children[0]!), { kind: "blocked", question: "Waiting for you", on: kind === "approval" ? "approval" : "person" })
+      for (const key of ["c-apex-old", "c-apex"]) {
+        const apex = state.conversations[key]
+        assert.ok(apex?.kind === "live")
+        const roster = conversationRoster(state, apex)
+        assert.equal(roster?.agents[0]?.child?.conversation, "c-fin-old", "both Apex Sessions read the selected placed row")
+        assert.equal(conversationWork(state, apex)?.named[0]?.child?.conversation, "c-fin-old", "background work reads that same row")
+      }
+      assert.deepEqual(finOpening(state, placedChild()), { kind: "conversation", key: "c-fin-old" })
+      // When the Fin's device is quiet, the newest Apex roster stands: its older copy's ask was answered.
+      acpStore.set({ activeKey: null, conversations: {}, threadSessions: {} })
+      listLive(rows.map((each) => listedSummary(each, each.thread === APEX_THREAD ? "MacBook" : "Loft", each.thread === FIN_THREAD ? at(-20) : undefined, undefined, listedApexOf(each, rows))))
+      const quietState = acpStore.get()
+      assert.deepEqual(childStateOf(sharedThreadChildren(quietState, APEX_THREAD)[0]!), { kind: "idle" }, "the newest Apex's idle word outranks the older copy's ask")
+      for (const key of ["c-apex-old", "c-apex"]) {
+        const apex = quietState.conversations[key]
+        assert.ok(apex?.kind === "live")
+        assert.equal(conversationWork(quietState, apex), null, "neither Apex Session counts work from the answered copy")
+      }
+    }
+  })
+}

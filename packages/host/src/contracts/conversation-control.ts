@@ -1,3 +1,4 @@
+import { AgentAskSchema } from "./agent-asks.js"
 import { LiveQuestionSchema } from "./live-questions.js"
 import { ApprovalResponseSchema, NativeApprovalDecisionSchema, NativeApprovalIdentitySchema, sameNativeApproval } from "./approval-response.js"
 import { SessionSettingsSchema } from "@mako/sessions/settings"
@@ -218,6 +219,8 @@ export const ConversationControlSchema = z.object({
   approvalObservations: z.array(z.object({ bindingId: z.string(), identity: NativeApprovalIdentitySchema, decision: NativeApprovalDecisionSchema.optional() })
     .refine(item => !item.decision || sameNativeApproval(item.identity, item.decision.identity), "Native decision belongs to another question")).max(2000).optional(),
   actions: z.array(LiveActionSchema).optional(),
+  /** What its agent asked the person to let it do through Mako's tools, until they answer (`LiveAsks`). */
+  asks: z.array(AgentAskSchema).max(32).optional(),
   merges: z
     .array(
       z.object({

@@ -21,7 +21,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { archivedByKeys, liveArchiveKeys } from "../contracts/thread-lifecycle.js"
 import { namedUuid } from "./cloud-moves.js"
 import { syncTier } from "./sync-window.js"
-import { needsYouWaiting, type Waiting } from "@mako/protocol/attention"
+import { asks, needsYouWaiting, type Waiting } from "@mako/protocol/attention"
 
 /** A rail row as the report reads it: a session one of this Mac's harnesses keeps, placed in its Thread and Session. */
 export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "workspace" | "worktrees" | "lineage" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived" | "locked" | "heldBy" | "parent">
@@ -84,6 +84,8 @@ export type ReportSources = {
   background?(conversationId: string): number | undefined
   /** What one of a conversation's Fins asks the person, which its row waits on (`finAsking`). */
   asking?(conversationId: string): FinAsking | undefined
+  /** What a conversation's agent asked through Mako's tools, which its row waits on (`LiveConversations.askWaiting`). */
+  asked?(conversationId: string): Waiting | undefined
   /** A conversation's Fins, as its roster lists them for every other device (`listedFins`). */
   fins?(conversationId: string): ReportedSession["fins"]
   now(): number
@@ -125,6 +127,16 @@ function preferred(left: ReportedSession, right: ReportedSession): ReportedSessi
 export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn" | "waitingFor" | "background" | "promptedAt" | "asking" | "fins">
 
 /**
+ * What a conversation waits on the person for, by the one rule every surface asks by: what it names (an approval, a
+ * question, `waitingOn`), else, while its lifecycle has it waiting on the person with nothing more to say, needs-you.
+ * Undefined when nothing it says asks (`asks`, the protocol's own predicate).
+ */
+export function personWaiting(said: Waiting | undefined, working: LifecycleWork["status"] | undefined): Waiting | undefined {
+  const waiting = said ?? (working === "waiting" ? needsYouWaiting(undefined) : undefined)
+  return waiting && asks(waiting.for) ? waiting : undefined
+}
+
+/**
  * What a list shows of one of this host's conversations that its own turns move, as its row says it: each conversation's
  * row is made with this (`ownedSessions`), and each of its batches is checked against it (`SessionPublisher.own`), so
  * whether a batch moved anything a list shows is decided by the row's own rule, never a second one. `working` is the
@@ -140,6 +152,8 @@ export function conversationShown(conversation: {
   background?: number | undefined
   promptedAt?: number | undefined
   asking?: ((conversationId: string) => FinAsking | undefined) | undefined
+  /** What its agent asked through Mako's tools (`LiveConversations.askWaiting`). */
+  asked?: ((conversationId: string) => Waiting | undefined) | undefined
   fins?: ((conversationId: string) => ReportedSession["fins"]) | undefined
 }): ConversationShown {
   const { session, working, execution } = conversation
@@ -155,14 +169,21 @@ export function conversationShown(conversation: {
   if (state === "working" && session.status !== "running" && session.status !== "starting" && conversation.background) shown.background = conversation.background
   if (state === "waiting") {
     // A native agent of its waiting on the person says nothing more than that it does.
-    const on = conversation.waitingOn(session.id) ?? needsYouWaiting(undefined)
+    const on = personWaiting(conversation.waitingOn(session.id), working) ?? needsYouWaiting(undefined)
     shown.waitingOn = on.line
     shown.waitingFor = on.for
   }
   // Its own ask goes first; a Fin's waits behind it, and a move says nothing more.
   const under = state === "working" || state === "idle" || state === "failed" ? state : undefined
-  const fin = under && conversation.asking?.(session.id)
-  if (fin) {
+  // What its agent asked through Mako's tools leaves it working or idle, and waits on the person all the same.
+  const asked = under && conversation.asked?.(session.id)
+  const fin = under && !asked && conversation.asking?.(session.id)
+  if (asked) {
+    shown.state = "waiting"
+    shown.waitingOn = asked.line
+    shown.waitingFor = asked.for
+    delete shown.background
+  } else if (fin) {
     shown.state = "waiting"
     shown.waitingOn = fin.waiting.line
     shown.waitingFor = fin.waiting.for
