@@ -5,8 +5,9 @@ import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { LineAssembler } from "@mako/sessions"
+import { writeChildInput } from "@mako/sessions/child-input"
 import { hostLog, hostWarn } from "../../../base/host-log.js"
-import { spawnProviderProcess } from "../../provider-process.js"
+import { closeProviderProcess, endProviderProcess, spawnProviderProcess } from "../../provider-process.js"
 import { headlessNodeExecutable } from "../../../base/headless-node.js"
 import { reownProviderPid } from "../../../base/provider-children.js"
 import {
@@ -144,13 +145,13 @@ export function cursorSdkChildEntry(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "child.js")
 }
 
-/** The SDK's child as its client spawns it. */
+/** The SDK's child as its client spawns it; `CURSOR_SDK_CHILD` names another entry, as `CODEX_EXECUTABLE` does Codex's binary. */
 function cursorSdkChild(options: Pick<CursorSdkClientOptions, "env" | "entry" | "execPath" | "heapSnapshots">) {
   const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
   delete env.NODE_OPTIONS
   return {
     command: headlessNodeExecutable(options.execPath),
-    args: [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? cursorSdkChildEntry()],
+    args: [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? (options.env.CURSOR_SDK_CHILD || cursorSdkChildEntry())],
     env,
   }
 }
@@ -304,8 +305,7 @@ export class CursorSdkClient {
         reject,
         timer,
       })
-      this.child.stdin?.write(`${JSON.stringify(line)}\n`, (error) => {
-        if (!error) return
+      writeChildInput(this.child, `${JSON.stringify(line)}\n`).catch((error: Error) => {
         const entry = this.pending.get(id)
         if (!entry) return
         this.pending.delete(id)
@@ -315,19 +315,20 @@ export class CursorSdkClient {
     })
   }
 
-  /** Asks the child to close its agent and waits for it; kills it when it lingers. */
+  /** Asks the child to close its agent and waits for it; kills it when it lingers, and rejects if it outlives that. */
   async close(graceMs = 5_000): Promise<void> {
     if (!this.alive) {
       await this.exited
       return
     }
-    const timer = setTimeout(() => this.child.kill("SIGKILL"), graceMs)
+    const timer = setTimeout(() => void endProviderProcess(this.child), graceMs)
     try {
       await this.request("close", undefined).catch(() => undefined)
-      await this.exited
+      await closeProviderProcess(this.child, "input", graceMs)
     } finally {
       clearTimeout(timer)
     }
+    await this.exited
   }
 
   /** Ends the process without a goodbye; for a session that is already lost. */
@@ -362,7 +363,9 @@ export class CursorSdkClient {
       const message = parsed.data
       if ("event" in message) {
         if (message.event === "log") {
-          hostWarn("cursor-sdk", message.message, { owner: this.options.owner, level: message.level })
+          // An open's phase lines are info: they reset the silence watch and say where an open was. A warning stays a warning.
+          if (message.level === "warn") hostWarn("cursor-sdk", message.message, { owner: this.options.owner })
+          else hostLog("cursor-sdk", message.message, { owner: this.options.owner })
           continue
         }
         this.options.onEvent(message)

@@ -1,12 +1,12 @@
-import { execFile, spawn as spawnProcess, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdir, rename, stat } from "node:fs/promises"
+import { stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
-import { promisify } from "node:util"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { trackProviderChild } from "../base/provider-children.js"
+import { endChildInput, writeChildInput } from "@mako/sessions/child-input"
 
 /**
  * How long the helper holds a sleep for the host (`mako-sleep-watch --hold`). macOS waits at most 30 seconds for an
@@ -20,7 +20,7 @@ const RESTARTS = 3
 const RESTART_WINDOW_MS = 60_000
 
 export type SleepHandOffOptions = {
-  /** The helper's path, built if this checkout has none yet; undefined where there is none (not a Mac). */
+  /** The helper's path; undefined where there is none (not a Mac, or a checkout that didn't build it). */
   helper(): Promise<string | undefined>
   /** Whether agents at work go to the cloud as this Mac sleeps: the person's choice, and a Mac able to. */
   enabled(): Promise<boolean>
@@ -60,7 +60,7 @@ export class SleepHandOff {
 
   stop(): void {
     this.#stopped = true
-    this.#child?.stdin.end()
+    if (this.#child) endChildInput(this.#child)
     this.#child?.kill()
     this.#child = undefined
   }
@@ -70,7 +70,7 @@ export class SleepHandOff {
     const enabled = await this.#options.enabled()
     if (!enabled) {
       if (this.#child) hostLog("handoff", "the sleep watch stopped: handing off on sleep is off")
-      this.#child?.stdin.end()
+      if (this.#child) endChildInput(this.#child)
       this.#child = undefined
       return
     }
@@ -118,7 +118,8 @@ export class SleepHandOff {
     } catch (error) {
       hostWarn("handoff", "agents at work couldn't be handed off as this Mac slept", { error: errorMessage({ error }) })
     }
-    if (!child.stdin.destroyed) child.stdin.write(`allow ${id}\n`)
+    // A watch gone by now lets the Mac sleep anyway, and its `exit` starts another.
+    writeChildInput(child, `allow ${id}\n`).catch(() => {})
     hostLog("handoff", "this Mac may sleep", { ms: Date.now() - began })
   }
 }
@@ -131,29 +132,13 @@ function spawnHelper(path: string, args: readonly string[]): ChildProcessWithout
 export const SLEEP_WATCH_HELPER = "mako-sleep-watch"
 
 /**
- * Where the sleep helper is: a packaged app's, beside its executable; a checkout's, built from its source into the
- * data root the first time it's needed and again whenever the source is newer. Undefined where it can't be had (the
- * Command Line Tools missing), which leaves handing off on sleep unavailable, said once.
+ * Where the sleep helper is: a packaged app's, beside its executable; a checkout's, where `build:electron` built it
+ * for every host of that checkout. A host never builds it: its data root is often new and its life short, and what it
+ * started would outlive it. Undefined where there is none, which leaves handing off on sleep unavailable.
  */
-export async function sleepWatchHelper(environment: { appRoot: string; packaged: boolean; dataRoot: string }): Promise<string | undefined> {
-  if (environment.packaged) {
-    const packaged = join(dirname(dirname(environment.appRoot)), "MacOS", SLEEP_WATCH_HELPER)
-    return (await stat(packaged).catch(() => undefined)) ? packaged : undefined
-  }
-  const source = join(environment.appRoot, "native", "sleep-watch-macos", "main.swift")
-  const built = join(environment.dataRoot, "native", SLEEP_WATCH_HELPER)
-  const [sourced, made] = await Promise.all([stat(source).catch(() => undefined), stat(built).catch(() => undefined)])
-  if (!sourced) return undefined
-  if (made && made.mtimeMs >= sourced.mtimeMs) return built
-  await mkdir(dirname(built), { recursive: true })
-  const building = `${built}.${process.pid}.building`
-  try {
-    await promisify(execFile)("xcrun", ["swiftc", "-O", "-swift-version", "5", source, "-o", building], { timeout: 120_000 })
-    await rename(building, built)
-    hostLog("handoff", "built the sleep watch for this checkout", { path: built })
-    return built
-  } catch (error) {
-    hostWarn("handoff", "the sleep watch couldn't be built; agents won't be handed off on sleep", { error: errorMessage({ error }).slice(0, 500) })
-    return undefined
-  }
+export async function sleepWatchHelper(environment: { appRoot: string; packaged: boolean }): Promise<string | undefined> {
+  const helper = environment.packaged
+    ? join(dirname(dirname(environment.appRoot)), "MacOS", SLEEP_WATCH_HELPER)
+    : join(environment.appRoot, "build", SLEEP_WATCH_HELPER)
+  return (await stat(helper).catch(() => undefined)) ? helper : undefined
 }

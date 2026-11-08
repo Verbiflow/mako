@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import { SquarePenIcon } from "lucide-react"
 import { toast } from "sonner"
 import { landTranscriptsAtEnd } from "@/components/transcript/transcript-end"
@@ -17,51 +17,24 @@ import { tapOnLift } from "./taps"
 import { useSeenWhileOpen } from "./read-state"
 import { useThread } from "./use-thread"
 import { ReviewLayer } from "./review-layer"
+import { FilesLayer } from "./files-layer"
 import { arrivedUpdated, takeUpdates } from "./update"
+import { chunk, transcriptChunk } from "./chunks"
 
 /**
- * A chunk of the app the list paints without, read once: its module as soon as it has arrived, and until then nothing.
- * Read without suspending, so a screen whose code is already here draws in the frame it's asked for (a Suspense
- * boundary would hold its reveal back for a beat).
- */
-function chunk<Module>(load: () => Promise<Module>) {
-  let module: Module | undefined
-  let reading: Promise<Module> | undefined
-  const listeners = new Set<() => void>()
-  const read = (): Promise<Module> => {
-    reading ??= load().then((loaded) => {
-      module = loaded
-      for (const listener of listeners) listener()
-      return loaded
-    })
-    // Not here (offline before the service worker kept it): asked again next time.
-    reading.catch(() => {
-      reading = undefined
-    })
-    return reading
-  }
-  const subscribe = (listener: () => void) => {
-    listeners.add(listener)
-    return () => {
-      listeners.delete(listener)
-    }
-  }
-  return { read, use: () => useSyncExternalStore(subscribe, () => module) }
-}
-
-/**
- * What the list paints without, each a chunk of its own: a Thread (its screen, then its transcript, the desk's live
- * state and its conversations), New, Settings and the toasts. A Thread's and New's are read as soon as the list has
- * painted (`afterFirstPaint`), so they're there by the time one is tapped, and at once when the app opens on one.
+ * What the list paints without, each a chunk of its own (`chunk`): a Thread (its screen, then its transcript, the
+ * desk's live state and its conversations), New, Settings and the toasts. A Thread's and New's are read as soon as the
+ * list has painted (`afterFirstPaint`), so they're there by the time one is tapped, and at once when the app opens on one.
  */
 const threadChunk = chunk(() => import("./thread"))
-const transcriptChunk = chunk(() => import("./live-session"))
 const conversationsChunk = chunk(() => import("./conversations"))
 const startChunk = chunk(() => import("./new-thread"))
 /** The desk, a laptop's browser's form: the desktop app's rail, transcript, composer and palette, its own chunk. */
 const deskChunk = chunk(() => import("./desk"))
 const Toaster = lazy(() => import("@/components/ui/sonner").then((module) => ({ default: module.Toaster })))
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
+const InboxScreen = lazy(() => import("./inbox-screen").then((module) => ({ default: module.InboxScreen })))
+const SetupScreen = lazy(() => import("./setup-screen").then((module) => ({ default: module.SetupScreen })))
 
 /** A Thread's code first, the screen most often opened next, then New's: one after the other, each has the line to itself. */
 async function readNextScreens(): Promise<void> {
@@ -200,6 +173,8 @@ export function WebApp() {
       onOpen={(thread) => open({ kind: "thread", thread: thread.id })}
       onNew={() => navigate({ kind: "new", over: under })}
       onSettings={() => open({ kind: "settings" })}
+      inbox={under.kind === "inbox" && !startPane}
+      onInbox={() => open({ kind: "inbox" })}
     />
   )
   const detail = startPane ? (
@@ -223,7 +198,15 @@ export function WebApp() {
       )
     ) : under.kind === "settings" ? (
       <Suspense fallback={null}>
-        <Settings onBack={wide ? undefined : back} />
+        <Settings onBack={wide ? undefined : back} onSetup={(project) => open({ kind: "setup", project })} />
+      </Suspense>
+    ) : under.kind === "inbox" ? (
+      <Suspense fallback={null}>
+        <InboxScreen onBack={wide ? undefined : back} onOpen={(thread) => open({ kind: "thread", thread: thread.id })} />
+      </Suspense>
+    ) : under.kind === "setup" ? (
+      <Suspense fallback={null}>
+        <SetupScreen project={under.project} onBack={back} />
       </Suspense>
     ) : null
   // Changes belongs to the Thread on screen: anywhere else, it's closed.
@@ -246,16 +229,18 @@ export function WebApp() {
     <div className="web-app flex w-full overflow-hidden bg-shell text-foreground" data-form={form}>
       {wide ? (
         <>
-          <div className="web-rail flex shrink-0 flex-col border-r border-hairline">{list}</div>
+          <div className="web-rail flex shrink-0 flex-col">{list}</div>
           <main className="relative flex min-w-0 flex-1 flex-col">
             {detail ?? <NothingOpen onNew={() => navigate({ kind: "new", over: under })} />}
             <ReviewLayer form={form} place={reviewPlace} />
+            <FilesLayer form={form} place={reviewPlace} />
           </main>
         </>
       ) : (
         <main className="relative flex min-w-0 flex-1 flex-col">
           <ScreenStack under={list} top={detail} topKey={detail ? routeHref(under, client.options.base).split("?")[0] : undefined} onBack={back} />
           <ReviewLayer form={form} place={reviewPlace} />
+          <FilesLayer form={form} place={reviewPlace} />
         </main>
       )}
       {sheet}

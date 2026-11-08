@@ -106,6 +106,11 @@ export class ProviderChildren {
     })
   }
 
+  /** This host's provider processes running now, each with the conversation or engine that owns it. */
+  processes(): ReadonlyArray<Pick<ProviderChildRecord, "pid" | "kind" | "owner">> {
+    return this.records
+  }
+
   /** A recorded process taken over by another owner (a child spawned ahead, adopted by a session); its birth stays. */
   reown(info: { pid: number; owner: string }): void {
     if (!this.records.some((entry) => entry.pid === info.pid && entry.owner !== info.owner)) return

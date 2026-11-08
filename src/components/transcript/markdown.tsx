@@ -305,7 +305,7 @@ function MarkdownTable({ children }: ComponentProps<"table">) {
         <DialogTrigger asChild>
           <button
             type="button"
-            className="pressable mt-1 flex items-center gap-1 rounded px-1 py-0.5 text-label text-faint hover:text-foreground"
+            className="pressable mt-1 flex items-center gap-1 px-1 py-0.5 text-label text-faint hover:text-foreground"
           >
             <ExpandIcon className="size-3" />
             Expand table
@@ -315,7 +315,7 @@ function MarkdownTable({ children }: ComponentProps<"table">) {
           <div className="mb-3 flex items-center justify-between">
             <DialogTitle>Table</DialogTitle>
             <DialogClose
-              className="pressable rounded p-1"
+              className="pressable p-1"
               aria-label="Close table"
             >
               <XIcon className="size-4" />
@@ -411,7 +411,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
         {diagram ? (
           <button
             type="button"
-            className="pressable ml-2 rounded px-1 text-label text-faint"
+            className="pressable ml-2 px-1 text-label text-faint"
             onClick={() => setShowSource((value) => !value)}
           >
             {showSource ? "Diagram" : "Source"}
@@ -424,7 +424,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
             void copy()
           }}
           className={cn(
-            "pressable ml-auto flex h-5 items-center gap-1 rounded px-1.5 text-label",
+            "pressable ml-auto flex h-5 items-center gap-1 px-1.5 text-label",
             "text-faint opacity-0 transition-opacity duration-150",
             "group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100"
           )}

@@ -4,7 +4,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Slot } from "@/extend/slot"
 import type { ComposerControlSlotProps } from "@/extend/slots"
 
-const itemClass = "pressable flex min-h-9 w-full items-center gap-3 rounded-md px-3 py-2 text-left text-ui text-foreground hover:bg-fill-hover focus-visible:bg-fill-hover disabled:opacity-40"
+const itemClass = "pressable flex min-h-9 w-full items-center gap-3 px-3 py-2 text-left text-ui text-foreground hover:bg-fill-hover focus-visible:bg-fill-hover disabled:opacity-40"
 
 export function ComposerAdditions({ onAttach, onReference, ...controls }: ComposerControlSlotProps & { onAttach(): void; onReference(sigil: "@" | "/"): void }) {
   const [open, setOpen] = useState(false)
@@ -15,7 +15,7 @@ export function ComposerAdditions({ onAttach, onReference, ...controls }: Compos
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type="button" aria-label="Add to message" disabled={controls.disabled} className="pressable flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-fill-hover hover:text-foreground disabled:opacity-40">
+        <button type="button" aria-label="Add to message" disabled={controls.disabled} className="pressable flex size-8 shrink-0 items-center justify-center text-muted-foreground hover:bg-fill-hover hover:text-foreground disabled:opacity-40">
           <PlusIcon className="size-4" />
         </button>
       </PopoverTrigger>

@@ -2,6 +2,7 @@
  * real headless Chromium: waits, name patterns, page scripts, inspection,
  * hover, HTML5 and pointer drags, scrolling, refs across screenshots and
  * compact discovery. Run: tsx scripts/test-control-page-verbs.ts */
+import { HEADLESS_CHROME_ARGS } from "./lib/headless-chrome.ts"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { existsSync } from "node:fs"
@@ -60,7 +61,7 @@ const root = await mkdtemp(join(tmpdir(), "mako-page-verbs-"))
 const chromium = spawn(
   executable,
   [
-    "--headless=new",
+    ...HEADLESS_CHROME_ARGS,
     "--remote-debugging-port=0",
     `--user-data-dir=${join(root, "profile")}`,
     "--no-first-run",

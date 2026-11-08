@@ -6,20 +6,22 @@ import { heavy } from "@mako/host/base/heavy-packages"
 import type { AgentCaller } from "@mako/host/contracts/agents"
 import { AGENT_TOOLS, ORCHESTRATION_INSTRUCTIONS, SESSION_VARIABLE, WAIT_LIMIT_MS, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import { AgentAnswerSchema, agentToolText, registerAgentTools, type AgentToolDoor } from "@mako/host/conversations/agent-tools"
+import { registerThreadTools, ThreadMoveAnswerSchema } from "@mako/host/conversations/thread-move-tool"
 import { z } from "zod"
 import { localHost, type HostTransport } from "./transport.js"
 
-export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--model <id>] [--reasoning <level>] [--access <tier>]
+export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--model <id>] [--reasoning <level>] [--fast|--standard] [--rule <n>] [--access <tier>]
                     [--worktree --branch <b> | --base <b>] [--title <words>] [--name <n>] [--key <k>]
-                    [--wait [--timeout <ms>]] [--wake decisions|finish|never]
-  mako agents list [--tree]
+                    [--wait [--timeout <ms>]] [--wake decisions|finish|never] [--thread <ref|id|fin>]…
+  mako agents move <fin|all> <harness> [--model <id>] [--reasoning <level>] [--fast|--standard] [--key <k>]
+  mako agents list [--tree | --crew | --apexes | --threads [words]]
   mako agents read <fin> [--transcript]
   mako agents report <status> <summary> [--question <q>] [--key <k>]
   mako agents wait [fin…] [--timeout <ms>]
-  mako agents send <fin> [words…] [--forward] [--key <k>]
+  mako agents send <fin> [words…] [--forward] [--thread <ref|id|fin>]… [--key <k>]
   mako agents stop <fin|all> [--reason <words>]
   mako agents link <harness> <session> [--pid <n>]
-  mako mcp [--cwd <folder>]   the same operations as an MCP server on stdio
+  mako mcp [--cwd <folder>]   the same operations, and thread_move, as an MCP server on stdio
 
   A brief file ending .json is a brief ({objective, doneWhen, boundaries, output}); any other is its objective.
   The caller is the Session ${SESSION_VARIABLE} names, as in a Mako Thread's shell: an Apex, and each Thread it starts
@@ -58,6 +60,9 @@ const OPTIONS = {
   "brief-file": { type: "string" },
   model: { type: "string" },
   reasoning: { type: "string" },
+  fast: { type: "boolean" },
+  standard: { type: "boolean" },
+  rule: { type: "string" },
   access: { type: "string" },
   worktree: { type: "boolean" },
   branch: { type: "string" },
@@ -66,6 +71,8 @@ const OPTIONS = {
   name: { type: "string" },
   key: { type: "string" },
   tree: { type: "boolean" },
+  crew: { type: "boolean" },
+  apexes: { type: "boolean" },
   transcript: { type: "boolean" },
   question: { type: "string" },
   wait: { type: "boolean" },
@@ -74,8 +81,15 @@ const OPTIONS = {
   reason: { type: "string" },
   pid: { type: "string" },
   forward: { type: "boolean" },
+  threads: { type: "boolean" },
+  thread: { type: "string", multiple: true },
 } as const
 type Parsed = ReturnType<typeof parseArgs<{ args: string[]; allowPositionals: true; options: typeof OPTIONS }>>
+
+/** The Threads a start or a message attaches, one `--thread` each. */
+function attached({ thread }: Parsed["values"]): { context?: { thread: string }[] } {
+  return thread?.length ? { context: thread.map((ref) => ({ thread: ref })) } : {}
+}
 
 /** One `mako agents <verb>`: its input from the arguments, the same host call the in-Thread tool makes. */
 async function input(verb: string, { values, positionals }: Parsed, cwd: string): Promise<{ tool: AgentToolDefinition; input: object }> {
@@ -86,6 +100,7 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
       if ((values.branch || values.base) && !values.worktree) throw new Error("--branch and --base name its worktree: add --worktree")
       if (values.branch && values.base) throw new Error("--branch or --base, not both")
       if (values.timeout && !values.wait) throw new Error("--timeout is how long --wait holds: add --wait")
+      if (values.fast && values.standard) throw new Error("--fast or --standard, not both")
       return {
         tool: tool("start"),
         input: {
@@ -95,6 +110,8 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
           clientKey: values.key ?? randomUUID(),
           ...(values.model && { model: values.model }),
           ...(values.reasoning && { reasoning: values.reasoning }),
+          ...((values.fast || values.standard) && { fast: Boolean(values.fast) }),
+          ...(values.rule && { rule: Number(values.rule) }),
           ...(values.access && { access: values.access }),
           ...(values.worktree && { workspace: { ...(values.branch && { branch: values.branch }), ...(values.base && { base: values.base }) } }),
           ...(values.title && { title: values.title }),
@@ -102,11 +119,27 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
           ...(values.wait && { mode: "wait" }),
           ...(values.wake && { wake: values.wake }),
           ...(values.timeout && { timeoutMs: Number(values.timeout) }),
+          ...attached(values),
+        },
+      }
+    }
+    case "move": {
+      if (!first || !second) throw new Error("agents move needs a Fin, or all, and a harness")
+      if (values.fast && values.standard) throw new Error("--fast or --standard, not both")
+      return {
+        tool: tool("move"),
+        input: {
+          ...(first === "all" ? { all: true } : { child: first }),
+          harness: second,
+          clientKey: values.key ?? randomUUID(),
+          ...(values.model && { model: values.model }),
+          ...(values.reasoning && { reasoning: values.reasoning }),
+          ...((values.fast || values.standard) && { fast: Boolean(values.fast) }),
         },
       }
     }
     case "list":
-      return { tool: tool("list"), input: values.tree ? { scope: "tree" } : {} }
+      return { tool: tool("list"), input: values.threads ? { scope: "threads", ...(positionals.length && { query: positionals.join(" ") }) } : values.apexes ? { scope: "apexes" } : values.crew ? { scope: "crew" } : values.tree ? { scope: "tree" } : {} }
     case "read":
       if (!first) throw new Error("agents read needs a Fin")
       return { tool: tool("read"), input: { child: first, ...(values.transcript && { view: "transcript" }) } }
@@ -126,7 +159,7 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
       if (!first || (!words && !values.forward)) throw new Error("agents send needs a Fin and words, or --forward")
       return {
         tool: tool("send"),
-        input: { to: first, clientKey: values.key ?? randomUUID(), ...(values.forward && { forward: true }), ...(words && { text: words }) },
+        input: { to: first, clientKey: values.key ?? randomUUID(), ...(values.forward && { forward: true }), ...(words && { text: words }), ...attached(values) },
       }
     }
     case "stop":
@@ -153,7 +186,7 @@ export async function agentsMain(argv: string[]): Promise<void> {
   const cwd = parsed.values.cwd ?? process.cwd()
   try {
     if (command === "mcp") return await serveAgentsMcp(transport, cwd)
-    if (!verb) throw new Error("agents needs a command: start, list, read, report, wait, send, stop or link")
+    if (!verb) throw new Error("agents needs a command: start, move, list, read, report, wait, send, stop or link")
     const call = await input(verb, { ...parsed, positionals: rest }, cwd)
     const result = await door(transport, cwd).invoke(call.tool.channel, [caller(), call.input])
     process.stdout.write(`${parsed.values.json ? JSON.stringify(result) : agentToolText(result)}\n`)
@@ -168,6 +201,7 @@ async function serveAgentsMcp(transport: HostTransport, cwd: string): Promise<vo
   const { McpServer, StdioServerTransport } = await heavy.mcpStdio.load("mako mcp")
   const server = new McpServer({ name: "mako", version: "1.0.0" }, { instructions: ORCHESTRATION_INSTRUCTIONS })
   registerAgentTools(server, door(transport, cwd))
+  registerThreadTools(server, { invoke: async (channel, args) => ThreadMoveAnswerSchema.parse(await transport.call(channel, args)), caller })
   const ended = new Promise<void>((resolve) => process.stdin.once("end", resolve))
   await server.connect(new StdioServerTransport())
   await ended

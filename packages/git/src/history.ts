@@ -109,6 +109,25 @@ export async function listFiles(git: Git, root: string): Promise<string[]> {
   return [...new Set(result.stdout.toString("utf8").split("\0").filter(Boolean))]
 }
 
+/**
+ * `listFiles` told apart: what Git tracks and what's untracked but not ignored, at or under `paths` (literal, relative
+ * to `root`) when given. Listing untracked files walks every folder, so a search that knows them needn't, and
+ * `untracked: false` lists only what the index holds, which reads no folder.
+ */
+export async function listFileStates(git: Git, root: string, paths?: readonly string[], options: { untracked?: boolean } = {}): Promise<{ tracked: string[]; untracked: string[] }> {
+  if (paths && !paths.length) return { tracked: [], untracked: [] }
+  const others = options.untracked === false ? [] : ["--others", "--exclude-standard"]
+  const result = await git.run({ cwd: root, args: ["ls-files", "-z", "-t", "--cached", ...others, "--", ...(paths ?? []).map((path) => `:(literal)${path}`)], read: true })
+  const tracked = new Set<string>()
+  const untracked = new Set<string>()
+  for (const entry of result.stdout.toString("utf8").split("\0")) {
+    // Each is its tag, a space and the path: `?` for untracked, a letter for what the index holds.
+    if (entry.length < 3) continue
+    ;(entry[0] === "?" ? untracked : tracked).add(entry.slice(2))
+  }
+  return { tracked: [...tracked], untracked: [...untracked] }
+}
+
 export interface GrepOptions {
   caseSensitive?: boolean
   wholeWord?: boolean
@@ -127,4 +146,54 @@ export async function grep(git: Git, root: string, term: string, options: GrepOp
   const lines = result.stdout.toString("utf8").split("\n")
   if (lines.at(-1) === "") lines.pop()
   return lines
+}
+
+export interface GrepMatch {
+  path: string
+  line: number
+  text: string
+}
+
+export interface GrepMatchOptions extends GrepOptions {
+  /** Stop once this many bytes of matches are read: the first ones come back as soon as they are found. */
+  maxBytes?: number
+  /** Matches listed per file at most. */
+  perFile?: number
+  /** Only under these paths (literal, relative to `root`). */
+  paths?: readonly string[]
+  /** Untracked files too, which costs a walk of every folder first. */
+  untracked?: boolean
+  signal?: AbortSignal
+}
+
+/**
+ * Matches in tracked text files (untracked ones too, when asked), each as its path, line and text, and whether Git was stopped before it
+ * had read everything (`more`). Paths are NUL-separated, so a name holding a colon reads as it is.
+ */
+export async function grepMatches(git: Git, root: string, term: string, options: GrepMatchOptions = {}): Promise<{ matches: GrepMatch[]; more: boolean }> {
+  if (Buffer.byteLength(term) > 4096) throw new Error("Search query exceeds the input budget")
+  // Tracked files only unless asked: `--untracked` walks every folder before the first match.
+  const args = ["grep", "--no-color", "-n", "-z", "-I", ...(options.untracked ? ["--untracked"] : [])]
+  if (!options.caseSensitive) args.push("-i")
+  if (options.wholeWord) args.push("-w")
+  if (options.perFile) args.push(`--max-count=${options.perFile}`)
+  args.push(options.regex ? "-E" : "-F", "-e", term, "--", ...(options.paths ?? []).map((path) => `:(literal)${path}`))
+  const result = await git.run({ cwd: root, args, codes: [1], maxBytes: options.maxBytes ?? 16 * 1024 * 1024, timeoutMs: 15_000, read: true, signal: options.signal })
+  if (result.code === 1 && !result.truncated) return { matches: [], more: false }
+  const text = result.stdout.toString("utf8")
+  const matches: GrepMatch[] = []
+  let from = 0
+  for (;;) {
+    const end = text.indexOf("\n", from)
+    // A line cut off by the byte limit is left out.
+    if (end < 0) break
+    const first = text.indexOf("\0", from)
+    const second = first < 0 ? -1 : text.indexOf("\0", first + 1)
+    if (first >= 0 && second >= 0 && second < end) {
+      const line = Number(text.slice(first + 1, second))
+      if (Number.isFinite(line)) matches.push({ path: text.slice(from, first), line, text: text.slice(second + 1, end) })
+    }
+    from = end + 1
+  }
+  return { matches, more: result.truncated }
 }

@@ -11,6 +11,7 @@ import type { CodexEngine } from "../codex-app.js"
 import type { HarnessContext } from "../host.js"
 import { fileResumeEvidence } from "../native-continuation.js"
 import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
+import { codexLayer } from "./layer.js"
 
 export const CODEX_NATIVE_IDENTITY = { kind: "reported", via: "app-server account/read" } as const
 
@@ -48,6 +49,9 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
     },
     nativeAgents: { kind: "observed", via: "`spawn_agent` calls and the agent threads they start." },
     nativeRouting: { kind: "at-launch", via: "`agents.enabled = false` in the config `thread/start`, `thread/resume` and `thread/fork` carry, which removes `spawn_agent` and the other multi-agent tools whatever the model declares.", verified: { version: "0.166.0", how: "harness:native-tools records every model as a lead without them (2026-11-01); test:native-routing-live: a lead, and that lead resumed in a new app-server, offered no `spawn_agent`, an ordinary Thread's child ran and was observed" } },
+    layer: codexLayer.capabilities,
+    modelRoutes: { kind: "planned", wires: ["openai-chat", "openai-responses"], via: "A provider in `config.model_providers` (its `base_url`, `wire_api` and `env_key`) and `modelProvider` on `thread/start`; no adapter uses it yet." },
+    accountContinuation: { kind: "new-session", reason: "A resumed thread sends back its encrypted reasoning items, which the API refuses from an account that didn't make them (\"was not issued to this caller\"), so another account starts a thread of its own." },
     contextBreakdown: { kind: "unavailable", reason: "The app-server reports token totals and the context window, not what fills it." },
     modeSwitching: { kind: "native", via: "Each mode is an approval policy and sandbox, sent with each turn." },
     backgroundStop: { kind: "ends-on-stop", how: "Stop terminates exact native terminal IDs before interruption and checks again after settlement, including child threads. Stopped turn IDs retain a bounded guard for commands reported after interruption; failed native termination disconnects instead of claiming cleanup. Checked on Codex 0.159.3: foreground child exit and same-session follow-up. Closing ends terminals and subagents before the app-server exits." },
@@ -65,6 +69,11 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
     steering: {
       kind: "supported",
       lands: "step",
+      // Measured again 2026-11-03: heard 0.0 s after the steer, the command cut short. Its own steer lands at once.
+      landing: "native",
+      // Seen with Codex 0.164.0 on gpt-6.1-sol (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command,
+      // the code-mode cell yielded at once ("Script running with cell ID 1") and the model heard the message then.
+      hears: "at once: a command it's running yields to the model and carries on in the background",
       via: "`turn/steer` adds the message to the running turn, read at its next step.",
       steer: async (...args) => (await engine()).steer(...args),
     },

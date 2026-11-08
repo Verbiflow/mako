@@ -14,7 +14,7 @@ import { DatabaseSync } from "node:sqlite"
 import { ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
 import { AppKeySchema, THREAD_PORT_COUNT, THREAD_PORT_FIRST, THREAD_PORT_LAST } from "@mako/host/contracts/thread-environments"
 import { controlNote } from "@mako/host/control/launch"
-import { ThreadEnvironments, applyThreadEnvironment, folderApp, threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
+import { CLOUD_MACHINE_INSTRUCTIONS, ThreadEnvironments, applyThreadEnvironment, folderApp, threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
 import { ThreadStore } from "@mako/host/threads/store"
 
 const gitRunner = new Git()
@@ -160,6 +160,18 @@ function processEnvironment(): void {
   assert.equal(withoutMakoFraming(prompt), "Make the login page remember me", "history readers strip the note like Local Control's")
   assert.equal(userTextFrom(prompt), "Make the login page remember me")
   assert.equal(controlNote([]), undefined, "no note when there is nothing to say")
+
+  // On a cloud machine every harness is told where it runs and how to get what it lacks, before anything else.
+  const cloud = controlNote([CLOUD_MACHINE_INSTRUCTIONS, threadEnvironmentInstructions(environment, "cloud")])!
+  assert.match(cloud, /^<mako-local-control>\nYou run in Mako's cloud, not on the person's computer/)
+  assert.match(cloud, /keeps that computer's path for it, but nothing else of that computer is here/)
+  assert.match(cloud, /Settings › Apps › this project › In Mako Cloud/)
+  assert.match(cloud, /Commits made here name who the person chose in Settings › Git, themselves or Mako's bot with them as co-author, as Mako set Git's identity before you started/, "both authorship modes are named")
+  assert.match(cloud, /never set user\.name, user\.email, --author or GIT_AUTHOR_\*, and never copy an identity from another commit; keep your harness's co-author trailer\. A push of commits naming anyone else is refused\./, "agents are told who commits name, and not to guess")
+  assert.match(cloud, /This machine is this Thread's alone/)
+  assert.ok(!cloud.includes("Other Threads' agents share this machine"), "a machine isn't shared with other Threads")
+  assert.equal(withoutMakoFraming(`${cloud}\n\nDeploy the worker`), "Deploy the worker", "history readers strip the cloud's note too")
+  assert.ok(threadEnvironmentInstructions(environment).includes("Other Threads' agents share this machine"), "a computer's note is as before")
 }
 
 /** One app per folder: Threads sharing a folder share its values; a Worktree Thread's app is its own. */

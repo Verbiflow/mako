@@ -1,9 +1,8 @@
 import { memo, useMemo, useState, type KeyboardEvent, type ReactNode } from "react"
 import { ArchiveIcon, Columns2Icon, PencilLineIcon, PlusIcon, Rows2Icon, ScrollTextIcon, XIcon } from "lucide-react"
-import { ThreadStatusMark } from "@/components/rail/thread-status"
+import { ThreadMark } from "@/components/rail/thread-status"
 import { IconAction } from "@/components/ui/kit"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, MenuItem, MenuSeparator } from "@/components/ui/menu"
-import { HarnessIcon } from "@/components/ui/provider-icon"
 import { formatChord } from "@/extend/commands"
 import { presenceThreadStatus } from "@/lib/thread-fold"
 import type { ThreadRef } from "@/lib/types"
@@ -42,17 +41,18 @@ function shownStatus(status: ThreadStatus, onScreen: boolean): ThreadStatus | nu
   return status.kind === "review" && status.unread && !onScreen ? status : null
 }
 
-const NativeTabStatus = memo(function NativeTabStatus({ threadRef, onScreen }: { threadRef: ThreadRef; onScreen: boolean }) {
+const IDLE: ThreadStatus = { kind: "idle" }
+
+const NativeTabMark = memo(function NativeTabMark({ threadRef, harness, onScreen }: { threadRef: ThreadRef; harness: string; onScreen: boolean }) {
   const status = useThreads((state) => threadStatus(threadRef, state), sameThreadStatus)
-  const shown = shownStatus(status, onScreen)
-  return shown ? <ThreadStatusMark status={shown} /> : null
+  return <ThreadMark status={shownStatus(status, onScreen) ?? IDLE} harness={harness} lit={onScreen} cut={onScreen ? "var(--raised)" : "var(--shell)"} />
 })
 
-function TabStatus({ tab, onScreen }: { tab: SessionTab; onScreen: boolean }) {
-  if (tab.kind === "draft") return null
-  if (tab.ref) return <NativeTabStatus threadRef={tab.ref} onScreen={onScreen} />
-  const shown = tab.presence ? shownStatus(presenceThreadStatus(tab.presence), onScreen) : null
-  return shown ? <ThreadStatusMark status={shown} /> : null
+/** A tab's one mark: its agent's glyph with its news round it, as its rail row wears it. */
+function TabMark({ tab, harness, onScreen }: { tab: SessionTab; harness: string; onScreen: boolean }) {
+  if (tab.kind !== "draft" && tab.ref) return <NativeTabMark threadRef={tab.ref} harness={harness} onScreen={onScreen} />
+  const shown = tab.kind !== "draft" && tab.presence ? shownStatus(presenceThreadStatus(tab.presence), onScreen) : null
+  return <ThreadMark status={shown ?? IDLE} harness={harness} lit={onScreen} cut={onScreen ? "var(--raised)" : "var(--shell)"} />
 }
 
 /**
@@ -163,7 +163,7 @@ function SessionTabButton({
         if (event.button === 1) close?.()
       }}
       className={cn(
-        "session-tab group @container/tab relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center overflow-hidden rounded-md",
+        "session-tab group @container/tab relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center overflow-hidden",
         selected
           ? "bg-raised text-foreground"
           : "bg-shell text-faint hover:bg-fill-hover hover:text-muted-foreground"
@@ -190,7 +190,7 @@ function SessionTabButton({
         className="flex h-full min-w-0 flex-1 items-center gap-1.5 truncate px-1.5 text-left text-ui font-medium"
       >
         {harness ? (
-          <HarnessIcon harness={harness} className="size-4" />
+          <TabMark tab={tab} harness={harness} onScreen={selected} />
         ) : (
           <PencilLineIcon aria-hidden className="size-3.5" />
         )}
@@ -198,7 +198,6 @@ function SessionTabButton({
       </button>
       <span className="flex shrink-0 items-center gap-0.5 pr-1">
         {worked ? <span className="hidden px-0.5 text-label font-normal tabular-nums text-faint @[10rem]/tab:inline" data-session-age>{formatRelative(worked.at)}</span> : null}
-        <TabStatus tab={tab} onScreen={selected} />
         {close ? (
           <button
             type="button"
@@ -206,7 +205,7 @@ function SessionTabButton({
             title={tab.kind === "draft" ? "Close. Unsent text is kept for the next new tab." : "Archive this session. Restore it from Archived."}
             onClick={close}
             className={cn(
-              "pressable -mr-0.5 flex size-5 shrink-0 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground",
+              "pressable -mr-0.5 flex size-5 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground",
               selected
                 ? "opacity-80"
                 : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-80 group-focus-within:pointer-events-auto group-focus-within:opacity-80"

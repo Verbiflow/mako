@@ -89,7 +89,7 @@ export function IntegrationsSection() {
         </Action>
       </div>
 
-      <label className="mb-5 flex h-8 items-center gap-2 rounded-md bg-surface px-2.5 ring-1 ring-hairline focus-within:ring-border">
+      <label className="mb-5 flex h-8 items-center gap-2 bg-raised px-2.5 focus-within:ring-1 focus-within:ring-border">
         <SearchIcon className="size-3.5 shrink-0 text-faint" />
         <input
           value={query}
@@ -116,7 +116,7 @@ export function IntegrationsSection() {
       ))}
 
       {state.snapshot && groups.length === 0 ? (
-        <p className="rounded-lg bg-surface px-3 py-8 text-center text-ui text-faint ring-1 ring-hairline">
+        <p className="bg-raised px-3 py-8 text-center text-ui text-faint">
           No integrations match “{query.trim()}”.
         </p>
       ) : null}
@@ -133,7 +133,7 @@ function IntegrationCard({ record }: { record: IntegrationRecord }) {
   const updatingDriver = useIntegrations((value) => value.updatingDriver)
   const configured = state.kind === "connected" || state.kind === "ready"
   return (
-    <div className="contain-turn flex min-h-36 flex-col rounded-lg bg-surface p-3 ring-1 ring-hairline">
+    <div className="contain-turn flex min-h-36 flex-col bg-raised p-3">
       <div className="flex items-start gap-2.5">
         <IntegrationLogo record={record} />
         <span className="min-w-0 flex-1">
@@ -152,7 +152,7 @@ function IntegrationCard({ record }: { record: IntegrationRecord }) {
         {record.capabilities.map((capability) => (
           <span
             key={capability}
-            className="rounded bg-raised px-1.5 py-0.5 text-label text-faint"
+            className="bg-fill-hover px-1.5 py-0.5 text-label text-faint"
           >
             {capability}
           </span>
@@ -211,7 +211,7 @@ function IntegrationCard({ record }: { record: IntegrationRecord }) {
 function IntegrationLogo({ record }: { record: IntegrationRecord }) {
   const Logo = Object.entries(LOGOS).find(([id]) => id === record.id)?.[1]
   return (
-    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-raised text-muted-foreground ring-1 ring-hairline">
+    <span className="flex size-8 shrink-0 items-center justify-center bg-fill-hover text-muted-foreground">
       {Logo ? (
         <Logo aria-label={`${record.label} logo`} className="size-4.5" />
       ) : (

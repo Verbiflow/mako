@@ -1,7 +1,8 @@
 import type { Git } from "@mako/git"
 import { join } from "node:path"
-import type { UpdateInstallation } from "../contracts/app-lifecycle.js"
+import type { UpdateBuildFrom, UpdateInstallation } from "../contracts/app-lifecycle.js"
 import { LocalUpdates } from "./local-updates.js"
+import type { Writers } from "./local-update-source.js"
 import { prepareLocalInstall } from "./local-update-install.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { UpdateState } from "../contracts/automations-usage-updates.js"
@@ -40,6 +41,8 @@ export interface UpdatesOptions {
   git: Git
   emit(event: HostEvent): void
   desktop: DesktopUpdater
+  /** Who changed each uncommitted file of the source checkout, from the change journal. */
+  writers?: Writers
 }
 
 export class Updates {
@@ -50,18 +53,21 @@ export class Updates {
   /** A locally signed install's builder, once `start` has made it. */
   private local: LocalUpdates | null = null
 
-  constructor({ environment, git, emit, desktop }: UpdatesOptions) {
+  private readonly writers: Writers | undefined
+
+  constructor({ environment, git, emit, desktop, writers }: UpdatesOptions) {
     this.environment = environment
     this.git = git
     this.emit = emit
     this.desktop = desktop
+    this.writers = writers
   }
 
   /** A locally signed install reads where its last build got to and is ready to build the next. */
   start(): void {
     const identity = this.environment.build.makoLocalSigningIdentity
     if (!this.environment.packaged || !onMac() || packagedDistribution(this.environment.appRoot) !== "local" || !identity) return
-    const local = new LocalUpdates(this.git, join(this.environment.dataRoot, "updates"), identity, () => this.installationChanged(), this.environment.build.makoBuild ?? null)
+    const local = new LocalUpdates(this.git, join(this.environment.dataRoot, "updates"), identity, () => this.installationChanged(), this.environment.build.makoBuild ?? null, this.writers ? { writers: this.writers } : {})
     this.local = local
     void local.load().then(() => {
       this.installationChanged()
@@ -88,9 +94,9 @@ export class Updates {
     return this.installation()
   }
 
-  build(): void {
+  build(from?: UpdateBuildFrom): void {
     if (!this.local) throw new Error(UNAVAILABLE)
-    this.local.start()
+    this.local.start(from)
   }
 
   /** Measure a built update's performance again, after a Mac too busy to measure it. */

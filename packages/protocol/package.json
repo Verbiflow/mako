@@ -11,6 +11,8 @@
     ".": "./dist/index.js",
     "./fake-gateway": "./dist/fake-gateway.js",
     "./records": "./dist/records.js",
+    "./borrow": "./dist/borrow.js",
+    "./setup": "./dist/setup.js",
     "./records-http": "./dist/records-http.js",
     "./moves": "./dist/moves.js",
     "./saves": "./dist/saves.js",
@@ -27,7 +29,8 @@
     "./recipes-http": "./dist/recipes-http.js",
     "./gateway-http": "./dist/gateway-http.js",
     "./conformance": "./dist/conformance.js",
-    "./attribution-conformance": "./dist/attribution-conformance.js"
+    "./attribution-conformance": "./dist/attribution-conformance.js",
+    "./borrow-conformance": "./dist/borrow-conformance.js"
   },
   "files": [
     "dist"

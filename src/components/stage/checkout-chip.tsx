@@ -12,7 +12,7 @@ import { prefsStore } from "@/state/prefs"
 import { useSession } from "@/state/session"
 import { removeWorktree, useWorktreeAhead, useWorktrees, worktreeAt } from "@/state/worktrees"
 
-const item = "flex cursor-default items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-fill-hover"
+const item = "flex cursor-default items-center gap-2 px-2 py-1.5 outline-none data-[highlighted]:bg-fill-hover"
 
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`
@@ -60,7 +60,7 @@ export function CheckoutChip({ cwd }: { cwd: string | undefined }) {
           data-checkout-chip={worktree || outside ? "worktree" : "checkout"}
           data-worktree-origin={outside ? "outside" : undefined}
           aria-label={`${where}${outside ? " made outside Mako" : ""}, on ${checkoutSentence(head)}${counts ? `, ${counts}` : ""}`}
-          className="pressable flex h-6 min-w-0 max-w-[40%] shrink items-center gap-1 rounded-md px-1.5 text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
+          className="pressable flex h-6 min-w-0 max-w-[40%] shrink items-center gap-1 px-1.5 text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
         >
           {worktree || outside ? <FolderGit2Icon className="size-3 shrink-0" /> : <GitBranchIcon className="size-3 shrink-0" />}
           <CheckoutLabel head={head} />

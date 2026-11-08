@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { chmod, mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { admitted } from "../fixtures/admitted-start.ts"
-import { priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
-import { bareName, isShell, shellCommand } from "./names.ts"
+import { routeShellCall } from "@mako/host/contracts/native-calls"
+import { primerText } from "@mako/host/contracts/primer"
+import { apexesAnswer, caseCallThread, priorTurns, ToolArgs, turnText, type OrchCase, type Sample } from "./cases.ts"
+import { bareName, isShell, makoTool, shellCommand } from "./names.ts"
 import type { StubMako } from "./stub-mako.ts"
 
 /**
@@ -19,6 +23,11 @@ import type { StubMako } from "./stub-mako.ts"
  * print and exit. Cursor has no asking mode; the stubs are what stands
  * between it and a real run.
  */
+
+const execFileAsync = promisify(execFile)
+
+/** The harnesses whose driver routes each shell call (`NativeCallsCapability` per-call): a command routing denies there never ran. */
+const ROUTED_CALLS = new Set(["claude", "cursor", "grok", "devin", "codex", "opencode"])
 
 /** Each harness's mode that asks before a command runs; Cursor has only full access. */
 export const ASKING_MODE = new Map([["claude", "default"], ["codex", "access:ask"], ["opencode", "access:ask"], ["grok", "access:ask"], ["devin", "accept-edits"]])
@@ -52,18 +61,28 @@ function toolArgs(input: string): ToolArgs {
   }
 }
 
-/** The case's Thread as one prompt: its earlier turns as a transcript, then the person's message. */
-function prompt(orchCase: OrchCase): string {
+/** The case's Thread as one prompt. A harness with no instruction slot gets the blocks ahead of the message, as the host's note does. */
+function prompt(orchCase: OrchCase, primer: boolean, note: boolean): string {
   const prior = priorTurns(orchCase).map((turn) => `${turn.role === "user" ? "The person" : "You"}: ${turn.text}${turn.toolCalls?.length ? ` [${turn.toolCalls.map((call) => `${call.tool} → ${JSON.stringify(call.result)}`).join("; ")}]` : ""}`)
   const asked = turnText(orchCase)
-  return prior.length ? `Earlier in this Thread:\n${prior.join("\n")}\n\n${asked}` : asked
+  const body = prior.length ? `Earlier in this Thread:\n${prior.join("\n")}\n\n${asked}` : asked
+  if (!primer || !note) return body
+  const blocks = primerText({ role: orchCase.setup.role === "apex" ? "apex" : "thread", noRecipe: orchCase.setup.thread?.recipe === "none", computer: true })
+  return `${blocks}\n\n${body}`
 }
 
 export async function liveSample(input: {
   harness: string; driver: ProviderLiveDriver; stub: StubMako; orchCase: OrchCase; routing: "on" | "off"
+  /** Off is the launch before the primer: the show line only, over HTTP, with no `fin` agent. */
+  primer?: boolean
+  /** Claude: `false` serves `mako` over HTTP. */
+  inProcessMako?: boolean
   env: NodeJS.ProcessEnv; project: string; model?: string
+  /** How long a turn may run before the sample counts as an error: 180 s unless the run says (`--turn-seconds`). */
+  turnSeconds?: number
 }): Promise<Sample & { seconds: number }> {
   const { harness, driver, stub, orchCase, routing, env, project } = input
+  const primer = input.primer !== false
   const id = randomUUID()
   const events: LiveDriverEvent[] = []
   const refused: string[] = []
@@ -84,19 +103,29 @@ export async function liveSample(input: {
   const status = () => events.findLast((event) => event.type === "live-session")?.session.status
   try {
     const mode = ASKING_MODE.get(harness)
+    // The project's branch is the one the case's Thread works on: main in the main checkout, the Thread's own in its worktree.
+    await execFileAsync("git", ["-C", project, "checkout", "-q", "-f", orchCase.setup.thread?.place === "main" ? "main" : "mako/thread-work"]).catch(() => undefined)
+    const grant = stub.grant(id, apexesAnswer(orchCase))
+    if (routing === "on") stub.routes(id, caseCallThread(orchCase, project))
+    if (orchCase.setup.answers) stub.answers(id, orchCase.setup.answers)
     await driver.start(project, admitted(harness, {
       conversationId: id, emit, ...mode && { modeId: mode }, ...input.model && { tuning: { model: input.model } },
-      conversationTools: stub.grant(id),
+      conversationTools: grant, primer, ...input.inProcessMako === false && { inProcessMako: false },
       mcpSnapshot: async () => ({ cwd: project, generatedAt: Date.now(), servers: [], providers: [] }),
-      ...routing === "on" && { nativeRouting: () => ({ role: orchCase.setup.role === "apex" ? "apex" as const : "thread" as const }) },
+      ...routing === "on" && { nativeRouting: () => ({ role: orchCase.setup.role === "apex" ? "apex" as const : "thread" as const }), nativeCalls: () => caseCallThread(orchCase, project) },
     }, { env }))
-    await driver.prompt(id, prompt(orchCase), [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
-    const deadline = Date.now() + 180_000
+    await driver.prompt(id, prompt(orchCase, primer, !driver.makoInstructions), [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+    const seconds = input.turnSeconds ?? 180
+    const deadline = Date.now() + seconds * 1000
     while (Date.now() < deadline && !(status() !== "running" && status() !== "starting" && Date.now() - quiet > 5000)) await delay(250)
-    if (Date.now() >= deadline) throw new Error("the turn didn't settle in three minutes")
+    if (Date.now() >= deadline) throw new Error(`the turn didn't settle in ${seconds} s`)
   } finally {
     await Promise.resolve(driver.close(id)).catch(() => {})
   }
+  // A turn its harness failed before the model did anything (a usage limit, a sign-in) grades nothing: it's an error, left out of every rate.
+  const failed = events.findLast((event) => event.type === "live-session" && event.session.status === "failed")
+  if (failed?.type === "live-session" && !updates(events).some((update) => update.kind === "tool" || update.kind === "text"))
+    throw new Error(`the turn failed before the model acted: ${failed.session.error ?? "no reason given"}`)
   // A tool's later updates (its status, its output) repeat its id: the call is the last of them that names it.
   const named = new Map<string, { raw: string; args: ToolArgs }>()
   for (const update of updates(events)) if (update.kind === "tool" && update.name) named.set(update.id, { raw: update.name, args: update.input === undefined ? named.get(update.id)?.args ?? {} : toolArgs(update.input) })
@@ -106,7 +135,7 @@ export async function liveSample(input: {
     const tool = bareName(harness, raw)
     // Cursor names every MCP call `mcp`: the stub's calls, in order, say which.
     if (tool === "mcp" && makoArgs.length) return [makoArgs.shift()!]
-    const recorded = tool.startsWith("agents_") ? makoArgs.findIndex((call) => call.tool === tool) : -1
+    const recorded = makoTool(tool) ? makoArgs.findIndex((call) => call.tool === tool) : -1
     const known = recorded === -1 ? undefined : makoArgs.splice(recorded, 1)[0]
     return [{ tool, args: known?.args ?? args }]
   })
@@ -118,9 +147,12 @@ export async function liveSample(input: {
     const key = update.id ?? ""
     texts.set(key, update.replace ? update.text : (texts.get(key) ?? "") + update.text)
   }
+  const shell = [...tools.filter(({ raw }) => isShell(harness, raw)).map(({ args }) => shellCommand(args)), ...refused]
+  const routes = routing === "on" && ROUTED_CALLS.has(harness)
   return {
     steps,
-    shell: [...tools.filter(({ raw }) => isShell(harness, raw)).map(({ args }) => shellCommand(args)), ...refused],
+    shell,
+    ran: routes ? shell.filter((command) => routeShellCall(caseCallThread(orchCase, project), { command, cwd: project }).kind !== "deny") : shell,
     text: [...texts.values()].join("\n"),
     ended: status() !== "failed",
     seconds: Math.round((Date.now() - began) / 1000),

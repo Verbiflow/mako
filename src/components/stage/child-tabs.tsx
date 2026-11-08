@@ -1,140 +1,64 @@
-import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
-import { childGroup, childLine, childStateOf, childWord, rollup } from "@mako/host/contracts/children"
-import { finsWord } from "@mako/host/contracts/agents"
+import { childLine, childStateOf, childWord } from "@mako/host/contracts/children"
 import type { ChildState } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { ThreadStatusMark } from "@/components/rail/thread-status"
+import { XIcon } from "lucide-react"
 import { HarnessIcon } from "@/components/ui/provider-icon"
-import { ApexMark } from "@/components/ui/apex-mark"
+import { LiveMark } from "@/components/ui/live-mark"
+import { finMarkState, motionOf } from "@/lib/live-mark-state"
 import { useHarnessIdentity, harnessLabel } from "@/lib/harness-label"
-import { cn } from "@/lib/utils"
-import { openFinInApex, useApexView, useThreadChildren } from "@/state/apex-fins"
-import { stage } from "@/state/stage"
+import { backToApex, useApexView, useThreadChildren } from "@/state/apex-fins"
 
-/** A Fin tab's widths: narrower than a Session's, so an Apex's Fins read as its own work beside them; they give way to the narrowest before one goes behind "+N". */
-const CHILD_TAB_PX = 160
-const CHILD_TAB_MIN_PX = 96
-const GAP_PX = 6
-/** The "+N" that stands for the rest at the strip's end. */
-const MORE_PX = 40
-
-/** Queued: started by no one yet, so a dashed ring where the others wear a mark. */
-function QueuedMark({ label }: { label: string }) {
+/**
+ * A Fin's live mark: the plain fin doing what the Fin does, its harness a corner badge. A Fin that finished and
+ * hasn't been read wears the unread dot.
+ */
+export function FinMark({ agent, state, read, lit, cut, size }: { agent: NativeAgent; state: ChildState; read?: boolean; lit?: boolean; cut?: string; size?: number }) {
+  const line = childLine(state)
+  const unread = state.kind === "ended" && state.outcome === "done" && state.decision?.on !== "person" && !read
   return (
-    <span role="img" aria-label={label} title={label} className="flex size-5 shrink-0 items-center justify-center">
-      <span aria-hidden className="size-2 rounded-full border border-dashed border-faint" />
-    </span>
+    <LiveMark kind="fin" state={unread ? "unread" : finMarkState(state)} motion={motionOf(line)} lit={lit} cut={cut} size={size} label={line ? `${childWord(state)}: ${line}` : childWord(state)}>
+      <HarnessIcon harness={agent.provider} />
+    </LiveMark>
   )
 }
 
 /**
- * A child's state in the rail's own marks, so its tab reads as a Session tab
- * does: what needs the person, running, failed, an answer to read, or queued.
- * An idle or stopped child has no news, so no mark.
+ * The Fin opened in place, the one tab a Fin gets. A tab is something opened on purpose, so a Fin earns one only by
+ * being opened (from the crew card, the rail or the Inbox) and gives it up on close; the rest of an Apex's Fins live in
+ * those places, never here as they spawn.
  */
-export function ChildStatusMark({ state, read }: { state: ChildState; read?: boolean }) {
-  const line = childLine(state)
-  const group = childGroup(state)
-  if (group === "queued") return <QueuedMark label={line ?? childWord(state)} />
-  if (group === "needs") return <ThreadStatusMark status={{ kind: "needs-permission", since: 0, detail: `${childWord(state)}: ${line ?? ""}` }} />
-  if (group === "working") return <ThreadStatusMark status={{ kind: "working", since: 0, detail: line ?? childWord(state) }} />
-  if (group === "failed") return <ThreadStatusMark status={{ kind: "failed", at: 0, detail: line ?? "Failed" }} />
-  if (state.kind === "ended" && state.outcome === "done" && !read) return <ThreadStatusMark status={{ kind: "review", at: 0, unread: true }} />
-  return null
+export function OpenFinTab({ thread }: { thread: string }) {
+  const open = useApexView((state) => (state.open?.apex === thread ? state.open.child : undefined))
+  const agent = useThreadChildren(open ? thread : undefined).find((entry) => entry.child?.thread === open)
+  return agent ? <FinTab agent={agent} onClose={backToApex} /> : null
 }
 
-/** One child's tab: its harness, its title and its state. Memoized on its entry, which keeps its identity while it's unchanged. */
-const ChildTab = memo(function ChildTab({ agent, selected, onOpen }: { agent: NativeAgent; selected: boolean; onOpen: (agent: NativeAgent) => void }) {
+/** A Fin's tab, selected as it's the one shown, its close going back to its Apex. */
+export function FinTab({ agent, onClose }: { agent: NativeAgent; onClose: () => void }) {
   useHarnessIdentity()
   const state = childStateOf(agent)
   return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={selected}
-      tabIndex={selected ? 0 : -1}
-      data-child-tab={agent.child?.thread}
-      title={`${agent.title} · ${harnessLabel(agent.provider)} · ${childWord(state)}`}
-      onMouseDown={(event) => {
-        if (event.button === 0 && event.detail > 0) onOpen(agent)
-      }}
-      onClick={(event) => {
-        if (event.detail === 0) onOpen(agent)
-      }}
-      style={{ flex: `0 1 ${CHILD_TAB_PX}px`, minWidth: CHILD_TAB_MIN_PX }}
-      className={cn(
-        "session-tab group relative flex h-7 items-center gap-1.5 overflow-hidden rounded-md pr-0.5 pl-1.5 text-ui",
-        selected ? "bg-raised font-medium text-foreground" : "text-muted-foreground hover:bg-fill-hover hover:text-foreground"
-      )}
-    >
-      <HarnessIcon harness={agent.provider} className="size-3.5" />
-      <span className="min-w-0 flex-1 truncate text-left">{agent.title}</span>
-      <ChildStatusMark state={state} read={selected} />
-    </button>
-  )
-})
-
-/**
- * An Apex's Fins in its own strip, after its Sessions: a hairline, their
- * count (which opens the Agents panel), then a tab each, what needs the person
- * first. As many as fit; the rest are one "+N" pinned at the end.
- */
-export function ApexFinTabs({ thread, apexTitle }: { thread: string; apexTitle: string }) {
-  const children = useThreadChildren(thread)
-  const open = useApexView((state) => (state.open?.apex === thread ? state.open.child : undefined))
-  const region = useRef<HTMLDivElement>(null)
-  const [fit, setFit] = useState({ alone: 4, beside: 3 })
-  const hasChildren = children.length > 0
-  // Stable, so a batch moving one Fin repaints that Fin's tab alone.
-  const press = useCallback((agent: NativeAgent) => openFinInApex(thread, apexTitle, agent), [thread, apexTitle])
-  useLayoutEffect(() => {
-    const node = region.current
-    if (!node) return
-    const measure = (width: number) => {
-      const alone = Math.max(1, Math.floor((width + GAP_PX) / (CHILD_TAB_MIN_PX + GAP_PX)))
-      const beside = Math.max(1, Math.floor((width - MORE_PX) / (CHILD_TAB_MIN_PX + GAP_PX)))
-      setFit((held) => (held.alone === alone && held.beside === beside ? held : { alone, beside }))
-    }
-    measure(node.clientWidth)
-    const observer = new ResizeObserver((entries) => measure(entries[0]?.contentRect.width ?? node.clientWidth))
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [hasChildren])
-  if (!hasChildren) return null
-  const counts = rollup(children)
-  const shown = children.slice(0, children.length <= fit.alone ? children.length : fit.beside)
-  const opened = open ? children.find((agent) => agent.child?.thread === open) : undefined
-  if (opened && !shown.includes(opened)) shown[shown.length - 1] = opened
-  const rest = children.length - shown.length
-  return (
-    <>
-      <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-hairline" />
+    <div className="session-tab group relative flex h-7 max-w-56 min-w-24 shrink items-center gap-0.5 overflow-hidden bg-raised text-foreground">
       <button
         type="button"
-        data-apex-count={counts.total}
-        onClick={() => stage.open("agents")}
-        title={`${finsWord(counts.total)} under ${apexTitle}, in the Agents panel`}
-        className="pressable flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
+        role="tab"
+        aria-selected
+        tabIndex={0}
+        data-child-tab={agent.child?.thread}
+        title={`${agent.title} · ${harnessLabel(agent.provider)} · ${childWord(state)}`}
+        className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-1.5 text-left text-ui font-medium"
       >
-        <ApexMark className="size-3.5" />
-        <span className="tabular">{counts.total}</span>
+        <FinMark agent={agent} state={state} read lit cut="var(--raised)" />
+        <span className="min-w-0 flex-1 truncate">{agent.title}</span>
       </button>
-      <div ref={region} data-child-tabs style={{ minWidth: CHILD_TAB_MIN_PX + GAP_PX + MORE_PX }} className="flex flex-1 items-center gap-1.5 overflow-hidden">
-        {shown.map((agent) => (
-          <ChildTab key={agent.nativeId} agent={agent} selected={open === agent.child?.thread} onOpen={press} />
-        ))}
-        {rest > 0 ? (
-          <button
-            type="button"
-            data-child-more={rest}
-            onClick={() => stage.open("agents")}
-            title={`${finsWord(rest)} more under ${apexTitle}, in the Agents panel`}
-            className="pressable ml-auto flex h-7 shrink-0 items-center rounded-md px-2 text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
-          >
-            <span className="tabular">+{rest}</span>
-          </button>
-        ) : null}
-      </div>
-    </>
+      <button
+        type="button"
+        aria-label={`Close ${agent.title}`}
+        onClick={onClose}
+        className="pressable flex size-5 shrink-0 items-center justify-center text-faint opacity-80 hover:bg-fill-hover hover:text-foreground"
+      >
+        <XIcon className="size-3" />
+      </button>
+    </div>
   )
 }

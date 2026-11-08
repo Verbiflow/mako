@@ -1,26 +1,30 @@
 import { useState, type FormEvent } from "react"
-import { ArrowUpRightIcon, CircleAlertIcon, KeyRoundIcon } from "lucide-react"
-import { Action, ListCard, ListCardRow, SettingRow, Toggle } from "@/components/ui/kit"
+import { ArrowUpRightIcon, CircleAlertIcon, InfoIcon, KeyRoundIcon } from "lucide-react"
+import { FIELD, Action, ListCard, ListCardRow, Segmented, SettingRow, Toggle } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
+import { AUTHORSHIP_UNAVAILABLE, AUTHORSHIP_UNREAD, authorshipChoosable, authorshipWords, FALLBACK_WORDS, TOKEN_KEPT_WORDS, useGitHubAuthorship, type GitHubAuthorships } from "@/state/github-authorship"
 
-const inputClass =
-  "h-8 min-w-0 flex-1 rounded-md bg-raised px-2.5 font-mono text-ui text-foreground ring-1 ring-hairline placeholder:font-sans placeholder:text-faint focus:outline-none focus-visible:ring-border"
+const inputClass = cn(FIELD, "flex-1 font-mono placeholder:font-sans")
 
 /**
- * Settings › Git › Pull requests in the cloud: "Open pull requests as me", off by default. Turning it on asks for the
- * person's own GitHub token, which the cloud checks with GitHub (and against `repository`, the one in view) before it
- * keeps it; then the row says whose it is and when it lapses. Turning it off, confirmed in place, deletes it from the
- * account and every cloud machine. The desktop's, and a laptop browser's Settings too.
+ * Settings › Git › Commits and pull requests in the cloud. First who they're authored as, `As you` by default or `As
+ * Mako`, the account's choice; under `As you` with no token saved, a line that the App opens pull requests until one
+ * is. Then "Open pull requests as me", off by default. Turning it on asks for the person's own GitHub token, which the
+ * cloud checks with GitHub (and against `repository`, the one in view) before it keeps it; then the row says whose it
+ * is and when it lapses. Turning it off, confirmed in place, deletes it from the account and every cloud machine. The
+ * desktop's, and a laptop browser's Settings too.
  */
-export function PullRequestsAsMe({ tokens, repository }: { tokens: GitHubTokens; repository?: string }) {
+export function PullRequestsAsMe({ tokens, authorships, repository }: { tokens: GitHubTokens; authorships: GitHubAuthorships; repository?: string }) {
   const { phase, busy, error, save, remove, read, clearError } = useGitHubToken(tokens)
+  const authorship = useGitHubAuthorship(authorships)
   const [asking, setAsking] = useState(false)
   const [confirmingOff, setConfirmingOff] = useState(false)
   const listing = phase.kind === "ready" ? phase.listing : null
   const on = Boolean(listing) || asking
   const expiry = listing ? expiryWords(listing.expiresAt) : undefined
+  const asMako = authorship.phase.kind === "ready" && authorship.phase.authorship.as === "mako"
   const cancel = () => {
     setAsking(false)
     clearError()
@@ -28,15 +32,20 @@ export function PullRequestsAsMe({ tokens, repository }: { tokens: GitHubTokens;
   return (
     <section id="pull-requests" className="flex scroll-mt-9 flex-col gap-3">
       <div>
-        <h3 className="text-ui font-medium">Pull requests in the cloud</h3>
+        <h3 className="text-ui font-medium">Commits and pull requests in the cloud</h3>
         <p className="mt-0.5 text-label leading-relaxed text-muted-foreground">
-          Cloud Threads open pull requests as {MAKO_GITHUB_APP} unless this is on. Your Mac uses your own GitHub sign-in.
+          Who GitHub shows for what cloud Threads commit and open. Your Mac uses your own Git identity and GitHub sign-in.
         </p>
       </div>
       <ListCard>
+        <CommitAuthorship authorship={authorship} hasToken={phase.kind === "ready" ? Boolean(listing) : undefined} asking={asking} onAddToken={() => setAsking(true)} />
         <SettingRow
           title="Open pull requests as me"
-          description={listing ? "Cloud Threads push, open and merge with your GitHub token, so GitHub shows you as the author." : "Use your own GitHub token, so GitHub shows you as the author instead of the app."}
+          description={
+            asMako
+              ? listing ? TOKEN_KEPT_WORDS : "Used once commits and pull requests are as you."
+              : listing ? "Cloud Threads push, open and merge with your GitHub token, so GitHub shows you as the author." : "Use your own GitHub token, so GitHub shows you as the author instead of the app."
+          }
         >
           <Toggle
             label="Open pull requests as me"
@@ -98,6 +107,42 @@ export function PullRequestsAsMe({ tokens, repository }: { tokens: GitHubTokens;
   )
 }
 
+/** `As you` or `As Mako`, and under `As you` without a token, that the App opens pull requests until one is saved. */
+function CommitAuthorship({ authorship, hasToken, asking, onAddToken }: {
+  authorship: ReturnType<typeof useGitHubAuthorship>
+  /** Undefined until the token's state is known. */
+  hasToken: boolean | undefined
+  asking: boolean
+  onAddToken: () => void
+}) {
+  const { phase, saving, error, choose, read } = authorship
+  const as = phase.kind === "ready" ? phase.authorship.as : undefined
+  return (
+    <>
+      <SettingRow title="Commits and pull requests" description={as ? authorshipWords(as, hasToken) : phase.kind === "unavailable" ? AUTHORSHIP_UNAVAILABLE : phase.kind === "failed" ? AUTHORSHIP_UNREAD : undefined}>
+        {phase.kind === "failed" ? <Action size="xs" onClick={read}>Try again</Action> : null}
+        {authorshipChoosable(phase) ? (
+          <Segmented
+            label="Commits and pull requests"
+            value={as}
+            disabled={phase.kind !== "ready" || saving}
+            options={[{ value: "you", label: "As you" }, { value: "mako", label: "As Mako" }]}
+            onChange={(next) => void choose(next)}
+          />
+        ) : null}
+      </SettingRow>
+      {phase.kind === "ready" && as === "you" && hasToken === false && !asking ? (
+        <ListCardRow className="flex items-center gap-2 text-label">
+          <InfoIcon className="size-3.5 shrink-0 text-faint" />
+          <span className="min-w-0 flex-1 text-muted-foreground">{FALLBACK_WORDS}</span>
+          <Action size="xs" tone="outline" onClick={onAddToken}>Add token</Action>
+        </ListCardRow>
+      ) : null}
+      {error ? <ListCardRow className="text-label text-negative"><p role="alert">{error}</p></ListCardRow> : null}
+    </>
+  )
+}
+
 function TokenForm({ busy, error, replacing, onCancel, onOpenGitHub, onSave, onEdit }: {
   busy: boolean
   error: string | undefined
@@ -127,7 +172,7 @@ function TokenForm({ busy, error, replacing, onCancel, onOpenGitHub, onSave, onE
           <ArrowUpRightIcon />
         </Action>
       </div>
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 rounded-md bg-raised/60 px-3 py-2 text-label ring-1 ring-hairline">
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 bg-raised/60 px-3 py-2 text-label">
         {PERSON_TOKEN_PERMISSIONS.map((permission) => (
           <div key={permission.name} className="contents">
             <dt className="text-foreground/90">{permission.name}</dt>

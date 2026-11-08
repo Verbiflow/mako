@@ -5,6 +5,7 @@ import { KeptRestoreSchema } from "./kept-restore.js"
 import type { StoredChunk } from "./record-chunks.js"
 import type { ExportPage, RecordStore } from "./record-store.js"
 import { UploadBudget, type UploadReservation } from "./upload-budget.js"
+import { inSlices } from "./slices.js"
 
 export type { RecordRemote } from "@mako/protocol/records"
 
@@ -208,7 +209,7 @@ export class RecordSync {
       // A batch at a time, so a long session is never held whole: the remote's mirror moves with each part pushed.
       const batch: ExportPage = { limit: PUSH_VERSIONS }
       if (cursor !== undefined) batch.cursor = cursor
-      const page = this.#store.exportFor(this.#remote.id, harness, nativeId, batch)
+      const page = await inSlices(this.#store.exportSteps(this.#remote.id, harness, nativeId, batch))
       if (!page?.bundle.units.length) break
       let moved = false
       for (const whole of splitBundle(page.bundle)) {
@@ -603,9 +604,16 @@ function sumCalls(first: NonNullable<SyncReport["calls"]>, second: NonNullable<S
   return sum
 }
 
-/** Where a store's records go: a remote's routes and the header its calls carry. */
-export const RecordsLinkSchema = z.object({ id: z.string().min(1).max(2_048), base: z.url(), authorization: z.string().min(1).max(4_096) })
+/**
+ * Where a store's records go: a remote's routes and the header its calls carry, with when the header's token is due
+ * for renewal on this Mac's clock (`renewAtMs`), which a link handed to the catalog's process carries (`LinkCredential`).
+ */
+export const RecordsLinkSchema = z.object({ id: z.string().min(1).max(2_048), base: z.url(), authorization: z.string().min(1).max(4_096), renewAt: z.number().optional() })
 export type RecordsLink = z.infer<typeof RecordsLinkSchema>
+
+/** Which of a catalog's links (`SessionCatalog.syncRecords`, `syncCopies`, `syncOriginals`). */
+export const LinkFormSchema = z.enum(["records", "copies", "originals"])
+export type LinkForm = z.infer<typeof LinkFormSchema>
 
 /**
  * How a send or receive over a link says the remote refused its credential, which lapses: a link carries a

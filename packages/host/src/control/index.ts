@@ -32,6 +32,12 @@ import type { AppshotFrontRequest, AppshotTarget } from "@mako/control-runtime/c
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostJobs } from "../base/host-jobs.js"
+import { SimulatorSetupFollower } from "./simulators/setup.js"
+import { Simulators } from "./simulators/simulators.js"
+import { LocalSimulatorHost, localDriving } from "./simulators/local-host.js"
+import { declareSimulatorMethods } from "./simulators/methods.js"
+import type { SimulatorAgent } from "../contracts/simulators.js"
+import { SimulatorTools } from "./simulators/mcp.js"
 
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
 export { ControlResidency } from "./residency.js"
@@ -54,6 +60,12 @@ export interface Control {
   /** Elements a person points at in a browser tab, for the composer. */
   elementPicks: ElementPicks
   sessions: ControlSessions
+  /** Settings › Simulators' setup line: Xcode, its runtime, Mako's iPhone and iPad, the pinned tools, consent. */
+  simulatorSetup: SimulatorSetupFollower
+  /** The simulators every host here runs, and the one Thread that drives each. */
+  simulators: Simulators
+  /** The simulator tools on each Thread's `mako` server, offered as the setup line allows. */
+  simulatorTools: SimulatorTools
   /** The renderer a development host's windows load now; another checkout's dev server can register while it runs. */
   devServerUrl(): string | null
   /** Mako's own computer-use driver, started once and shared. */
@@ -91,7 +103,15 @@ export interface ControlConfig {
 }
 
 /** `updated`: the desktop's updater moved, or the desktop that had one left. */
-export function openControl(config: ControlConfig, machine: MachineCapability, jobs: HostJobs, emit: (event: HostEvent) => void, updated: () => void): Control {
+/** `simulatorAgent`: a Session's Thread, conversation, title and project folder, which simulators' claims and consent read. */
+export function openControl(
+  config: ControlConfig,
+  machine: MachineCapability,
+  jobs: HostJobs,
+  emit: (event: HostEvent) => void,
+  updated: () => void,
+  simulatorAgent: (session: string) => SimulatorAgent | undefined
+): Control {
   const { environment, fixtureDesk } = config
   const configuredDevServerUrl = config.development?.devServerUrl ?? null
   let activeDevServerUrl = configuredDevServerUrl
@@ -242,6 +262,30 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
     (bindingId) => driver.revoke(`agent ${bindingId}`)
   )
   const unsubscribe = browser.subscribe((browsers) => emit({ type: "browser-control", browsers }))
+  const localSimulators: LocalSimulatorHost = new LocalSimulatorHost({
+    setup: (refresh) => simulatorSetup.read(refresh),
+    folder: join(environment.dataRoot, "simulators"),
+    driving: localDriving({ dataRoot: environment.dataRoot, hub: { entry: join(environment.appRoot, "dist-electron", "simulator-hub-entry.js") } }),
+  })
+  const simulatorTools = new SimulatorTools(simulatorAgent)
+  const simulatorSetup = new SimulatorSetupFollower({
+    dataRoot: environment.dataRoot,
+    jobs,
+    emit: (setup) => {
+      simulatorTools.heard(setup)
+      emit({ type: "simulator-setup", setup })
+    },
+    tryIt: () => localSimulators.tryIt(),
+  })
+  void simulatorSetup.read().catch(() => undefined)
+  const simulatorHeld = jobs.demand("A simulator is held")
+  const simulators = new Simulators({
+    hosts: [localSimulators],
+    consent: () => simulatorSetup.consent(),
+    agent: simulatorAgent,
+    holding: (on) => simulatorHeld.set(on),
+  })
+  const stopSimulatorSweep = jobs.every("simulator-claims", 60_000, () => simulators.sweep(), { needs: [simulatorHeld] })
   let service: ControlService | undefined
   return {
     desktop,
@@ -251,6 +295,9 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
     previews,
     elementPicks,
     sessions,
+    simulatorSetup,
+    simulators,
+    simulatorTools,
     devServerUrl: () => activeDevServerUrl,
     ensureLocalControl,
     driverStatus: () => driverVersions.status(resolveExecutable("cua-driver")),
@@ -287,6 +334,9 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
       deskBrowser.close()
       machineBrowser?.close()
       unsubscribe?.()
+      simulatorSetup.stop()
+      stopSimulatorSweep()
+      void simulators.close()
     },
   }
 }
@@ -295,6 +345,7 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
 export function declareControlMethods(methods: MethodTable, control: Control, appRoot: string, executable: string): void {
   const { appshots, browser, previews, desktop } = control
   methods.handle("mako:computer-permissions", () => control.computerPermissions())
+  declareSimulatorMethods(methods, control.simulatorSetup, control.simulators)
   methods.handle("mako:control-preview-source", async (conversationId: string) => {
     const target = previews.nativeWindow(conversationId)
     if (!target) return null

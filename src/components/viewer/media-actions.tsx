@@ -29,7 +29,7 @@ export function MediaActions({ file, name, path, className }: { file: FileConten
           aria-label={`Actions for ${name}`}
           title="Actions"
           onClick={(event) => event.stopPropagation()}
-          className={cn("pressable grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-selected data-[state=open]:text-foreground", className)}
+          className={cn("pressable grid size-7 place-items-center text-muted-foreground hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-selected data-[state=open]:text-foreground", className)}
         >
           <EllipsisIcon className="size-4" />
         </button>

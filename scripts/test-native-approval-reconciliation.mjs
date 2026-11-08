@@ -1,16 +1,16 @@
 // Opt-in real-provider probe: permitted writes are nonce files in its disposable workspace.
 import { spawn } from "node:child_process"
 import { randomInt, randomUUID } from "node:crypto"
-import { mkdtemp, mkdir, writeFile, readFile, symlink } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile, readFile, symlink } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-provider-e2e-approval-"))
+  const root = testScratch("mako-provider-e2e-approval-")
   await writeFile(
     join(root, "package.json"),
     JSON.stringify({ main: fileURLToPath(import.meta.url) })
@@ -415,13 +415,10 @@ async function run() {
             : "failed"
       await render(done)
       await capture(access+"-"+decision+"-completed")
+      // A decision the agent confirmed is settled: nothing about it stays above the composer.
       if (page && record.nativeDecisionsConfirmed) {
-        const point=await page.executeJavaScript("(()=>{const r=document.querySelector('button[aria-label=\"Conversation actions\"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
-        for(const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
         await capture(access+'-'+decision+'-native-decision')
-        if (!await page.executeJavaScript("document.body.textContent.includes('Agent recorded your answer')")) throw Error('Native decision did not reach approval history UI')
-        await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-        await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+        if (await page.executeJavaScript("Boolean(document.querySelector('[data-approval-recovery]'))")) throw Error('A confirmed native decision still shows a notice')
       }
       console.log(JSON.stringify({ provider, ...record }))
     }
@@ -497,10 +494,8 @@ async function run() {
       await capture('reconnected-native-evidence')
       if (result.question) result.questionAfterReconnect = await checkQuestion('question-after-reconnect', result.question)
       if (page && (requireNativeDecisions || questionDecisions)) {
-        const point = await page.executeJavaScript("(()=>{const r=document.querySelector('button[aria-label=\"Conversation actions\"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
-        for (const type of ['mousePressed','mouseReleased']) await page.debugger.sendCommand('Input.dispatchMouseEvent',{type,button:'left',clickCount:1,...point})
-        if (!await page.executeJavaScript("document.body.textContent.includes('Agent recorded your answer')")) throw Error('Recovered native decision did not reach approval history UI')
-        await capture('reconnected-approval-history')
+        if (await page.executeJavaScript("Boolean(document.querySelector('[data-approval-recovery]'))")) throw Error('A recovered native decision still shows a notice')
+        await capture('reconnected-approval-settled')
       }
     }
   } catch (error) {
@@ -551,7 +546,6 @@ async function run() {
       }
     }
     await writeFile(join(root, "result.json"), JSON.stringify(result, null, 2))
-    console.log("Native evidence: " + join(root, "result.json"))
     process.exitCode = result.error || result.cases.some(item => item.status === "failed") ? 1
       : result.inconclusive || result.cases.some(item => item.status !== "passed") ? 2 : 0
   }

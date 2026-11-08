@@ -21,7 +21,7 @@ assert.equal(readers.protected("chat"), undefined, "A second unmeasured pane can
 second.report({ ...left, visible: ["new"], anchor: { turn: "new", offset: -12 } })
 assert.deepEqual(readers.protected("chat"), new Set(["old", "before", "after", "new"]))
 first.report({ ...left, interacting: true })
-assert.equal(readers.protected("chat"), undefined, "Selection/focus postpones structural eviction")
+assert.equal(readers.protected("chat"), undefined, "A selection postpones structural eviction")
 first.report({ ...left, moving: true })
 assert.equal(readers.protected("chat"), undefined, "Momentum/drag postpones structural eviction")
 first.report(left)
@@ -46,6 +46,10 @@ const { installMockBridge } = await import("../src/dev/mock-bridge")
 installMockBridge()
 const { getMako } = await import("../src/lib/bridge")
 const { acpStore } = await import("../src/state/acp-state")
+// What the window's own code writes of a conversation goes through the door (`receiveLive`), or the suite fails.
+const { failAroundTheDoor } = await import("./live-door-watch")
+const { receivingLive: receivingThroughTheDoor, readingLive: readingThroughTheDoor } = await import("../src/state/live-door")
+failAroundTheDoor(acpStore, receivingThroughTheDoor, readingThroughTheDoor)
 const { applyLiveSnapshot, applyLiveBatch } = await import("../src/state/live-recovery")
 const { watchLiveResidency } = await import("../src/state/live-residency")
 const { loadReleasedLiveTurn } = await import("../src/state/live-history")
@@ -59,7 +63,8 @@ const idle = async () => { for (let n = 0; n < 8; n++) await new Promise(resolve
 const source = auditSnapshot(120, "fixture", 8192, 32)
 source.session = { ...source.session, id: auditId(9876), status: "ready" }
 source.requests = source.requests.map(request => ({ ...request, status: "completed" }))
-source.epoch = "residency"
+// Host starts as a host names them: their generation on one data root (`LiveConversations.epoch`).
+source.epoch = "g1.residency0.a"
 const host = new LiveHistoryReader()
 const snapshot = host.capture(source, { blocks: 0, base: 0 })
 applyLiveSnapshot(snapshot)
@@ -120,7 +125,7 @@ try {
   })
   const oldRange = loadReleasedLiveTurn(source.session.id, staleTurn.id)
   await started
-  const newer = { ...source, epoch: "replacement-source", revision: source.revision + 1,
+  const newer = { ...source, epoch: "g2.residency0.b", revision: source.revision + 1,
     blocks: source.blocks.map((block, index) => index === staleTurn.blocks.start + 2 ? { type: "text" as const, text: "New source answer" } : block) }
   applyLiveSnapshot(host.capture(newer, { blocks: 0, base: 0 }))
   unblock()

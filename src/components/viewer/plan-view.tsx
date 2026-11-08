@@ -41,7 +41,7 @@ export function PlanDocumentView({ document, of }: { document: ViewerDocument; o
         <span className="min-w-0 flex-1 truncate px-1 text-label text-faint" title={title}>
           {state.awaiting && !state.built ? "Proposed plan" : state.label}
         </span>
-        {state.awaiting && !state.built ? <Chip tone="caution">Waiting for your approval</Chip> : null}
+        {state.awaiting && !state.built ? <Chip tone="attention">Waiting for your approval</Chip> : null}
         <Action size="xs" aria-pressed={preview} onClick={() => viewer.setRenderMode(document.id, preview ? "source" : "preview")}>
           {preview ? <Code2Icon /> : <BookOpenIcon />}
           <span>{preview ? "Source" : "Preview"}</span>

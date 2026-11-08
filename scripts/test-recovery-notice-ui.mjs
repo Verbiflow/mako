@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, writeFile, mkdir, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile, mkdir, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (!process.versions.electron) {
   const { createServer } = await import('vite')
-  const root = await mkdtemp(join(tmpdir(), 'mako-recovery-ui-'))
+  const root = testScratch('mako-recovery-ui-')
   const server = await createServer({ cacheDir: join(root, 'cache'), server: {host:'127.0.0.1',port:0,hmr:false,watch:{ignored:['**']}} })
   await server.listen()
   await writeFile(join(root,'package.json'),JSON.stringify({main:fileURLToPath(import.meta.url)}))
@@ -54,10 +54,6 @@ async function checkWindow() {
         await until("document.querySelector('[data-approval-recovery]')?.textContent.includes('Answer delivery unknown')")
         await evaluate("window.__publishNative('a'.repeat(64))")
         await until("!document.querySelector('[data-approval-recovery]')")
-        await click('[aria-label="Conversation actions"]')
-        await until("document.querySelector('[data-approval-recovery]')?.textContent.includes('Agent recorded your answer')")
-        await capture(harness+'-native-confirmed-history.png')
-        for(const type of ['keyDown','keyUp'])await page.debugger.sendCommand('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
         await evaluate("window.__publishNative('b'.repeat(64))")
         await until("document.querySelector('[data-approval-recovery]')?.textContent.includes('Agent recorded a different decision')")
         await capture(harness+'-native-different.png')
@@ -66,8 +62,7 @@ async function checkWindow() {
         await until("!document.querySelector('[data-approval-recovery]')")
         assert.equal(await evaluate('window.__nativeCalls'),0,'native evidence must not resend an answer')
       }
-      console.log('PASS: all-six native confirmation/history, differing verdict, persistent dismissal and no answer replay')
-      console.log('Visual evidence: '+evidence)
+      console.log('PASS: all-six native confirmation, differing verdict, persistent dismissal and no answer replay')
       return
     }
     if (process.env.MAKO_RECOVERY_CONTROLS) {
@@ -129,7 +124,6 @@ async function checkWindow() {
         await capture(harness+'-unsupported-compaction.png')
       }
       console.log('PASS: all-six failure rows keep action reasons, messages that never reached the transcript, native error text, retry eligibility and compaction state; viewing never submits work')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_APPROVAL_RECONCILIATION_FIXTURES) {
@@ -156,7 +150,6 @@ async function checkWindow() {
         await capture(harness+'-newer-preserved.png')
       }
       console.log('PASS: all-six renderer profiles remove an ended approval and preserve the newer occurrence without sending an answer')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_APPROVAL_RECOVERY) {
@@ -196,11 +189,6 @@ async function checkWindow() {
           await evaluate('window.__finishApproval();true')
           if(outcome==='submitted') {
             await until("!document.querySelector('[data-approval-recovery]')")
-            await click('[aria-label="Conversation actions"]')
-            await until("document.querySelector('[data-approval-recovery]')?.textContent.includes('has not confirmed receiving')")
-            await capture(harness+'-submitted-history.png')
-            await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-            await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
           } else {
             const title=outcome==='uncertain'?'Answer delivery unknown':outcome==='refused'?'Answer needs a correction':'Approval is no longer waiting';
             await until(`document.querySelector('[data-approval-recovery]')?.textContent.includes(${JSON.stringify(title)})`)
@@ -212,13 +200,6 @@ async function checkWindow() {
             await until("!document.querySelector('[data-approval-recovery]')")
             await evaluate("import('/src/state/live-recovery.ts').then(({applyLiveSnapshot})=>{applyLiveSnapshot({...window.__approvalSnapshot,revision:window.__approvalSnapshot.revision+1});return true})")
             assert.equal(await evaluate("Boolean(document.querySelector('[data-approval-recovery]'))"),false,'snapshot refresh cannot resurrect a dismissed occurrence')
-            if(outcome==='uncertain') {
-              await click('[aria-label="Conversation actions"]')
-              await until("document.querySelector('[data-approval-recovery]')?.textContent.includes('Answer delivery unknown')")
-              await capture(harness+'-unknown-history.png')
-              await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-              await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-            }
           }
           assert.equal(await evaluate('window.__approvalCalls.length'),1,'presentation and recovery never resend an answer')
           if(harness==='opencode' && outcome==='uncertain') {
@@ -232,8 +213,7 @@ async function checkWindow() {
           }
         }
       }
-      console.log('PASS: all-six approval pending/unknown/refusal/submitted UI, preserved structured drafts, dismissal and history; one answer call')
-      console.log('Visual evidence: '+evidence)
+      console.log('PASS: all-six approval pending/unknown/refusal/submitted UI, preserved structured drafts and dismissal; one answer call')
       return
     }
     if (process.env.MAKO_APPROVAL_FIXTURES) {
@@ -260,7 +240,6 @@ async function checkWindow() {
         await capture(harness+'-newer-approval-preserved.png')
       }
       console.log('PASS: all-six approval renderer profiles use host occurrence IDs; saved host-result snapshots preserve the newer approval')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_QUEUED_STEERING) {
@@ -304,7 +283,6 @@ async function checkWindow() {
         }
       }
       console.log('PASS: all-six queued steering button sends one atomic command; no queue-removal RPC; refusal retains queue; unknown outcome stays recoverable without queue replay')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_RECOVERY_OPERATIONS) {
@@ -337,36 +315,9 @@ async function checkWindow() {
       }
       for (const harness of fixtureHarnesses) {
         await operationSeed(harness,'compact',{kind:'acknowledged',receipt:{at:1,outcome:{kind:'uncertain',reason:'The native reply was lost before completion could be confirmed.'}}})
-        await until("!document.querySelector('[data-action-recovery]')")
-        await click('[aria-label="Conversation actions"]')
-        await until("document.querySelector('[data-action-recovery]')?.textContent.includes('uncertainty acknowledged')")
-        assert.ok(!await evaluate("[...document.querySelectorAll('[data-action-recovery] button')].some(n=>n.textContent.includes('Disconnect and keep history'))"))
-        await evaluate("[...document.querySelectorAll('[data-action-recovery] button')].find(n=>n.textContent.includes('Details')).setAttribute('data-test-details','')")
-        await click('[data-test-details]')
-        await until("document.querySelector('[data-action-recovery]')?.textContent.includes('The native reply was lost')")
-        await capture(harness+'-acknowledged-history.png')
-        await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-        await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+        // Acknowledged, it leaves the composer: no menu keeps it as history.
         await until("!document.querySelector('[data-action-recovery]')")
       }
-      await operationSeed('claude','compact',{kind:'acknowledged'})
-      await click('[aria-label="Conversation actions"]')
-      await until("document.querySelector('[data-action-recovery]')?.textContent.includes('was not retained')")
-      await capture('legacy-acknowledgement.png')
-      await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-      await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-      // Use the production action menu to inspect a successful switch's separate prompt receipt.
-      const manifest={file:'/fixture/context.md',digest:'fixture',sourceRevision:1,fromBlock:0,toBlock:1,includesBase:true,losses:[]}
-      await operationSeed('codex','transfer',{kind:'accepted',bindingId:transferId,manifest})
-      await evaluate(`(async()=>{const {acpStore}=await import('/src/state/acp-state.ts');const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,requests:[{id:${JSON.stringify(transferId)},status:'queued',text:'Review the saved changes.',attachments:[]}]}}});return true})()`)
-      await click('[aria-label="Conversation actions"]')
-      await until("document.querySelector('[data-transfer-recovery]')?.textContent.includes('waiting to be sent')")
-      await capture('switch-saved-prompt-queued.png')
-      await evaluate(`(async()=>{const {acpStore}=await import('/src/state/acp-state.ts');const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,requests:l.requests.map(r=>({...r,status:'dispatching',nativeDelivery:{attemptId:${JSON.stringify(transferId)},bindingId:s.activeKey,ownerEpoch:'fixture',evidence:{kind:'accepted',source:'native-response'}}}))}}});return true})()`)
-      await until("document.querySelector('[data-transfer-recovery]')?.textContent.includes('destination received')")
-      await capture('switch-prompt-received.png')
-      await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-      await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
       await operationSeed('grok','transfer',{kind:'uncertain',error:'The reply was lost.'})
       await evaluate(`(async()=>{const {acpStore}=await import('/src/state/acp-state.ts');const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,control:{...l.control,transfers:l.control.transfers.map(t=>({...t,input:{...t.input,bindingId:${JSON.stringify(actionId)},modeId:'plan'}}))}}}});window.__transferRetries=[];window.mako.liveTransfer=async(id,input)=>{window.__transferRetries.push(input);const live=acpStore.get().conversations[id];return {session:live.session,revision:100,createdAt:1,base:null,blocks:live.blocks??[],requests:[],permissions:[],control:{...live.control,transfers:[...live.control.transfers,{input,createdAt:2,state:{kind:'queued'}}]}}};return true})()`)
       await evaluate("[...document.querySelectorAll('[data-transfer-recovery] button')].find(n=>n.textContent.includes('Try switch again')).setAttribute('data-test-switch','')")
@@ -389,8 +340,7 @@ async function checkWindow() {
       await evaluate("document.querySelector('aside[aria-label=\"Agents companion\"]').style.display='none'")
       w.setSize(430,800)
       await capture('narrow-action-recovery.png')
-      console.log('PASS: all-six operation guidance, acceptance distinct from completion, correlated transfer prompt receipt updates in menu, explicit action acknowledgement')
-      console.log('Visual evidence: '+evidence)
+      console.log('PASS: all-six operation guidance, acceptance distinct from completion, explicit action acknowledgement, and a settled operation leaves the composer')
       return
     }
     if (process.env.MAKO_RECOVERY_SNAPSHOT) {
@@ -413,7 +363,6 @@ async function checkWindow() {
       assert.equal(await evaluate("Boolean(document.querySelector('[data-recovery-notice]'))"),false)
       await capture('native-auth-dismissed.png')
       console.log('PASS: real native failure snapshot displays auth guidance, retained error details and persistent occurrence dismissal in the production renderer fixture')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_RECOVERY_DELIVERY) {
@@ -478,7 +427,6 @@ async function checkWindow() {
       w.setSize(430,800)
       await capture('narrow.png')
       console.log('PASS: all-six receipt/refusal/legacy/uncertain presentation, late receipt while expanded, disconnected guard, explicit new-operation send and original receipt retained')
-      console.log('Visual evidence: '+evidence)
       return
     }
     await seed()
@@ -493,13 +441,11 @@ async function checkWindow() {
     await click('[data-test-details]')
     await until("document.querySelector('[data-failure-row=\"newest\"] [data-provider-error]')?.textContent.includes('Selected model is at capacity')")
     await capture('expanded.png')
-    // The overflow holds the rest, the saved messages list keeps every one.
+    // The overflow holds the rest.
     await click('[data-failure-row="newest"] [aria-label="More ways to recover this message"]')
     await until("[...document.querySelectorAll('[role=menuitem]')].some(n=>n.textContent==='Restore to composer')")
     for(const type of ['keyDown','keyUp'])await page.debugger.sendCommand('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-    await click('[aria-label="Conversation actions"]')
-    await until("[...document.querySelectorAll('button[aria-expanded]')].some(n=>n.textContent.includes('Saved messages (2)'))")
-    for(const type of ['keyDown','keyUp'])await page.debugger.sendCommand('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+    assert.equal(await evaluate("Boolean(document.querySelector('[aria-label=\"Conversation actions\"]'))"),false,'the composer bar has no conversation menu; each saved message is its row in the transcript')
     for(const harness of fixtureHarnesses) {
       await seed(harness,'new-'+harness)
       await until(`Boolean(document.querySelector('[data-failure-row="new-${harness}"]'))`)
@@ -512,6 +458,5 @@ async function checkWindow() {
     await evaluate("(async()=>{const {acpStore}=await import('/src/state/acp-state.ts');const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,requests:[...l.requests,{id:'resolved',status:'completed',text:'A later successful turn',attachments:[]}]}}});return true})()")
     await until("document.querySelectorAll('[data-failure-row]').length===0")
     console.log('PASS: failure rows where the messages failed, warning tone for capacity, details on demand, overflow and saved messages, all-six provider fixtures, narrow screenshot')
-    console.log('Visual evidence: '+evidence)
   } finally {clearTimeout(timer);w.destroy();app.quit()}
 }

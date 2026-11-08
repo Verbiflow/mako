@@ -2,12 +2,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { exceeds, opensTurn, PAYLOAD_LIMITS, previewLines, PROSE_LIMITS, steeredMessages, steersShown, type Thread, type ThreadRef } from "@mako/sessions"
 import { attachmentDescription, describeToolDetails } from "@mako/sessions/content"
-import { readMessage } from "@mako/sessions/context-wire"
 import type { Entry } from "@mako/sessions/entries"
 import type { LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import { ThreadIdSchema, type ThreadId } from "../contracts/thread-identity.js"
 import type { ThreadCatalog, ThreadStore } from "../threads/index.js"
 import { resumed } from "./resumed-history.js"
+import { heldReferences, treeEdges, type HeldReference } from "./thread-tree.js"
+import { readMessage } from "@mako/sessions/context-wire"
 
 /**
  * `thread_history` on the `mako` server: a running agent reads its Thread's
@@ -41,7 +42,9 @@ const SNIPPET_CHARS = 70
 const OPENED_THREADS = 4
 const OPENED_CHARS = 256 * 1024 * 1024
 
-const ACTIONS = ["turns", "read", "search", "payload"] as const
+const ACTIONS = ["turns", "read", "search", "payload", "export"] as const
+/** `thread` for a search of the caller's whole tree. */
+const WHOLE_TREE = "tree"
 /** A call's arguments, as most harnesses record them: one JSON object. */
 const CallArgumentsSchema = z.record(z.string(), z.json())
 type Action = (typeof ACTIONS)[number]
@@ -52,9 +55,14 @@ export interface ThreadHistoryDeps {
   /** A conversation once its history is read (`LiveConversations.historySnapshot`). */
   snapshot(id: string): Promise<LiveSnapshot | null>
   /** The Thread store; null where it didn't open, and then a conversation is its own history. */
-  store(): Pick<ThreadStore, "thread" | "sessionContents"> | null
+  store(): Pick<ThreadStore, "thread" | "sessionContents" | "edges"> | null
   /** Native sessions as the catalog reads them. */
   catalog: Pick<ThreadCatalog, "list" | "nativePath" | "ref" | "open" | "entry">
+  /** A Session's whole transcript as a file, the bundle a switch and an `@` chip hand over: a conversation's, or a native session's. */
+  bundle?: {
+    live(conversation: string): Promise<{ file: string } | null>
+    native(path: string): Promise<{ file: string } | null>
+  }
 }
 
 export interface ThreadHistoryInput {
@@ -105,19 +113,13 @@ interface Turn {
   end: number
 }
 
-interface Reference {
-  ref: string
-  harness?: string
-  title?: string
-}
-
 interface View {
   title?: string
   parts: Part[]
   /** The Session a turn or ref without a number means. */
   home: Part
   /** Threads the requests referenced: what else this caller may read. */
-  references: Reference[]
+  references: HeldReference[]
   /** The calling conversation, when the view is its own Thread. */
   caller?: string
 }
@@ -241,7 +243,7 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
       if (!home) return undefined
       return "conversation" in home ? parts.find((part) => part.conversation === home.conversation) : parts.find((part) => part.sessionId === home.session)
     }
-    const read: View = { parts, home: homeOf() ?? parts.at(-1)!, references: references([...snapshots.values()]) }
+    const read: View = { parts, home: homeOf() ?? parts.at(-1)!, references: heldReferences([...snapshots.values()].flatMap((snapshot) => snapshot.requests)) }
     title ??= parts.find((part) => part.title)?.title
     if (title) read.title = title
     if (caller) read.caller = caller
@@ -282,25 +284,85 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
     return placed(known?.threadId, known?.sessionId ? { session: known.sessionId } : undefined) ?? { kind: "native", path, harness }
   }
 
+  /** The Threads of the caller's own tree: its Fins, its Apex, the Fins beside it. */
+  function kin(conversationId: string): { top: string; edges: ReturnType<typeof treeEdges> } | undefined {
+    const store = deps.store()
+    const scope = ownScope(conversationId)
+    if (!store || scope.kind !== "thread") return undefined
+    const edges = treeEdges(store.edges(), scope.thread)
+    return { top: edges[0]?.parent ?? scope.thread, edges }
+  }
+
   async function scoped(conversationId: string, thread: string | undefined): Promise<View> {
     const own = await view(ownScope(conversationId), conversationId)
     if (!thread) return own
     const ref = thread.trim().replace(/^@/, "")
     const known = own.references.find((reference) => reference.ref === ref)
-    if (!known) {
+    const tree = kin(conversationId)
+    const name = ref.replace(/^fin:/, "")
+    const member = tree?.edges.find((edge) => edge.child === ref || edge.name === name)?.child ?? (tree?.top === ref ? ref : undefined)
+    const scope = member ? placed(member, undefined) : referenced(ref)
+    const ownTree = scope?.kind === "thread" && (scope.thread === tree?.top || tree?.edges.some((edge) => edge.child === scope.thread))
+    if (!known && !ownTree) {
       const readable = own.references.length ? own.references.map((reference) => reference.ref).join(", ") : "none"
-      throw new Error(`${ref} isn't one this Thread's messages referenced, so it isn't readable here. Omit thread for this Thread; referenced threads: ${readable}.`)
+      const family = tree?.edges.length ? ` this tree's: ${tree.edges.map((edge) => edge.name).join(", ")};` : ""
+      throw new Error(`${ref} isn't in this Thread's tree or one its messages referenced, so it isn't readable here. Omit thread for this Thread;${family} referenced threads: ${readable}.`)
     }
-    const scope = referenced(ref)
-    if (!scope) throw new Error(`${ref} (${known.title ?? "untitled"}) isn't on this device any more.`)
+    if (!scope) throw new Error(`${ref} (${known?.title ?? "untitled"}) isn't on this device any more.`)
     const read = await view(scope)
     read.references = []
-    read.title ??= known.title
+    if (known?.title) read.title ??= known.title
     return read
+  }
+
+  /** `search` over every Thread of the caller's tree, each hit under the Thread it's in, so `read` can open it. */
+  async function searchTree(conversationId: string, input: ThreadHistoryInput): Promise<string> {
+    const tree = kin(conversationId)
+    if (!tree) throw new Error("This Thread has no tree: omit thread for its own history.")
+    const pattern = searchPattern(input)
+    const members = [{ thread: tree.top, name: "the top Apex" }, ...tree.edges.map((edge) => ({ thread: edge.child, name: `fin:${edge.name}` }))]
+    const skip = input.offset ?? 0
+    const lines: string[] = []
+    let total = 0
+    let turns = 0
+    const unread: string[] = []
+    for (const { thread, name } of members) {
+      const scope = placed(thread, undefined)
+      const read = scope && await view(scope).catch(() => undefined)
+      if (!read) {
+        unread.push(name)
+        continue
+      }
+      turns += matches(read, input, pattern, (hit) => {
+        total += 1
+        if (total > skip && lines.length < SEARCH_HITS) lines.push(`${name} (${thread}) ${hit()}`)
+      })
+      // A tree is many histories: what else this host has to do goes between them.
+      await new Promise((next) => setImmediate(next))
+    }
+    const missed = unread.length ? ` Not read: ${unread.join(", ")}.` : ""
+    if (!total) return `No match for ${JSON.stringify(input.query)} across ${plural(turns, "turn")} of ${plural(members.length, "Thread")}.${missed}`
+    const more = skip + lines.length < total ? ` More: offset=${skip + lines.length}.` : ""
+    return [`${plural(total, "hit")} for ${JSON.stringify(input.query)} across ${plural(members.length, "Thread")}; ${skip + 1}–${skip + lines.length} shown.${more}${missed}`, ...lines].join("\n")
+  }
+
+  /** Every Session of a view as a file, each the bundle a switch or a chip hands over. */
+  async function exported(read: View): Promise<string> {
+    const { bundle } = deps
+    if (!bundle) throw new Error("This host can't write a transcript.")
+    const lines = await Promise.all(read.parts.map(async (part) => {
+      const file = await (part.conversation ? bundle.live(part.conversation) : part.path ? bundle.native(part.path) : null)
+      return `Session ${part.session} (${part.harness}, ${plural(part.turns.length, "turn")}): ${file?.file ?? `not written: ${part.missing ?? "nothing of it is on this device"}`}`
+    }))
+    return [`${read.title ?? "This Thread"}, whole, as files with their payloads beside them:`, ...lines].join("\n")
   }
 
   return {
     async answer(conversationId, input) {
+      if (input.thread?.trim() === WHOLE_TREE) {
+        if (input.action !== "search") throw new Error(`thread: "${WHOLE_TREE}" is for search; read one Thread by its ID or a Fin's name.`)
+        return searchTree(conversationId, input)
+      }
       const read = await scoped(conversationId, input.thread)
       switch (input.action) {
         case "turns":
@@ -311,26 +373,13 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
           return search(read, input)
         case "payload":
           return payload(read, input, deps.catalog)
+        case "export":
+          return exported(read)
       }
     },
   }
 }
 
-/** Every `thread:` reference the requests' `<mako_context>` blocks carry, once each. */
-function references(snapshots: readonly LiveSnapshot[]): Reference[] {
-  const found = new Map<string, Reference>()
-  for (const snapshot of snapshots)
-    for (const request of snapshot.requests)
-      for (const item of readMessage(request.text).items) {
-        const ref = item.kind === "conversation" ? item.attrs.ref : undefined
-        if (!ref?.startsWith("thread:") || found.has(ref)) continue
-        const reference: Reference = { ref }
-        if (item.attrs.harness) reference.harness = item.attrs.harness
-        if (item.attrs.title) reference.title = item.attrs.title
-        found.set(ref, reference)
-      }
-  return [...found.values()]
-}
 
 /**
  * A Session's turns, as the transcript groups them (`groupTurns`): one opens
@@ -767,20 +816,20 @@ function snippet(text: string, at: number, length: number): string {
  * matches, with a snippet around its first match. A fork's inherited turns
  * are counted in the Session they came from.
  */
-function search(view: View, input: ThreadHistoryInput): string {
+function searchPattern(input: ThreadHistoryInput): RegExp {
   const query = input.query
   if (!query) throw new Error("search needs a query.")
-  let pattern: RegExp
   try {
-    pattern = new RegExp(input.regex ? query : escapeRegex(query), "i")
+    return new RegExp(input.regex ? query : escapeRegex(query), "i")
   } catch (error) {
     throw new Error(`The regex doesn't parse: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }
+}
+
+/** Each match in a view, newest first, its line made only if it's kept; how many turns were searched. */
+function matches(view: View, input: ThreadHistoryInput, pattern: RegExp, hit: (line: () => string) => void): number {
   const asked = range(input.turns, view)
   const parts = asked ? [asked.part] : [view.home, ...view.parts.filter((part) => part !== view.home)]
-  const skip = input.offset ?? 0
-  const hits: string[] = []
-  let total = 0
   let searched = 0
   for (const part of parts) {
     const at = prefix(view, part)
@@ -796,14 +845,25 @@ function search(view: View, input: ThreadHistoryInput): string {
         const named = entry.type === "tool" ? toolName(entry) : entry.type === "event" ? entry.label : undefined
         for (const field of named ? [{ name: "", text: named }, ...fields(entry)] : fields(entry)) {
           const found = pattern.exec(field.text)
-          if (!found) continue
-          total++
-          if (total <= skip || hits.length >= SEARCH_HITS) continue
-          hits.push(`[${field.name ? `${ref}/${field.name}` : ref}] ${kindOf(entry)}: ${snippet(field.text, found.index, found[0].length)}`)
+          if (found) hit(() => `[${field.name ? `${ref}/${field.name}` : ref}] ${kindOf(entry)}: ${snippet(field.text, found.index, found[0].length)}`)
         }
       }
     }
   }
+  return searched
+}
+
+function search(view: View, input: ThreadHistoryInput): string {
+  const pattern = searchPattern(input)
+  const { query } = input
+  const skip = input.offset ?? 0
+  const hits: string[] = []
+  let total = 0
+  const searched = matches(view, input, pattern, (hit) => {
+    total++
+    if (total > skip && hits.length < SEARCH_HITS) hits.push(hit())
+  })
+  const asked = input.turns !== undefined
   const scope = asked ? ` in turns ${input.turns}` : ""
   if (!total) return `No match for ${JSON.stringify(query)}${scope} across ${plural(searched, "turn")}.`
   const more = skip + hits.length < total ? ` More: offset=${skip + hits.length}.` : ""
@@ -851,11 +911,12 @@ async function reply(work: () => Promise<string>) {
 
 /** What an agent reads before calling it, in every session: kept short. */
 const DESCRIPTION = [
-  "Read this Thread's history whole, every session and harness of it, and that of each thread its messages referenced (a <mako_context> conversation item). Turns are numbered as in a transcript Mako gave you. Changes nothing.",
+  "Read this Thread's history whole, every session and harness of it, that of each thread its messages referenced (a <mako_context> conversation item), and that of any Thread of its tree: its Fins, its Apex and the Fins beside it. Turns are numbered as in a transcript Mako gave you. Changes nothing.",
   "turns: one line per turn: number, time, request, what was done. Newest first page by default.",
   "read: turns whole: turns=\"12\", \"40-45\", \"12.7-14\" (from entry 7 of turn 12); another session's as \"2:12\". The newest turn by default. Entries are refs like 12.7; a field too long to show gives its size, first lines and a ref like 12.7/output.",
   "search: query as text, or a regex with regex: true; case-insensitive over prompts, replies, thinking and tool names, inputs and outputs. Hits newest first with refs and snippets; turns narrows it.",
   "payload: a ref's whole content, a page at a time from offset.",
+  "export: its whole transcript as a file for each session, the same bundle an @ reference hands over.",
   "A reply too long for one answer says how to get the rest.",
 ].join("\n")
 
@@ -867,7 +928,7 @@ export function registerThreadHistoryTools(server: McpServer, tools: ThreadHisto
       description: DESCRIPTION,
       inputSchema: z.object({
         action: z.enum(ACTIONS),
-        thread: z.string().max(1024).optional().describe("A referenced thread, as its item's ref names it (thread:<harness>:<id>). Omit for this Thread."),
+        thread: z.string().max(1024).optional().describe("A referenced thread, as its item's ref names it (thread:<harness>:<id>), or a Thread of this one's tree: its Fins, its Apex and the Fins beside it, by Thread ID or a Fin's name; for search, tree searches all of them. Omit for this Thread."),
         turns: z.string().max(64).optional().describe("A turn or range: 12, 40-60, 12.7-14, 2:5-9."),
         query: z.string().min(1).max(1024).optional().describe("search: text, or a JavaScript regex with regex: true."),
         regex: z.boolean().optional(),

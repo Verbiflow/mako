@@ -1,133 +1,66 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { useEffect, useRef, useState } from "react"
-import { HourglassIcon } from "lucide-react"
 import { formatRelative } from "@/lib/format"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import type { ThreadStatus } from "@/state/threads"
-import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
+import { LiveMark } from "@/components/ui/live-mark"
+import { motionOf, threadMarkState, threadStatusLabel, type LiveMarkState } from "@/lib/live-mark-state"
+import { HarnessIcon } from "@/components/ui/provider-icon"
 import { railAnnouncement, type RailAsk } from "@/lib/rail-announcement"
 import { unreadReview, type FoldedSession } from "@/lib/thread-fold"
 
 /** Slack for an answer that lands as its row is painted: still fresh. */
 const REVIEW_FRESH_MS = 2_000
 
-export function ThreadStatusMark({
-  status,
-  updatedAt,
-}: {
-  status: ThreadStatus
-  updatedAt?: string
-}) {
+/**
+ * A Thread's live mark: Mako's two-tone fin doing what the Thread does, its harness a corner badge (`LiveMark`). One mark at the start of a row
+ * or tab says who and how; there's no second status mark at its end. An answer that finished after the mark was
+ * painted is news and its dot arrives; a row scrolling back into view with an old answer paints it still.
+ */
+export function ThreadMark({ status, state, harness, lit, cut, size, label, className }: { status: ThreadStatus; state?: LiveMarkState; harness: string; lit?: boolean; cut?: string; size?: number; label?: string; className?: string }) {
   useHarnessIdentity()
-  // When this row was painted. An answer that finished after that is news
-  // and its mark arrives; a row scrolling back into view with an old answer
-  // paints the mark still.
   const [mountedAt] = useState(() => Date.now())
-  if (status.kind === "idle")
-    return updatedAt ? (
-      <span className="tabular shrink-0 text-label text-faint">
-        {formatRelative(updatedAt)}
-      </span>
-    ) : null
-  // Open elsewhere: the time stays, and a hollow ring says a window is on it.
-  // The app is named where a label would not fit.
-  if (status.kind === "external-open") {
-    const label = `Open in ${harnessLabel(status.app)}; no running turn reported`
-    return (
-      <span
-        role="img"
-        aria-label={label}
-        title={label}
-        className="flex shrink-0 items-center gap-1.5 text-label text-faint"
-      >
-        <span aria-hidden className="size-1.5 rounded-full ring-1 ring-current" />
-        {updatedAt ? <span className="tabular">{formatRelative(updatedAt)}</span> : null}
-      </span>
-    )
-  }
-  if (status.kind === "observed")
-    return (
-      <span
-        title="The session changed; running state is unconfirmed"
-        className="shrink-0 text-label text-faint"
-      >
-        Updated
-      </span>
-    )
-  // An answer you have not read is the one state in this column that is
-  // for you rather than about the agent, so it is the brightest thing a row
-  // can carry: a small sphere in the text colour itself (`.review-dot`).
-  // Hue would put a fourth warm tone beside ember, caution and negative in
-  // a 200px column; a grey ring with a check once made it the dimmest state
-  // here instead. Once read, the row shows its time again like any idle
-  // thread. It arrives with a short scale only when the answer is fresh, so
-  // rows scrolling back into view do not re-announce old news.
-  if (status.kind === "review") {
-    if (!status.unread)
-      return updatedAt ? (
-        <span className="tabular shrink-0 text-label text-faint">
-          {formatRelative(updatedAt)}
-        </span>
-      ) : null
-    return (
-      <span
-        role="img"
-        aria-label="Answer ready to review"
-        title="Answer ready to review"
-        className="flex size-5 shrink-0 items-center justify-center"
-      >
-        <span
-          aria-hidden
-          className="review-dot"
-          data-new={status.at >= mountedAt - REVIEW_FRESH_MS || undefined}
-        />
-      </span>
-    )
-  }
-  // The turn ended and the provider still runs work it will wake on: not
-  // the working mark, which would say a turn runs, and not the done dot,
-  // which would say it is finished. A still glyph, in the same vocabulary
-  // as the transcript's background lines.
-  if (status.kind === "background") {
-    const label = status.count === 1 ? "Waiting on a background task" : `Waiting on ${status.count} background tasks`
-    return (
-      <span
-        role="img"
-        aria-label={label}
-        title={label}
-        data-background-mark={status.count}
-        className="flex size-5 shrink-0 items-center justify-center text-muted-foreground"
-      >
-        <HourglassIcon aria-hidden className="size-3" strokeWidth={2} />
-      </span>
-    )
-  }
-  const state: ActivityState =
-    status.kind === "failed"
-      ? "failed"
-      : status.kind === "needs-permission"
-        ? "waiting"
-        : "working"
-  const label =
-    status.kind === "working"
-      ? (status.detail ?? "Working in Mako")
-      : status.kind === "external-active"
-        ? `Working in ${status.app ?? "another app"}`
-        : status.kind === "failed"
-          ? (status.detail ?? "Failed")
-          : (status.detail ?? "Needs your approval")
   return (
-    <span
-      role="img"
-      aria-label={label}
-      title={label}
-      className="flex shrink-0 items-center text-muted-foreground"
+    <LiveMark
+      state={state ?? threadMarkState(status)}
+      motion={motionOf(status.kind === "working" ? status.detail : undefined)}
+      lit={lit}
+      fresh={status.kind === "review" && status.at >= mountedAt - REVIEW_FRESH_MS}
+      cut={cut}
+      size={size}
+      label={label ?? threadStatusLabel(status, harness)}
+      className={className}
     >
-      <ActivityMark state={state} size={20} />
-    </span>
+      <HarnessIcon harness={harness} />
+    </LiveMark>
   )
 }
 
+/**
+ * A row's one trailing slot: what asks for the person, in words, or else how long ago it moved. The mark at the
+ * row's start already draws the state; this says the two that need the person by name.
+ */
+export function ThreadStatusEnd({ status, updatedAt }: { status: ThreadStatus; updatedAt?: string }) {
+  if (status.kind === "needs-permission")
+    return (
+      <span data-status-end="needs" className="shrink-0 text-label font-medium text-attention">
+        Needs you
+      </span>
+    )
+  if (status.kind === "failed")
+    return (
+      <span data-status-end="failed" className="shrink-0 text-label text-negative">
+        Failed
+      </span>
+    )
+  if (status.kind === "observed")
+    return (
+      <span title={threadStatusLabel(status)} className="shrink-0 text-label text-faint">
+        Updated
+      </span>
+    )
+  return updatedAt ? <span className="tabular shrink-0 text-label text-faint">{formatRelative(updatedAt)}</span> : null
+}
 
 /**
  * A folded row's second mark: another Session's answer is ready while the
@@ -171,4 +104,3 @@ export function RailAnnouncer({ asks }: { asks: readonly RailAsk[] }) {
   }, [asks])
   return <span aria-live="polite" className="sr-only">{message}</span>
 }
-

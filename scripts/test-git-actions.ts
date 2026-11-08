@@ -274,7 +274,7 @@ try {
   const grant = grants.mint("binding", "c")
   await agent.connect(new StreamableHTTPClientTransport(new URL(grant.makoUrl!), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))
   const listed = (await agent.listTools()).tools
-  assert.deepEqual(listed.map((tool) => tool.name), ["pull_request_status", "pull_request_open", "pull_request_merge"])
+  assert.deepEqual(listed.map((tool) => tool.name), ["pull_request_status", "pull_request_open", "pull_request_merge", "pull_request_rerun"])
   for (const tool of listed) assert.match(tool.description ?? "", /^Call (when|before|only when)\b/, `${tool.name} opens with when to call it`)
   const describe = (name: string) => listed.find((tool) => tool.name === name)!
   assert.ok(describe("pull_request_open").description!.endsWith(PULL_REQUEST_WRITING), "the agent writes by the shared rules")
@@ -294,6 +294,12 @@ try {
   assert.equal(changed, 1, "windows read GitHub again after opening")
   rmSync(join(project, "draft.txt"))
   assert.equal(text(await agent.callTool({ name: "pull_request_open", arguments: {} })), "#101 was already open; nothing new to push: https://github.com/o/r/pull/101.")
+  // Re-run, as the sidebar's: the failed jobs of each failed run on the pushed commit.
+  const rerunsBefore = github().reruns.length
+  const rerun = text(await agent.callTool({ name: "pull_request_rerun", arguments: {} }))
+  assert.match(rerun, /^(Re-running the failed jobs of \d+ GitHub Actions runs? on the pushed commit\.|No GitHub Actions run on the pushed commit has failed, so nothing was re-run\.)/)
+  assert.equal(github().reruns.length - rerunsBefore, Number(/of (\d+) GitHub/.exec(rerun)?.[1] ?? 0), "the tool re-runs what the sidebar's Re-run does")
+  assert.match(describe("pull_request_rerun").description!, /^Call when the user asks to re-run this branch's failed checks: Re-run in the Git sidebar\./, "below full access, a re-run is the person's ask")
   for (const tool of listed) {
     assert.ok(z.object({ properties: z.object({ repository: z.object({ type: z.literal("string") }) }) }).safeParse(tool.inputSchema).success, `${tool.name} takes a repository`)
     assert.match(tool.description ?? "", /one pull request per repository/, `${tool.name} says how it picks a project's repository`)
@@ -311,6 +317,7 @@ try {
   assert.match(onFull.get("pull_request_merge")!, /^Call when the user asks to merge .* or when merging it is the next step of the work you were given: this Thread is on full access, so it merges without asking first\./)
   assert.match(onFull.get("pull_request_open")!, /^Call when this branch's work is ready for review, .*this Thread is on full access, so it opens one without asking first\./)
   assert.equal(onFull.get("pull_request_status"), describe("pull_request_status").description, "reading is the same on every access")
+  assert.match(onFull.get("pull_request_rerun")!, /^Call when a check failed for a reason outside the branch's change/, "on full access it re-runs a flaky check on its own")
 
   // A project folder of two repositories on one branch: a pull request each, the repository named by its folder.
   const multi = join(root, "multi")
@@ -359,10 +366,29 @@ try {
   assert.equal(await project2.open("c", { repository: `${multi}/api/` }), "api: #102 was already open; pushed 1 commit: https://github.com/o/r/pull/102.", "a repository is named by its folder, absolute or from the project")
   await assert.rejects(project2.status("c", { repository: "nope" }), /^Error: .*multi has no repository named "nope"\. Pass one of: api, web\.$/)
   assert.equal(parseYaml(await project2.status("c", { repository: " ./web/ " })).repository, "web", "a name from the project folder may start with ./ and end with /")
-  const slashes = "/".repeat(100_000) + "x"
-  const started = performance.now()
-  await assert.rejects(project2.status("c", { repository: slashes }), /has no repository named/)
-  assert.ok(performance.now() - started < 1000, "a hostile name is refused in linear time")
+  // Linear, judged against a pass that plainly is over the same name, timed here: counting its slashes. Whatever the
+  // runner's speed does to one it does to the other, so refusing costs a few times the count, where a cost that grows
+  // with the name's square costs thousands. Each the quickest of five, past a first.
+  const hostile = "/".repeat(200_000) + "x"
+  const quickest = async (work: () => Promise<void> | void) => {
+    let best = Infinity
+    for (let run = 0; run < 5; run++) {
+      const began = performance.now()
+      await work()
+      best = Math.min(best, performance.now() - began)
+    }
+    return best
+  }
+  await assert.rejects(project2.status("c", { repository: hostile }), /has no repository named/)
+  const refusing = await quickest(() => assert.rejects(project2.status("c", { repository: hostile }), /has no repository named/))
+  let counted = 0
+  const counting = await quickest(() => {
+    let slashes = 0
+    for (const character of hostile) if (character === "/") slashes++
+    counted = slashes
+  })
+  assert.equal(counted, 200_000)
+  assert.ok(refusing < counting * 50, `a hostile name is refused in linear time: ${refusing.toFixed(2)} ms for 200,000 slashes, against ${counting.toFixed(2)} ms to count them`)
 
   const onlyApi = parseYaml(await project2.status("c", { repository: "api" }))
   assert.deepEqual([onlyApi.repository, onlyApi.pullRequest.number, onlyApi.otherRepositories], ["api", 102, ["web"]], "one repository's report names it and its siblings")

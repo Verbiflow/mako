@@ -12,7 +12,8 @@ import { browserFixture } from "./browser-control-fixture.ts"
 const cli = resolve("packages/control-runtime/dist/control-cli.js")
 const directory = await mkdtemp(join(tmpdir(), "mako-cli-proof-"))
 const fixture = await browserFixture()
-const browsers = new BrowserService([fixture.definition])
+// The test holds a capture's stop open while it runs other commands, so its 2 s limit mustn't end that hold on a slow runner.
+const browsers = new BrowserService([fixture.definition], { captureStopMs: 120_000 })
 const browserCall = (command, signal) =>
   browsers.execute("cli-proof", command, signal)
 browserCall.close = () =>

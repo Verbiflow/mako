@@ -22,6 +22,8 @@ const fixtureReads = [
   "mako:sync-readings",
   /** Reads `ps` and memory: a fixture desk watches and writes nothing of its own. */
   "mako:mako-footprint",
+  /** Answers from memory; the restart stays refused. */
+  "mako:file-events-service",
   /** Answers from memory: a fixture desk presses no continue. */
   "mako:continue-readings",
   /** Answers from memory: a fixture desk turns no cloud on. */
@@ -53,6 +55,7 @@ const fixtureReads = [
   "mako:checkout-heads",
   "mako:workspace-moves",
   "mako:workspace-move-hold",
+  /** Answers from memory: agents' asks to move their Thread to the cloud. */
   "mako:plan-builds",
   "mako:live-snapshot",
   "mako:live-state",
@@ -61,7 +64,11 @@ const fixtureReads = [
   "mako:native-requests",
   "mako:terminal-list",
   "mako:utility-model-settings",
+  /** Read from the profile's own file; never a key. */
+  "mako:model-connections",
   "mako:harness-order-saved",
+  /** Read from the profile's own file. */
+  "mako:fin-defaults",
   /** Read from the profile's own file; a fixture desk signs in only to a cloud on loopback. */
   "mako:access-choices",
   "mako:default-commit-prompt",

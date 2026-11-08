@@ -92,6 +92,14 @@ for (const { provider, absent } of harnesses) {
   const prefetch = providerHost.liveDrivers.get(provider)?.startPrefetch
   assert.ok(prefetch, `${provider} declares what its start runs first (startPrefetch)`)
   assert.ok(prefetch.via.trim(), `${provider} explains its startPrefetch`)
+  // Every harness takes the Mako layer through its adapter, and says how for each capability.
+  const layer = providerHost.liveDrivers.get(provider)?.layer
+  assert.ok(layer, `${provider} declares how it takes the Mako layer (layer)`)
+  assert.equal(layer.personSetup, "kept", `${provider} keeps the person's own setup under the Mako layer`)
+  // A Fin whose account runs out mid-turn resumes under another only where its harness says the session goes on there.
+  const continuation = providerHost.liveDrivers.get(provider)?.accountContinuation
+  assert.ok(continuation, `${provider} declares whether its session goes on under another account (accountContinuation)`)
+  assert.ok((continuation.kind === "resumes" ? continuation.via : continuation.reason).trim(), `${provider} explains its accountContinuation`)
   const runner = providerHost.nativeRunners.get(provider)
   if (runner) {
     assert.ok(runner.transport.trim(), `${provider} declares its actual headless transport`)

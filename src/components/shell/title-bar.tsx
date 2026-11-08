@@ -23,7 +23,7 @@ import {
 /**
  * The title strip.
  *
- * Its left segment *is* the sidebar's header — same width, same right border,
+ * Its left segment *is* the sidebar's header — same width, the same shell,
  * so the two read as one column rather than as two stacked bars each with
  * their own "new session" button. That duplication was the whole reason the
  * chrome looked wrong: a window has one header, not one per panel.
@@ -58,6 +58,7 @@ export function TitleBar() {
   })
   const activeTab = useTabs((state) => state.activeId)
   const companionOpen = useStage((state) => Boolean(state.byTab[activeTab]?.companion))
+  const railOpen = usePrefs((prefs) => prefs.railOpen)
 
   return (
     <TitleStrip
@@ -66,13 +67,16 @@ export function TitleBar() {
       leading={
         <>
           <RailToggle />
-          <IconAction
-            label="New thread"
-            keys={formatChord("mod+n")}
-            onClick={() => void actions.newSession()}
-          >
-            <PlusIcon />
-          </IconAction>
+          {/* With the rail open, its New thread row is the doorway. */}
+          {railOpen ? null : (
+            <IconAction
+              label="New thread"
+              keys={formatChord("mod+n")}
+              onClick={() => void actions.newSession()}
+            >
+              <PlusIcon />
+            </IconAction>
+          )}
 
           <Slot name="titlebar.leading" />
         </>
@@ -136,13 +140,12 @@ export function TitleStrip({
   const railOpen = usePrefs((prefs) => prefs.railOpen)
   const railWidth = usePrefs((prefs) => prefs.railWidth)
   return (
-    <header className={cn("relative flex h-[38px] shrink-0 items-center border-b border-hairline bg-shell pr-2", className)}>
+    <header className={cn("relative flex h-[38px] shrink-0 items-center bg-shell pr-2", className)}>
       <div
         style={railOpen ? { width: railWidth } : undefined}
         className={cn(
           "flex h-full shrink-0 items-center gap-1 pr-2",
           inset ? "pl-[86px]" : "pl-2",
-          railOpen && "border-r border-hairline"
         )}
       >
         {leading}

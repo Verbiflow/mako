@@ -1,44 +1,8 @@
 import { codeToTokens, bundledLanguages, type BundledLanguage } from "shiki"
+import { syntaxTheme } from "@/lib/syntax-theme"
 
-const theme = {
-  name: "mako",
-  tokenColors: [
-    {
-      settings: {
-        foreground: "var(--shiki-foreground)",
-        background: "var(--shiki-background)",
-      },
-    },
-    {
-      scope: ["comment"],
-      settings: { foreground: "var(--shiki-token-comment)" },
-    },
-    {
-      scope: ["string"],
-      settings: { foreground: "var(--shiki-token-string)" },
-    },
-    {
-      scope: ["keyword", "storage"],
-      settings: { foreground: "var(--shiki-token-keyword)" },
-    },
-    {
-      scope: ["constant"],
-      settings: { foreground: "var(--shiki-token-constant)" },
-    },
-    {
-      scope: ["entity.name.function"],
-      settings: { foreground: "var(--shiki-token-function)" },
-    },
-    {
-      scope: ["variable.parameter"],
-      settings: { foreground: "var(--shiki-token-parameter)" },
-    },
-    {
-      scope: ["punctuation"],
-      settings: { foreground: "var(--shiki-token-punctuation)" },
-    },
-  ],
-}
+/** The file viewer's theme; code blocks sit on the raised plane, so their ground is that. */
+const theme = { ...syntaxTheme("mako"), bg: "var(--shiki-background)" }
 
 function supportedLanguage(language: string): language is BundledLanguage {
   return Object.hasOwn(bundledLanguages, language)

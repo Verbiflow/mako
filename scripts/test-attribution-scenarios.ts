@@ -1,7 +1,8 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { stampFile } from "./lib/file-stamp.ts"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -15,7 +16,7 @@ import { contentRef } from "@mako/host/attribution/content"
 import { writersSince } from "@mako/host/attribution/writers-since"
 import { CallBounds, liveCallBounds, type LiveCallBounds } from "@mako/host/harnesses/call-bounds"
 import { claudeCallHooks } from "@mako/host/harnesses/claude/call-hooks"
-import { changes, hunks, partition, restorable, turnChanges, type JournalView } from "@mako/host/attribution/queries"
+import { changes, hunks, partition, restorable, shares, turnChanges, type JournalView } from "@mako/host/attribution/queries"
 import { lineNow, ThreadFiles } from "@mako/host/attribution/thread-files"
 import { threadTotals } from "@mako/host/attribution"
 import { threadTrees } from "@mako/host/attribution/thread-tree"
@@ -65,7 +66,7 @@ const at = (ms: number) => {
 const write = (path: string, text: string) => {
   const absolute = join(root, path)
   writeFileSync(absolute, text)
-  utimesSync(absolute, clock.now() / 1000, clock.now() / 1000)
+  stampFile(absolute, clock.now())
   events.changed(absolute)
 }
 const remove = (path: string) => {
@@ -178,7 +179,17 @@ test("interleaved Threads and the person, line by line", async () => {
   await tracker.settled()
   assert.deepEqual(last().author, { certainty: "person", via: "no-activity" })
 
-  const moving = partition(view, root, "T1")
+  // However many lines and runs a file has, each entry's side is worked out once and each version of a file read once.
+  const sided: number[] = []
+  const read: string[] = []
+  const store: JournalStore = Object.create(tracker.store)
+  store.provenance = (seq) => (sided.push(seq), tracker.store.provenance(seq))
+  store.blob = (ref) => (read.push(JSON.stringify(ref)), tracker.store.blob(ref))
+  const counting: JournalView = { ...view, store }
+  const moving = partition(counting, root, "T1")
+  assert.ok(sided.length > 0 && read.length > 0)
+  assert.deepEqual(sided, [...new Set(sided)], "each entry's side is worked out once")
+  assert.deepEqual(read, [...new Set(read)], "each version of a file is read once")
   const byPath = new Map(moving.files.map((file) => [file.path, file]))
   assert.deepEqual([...byPath.keys()].sort(), ["a.ts", "b.ts", "b2.ts", "c.md"])
   assert.deepEqual(byPath.get("b.ts")?.thread, { kind: "absent" })
@@ -191,8 +202,6 @@ test("interleaved Threads and the person, line by line", async () => {
   const cmd = byPath.get("c.md")!
   assert.ok(cmd.thread.kind === "text" && cmd.thread.text === "# Rewritten\n")
   assert.ok(cmd.remaining.kind === "text" && cmd.remaining.text === "# Notes\n\nsome  text\n")
-  assert.ok(moving.ms < 200, `partition took ${moving.ms} ms`)
-
   const other = partition(view, root, "T2")
   assert.deepEqual(other.files.map((file) => file.path).sort(), ["a.ts", "d.ts"])
 
@@ -330,7 +339,7 @@ test("the live conversations' batches become turns, calls, background work and r
     adapter.observe(batch({ updates: [{ kind: "tool", id: "toolu_1", title: "Edit", name: "Edit", status: "in_progress", input: JSON.stringify({ file_path: path, old_string: "'old'", new_string: "'new'" }) }] }))
     liveClock.advance(10)
     writeFileSync(path, "export const title = 'new'\n")
-    utimesSync(path, liveClock.now() / 1000, liveClock.now() / 1000)
+    stampFile(path, liveClock.now())
     liveEvents.changed(path)
     liveClock.advance(10)
     adapter.observe(batch({ updates: [{ kind: "tool-update", id: "toolu_1", status: "completed", output: "ok", effects: [{ kind: "modify", path, edits: [{ old: "'old'", new: "'new'" }] }] }] }))
@@ -350,6 +359,55 @@ test("the live conversations' batches become turns, calls, background work and r
     await live.close()
     rmSync(folder, { recursive: true, force: true })
     rmSync(liveStorage, { recursive: true, force: true })
+  }
+})
+
+test("a Fin its Apex lists runs as its own Thread: nothing changed in the Apex's checkout meanwhile is the Apex's", async () => {
+  // Seen on a person's Mac: an Apex in the main checkout started Fins that worked for hours in their own
+  // worktrees. Each Fin's roster entry became the Apex's background work there, on every Session of the Apex.
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-fin-")))
+  const finStorage = mkdtempSync(join(tmpdir(), "mako-attribution-fin-journal-"))
+  const finEvents = new FakeEventSource()
+  const finClock = new FakeClock(Date.now())
+  const tracker = await LaptopTracker.open({ fs: nodeFileSystem(), events: finEvents, clock: finClock, storage: finStorage, device: "scenario" })
+  const finView: JournalView = { store: tracker.store, roots: () => tracker.rootStates().values(), author: (seq) => tracker.authorOf(seq) }
+  try {
+    writeFileSync(join(folder, "notes.md"), "# Notes\n")
+    await tracker.track({ id: "apex", path: folder, kind: "attached" })
+    const adapter = new LiveActivity({
+      tracker,
+      placement: () => ({ thread: "APEX", session: "apex-session" }),
+      session: () => ({ cwd: folder, harness: "cursor" }),
+      checkout: () => folder,
+      working: () => undefined,
+      now: () => finClock.now(),
+    })
+    const fin = {
+      nativeId: "mako-child:5f0c2a4e-3b1d-4c55-9e0a-1d2b3c4d5e6f",
+      title: "Audit and fix change attribution",
+      work: "agent" as const,
+      background: true,
+      detail: `Read ${join(folder, "notes.md")} and ${folder}, then fix what you find.`,
+      state: { kind: "working" as const },
+      bindingId: "mako:children",
+      provider: "cursor",
+      observedAt: finClock.now(),
+      child: { thread: "5f0c2a4e-3b1d-4c55-9e0a-1d2b3c4d5e6f", name: "attribution-audit", origin: "started" as const },
+    }
+    adapter.observe({ id: "apex-conversation", revision: 1, updates: [], sessionChanges: { status: "ready" }, nativeAgents: { agents: [fin], limited: false } })
+    finClock.advance(60_000)
+    writeFileSync(join(folder, "notes.md"), "# Notes\n\nthe person's line\n")
+    stampFile(join(folder, "notes.md"), finClock.now())
+    finEvents.changed(join(folder, "notes.md"))
+    await tracker.settled()
+    assert.deepEqual(shares(finView, folder, "APEX").thread.files, [], "worktree_status counts none of it as the Apex's")
+    assert.deepEqual(partition(finView, folder, "APEX").files, [], "a move of the Apex takes none of it")
+    assert.deepEqual(tracker.changes(0).at(-1)?.author, { certainty: "person", via: "no-activity" }, "the person's save while only the Fin ran is theirs")
+    assert.deepEqual(tracker.store.activityOfThread("APEX").filter((item) => item.kind === "background"), [], "the Fin is no background work of the Apex")
+  } finally {
+    await tracker.close()
+    rmSync(folder, { recursive: true, force: true })
+    rmSync(finStorage, { recursive: true, force: true })
   }
 })
 
@@ -381,7 +439,7 @@ async function liveWorld() {
   const write = (name: string, text: string) => {
     const path = join(folder, name)
     writeFileSync(path, text)
-    utimesSync(path, clock.now() / 1000, clock.now() / 1000)
+    stampFile(path, clock.now())
     events.changed(path)
   }
   const world = {
@@ -592,7 +650,7 @@ async function gitWorld(t: { after(run: () => Promise<void> | void): void }) {
   const touch = (path: string) => {
     const absolute = join(folder, path)
     try {
-      utimesSync(absolute, worldClock.now() / 1000, worldClock.now() / 1000)
+      stampFile(absolute, worldClock.now())
     } catch {
       // Gone: a deletion is heard all the same.
     }
@@ -765,7 +823,7 @@ test("a call a hook bounds: its write proven by content, the person's saves arou
   const when = (ms: number) => hookedClock.advance(began + ms - hookedClock.now())
   const save = (name: string, text: string) => {
     writeFileSync(join(folder, name), text)
-    utimesSync(join(folder, name), hookedClock.now() / 1000, hookedClock.now() / 1000)
+    stampFile(join(folder, name), hookedClock.now())
     hookedEvents.changed(join(folder, name))
   }
   const T5 = { thread: "T5", session: "T5-session", checkout: folder }
@@ -1090,6 +1148,37 @@ test("a version Git puts back in a turn keeps its writers: a stash and pop of th
   const summary = turnChanges(view, "T1", turn)
   assert.deepEqual(summary.files.map((file) => [file.relative, file.own]), [["a.ts", { added: 2, removed: 2 }]], "and so does the turn's count")
   assert.deepEqual(writersSince(view, [join(folder, "a.ts")], 0), { [join(folder, "a.ts")]: [{ kind: "thread", thread: "T1", sure: true }] })
+})
+
+test("a file Git puts back while a Thread runs is still its writer's: a move and worktree_status leave the person's new file theirs", async (t) => {
+  const world = await gitWorld(t)
+  const { folder } = world
+  const view: JournalView = { store: world.tracker.store, roots: () => world.tracker.rootStates().values(), author: (seq) => world.tracker.authorOf(seq) }
+  world.write("notes.ts", "export const notes = 'the person's'\n")
+  await world.tracker.settled()
+  const made = world.entries().at(-1)!
+  assert.deepEqual([made.path, made.author], ["notes.ts", { certainty: "person", via: "no-activity" }])
+  world.clock.advance(1_000)
+  world.git("stash", "-q", "-u")
+  world.gitHeard(["notes.ts"], [".git/index", ".git/logs/refs/stash", ".git/refs/stash"])
+  await world.tracker.settled()
+  // T1's call runs, naming nothing, while the person pops the stash.
+  world.clock.advance(1_000)
+  world.mark("turn", "T1", "t1", "start")
+  world.mark("call", "T1", "c1", "start", "t1")
+  world.clock.advance(100)
+  world.git("stash", "pop", "-q")
+  world.gitHeard(["notes.ts"], [".git/index", ".git/logs/refs/stash", ".git/refs/stash"])
+  await world.tracker.settled()
+  const popped = world.entries().at(-1)!
+  assert.deepEqual([popped.path, popped.kind, popped.git], ["notes.ts", "create", true], "the pop is Git's")
+  const divided = shares(view, folder, "T1")
+  assert.deepEqual([divided.thread.files, divided.uncertain.files], [[], []], "none of it is T1's, nor might be")
+  assert.deepEqual(divided.person.files, [join(folder, "notes.ts")], "the file is the person's")
+  const moving = partition(view, folder, "T1")
+  assert.deepEqual([moving.files, moving.uncertain], [[], []], "a move of T1 neither takes nor offers it")
+  world.mark("call", "T1", "c1", "end", "t1")
+  world.mark("turn", "T1", "t1", "end")
 })
 
 test("a journal from before either column set opens in the one format: turns and candidates filled once, nothing Git's", () => {

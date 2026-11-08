@@ -51,7 +51,7 @@ export function RestoreVersions({ thread, title, onClose }: { thread: string | u
                     if (done) setVersions((list) => list?.filter((item) => item !== version))
                   })
                 }}
-                className="pressable h-6 shrink-0 rounded-md px-2 text-label font-medium text-muted-foreground hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
+                className="pressable h-6 shrink-0 px-2 text-label font-medium text-muted-foreground hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
               >
                 {busy === version.entry ? "Restoring…" : "Restore"}
               </button>

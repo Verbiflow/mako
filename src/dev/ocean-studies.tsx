@@ -19,7 +19,7 @@ export function Studies() {
           type="button"
           aria-pressed={motion}
           onClick={() => setPref("oceanMotion", !motion)}
-          className="pressable ocean-preview-controls rounded-md px-3 py-1.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground focus-visible:outline focus-visible:outline-1"
+          className="pressable ocean-preview-controls px-3 py-1.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground focus-visible:outline focus-visible:outline-1"
         >
           {motion ? "Pause animation" : "Play animation"}
         </button>
@@ -37,7 +37,7 @@ export function Studies() {
               rows={3}
               aria-label="Draft"
               placeholder="Start with a thought…"
-              className="ocean-preview-controls w-full resize-none rounded-xl border border-border bg-popover p-4 text-ui outline-none focus:border-ring"
+              className="ocean-preview-controls w-full resize-none border border-border bg-popover p-4 text-ui outline-none focus:border-ring"
             />
             <p className="mt-2 text-center text-label text-faint">The water rests while you write.</p>
           </div>

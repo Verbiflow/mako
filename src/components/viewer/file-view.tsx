@@ -11,13 +11,15 @@ import { ArtifactPreview } from "./artifact-preview"
 import { HtmlFrame } from "./html-frame"
 import { MediaVideo } from "./media-video"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type RefObject } from "react"
-import type { SelectedLineRange } from "@pierre/diffs"
+import type { FileContents as SourceContents, SelectedLineRange } from "@pierre/diffs"
 import { File, Virtualizer } from "@pierre/diffs/react"
 import { LineCommentField } from "@/components/inspector/line-comment"
 import { commentInput, commentLabel, fileCommentDetail, lineOfNode, workspacePath } from "@/lib/line-comments"
 import { addContext } from "@/state/composer-context"
 import { store } from "@/state/session"
 import { DIFF_THEME } from "@/lib/diff-theme"
+import { fileLanguage } from "@/lib/file-kinds"
+import { HighlightPool } from "@/lib/highlight-pool"
 import { FileIcon } from "lucide-react"
 import { formatBytes } from "@/lib/format"
 import { Prose } from "@/components/transcript/markdown"
@@ -132,22 +134,29 @@ export function FileView({
     return <TabularPreview contents={file.contents} path={file.path} />
   }
 
-  return commentPath ? (
-    <CommentableSource host={host} file={file} line={line} path={commentPath} />
-  ) : (
-    <div ref={host}>
-      <Virtualizer className="min-h-full">
-        <File
-          file={{ name: file.path, contents: file.contents }}
-          selectedLines={line ? { start: line, end: line } : null}
-          options={SOURCE_OPTIONS}
-        />
-      </Virtualizer>
-    </div>
+  return (
+    <HighlightPool>
+      {commentPath ? (
+        <CommentableSource host={host} file={file} line={line} path={commentPath} />
+      ) : (
+        <div ref={host}>
+          <Virtualizer className="min-h-full">
+            <File file={sourceOf(file)} selectedLines={line ? { start: line, end: line } : null} options={SOURCE_OPTIONS} />
+          </Virtualizer>
+        </div>
+      )}
+    </HighlightPool>
   )
 }
 
 const SOURCE_OPTIONS = { theme: DIFF_THEME, disableFileHeader: true }
+
+/** What the renderer highlights: the file, in the language its name says where the renderer would guess wrong. */
+function sourceOf(file: FileContents): SourceContents {
+  const lang = fileLanguage(file.path)
+  // SAFETY: `fileLanguage` names only languages the highlighter bundles (`file-kinds.ts`).
+  return { name: file.path, contents: file.contents, ...(lang && { lang: lang as NonNullable<SourceContents["lang"]> }) }
+}
 
 /**
  * Lines picked in a file, and how they were picked: in the gutter (a
@@ -201,11 +210,7 @@ function CommentableSource({ host, file, line, path }: {
   return (
     <div ref={host} className="relative" onPointerUp={onPointerUp}>
       <Virtualizer className="min-h-full">
-        <File
-          file={{ name: file.path, contents: file.contents }}
-          selectedLines={selectedLines}
-          options={options}
-        />
+        <File file={sourceOf(file)} selectedLines={selectedLines} options={options} />
       </Virtualizer>
       {range && detail ? (
         <FloatingComment
@@ -311,7 +316,7 @@ function MediaPreview({ file }: { file: FileContents }) {
           src={viewerFileUrl(file.previewUrl)}
           alt={file.path}
           draggable={false}
-          className="max-h-full max-w-full rounded-md object-contain shadow-[var(--elevation-card)]"
+          className="max-h-full max-w-full object-contain shadow-[var(--elevation-card)]"
         />
       </div>
     )
@@ -338,7 +343,7 @@ function MediaPreview({ file }: { file: FileContents }) {
           url={viewerFileUrl(file.previewUrl)}
           poster={file.posterUrl && viewerFileUrl(file.posterUrl)}
           name={file.path}
-          className="max-h-full max-w-full rounded-md"
+          className="max-h-full max-w-full"
         />
       </div>
     )
@@ -350,14 +355,14 @@ function MediaPreview({ file }: { file: FileContents }) {
           src={file.thumbnailUrl}
           alt={`Preview of ${file.path}`}
           draggable={false}
-          className="max-w-full rounded-md object-contain shadow-[var(--elevation-card)]"
+          className="max-w-full object-contain shadow-[var(--elevation-card)]"
         />
       </div>
     )
   }
   return (
     <div className="flex min-h-56 flex-col items-center justify-center gap-2 p-6 text-center">
-      <span className="flex size-10 items-center justify-center rounded-lg bg-raised text-faint ring-1 ring-hairline ring-inset">
+      <span className="flex size-10 items-center justify-center bg-raised text-faint ring-1 ring-hairline ring-inset">
         <FileIcon className="size-4" />
       </span>
       <p className="text-ui font-medium text-muted-foreground">

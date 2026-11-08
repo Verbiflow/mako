@@ -1,9 +1,10 @@
 import type { ArchivedThread, ListedSession, ListedState } from "@mako/protocol/thread-listing"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import type { WaitingFor } from "@mako/protocol/attention"
-import { CLOUD_FOLDER_WHERE, listedOwner, listedPromptedAt, listedSummary, type ListedOwner } from "@mako/host/contracts/listed-conversations"
+import { CLOUD_FOLDER_WHERE, listedApexOf, listedOwner, listedPromptedAt, listedSummary, type ListedOwner } from "@mako/host/contracts/listed-conversations"
 import { byLastWorked, staleTarget, type OpenedBy, type SessionFacts } from "@mako/host/contracts/session-choice"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
+import { runPlace, type RunPlace } from "@mako/host/contracts/account-devices"
 import type { AccountListState, WebDevice } from "./account-list"
 import type { Owner } from "./start"
 
@@ -15,6 +16,8 @@ export interface WebSession {
   summary: LiveSummary
   /** Where it runs, in words: "Studio", "the cloud". */
   where: string
+  /** It runs on a machine of the person's own (a `runtime` device): its rows and bar wear a server, not a laptop. */
+  machine?: true
   /** When the cloud last heard from its device, while that device is quiet. */
   quietSince?: string
   waiting: readonly WaitingMessage[]
@@ -40,6 +43,8 @@ export interface WebThread {
   workingSince?: number
   /** Where it runs: one place, or several when its Sessions run on more than one. */
   where: string
+  /** Every Session of it runs on a machine of the person's own. */
+  machine?: true
   /** The project folder's name, when its Sessions agree on one. */
   project?: string
   /** Its newest activity, in ms since the epoch. */
@@ -48,6 +53,11 @@ export interface WebThread {
   /** Messages waiting in the account for a Session of it whose device is off. */
   waitingMessages: number
   archived?: { move: string; archivedAt: string }
+  /**
+   * It's a Fin of another Thread, placed on the device that lists it (`listedApexOf`): shown under that Apex, never as
+   * a Thread of its own, and opened from there, its own device answering.
+   */
+  apex?: { thread: string; title: string }
 }
 
 /**
@@ -79,25 +89,27 @@ function standingOf(state: ListedState, quiet: boolean, moving: boolean): Thread
   return state === "moving" ? "moving" : state
 }
 
-function projectOf(folder: string | undefined): string | undefined {
+export function projectOf(folder: string | undefined): string | undefined {
   if (!folder) return undefined
   const parts = folder.split("/").filter(Boolean)
   return parts.at(-1)
 }
 
 /** One listed row as the browser holds it: who answers it, where it runs, and how a window lists it. */
-export function sessionOf(row: ListedSession, list: Pick<AccountListState, "devices" | "quiet" | "waiting">): WebSession {
+export function sessionOf(row: ListedSession, list: Pick<AccountListState, "rows" | "devices" | "quiet" | "waiting">): WebSession {
   const where = whereOf(row, list.devices)
   const quietSince = row.runsOn.kind === "device" ? list.quiet.get(row.runsOn.deviceId) : undefined
+  const deviceKind = row.runsOn.kind === "device" ? list.devices.get(row.runsOn.deviceId)?.kind : undefined
   const session: WebSession = {
     row,
     owner: listedOwner(row),
-    summary: listedSummary(row, row.runsOn.kind === "cloud" ? CLOUD_FOLDER_WHERE : where, quietSince),
+    summary: listedSummary(row, row.runsOn.kind === "cloud" ? CLOUD_FOLDER_WHERE : where, quietSince, deviceKind, listedApexOf(row, list.rows)),
     where,
     waiting: list.waiting.get(row.session) ?? [],
     facts: listedFacts(row, quietSince !== undefined),
   }
   if (quietSince) session.quietSince = quietSince
+  if (runPlace(row.runsOn.kind === "cloud", deviceKind) === "machine") session.machine = true
   return session
 }
 
@@ -155,16 +167,31 @@ function fold(id: string, sessions: WebSession[], archived?: ArchivedThread): We
   if (standing === "waiting" && waitingFor) thread.waitingFor = waitingFor
   if (standing === "working" && workingSince !== undefined) thread.workingSince = workingSince
   if (projects.size === 1) thread.project = [...projects][0]!
+  if (sessions.every((session) => session.machine)) thread.machine = true
   const quietSince = sessions.find((session) => session.quietSince)?.quietSince
   if (quietSince && sessions.every((session) => session.quietSince)) thread.quietSince = quietSince
   if (archived) thread.archived = { move: archived.move, archivedAt: archived.archivedAt }
   return thread
 }
 
-/** The account's Threads as the list shows them: the ones it follows, and the archived cloud Threads apart. */
+/**
+ * The account's Threads as the list shows them: the ones it follows, the archived cloud Threads apart, and the Fins
+ * placed on other devices, each under its Apex (`WebThread.apex`), never among the Threads.
+ */
 export interface FoldedThreads {
   threads: WebThread[]
   archived: WebThread[]
+  placed: WebThread[]
+}
+
+/** The Thread a route or a row names, among the Threads, the Fins placed elsewhere and the archived. */
+export function threadById(folded: FoldedThreads, named: (thread: WebThread) => boolean): WebThread | undefined {
+  return folded.threads.find(named) ?? folded.placed.find(named) ?? folded.archived.find(named)
+}
+
+/** The Fins placed elsewhere under one Apex, waiting on the person first. */
+export function placedUnder(folded: Pick<FoldedThreads, "placed">, apex: string): WebThread[] {
+  return folded.placed.filter((thread) => thread.apex?.thread === apex)
 }
 
 /**
@@ -179,13 +206,23 @@ export function foldThreads(list: Pick<AccountListState, "rows" | "devices" | "q
     if (sessions) sessions.push(session)
     else byThread.set(row.thread, [session])
   }
-  const threads = [...byThread].map(([id, sessions]) => fold(id, sessions))
-  threads.sort((left, right) => STANDING_ORDER[left.standing] - STANDING_ORDER[right.standing] || (left.standing === "waiting" ? waitingRank(left) - waitingRank(right) : 0) || right.activityAt - left.activityAt)
+  const folded = [...byThread].map(([id, sessions]) => fold(id, sessions))
+  folded.sort((left, right) => STANDING_ORDER[left.standing] - STANDING_ORDER[right.standing] || (left.standing === "waiting" ? waitingRank(left) - waitingRank(right) : 0) || right.activityAt - left.activityAt)
+  // A Fin placed on another device goes under its Apex, by the Apex's row that names it among its Fins; one no row
+  // names stands on its own, since there's nothing to put it under.
+  const titles = new Map(folded.map((thread) => [thread.id, thread.title]))
+  const threads: WebThread[] = []
+  const placed: WebThread[] = []
+  for (const thread of folded) {
+    const apex = thread.sessions.find((session) => session.summary.parent)?.summary.parent?.thread
+    if (apex === undefined || apex === thread.id) threads.push(thread)
+    else placed.push({ ...thread, apex: { thread: apex, title: titles.get(apex) ?? "its Apex" } })
+  }
   const archived = list.archived.flatMap((entry) => {
     const sessions = entry.sessions.map((row) => sessionOf(row, list))
     return sessions.length ? [fold(entry.sessions[0]!.thread, sessions, entry)] : []
   })
-  return { threads, archived }
+  return { threads, archived, placed }
 }
 
 /** The conversation a Thread opens on: one waiting on the person first, then the newest at work, then its first. */
@@ -213,7 +250,25 @@ export function ownerOf(session: WebSession): Owner {
   return session.owner.kind === "cloud" ? { kind: "cloud", threadId: session.owner.threadId } : { kind: "mac", deviceId: session.owner.deviceId }
 }
 
-/** A Session's one line under its title: the Mac's name, when it isn't the cloud, and the project. */
+/** Where a Thread or Session runs, said in one line (`placeLine`): its words, and the glyph at their head. */
+export interface PlaceLine {
+  text: string
+  place: RunPlace
+}
+
+/**
+ * Where a Thread runs and its project, in the one order every screen says them: the device's name, then the project
+ * ("build-box · mako"), with the place's glyph: a cloud, a server for a machine of the person's own, a laptop for a Mac.
+ * The cloud isn't named (its glyph says it), and neither is the device where `named` is false (the list, while the
+ * account has one); with nothing else to say, where it runs.
+ */
+export function placeLine(where: string, project: string | undefined, { named = true, machine = false }: { named?: boolean; machine?: boolean } = {}): PlaceLine {
+  const cloud = where === CLOUD_WHERE
+  const text = [cloud || !named ? undefined : where, project].filter(Boolean).join(" · ") || (cloud ? "Cloud" : where)
+  return { text, place: cloud ? "cloud" : machine ? "machine" : "device" }
+}
+
+/** A Session's one line under its title: where it runs and the project (`placeLine`). */
 export function subtitle(thread: WebThread, session: WebSession): string {
-  return [session.where === CLOUD_WHERE ? undefined : session.where, thread.project].filter(Boolean).join(" · ") || (session.where === CLOUD_WHERE ? "Cloud" : session.where)
+  return placeLine(session.where, thread.project, { machine: session.machine }).text
 }

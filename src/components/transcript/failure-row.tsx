@@ -71,7 +71,7 @@ function DetailsToggle({ open, onToggle, className }: { open: boolean; onToggle(
       type="button"
       aria-expanded={open}
       onClick={onToggle}
-      className={cn("pressable flex h-6 items-center gap-1 rounded-md px-1.5 text-label text-faint transition-colors duration-100 hover:text-foreground", className)}
+      className={cn("pressable flex h-6 items-center gap-1 px-1.5 text-label text-faint transition-colors duration-100 hover:text-foreground", className)}
     >
       Details
       <ChevronRightIcon aria-hidden className={cn("size-3 transition-transform duration-200 ease-[var(--ease-out)]", open && "rotate-90")} />
@@ -221,7 +221,7 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
               data-recovery-primary={primary.kind}
               disabled={busy !== null || ((primary.kind === "resend" || primary.kind === "compact" || primary.kind === "continue") && !idle) || done === primary.kind}
               onClick={() => void run(primary)}
-              className="pressable h-6 rounded-md bg-fill-selected px-2 text-label font-medium text-foreground transition-colors duration-100 hover:bg-foreground/15 disabled:opacity-45"
+              className="pressable h-6 bg-fill-selected px-2 text-label font-medium text-foreground transition-colors duration-100 hover:bg-foreground/15 disabled:opacity-45"
             >
               {label(primary)}
             </button>
@@ -232,7 +232,7 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
                 type="button"
                 aria-label="More ways to recover this message"
                 title="More"
-                className="pressable grid size-6 place-items-center rounded-md text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
+                className="pressable grid size-6 place-items-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
               >
                 <MoreHorizontalIcon className="size-3.5" />
               </button>

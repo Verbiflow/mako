@@ -48,7 +48,7 @@ export function Explained({ reason, children }: { reason: string | null | undefi
   if (!reason) return children
   return (
     <Tooltip>
-      <TooltipTrigger asChild><span tabIndex={0} className="inline-flex rounded-md">{children}</span></TooltipTrigger>
+      <TooltipTrigger asChild><span tabIndex={0} className="inline-flex">{children}</span></TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-64">{reason}</TooltipContent>
     </Tooltip>
   )
@@ -266,7 +266,7 @@ export function GitActionControl({ cwd, branch }: { cwd: string; branch: string 
         <Spinner icon={RefreshCwIcon} turning={state.kind === "syncing" && state.action === "fetch"} />
       </IconAction>
       {primary ? (
-        <span data-git-next={primary.kind} className="inline-flex items-stretch rounded-md bg-foreground/[0.06]">
+        <span data-git-next={primary.kind} className="inline-flex items-stretch bg-foreground/[0.06]">
           {button(primary)}
           {more.length ? <>
             <span aria-hidden className="my-1.5 w-px bg-foreground/10" />

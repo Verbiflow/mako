@@ -2,19 +2,19 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { readFile, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { fixtureResume, noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-provider-turn-test-"))
+  const root = testScratch("mako-provider-turn-test-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-provider-turn-test", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_PROVIDER_TURN_ROOT: root, MAKO_REPO: resolve(".") }
   delete env.ELECTRON_RUN_AS_NODE
@@ -241,7 +241,7 @@ async function check() {
   await grok.until("the compaction to settle", () => settled() && grok.session()?.status === "ready")
   assert.deepEqual(settled().result, { kind: "completed" }, "Grok's own compaction notice confirms the /compact Mako sent")
   assert.deepEqual(grok.events.slice(beforeCompact).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update.detail] : []),
-    ["Manual · 23k → 9k tokens"], "a compaction Mako asked for is labelled manual")
+    ["Manual · 23.3K → 9.1K tokens"], "a compaction Mako asked for is labelled manual")
   assert.equal(grok.session()?.lastStop, "completed")
   console.log("PASS: Compact on Grok sends /compact and settles on Grok's own completion notice, marked manual")
 
@@ -251,7 +251,7 @@ async function check() {
   assert.deepEqual(since(beforeNative).flatMap((event) => event.type === "live-activity" ? [event.activity] : []), [{ kind: "compacting" }, null],
     "Grok's auto-compaction shows while it runs and ends with its marker; another session's does not")
   assert.deepEqual(since(beforeNative).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
-    [{ kind: "event", label: "Context compacted", detail: "Automatic · 404k → 21k tokens · took 1m 34s" }])
+    [{ kind: "event", label: "Context compacted", detail: "Automatic · 404K → 21.3K tokens · took 1m 34s" }])
   const titles = since(beforeNative).flatMap((event) => event.type === "live-session" && event.session.title ? [event.session.title] : [])
   // The SDK dispatches vendor notifications through more handlers than session
   // updates, so the two channels are not ordered against each other.
@@ -267,7 +267,7 @@ async function check() {
   assert.deepEqual(refusedActivity, [{ kind: "compacting" }, null, null],
     "Grok's kinds on ACP's own method reach its decoder instead of being dropped by the SDK")
   assert.deepEqual(since(beforeRefused).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
-    [{ kind: "event", id: "fixture-2", source: { harness: "provider-turn-grok", record: "fixture-2" }, label: "Context compacted", detail: "Automatic · 1k → 200 tokens · took 4s" }],
+    [{ kind: "event", id: "fixture-2", source: { harness: "provider-turn-grok", record: "fixture-2" }, label: "Context compacted", detail: "Automatic · 1K → 200 tokens · took 4s" }],
     "the replayed completion, named by Grok's event id, is drawn once")
   await hostLog.flush()
   const logged = await readFile(hostLogFile, "utf8")
@@ -341,16 +341,30 @@ async function check() {
   assert.equal(devin.opened().length, 2, "the ended announcement does not open a later turn")
   console.log("PASS: Stopping Devin's background subagent opens no turn, and leaves no announcement behind")
 
-  const beforeDevinNative = devin.events.length
-  await devin.prompt("native-devin")
-  const devinSince = devin.events.slice(beforeDevinNative)
-  assert.deepEqual(devinSince.flatMap((event) => event.type === "live-activity" ? [event.activity] : []),
-    [{ kind: "retrying", attempt: 1, maxAttempts: 5, reason: "Stream interrupted" }])
-  assert.deepEqual(devinSince.flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
-    // Devin's quota is a usage limit, as every harness's is, with nothing more it says of the window.
-    [{ kind: "event", label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error", limit: {} }])
+  // How long a retry took is the clock's, so it isn't part of what's compared.
+  const clockless = (update) => (update.retries ? { ...update, retries: { ...update.retries, durationMs: 0 } } : update)
+  /** A turn's retry and quota stop, with what its retry came to. */
+  const retriedTurn = async (prompt, retried) => {
+    const before = devin.events.length
+    await devin.prompt(prompt)
+    const since = devin.events.slice(before)
+    assert.deepEqual(since.flatMap((event) => event.type === "live-activity" ? [event.activity] : []),
+      [{ kind: "retrying", attempt: 1, maxAttempts: 5, reason: "Stream interrupted" }])
+    assert.deepEqual(since.flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [clockless(event.update)] : []), [
+      retried,
+      // Devin's quota is a usage limit, as every harness's is, with nothing more it says of the window.
+      { kind: "event", label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error", limit: {} },
+    ])
+    return since
+  }
+  // On the wire: the retry, a reply, then the stop. The reply ended the retry, so it recovered; events in wire order say so.
+  const recovered = await retriedTurn("native-devin", { kind: "event", label: "Recovered after 1 retry", detail: "Stream interrupted", retries: { count: 1, durationMs: 0, outcome: "recovered" } })
+  const shown = recovered.flatMap((event) => event.type === "live-activity" ? ["retry"] : event.type === "live-update" && event.update.kind === "text" && event.update.text === "Reconnected." ? ["reply"] : [])
+  assert.deepEqual(shown, ["retry", "reply"], "an extension notification and the update after it reach the engine in wire order")
+  // The retry, then the stop, with no reply between: it gave up.
+  await retriedTurn("native-devin-gave-up", { kind: "event", label: "Retried once", detail: "Stream interrupted", retries: { count: 1, durationMs: 0, outcome: "gave-up" } })
   assert.equal(devin.opened().length, 2, "a failed prompted turn opens no provider turn")
-  console.log("PASS: Devin's connection retry and quota stop reach the conversation as activity and a failure marker")
+  console.log("PASS: Devin's connection retry and quota stop reach the conversation as activity and a failure marker, recovered by a reply and given up without one")
   await devin.close()
 
   // The agent's first output is the prompt's receipt, and a process that dies

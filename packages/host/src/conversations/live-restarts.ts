@@ -67,8 +67,14 @@ export class LiveRestarts {
   /** What the host before this one left, once: the list goes as it is read, and nothing is continued unless the person still wants it. */
   take(): LeftTurn[] {
     if (!existsSync(this.#leftFile)) return []
-    const turns = this.#left()
+    const turns = this.left()
     rmSync(this.#leftFile, { force: true })
+    return turns
+  }
+
+  /** What `take` would take, left where it is. */
+  left(): LeftTurn[] {
+    const turns = this.#left()
     return this.#settings.continueAfterRestart ? turns : turns.filter((turn) => turn.always)
   }
 

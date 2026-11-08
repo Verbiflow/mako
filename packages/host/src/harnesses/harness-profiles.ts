@@ -90,6 +90,17 @@ export class HarnessProfiles {
     })
   }
 
+  /**
+   * The newest catalog this host holds for `harness` in memory, from any workspace, without discovering: what a row
+   * reads its labels from. Undefined until one was read.
+   */
+  held(harness: string): HarnessProfile | undefined {
+    let newest: { profile: HarnessProfile; loadedAt: number } | undefined
+    for (const [key, entry] of this.cache)
+      if (key.startsWith(`${harness}:`) && entry.profile.available && entry.profile.models.length && (!newest || entry.loadedAt > newest.loadedAt)) newest = entry
+    return newest?.profile
+  }
+
   /** Sending validates the selection already shown; discovery is not a per-turn tax. */
   forSend(harness: string, cwd?: string): Promise<HarnessProfile> {
     return this.loadProfile(harness, cwd, "send")

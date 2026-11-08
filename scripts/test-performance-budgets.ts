@@ -25,11 +25,11 @@ import { deliverLiveUpdates, queueLiveUpdate, reduceLiveUpdates, type LivePendin
 import { SessionUsage, type UsageObservation } from "@mako/host/harnesses/session-usage"
 import { decoders } from "./native-decoding"
 import { timing, type Work } from "./performance-measure"
-import { committed, concluded, ROUNDS, script, settle, type Measurer, type Suspect } from "./perf-reference"
+import { allowedRegression, committed, concluded, ROUNDS, script, settle, type Measurer, type Suspect } from "./perf-reference"
 import type { Entry } from "@mako/sessions/entries"
 
 const BUDGETS = join(import.meta.dirname, "performance-budgets.json")
-const ALLOWED_REGRESSION = 1.25
+const ALLOWED_REGRESSION = allowedRegression()
 const BaselinesSchema = z.object({
   /** The commit whose code the baselines measured: a budget over its baseline is measured again beside it. */
   at: z.string().regex(/^[0-9a-f]{40}$/).optional(),

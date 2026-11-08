@@ -18,6 +18,7 @@ import { devinCheckpoint, devinFork } from "./fork.js"
 import { devinSideQuestions } from "./side-questions.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { adapters } from "../heavy.js"
+import { DEVIN_LAYER } from "./layer.js"
 
 /** Devin's ACP source, reading Devin's store as `stores` opens it. */
 export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
@@ -50,6 +51,9 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
     ...DEVIN_ACP_HOOKS,
     clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
     nativeRouting: { kind: "at-launch", via: "`subagents_enabled: false` in the copy of the person's `config.json` its launch's own config folder holds, which removes `run_subagent` and `read_subagent`; leaving out `cognition.ai/subagentSupport` doesn't.", verified: { version: "3000.11.234", how: "harness:native-tools records each mode as a lead without them on 3000.11.234 and 3000.10.23, and with them when the capability is left out (2026-11-01); test:native-routing-live: a lead's call was refused as unavailable, an ordinary Thread's child ran and was observed" } },
+    layer: DEVIN_LAYER,
+    modelRoutes: { kind: "absent", reason: "Devin runs its models through Devin's own service and takes no endpoint of the person's." },
+    accountContinuation: { kind: "new-session", reason: "A session runs on Devin's own service under the seat that started it; Mako hasn't seen one reopened under another seat, so another account starts a session of its own." },
     agents: { kind: "observed", via: "`run_subagent` calls, whose usage arrives tagged with the subagent's ID.", child: devinChildUpdate, observe: input => new DevinAgents(input) },
     observeBackground: devinBackground,
     providerTurns: devinProviderTurns,
@@ -70,7 +74,9 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
       reason: "Devin has no command that only reviews: its `/loop` reviews the diff and fixes it. It has a read-only review subagent, which Mako's prompt hands the review to.",
       reviewer: "Hand the review to your review subagent: call `run_subagent` with the `subagent_review` profile, and report what it finds.",
     },
-    steering: { kind: "supported", via: "A prompt sent while a turn runs is read at its next step.", wire: "concurrent-prompt" },
+    // Measured 2026-11-03 (`scripts/probe-steer-semantics.ts`): steered 4 s into a 15 s command, the model heard it
+    // 6.0 s later, when Devin handed the command back; a Stop ended the turn in 0.1 s. The person's steer restarts it.
+    steering: { kind: "supported", landing: "restart", hears: "at its next step, once its running command returns (Devin hands a long one back after about 10 s)", via: "A prompt sent while a turn runs is read at its next step.", wire: "concurrent-prompt" },
     access: {
       native: { edits: "accept-edits", auto: "smart", chat: "ask", plan: "plan", full: "bypass" },
       default: "edits",
@@ -92,7 +98,7 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
         // launch runs is what Mako stamps the session's records with, which a restore weighs (`restoreGate`).
         versionArgs: ["--version"],
         configureEnvironment: configureDevinEnvironment,
-        prepareMcp: (servers, env) => prepareDevinMcp(servers, env, options.nativeSpawnsOff === true),
+        prepareMcp: (servers, env) => prepareDevinMcp(servers, env, options.nativeSpawnsOff === true, options.routesCalls === true),
         async prepareApprovals({ previous, publish }) {
           const { DevinApprovalObserver, readDevinApprovalDecisions } = await adapters.devinApprovals.load("devin approvals")
           if (options.nativePath && options.resume) {
