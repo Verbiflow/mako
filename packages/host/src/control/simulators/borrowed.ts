@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto"
 import { mkdir, writeFile } from "node:fs/promises"
 import { basename, join } from "node:path"
 import { decodeReply, encodeOperation } from "@mako/protocol"
-import type { BorrowAnswer, Lease, Need } from "@mako/protocol/borrow"
+import { BorrowAnswerSchema, type BorrowAnswer, type Lease, type Need } from "@mako/protocol/borrow"
+import { z } from "zod"
 import { borrowWords, type WordedDevice } from "@mako/protocol/borrow-words"
 import { hostCallInput, hostReplyValue, toHostOperation } from "../../contracts/host-operations.js"
 import { decodeRuntimeValue } from "../../contracts/runtime-value.js"
@@ -29,7 +30,8 @@ import {
   type SimulatorsWatchInput,
   type SimulatorsWatchResult,
 } from "../../contracts/simulators.js"
-import { hostLog } from "../../base/host-log.js"
+import { HeldLeases } from "../../base/held-leases.js"
+import { hostLog, hostWarn } from "../../base/host-log.js"
 import type { RemoteSimulatorHost } from "./host.js"
 import { RemoteMacSimulators, type SimulatorHostCall } from "./remote-host.js"
 
@@ -47,6 +49,40 @@ export interface SimulatorBorrowing {
   devices(ref: string): Promise<WordedDevice[]>
 }
 
+/** Where a cloud Thread's machine reaches the account's broker, and as whom: its machine's link. */
+export type BorrowingLink = { gatewayUrl: string; machine: string; credential: string }
+
+const WordedDevicesSchema = z.object({ devices: z.array(z.object({ id: z.string(), name: z.string(), online: z.boolean(), lastSeen: z.number().nullable() }).strip()) })
+
+/**
+ * A cloud Thread's machine's routes to the account's broker, as its credential names it, for borrowing a simulator.
+ * Every answer but a success is a failure, a release's included (`410` is the lease already gone: ended, not failed).
+ */
+export function accountBorrowing(link: () => BorrowingLink | null, fetching: typeof fetch = fetch): SimulatorBorrowing {
+  const call = async (method: string, path: string, body?: string): Promise<Response> => {
+    const linked = link()
+    if (!linked) throw new Error("This machine isn't linked to Mako's cloud yet.")
+    const url = new URL(`/v1/machines/${encodeURIComponent(linked.machine)}/borrow${path}`, linked.gatewayUrl)
+    return fetching(url, { method, headers: { authorization: `Bearer ${linked.credential}`, ...(body !== undefined && { "content-type": "application/json" }) }, ...(body !== undefined && { body }), signal: AbortSignal.timeout(75_000) })
+  }
+  const ok = async (response: Response): Promise<Response> => {
+    if (response.status === 410) throw new LeaseEnded(await response.text())
+    if (!response.ok) throw new Error(`Mako's cloud answered ${response.status}`)
+    return response
+  }
+  return {
+    need: async (need) => BorrowAnswerSchema.parse(await (await ok(await call("POST", "/needs", JSON.stringify(need)))).json()),
+    release: async (lease) => {
+      const response = await call("DELETE", `/leases/${encodeURIComponent(lease)}`)
+      if (response.status !== 410) await ok(response)
+    },
+    renew: async (lease) => BorrowAnswerSchema.parse(await (await ok(await call("POST", `/leases/${encodeURIComponent(lease)}/renew`))).json()),
+    call: async (lease, operation) => (await ok(await call("POST", `/leases/${encodeURIComponent(lease)}/call`, operation))).text(),
+    artifact: async (lease, hash) => new Uint8Array(await (await ok(await call("GET", `/leases/${encodeURIComponent(lease)}/artifacts/${encodeURIComponent(hash)}`))).arrayBuffer()),
+    devices: async (ref) => WordedDevicesSchema.parse(await (await ok(await call("GET", `/devices?ref=${encodeURIComponent(ref)}`))).json()).devices,
+  }
+}
+
 /** The lease a call was under ended (released, revoked, lost): borrow again. */
 export class LeaseEnded extends Error {
   constructor(why: string) {
@@ -60,6 +96,8 @@ const REF = "ios-simulator"
 export const KEEP_ALIVE_MS = CLAIM_IDLE_MS / 3
 /** A lease this close to its end is renewed at the next keep-alive. */
 const RENEW_BEFORE_MS = 2 * KEEP_ALIVE_MS
+/** How long closing waits for the account to confirm its releases: a host stopping never hangs on the network. */
+const CLOSE_RELEASE_MS = 5_000
 
 /**
  * A cloud Thread's simulators: one of the person's Macs, borrowed as a session lease and driven over the lease's calls.
@@ -68,15 +106,21 @@ const RENEW_BEFORE_MS = 2 * KEEP_ALIVE_MS
  * (design 7.8): asleep waits, a lapsed claim re-opens once, a vanished simulator is re-listed once, the person's no is
  * final, and an act whose outcome is unknown is never sent again. While a simulator is held it's read within each idle
  * window, so a long session that only watches keeps its claim. Each lease's end frees it here; the next look borrows.
+ * Its lease is held under borrowing's lifecycle rules (`HeldLeases`): an answer, a renewal or a list that comes after a
+ * release, an end or another lease holds nothing (a late lease is released), a release is kept until the account
+ * confirms it, and closing releases everything this host borrowed.
  */
 export class BorrowedSimulators {
   readonly #port: SimulatorBorrowing
   readonly #shots: string
   readonly #now: () => number
   #correlation = randomUUID()
+  readonly #held = new HeldLeases()
+  /** The lease its Thread uses now, held in `#held`. */
   #lease: Lease | undefined
   #host: LeasedMac | undefined
   #words: string | undefined
+  #closed = false
 
   constructor(options: { port: SimulatorBorrowing; shots: string; now?: () => number }) {
     this.#port = options.port
@@ -95,10 +139,15 @@ export class BorrowedSimulators {
    * shows so the agent reads them where it looks.
    */
   async ensure(why: string): Promise<SimulatorHostSummary | undefined> {
+    if (this.#closed) return undefined
     if (this.#host && this.#lease && this.#lease.expiresAt > this.#now()) return undefined
+    const since = this.#held.begin()
     const answer = await this.#port.need({ kind: "operation", ref: REF, why, correlationId: this.#correlation })
     if ("lease" in answer && answer.lease.device) {
-      this.#take(answer.lease, await this.#devices())
+      const devices = await this.#devices()
+      const taken = this.#held.take(answer.lease, this.#now(), since)
+      if (taken === "held" || (taken !== "stale" && !this.#host)) this.#take(answer.lease, devices)
+      else if (taken === "stale" && !this.#held.has(answer.lease.id) && !this.#held.ended(answer.lease.id)) await this.#releaseLate(answer.lease.id)
       return undefined
     }
     // A wait that ended, however it ended, makes the next ask a new need.
@@ -109,11 +158,35 @@ export class BorrowedSimulators {
     return { id: "borrowing", label: "Your Mac", kind: "mac", platforms: { ios: waiting, android: { ready: false, blocker: "not-built", why: "Android emulators come after iOS." } } }
   }
 
-  /** The Thread is done with its simulator: the claim and the lease go, and its Mac's slot is free. */
+  /**
+   * The Thread is done with its simulator: the claim and the lease go, and its Mac's slot is free. Anything still being
+   * acquired holds nothing when it comes. The release is kept until the account confirms it, tried again by the next
+   * release, keep-alive or close, and a failure is thrown, so it's said.
+   */
   async release(): Promise<void> {
+    this.#held.invalidate()
     const lease = this.#lease
     this.#drop("released")
-    if (lease) await this.#port.release(lease.id).catch(() => undefined)
+    if (lease) this.#held.releasing(lease.id)
+    await this.#releasePending()
+  }
+
+  /** The releases the account hasn't confirmed yet, by lease. */
+  unreleased(): string[] {
+    return this.#held.unreleased()
+  }
+
+  /**
+   * This host stops: everything it borrowed is released, the lease a list took included, and one still being acquired
+   * is released when it comes. It waits for the account at most `CLOSE_RELEASE_MS`; a release it didn't hear confirmed
+   * is logged, and the broker ends that lease at its expiry.
+   */
+  async close(): Promise<void> {
+    this.#closed = true
+    const released = this.release().catch((error: Error) => hostWarn("simulators", "a borrowed lease's release on close failed", { error: error.message, leases: this.unreleased().join(",") }))
+    let timer: NodeJS.Timeout | undefined
+    await Promise.race([released, new Promise<void>((resolve) => (timer = setTimeout(resolve, CLOSE_RELEASE_MS).unref()))])
+    clearTimeout(timer)
   }
 
   /**
@@ -121,17 +194,23 @@ export class BorrowedSimulators {
    * that runs it runs every `KEEP_ALIVE_MS`. A lease that can't be renewed ends here.
    */
   async keepAlive(): Promise<void> {
+    if (this.#held.unreleased().length > 0) await this.#releasePending().catch((error: Error) => hostWarn("simulators", "a borrowed lease's release failed again", { error: error.message }))
     const lease = this.#lease
     if (lease && lease.expiresAt - this.#now() < RENEW_BEFORE_MS) {
+      const since = this.#held.begin()
       const renewed = await this.#port.renew(lease.id).catch(() => undefined)
-      if (renewed && "lease" in renewed) this.#lease = renewed.lease
-      else if (renewed) this.ended(lease.id)
+      // A renewal counts only for the lease still held, as it was when the renewal was asked.
+      if (renewed && "lease" in renewed) {
+        if (this.#held.take(renewed.lease, this.#now(), since) === "renewed") this.#lease = this.#held.get(lease.id)
+      } else if (renewed && this.#lease?.id === lease.id) this.ended(lease.id)
     }
     await this.#host?.keepAlive()
   }
 
-  /** The lease ended, as a call found or its push said: the next look borrows again. */
+  /** The lease ended, as a call found or its push said, held here yet or not: the next look borrows again. */
   ended(lease: string): void {
+    this.#held.end(lease)
+    this.#held.released(lease)
     if (this.#lease?.id === lease) this.#drop("ended")
   }
 
@@ -173,9 +252,33 @@ export class BorrowedSimulators {
   #drop(why: string): void {
     if (!this.#lease) return
     hostLog("simulators", "borrowed lease let go", { lease: this.#lease.id, why })
+    this.#held.end(this.#lease.id)
     this.#lease = undefined
     this.#host = undefined
     this.#correlation = randomUUID()
+  }
+
+  /** A lease that came after its borrowing was let go: released, never used. */
+  async #releaseLate(lease: string): Promise<void> {
+    hostLog("simulators", "a late lease is released", { lease })
+    this.#held.end(lease)
+    this.#held.releasing(lease)
+    await this.#releasePending().catch((error: Error) => hostWarn("simulators", "a late lease's release failed", { lease, error: error.message }))
+  }
+
+  /** Every release not yet confirmed, asked of the account again; the first failure is thrown once all were tried. */
+  async #releasePending(): Promise<void> {
+    const failures: Error[] = []
+    for (const lease of this.#held.unreleased()) {
+      try {
+        await this.#port.release(lease)
+        this.#held.released(lease)
+      } catch (error) {
+        if (error instanceof LeaseEnded) this.#held.released(lease)
+        else failures.push(error instanceof Error ? error : new Error(String(error)))
+      }
+    }
+    if (failures[0]) throw failures[0]
   }
 
   async #devices(): Promise<WordedDevice[]> {

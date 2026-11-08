@@ -43,7 +43,7 @@ import { SimulatorTools } from "./simulators/mcp.js"
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
 export { ControlResidency } from "./residency.js"
 export type { SimulatorLeases } from "./simulators/simulators.js"
-export { BorrowedSimulators, LeaseEnded, type SimulatorBorrowing } from "./simulators/borrowed.js"
+export { accountBorrowing, BorrowedSimulators, LeaseEnded, type SimulatorBorrowing } from "./simulators/borrowed.js"
 export { controlVideoMedia } from "./video-media.js"
 
 /** Browser and computer use, and the desktop app that does what only Electron can. */
@@ -83,7 +83,8 @@ export interface Control {
   computerPermissions(): Promise<MakoComputerPermissions>
   /** Agents' browser access, once the conversations exist to authorize them. */
   startService(authorize: (conversationId: string, bindingId: string) => void): Promise<ControlService>
-  stop(): void
+  /** Stops what control runs; settles once the simulators closed, their borrowed leases released (`Simulators.close`). */
+  stop(): Promise<void>
 }
 
 export type ControlService = Awaited<ReturnType<typeof startControlService>>
@@ -347,7 +348,7 @@ export function openControl(
       simulatorSetup.stop()
       stopSimulatorSweep()
       stopKeepingAlive?.()
-      void simulators.close()
+      return simulators.close()
     },
   }
 }

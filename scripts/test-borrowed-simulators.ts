@@ -23,7 +23,7 @@ import { LOCAL_HOST, macHostId, type SimulatorAction, type SimulatorAgent, type 
 import type { SimulatorHost } from "@mako/host/control/simulators/host"
 import { declareSimulatorMethods } from "@mako/host/control/simulators/methods"
 import { Simulators } from "@mako/host/control/simulators/simulators"
-import { BorrowedSimulators, LeaseEnded, type SimulatorBorrowing } from "@mako/host/control/simulators/borrowed"
+import { accountBorrowing, BorrowedSimulators, LeaseEnded, type SimulatorBorrowing } from "@mako/host/control/simulators/borrowed"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-borrowed-simulators-"))
 after(() => rm(scratch, { recursive: true, force: true }))
@@ -249,4 +249,116 @@ test("an act whose outcome is unknown is never sent again; the agent is told to 
   assert.equal(calls - before, 1, "sent once, never again")
   served.close()
   await gateway.close()
+})
+
+/** pr-review's lifecycle controls on #417: a borrowing port that does what each case needs, and nothing else. */
+function port(patch: Partial<SimulatorBorrowing> = {}): SimulatorBorrowing {
+  return {
+    need: async () => ({ lease: lease("A") }),
+    release: async () => {},
+    renew: async (id) => ({ lease: { ...lease(id), expiresAt: Date.now() + 2 * 60 * 60_000 } }),
+    call: async () => {
+      throw new Error("no operation expected")
+    },
+    artifact: async () => new Uint8Array(),
+    devices: async () => [],
+    ...patch,
+  }
+}
+const borrowed = (patched: SimulatorBorrowing, now?: () => number) => new BorrowedSimulators({ port: patched, shots: join(scratch, "lifecycle"), ...(now && { now }) })
+
+test("a lease that comes after its borrowing was let go, or after it ended, holds nothing, and a late one is released", async () => {
+  let answer!: (answer: BorrowAnswer) => void
+  const released: string[] = []
+  const late = borrowed(port({ need: () => new Promise((resolve) => (answer = resolve)), release: async (id) => void released.push(id) }))
+  const acquiring = late.ensure("look")
+  await late.release()
+  answer({ lease: lease("A") })
+  await acquiring
+  assert.equal(late.remotes().length, 0, "released while acquiring: no Mac reappears")
+  assert.deepEqual(released, ["A"], "and the lease that came late is released, not left holding the Mac's slot")
+
+  let listed!: () => void
+  let devices!: (devices: []) => void
+  const entered = new Promise<void>((resolve) => (listed = resolve))
+  const ending = borrowed(port({ devices: () => (listed(), new Promise((resolve) => (devices = resolve))) }))
+  const ensuring = ending.ensure("look")
+  await entered
+  ending.ended("A")
+  devices([])
+  await ensuring
+  assert.equal(ending.remotes().length, 0, "ended while acquiring: it isn't installed after")
+})
+
+test("a renewal of a lease since replaced never overwrites the lease held now", async () => {
+  let renewal!: (answer: BorrowAnswer) => void
+  let needs = 0
+  // Its clock a second before the first lease's end, so the keep-alive renews.
+  const nearEnd = Date.now() + 60 * 60_000 - 1_000
+  const simulators = borrowed(port({ need: async () => ({ lease: lease(++needs === 1 ? "A" : "B") }), renew: () => new Promise((resolve) => (renewal = resolve)) }), () => nearEnd)
+  await simulators.ensure("look")
+  const renewing = simulators.keepAlive()
+  await new Promise((resolve) => setImmediate(resolve))
+  simulators.ended("A")
+  await simulators.ensure("look again")
+  renewal({ lease: { ...lease("A"), expiresAt: Date.now() + 2 * 60 * 60_000 } })
+  await renewing
+  simulators.ended("B")
+  assert.equal(simulators.remotes().length, 0, "ending B lets go of B: A's late renewal didn't take its place")
+})
+
+test("a release that fails keeps its lease to try again, and says it failed", async () => {
+  let attempts = 0
+  const live = new Set(["A"])
+  const simulators = borrowed(port({ release: async (id) => {
+    if (++attempts === 1) throw new Error("network down")
+    live.delete(id)
+  } }))
+  await simulators.ensure("look")
+  await assert.rejects(simulators.release(), /network down/, "the failure is said")
+  assert.equal(simulators.remotes().length, 0, "the Thread let go: its Mac isn't used again")
+  await simulators.release()
+  assert.equal(attempts, 2, "tried again")
+  assert.deepEqual([...live], [], "and the broker's lease is gone")
+  // A keep-alive tries an unconfirmed release again too.
+  let failing = true
+  const later = borrowed(port({ release: async () => {
+    if (failing) throw new Error("still down")
+  } }))
+  await later.ensure("look")
+  await later.release().catch(() => undefined)
+  failing = false
+  await later.keepAlive()
+  assert.deepEqual(later.unreleased(), [])
+})
+
+test("the account's DELETE for a release that isn't a success is a failure, not a release", async () => {
+  const answers = [new Response("busy", { status: 503 }), new Response(null, { status: 204 }), new Response("gone", { status: 410 })]
+  const seen: string[] = []
+  const routes = accountBorrowing(() => ({ gatewayUrl: "https://gateway.test", machine: MACHINE, credential: "test-credential" }), async (url, init) => {
+    seen.push(`${init?.method} ${new URL(String(url)).pathname}`)
+    return answers.shift()!
+  })
+  await assert.rejects(routes.release("A"), /503/)
+  await routes.release("A")
+  await routes.release("A")
+  assert.deepEqual(seen, Array(3).fill(`DELETE /v1/machines/${MACHINE}/borrow/leases/A`))
+})
+
+test("closing the simulators releases what this host borrowed, a lease taken by a list alone included", async () => {
+  const released: string[] = []
+  const simulators = borrowed(port({ release: async (id) => void released.push(id) }))
+  await simulators.ensure("list only")
+  const here = new Simulators({ hosts: [], consent: async () => [], agent: () => undefined, remotes: () => simulators.remotes(), borrowing: simulators })
+  await here.close()
+  assert.deepEqual(released, ["A"])
+  assert.equal(simulators.remotes().length, 0)
+  // And one still being acquired as it closes is released when it comes.
+  let answer!: (answer: BorrowAnswer) => void
+  const pending = borrowed(port({ need: () => new Promise((resolve) => (answer = resolve)), release: async (id) => void released.push(id) }))
+  const acquiring = pending.ensure("look")
+  await new Simulators({ hosts: [], consent: async () => [], agent: () => undefined, remotes: () => pending.remotes(), borrowing: pending }).close()
+  answer({ lease: lease("C") })
+  await acquiring
+  assert.deepEqual(released, ["A", "C"])
 })

@@ -72,10 +72,16 @@ export interface SimulatorLeases {
  * another of their devices, and an agent's only under a live session lease of its Thread that this Mac serves
  * (`leases`), checked on every call.
  */
+/** A cloud Thread's borrowed simulators, as the list asks for one and a stopping host lets them go (`BorrowedSimulators`). */
+export interface SimulatorsBorrowing {
+  ensure(why: string): Promise<SimulatorHostSummary | undefined>
+  close?(): Promise<void>
+}
+
 export class Simulators {
   readonly #hosts: ReadonlyMap<string, SimulatorHost>
   readonly #remotes: () => readonly RemoteSimulatorHost[]
-  readonly #borrowing: { ensure(why: string): Promise<SimulatorHostSummary | undefined> } | undefined
+  readonly #borrowing: SimulatorsBorrowing | undefined
   readonly #consent: () => Promise<SetupConsent[]>
   readonly #leases: SimulatorLeases | undefined
   readonly #agent: (session: string) => SimulatorAgent | undefined
@@ -100,7 +106,7 @@ export class Simulators {
      * On a cloud Thread's machine: its simulators are a Mac of the person's borrowed under a session lease. The first
      * look asks for one, and how that stands is a host in the list; the person's grant is the consent there.
      */
-    borrowing?: { ensure(why: string): Promise<SimulatorHostSummary | undefined> }
+    borrowing?: SimulatorsBorrowing
     now?: () => number
     /** Whether any simulator is held, as it changes: the idle sweep runs only while one is. */
     holding?: (on: boolean) => void
@@ -277,8 +283,9 @@ export class Simulators {
     for (const id of this.#claims.keys()) this.#claim(id)
   }
 
-  /** Every screen stops streaming, and every host stops what it started. */
+  /** Every screen stops streaming, every host stops what it started, and what this host borrowed is released. */
   async close(): Promise<void> {
+    await this.#borrowing?.close?.()
     await this.#streams.close()
     await Promise.all([...this.#hosts.values()].map((host) => host.close().catch((error) => hostWarn("simulators", "host close failed", { host: host.id, error: error instanceof Error ? error.message : String(error) }))))
   }

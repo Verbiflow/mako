@@ -44,8 +44,6 @@ import { Advertiser, ADVERTISE_EVERY_MS } from "./base/advertiser.js"
 import { deviceProbe, probeCapabilities, type SimulatorFacts } from "./base/capabilities.js"
 import { LentHere } from "./base/lent.js"
 import { operationWords } from "@mako/protocol/borrow-words"
-import { BorrowAnswerSchema } from "@mako/protocol/borrow"
-import { z } from "zod"
 import { setupStep } from "./contracts/simulator-setup.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice, Lending, LEND_BEAT_MS } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, CliReadings, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
@@ -58,7 +56,7 @@ import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { KeepAwakeSettings } from "./contracts/keep-awake.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
-import { BorrowedSimulators, ControlResidency, LeaseEnded, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService, type SimulatorBorrowing } from "./control/index.js"
+import { accountBorrowing, BorrowedSimulators, ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
@@ -370,7 +368,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // machine's own routes to the account's broker.
   const borrowedSimulators = config.machineAgentFd === undefined
     ? undefined
-    : new BorrowedSimulators({ port: machineBorrowing(() => machineLink), shots: join(environment.dataRoot, "simulators", "borrowed") })
+    : new BorrowedSimulators({ port: accountBorrowing(() => machineLink), shots: join(environment.dataRoot, "simulators", "borrowed") })
   const control = openControl(config, machine, shell.jobs, emit, () => late.updates?.desktopChanged(), (session) => {
     const parsed = SessionIdSchema.safeParse(session)
     const placed = parsed.success && store ? store.sessionPlacement(parsed.data) : undefined
@@ -1811,12 +1809,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       shell.terminals.current()?.dispose()
       plugins?.close()
       for (const build of builds) build.close()
-      control.stop()
+      const controlStopped = control.stop().catch((error: Error) => hostWarn("control", "stop failed", { error: error.message }))
       files.stop()
       workspaceAutomations.stop()
       harnesses.updates.stop()
       catalog.stop()
-      await Promise.all([callsDrained, providersDrained, telemetry.close(), usage.close()])
+      await Promise.all([callsDrained, providersDrained, telemetry.close(), usage.close(), controlStopped])
       await opened.stop()
       cloudConversations?.dispose()
       late.agentServers?.close()
@@ -1865,27 +1863,3 @@ function watchOwnBuild(directories: readonly string[], emit: (event: HostEvent) 
   })
 }
 
-/** A cloud Thread's machine's routes to the account's broker, as its credential names it, for borrowing a simulator. */
-function machineBorrowing(link: () => MachineGatewayLink | null): SimulatorBorrowing {
-  const call = async (method: string, path: string, body?: string): Promise<Response> => {
-    const linked = link()
-    if (!linked) throw new Error("This machine isn't linked to Mako's cloud yet.")
-    const url = new URL(`/v1/machines/${encodeURIComponent(linked.machine)}/borrow${path}`, linked.gatewayUrl)
-    return fetch(url, { method, headers: { authorization: `Bearer ${linked.credential}`, ...(body !== undefined && { "content-type": "application/json" }) }, ...(body !== undefined && { body }), signal: AbortSignal.timeout(75_000) })
-  }
-  const ok = async (response: Response): Promise<Response> => {
-    if (response.status === 410) throw new LeaseEnded(await response.text())
-    if (!response.ok) throw new Error(`Mako's cloud answered ${response.status}`)
-    return response
-  }
-  return {
-    need: async (need) => BorrowAnswerSchema.parse(await (await ok(await call("POST", "/needs", JSON.stringify(need)))).json()),
-    release: async (lease) => void (await call("DELETE", `/leases/${encodeURIComponent(lease)}`)),
-    renew: async (lease) => BorrowAnswerSchema.parse(await (await ok(await call("POST", `/leases/${encodeURIComponent(lease)}/renew`))).json()),
-    call: async (lease, operation) => (await ok(await call("POST", `/leases/${encodeURIComponent(lease)}/call`, operation))).text(),
-    artifact: async (lease, hash) => new Uint8Array(await (await ok(await call("GET", `/leases/${encodeURIComponent(lease)}/artifacts/${encodeURIComponent(hash)}`))).arrayBuffer()),
-    devices: async (ref) => WordedDevicesSchema.parse(await (await ok(await call("GET", `/devices?ref=${encodeURIComponent(ref)}`))).json()).devices,
-  }
-}
-
-const WordedDevicesSchema = z.object({ devices: z.array(z.object({ id: z.string(), name: z.string(), online: z.boolean(), lastSeen: z.number().nullable() }).strip()) })
