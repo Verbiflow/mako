@@ -415,6 +415,7 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
     tier: () => tier,
     invoke: async (channel, args) => {
       calls.push([channel, ...args])
+      if (channel === "mako:automation-context") return { cwd: "/fixture/workspace", automations: [{ id: "nightly" }] }
       if (channel === "mako:run-automation") return runAnswer
       if (channel === "mako:automation-enabled") return [{ id: "nightly", enabled: args[1] === true && switches }]
       return channel === "mako:automations" ? [{ id: "nightly" }] : []
@@ -425,12 +426,12 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
   assert.deepEqual(await tool.act(agent("s-mine"), { action: "list", clientKey: "a1" }), { outcome: "listed", automations: [{ id: "nightly" }] })
   const asked = await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "a2" })
   assert.equal("outcome" in asked && asked.outcome, "asked")
-  assert.ok(calls.every(([channel]) => channel === "mako:automations"), "nothing ran on the agent's word alone")
+  assert.ok(calls.every(([channel]) => channel === "mako:automations" || channel === "mako:automation-context"), "nothing ran on the agent's word alone")
   await gate.answer("mine", "ask" in asked ? asked.ask : "", true)
-  assert.deepEqual(calls.at(-1), ["mako:run-automation", "nightly", JSON.stringify(["mine", "ask" in asked ? asked.ask : ""])])
+  assert.deepEqual(calls.at(-1), ["mako:run-automation", "nightly", JSON.stringify(["mine", "ask" in asked ? asked.ask : ""]), "/fixture/workspace"])
   tier = "full"
   assert.deepEqual(await tool.act(agent("s-mine"), { action: "off", id: "nightly", clientKey: "a3" }), { outcome: "done", action: "off", id: "nightly" })
-  assert.deepEqual(calls.at(-1), ["mako:automation-enabled", "nightly", false])
+  assert.deepEqual(calls.at(-1), ["mako:automation-enabled", "nightly", false, "/fixture/workspace"])
   // A launch that failed, or a run that never began, is said: Run now answers with how it went.
   runAnswer = { status: "failed", error: "No harness can run it" }
   assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "a4" }), { refused: "failed", why: "No harness can run it" })

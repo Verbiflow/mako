@@ -24,8 +24,9 @@ async function compose(root: string, conversation: string, launch: () => Promise
   await service.watch(root)
   const gate = new AgentAskGate(world.live.asks)
   const tool = new AutomationTool({ gate, conversationOf: () => conversation, tier: () => "auto", invoke: async (channel, args) => {
-    if (channel === "mako:run-automation") return z.json().parse(await service.fire(String(args[0]), "manual", z.string().optional().parse(args[1])))
-    return z.json().parse(channel === "mako:automations" ? service.list() : service.setEnabled(String(args[0]), Boolean(args[1])))
+    if (channel === "mako:automation-context") return z.json().parse(service.context())
+    if (channel === "mako:run-automation") return z.json().parse(await service.fire(String(args[0]), "manual", z.string().optional().parse(args[1]), z.string().optional().parse(args[2])))
+    return z.json().parse(channel === "mako:automations" ? service.list() : service.setEnabled(String(args[0]), Boolean(args[1]), z.string().optional().parse(args[2])))
   } })
   gate.runs.automation = (id, want, ask) => tool.allowed(id, want, ask)
   return { world, service, gate, tool, close: async () => { service.stop(); git.close(); await world.close() } }
@@ -71,7 +72,7 @@ if (process.argv[2] === "--child") {
       const apex = await initial.apex("codex", "auto")
       await initial.settle(100)
       const gate = new AgentAskGate(initial.live.asks)
-      const ask = gate.ask(apex.conversation, { kind: "automation", action: "run", id: "one" })
+      const ask = gate.ask(apex.conversation, { kind: "automation", action: "run", id: "one", cwd: root })
       await initial.close()
       const run = (mode: string) => new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
         const child = spawn(process.execPath, ["--import", "tsx", fileURLToPath(import.meta.url), "--child", root, apex.conversation, ask.id, mode], { stdio: "inherit" })

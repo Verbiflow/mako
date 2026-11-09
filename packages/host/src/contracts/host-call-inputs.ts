@@ -725,7 +725,9 @@ const inputs = {
       ]),
     ]),
   "mako:appshot-windows": () => z.tuple([]),
-  "mako:automation-enabled": () => z.tuple([z.string(), z.boolean()]),
+  "mako:automation-context": () => z.tuple([]),
+  "mako:automation-enabled": () =>
+    z.tuple([z.string(), z.boolean(), z.string().optional()]),
   "mako:automations": () => z.tuple([]),
   "mako:automations-act": () =>
     z.tuple([
@@ -2353,7 +2355,8 @@ const inputs = {
   "mako:restore-version": () => z.tuple([z.string(), z.number()]),
   "mako:reveal": () => z.tuple([z.string()]),
   "mako:reveal-plugins": () => z.tuple([]),
-  "mako:run-automation": () => z.tuple([z.string(), z.string().optional()]),
+  "mako:run-automation": () =>
+    z.tuple([z.string(), z.string().optional(), z.string().optional()]),
   "mako:run-command": () => z.tuple([z.string(), z.string().optional()]),
   "mako:save-automations": () =>
     z.tuple([
@@ -3260,6 +3263,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:appshot-capture", "control"],
   ["mako:appshot-front", "control"],
   ["mako:appshot-windows", "control"],
+  ["mako:automation-context", "workspaces"],
   ["mako:automation-enabled", "workspaces"],
   ["mako:automations", "workspaces"],
   ["mako:automations-act", "conversations"],
