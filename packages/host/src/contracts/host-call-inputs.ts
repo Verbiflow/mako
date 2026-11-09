@@ -2375,6 +2375,39 @@ const inputs = {
         z.literal("max"),
       ]),
     ]),
+  "mako:settings-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        action: z.union([z.literal("set"), z.literal("read")]),
+        setting: z.string().optional(),
+        value: z
+          .union([z.boolean(), z.string(), z.array(z.string())])
+          .optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:setup": () => z.tuple([z.string()]),
   "mako:setup-act": () =>
     z.tuple([
@@ -2384,10 +2417,10 @@ const inputs = {
           act: z.literal("answer"),
           ask: z.string(),
           answer: z.union([
-            z.literal("allow-thread"),
-            z.literal("allow-project"),
-            z.literal("decline"),
             z.literal("add-to-setup"),
+            z.literal("allow-project"),
+            z.literal("allow-thread"),
+            z.literal("decline"),
           ]),
         }),
         z.object({
@@ -2396,10 +2429,10 @@ const inputs = {
           row: z.string(),
           action: z.union([
             z.literal("stop"),
-            z.literal("send"),
             z.literal("add"),
-            z.literal("retry"),
             z.literal("keep"),
+            z.literal("retry"),
+            z.literal("send"),
           ]),
         }),
         z.object({ act: z.literal("rebuild") }),
@@ -2929,6 +2962,41 @@ const inputs = {
         .object({ cwd: z.string().optional(), harness: z.string().optional() })
         .optional(),
     ]),
+  "mako:threads-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        action: z.union([
+          z.literal("rename"),
+          z.literal("archive"),
+          z.literal("restore"),
+        ]),
+        title: z.string().optional(),
+        conversation: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:threads-move": () =>
     z.tuple([
       z.union([
@@ -3387,6 +3455,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:set-model", "workspaces"],
   ["mako:set-name", "workspaces"],
   ["mako:set-thinking", "workspaces"],
+  ["mako:settings-act", "conversations"],
   ["mako:setup", "workspaces"],
   ["mako:setup-act", "workspaces"],
   ["mako:shutdown-ack", "application"],
@@ -3471,6 +3540,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-titles-import", "threads"],
   ["mako:thread-unfollow", "threads"],
   ["mako:threads", "threads"],
+  ["mako:threads-act", "conversations"],
   ["mako:threads-move", "conversations"],
   ["mako:transcript-document", "conversations"],
   ["mako:unread-records", "threads"],

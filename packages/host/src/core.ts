@@ -2,6 +2,7 @@ import type { HostStopping } from "./base/host-stopping.js"
 import { randomBytes } from "node:crypto"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
 import type { RecordsLink } from "@mako/sessions/record-sync"
+import { z } from "zod"
 import { decodeRuntimeValue, encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { sessionAccessTier } from "./contracts/access.js"
 import { listedUnderApex } from "./contracts/agents.js"
@@ -57,7 +58,7 @@ import { ControlResidency, controlLine, openControl, declareControlMethods, cont
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { FinCapacity, FinCostModel, FinCostSampler, MacCapacity, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
+import { AgentAskGate, SettingsTool, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -185,6 +186,9 @@ interface LateParts {
   cloudMoves?: CloudMoves
   /** Agents' and shells' moves of a Thread between this Mac and the cloud (`thread_move`). */
   threadMoves?: ThreadMoveTool
+  threadActs?: ThreadActTool
+  settingsTool?: SettingsTool
+  agentAsks?: AgentAskGate
   /** The worktrees here of Threads that run in the cloud, following them at each turn's end. */
   cloudFollow?: CloudFollow
   /** This host's Sessions on the account's list: told again when one is archived here. */
@@ -1084,9 +1088,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     waiting: (session) => cloudConversations.listedWaiting(session),
     step: (conversationId, op, step) => emit({ type: "thread-continue-step", conversationId, op, step }),
   })
+  // What an agent below full access asks the person, for every tool that acts for them.
+  late.agentAsks = new AgentAskGate(live.asks)
   // The same three moves for an agent's `thread_move` and `mako thread move`: its own Thread, or the person's named one.
   // An agent's ask is answered on the path a harness's approval is, by whoever answers: one answer for each.
-  live.asks.answering = async (conversation, ask, allow) => late.threadMoves?.answer(conversation, ask, allow)
+  live.asks.answering = async (conversation, ask, allow) => late.agentAsks?.answer(conversation, ask, allow)
   late.threadMoves = new ThreadMoveTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
     place: (id) => {
@@ -1107,8 +1113,30 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       bringBack: (id, move) => cloudReturns.bringBack(id, move),
       continue: (id, op) => cloudContinues.press(id, op),
     } : undefined,
-    asks: live.asks,
+    gate: late.agentAsks,
   })
+  // Rename, Archive and Restore for an agent's `thread` and `mako thread`, through the calls the app's menu makes.
+  late.threadActs = new ThreadActTool({
+    conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
+    threadOf: (id) => threads.store?.journalPlacement(id)?.thread,
+    tier: (id) => sessionAccessTier(live.session(id)),
+    invoke: async (channel, args) => z.json().optional().parse(decodeRuntimeValue(await methods.invoke(channel, args))),
+    gate: late.agentAsks,
+  })
+  late.settingsTool = new SettingsTool({
+    conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
+    tier: (id) => sessionAccessTier(live.session(id)),
+    // Most of Settings' changes answer nothing.
+    invoke: async (channel, args) => z.json().optional().parse(decodeRuntimeValue(await methods.invoke(channel, args))),
+    gate: late.agentAsks,
+  })
+  late.agentAsks.runs = {
+    setting: async (_id, want) => void (await late.settingsTool?.run(want.setting)),
+    move: (id, want) => late.threadMoves?.allowed(id, want),
+    rename: async (id, want) => void (await late.threadActs?.run(id, want)),
+    archive: async (id, want) => void (await late.threadActs?.run(id, want)),
+    restore: async (id, want) => void (await late.threadActs?.run(id, want)),
+  }
   // And archives them, from here, whichever device they came from: the cloud ends them and keeps what they ran.
   const cloudArchives = cloudConversations && new CloudArchives({
     folder: join(environment.dataRoot, "cloud", "archives"),
@@ -1492,6 +1520,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }),
   })
   declareThreadMoveMethods(methods, () => late.threadMoves)
+  declareThreadActMethods(methods, () => late.threadActs)
+  declareSettingsMethods(methods, () => late.settingsTool)
+  declareAgentAskMethods(methods, () => late.agentAsks)
   const application: Application = declareApplicationMethods(methods, {
     live,
     native,
@@ -1622,7 +1653,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       if (channel === "mako:thread-move" && cloudMoves) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-move`'s schema before routing it.
         const [conversationId, move, handOff] = args as [string, string, ThreadHandOff | undefined]
-        late.threadMoves?.retire(conversationId)
+        late.agentAsks?.retire(conversationId, "move")
         return { handled: true, value: encodeRuntimeValue(await cloudMoves.move(conversationId, move, handOff)) }
       }
       if (cloudHandOffs) {

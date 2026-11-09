@@ -100,6 +100,9 @@ export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 export { Agents } from "./agents.js"
 export { AgentAnswerSchema, declareAgentMethods, registerAgentTools } from "./agent-tools.js"
+export { AgentAskGate, declareAgentAskMethods } from "./agent-ask-gate.js"
+export { ThreadActTool, declareThreadActMethods } from "./thread-act-tool.js"
+export { SettingsTool, declareSettingsMethods } from "./settings-tool.js"
 export { ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, threadToolText, type ThreadToolDoor } from "./thread-move-tool.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
