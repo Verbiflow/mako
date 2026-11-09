@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { parseArgs } from "node:util"
 import type { AgentCaller } from "@mako/host/contracts/agents"
 import { SESSION_VARIABLE } from "@mako/host/contracts/agent-tools"
-import { THREAD_ACT_TOOL, THREAD_MOVE_TOOL, type ThreadActInput, type ThreadsMoveInput } from "@mako/host/contracts/thread-tools"
+import { SETTINGS_TOOL, THREAD_ACT_TOOL, THREAD_MOVE_TOOL, type SettingsInput, type ThreadActInput, type ThreadsMoveInput } from "@mako/host/contracts/thread-tools"
 import { ThreadMoveAnswerSchema, threadToolText } from "@mako/host/conversations/thread-move-tool"
 import { localHost } from "./transport.js"
 
@@ -11,7 +11,10 @@ export const THREAD_HELP = `  mako thread move cloud|back [--conversation <id>] 
                     back: Bring it back to this Mac. From a Thread's shell (${SESSION_VARIABLE}) it moves that Thread,
                     as thread_move does; from your own shell, name the conversation, and it waits for the move's end.
   mako thread rename <title> | archive | restore [--conversation <id>] [--key <k>]
-                    Rename, Archive and Restore on the Thread's menu, as the thread tool does.`
+                    Rename, Archive and Restore on the Thread's menu, as the thread tool does.
+  mako settings read | set <setting> <value>
+                    What the settings tool reads and changes: hand-off-on-sleep, continue-after-restart, harness-order
+                    (harnesses first to last, comma-separated), commit-model, keep-awake and keep-awake-lid-closed.`
 
 const OPTIONS = {
   conversation: { type: "string" },
@@ -40,6 +43,32 @@ export function threadActInput(argv: string[]): ThreadActInput {
   const [, action, ...title] = positionals
   if (action !== "rename" && action !== "archive" && action !== "restore") throw new Error("thread needs a command: move, rename, archive or restore")
   return { action, clientKey: values.key ?? randomUUID(), ...(title.length && { title: title.join(" ") }), ...(values.conversation && { conversation: values.conversation }) }
+}
+
+/** `mako settings read|set`'s input, from its arguments. */
+export function settingsInput(argv: string[]): SettingsInput {
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS })
+  const [, action, setting, value] = positionals
+  const key = values.key ?? randomUUID()
+  if (action === "read") return { action, clientKey: key }
+  if (action !== "set" || !setting || value === undefined) throw new Error("settings needs read, or set <setting> <value>")
+  const parsed = value === "true" ? true : value === "false" ? false : setting === "harness-order" ? value.split(",") : value
+  return { action, setting, value: parsed, clientKey: key }
+}
+
+/** `mako settings`: the same host call as the in-Thread `settings`. A refusal exits 1. */
+export async function settingsMain(argv: string[]): Promise<void> {
+  const { values } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS })
+  if (values.help) return void process.stdout.write(`${THREAD_HELP}\n`)
+  const input = settingsInput(argv)
+  const transport = localHost(values.socket ? { socket: values.socket } : {})
+  try {
+    const result = ThreadMoveAnswerSchema.parse(await transport.call(SETTINGS_TOOL.channel, [caller(), input]))
+    process.stdout.write(`${values.json ? JSON.stringify(result) : threadToolText(result)}\n`)
+    if (result.refused !== undefined) process.exitCode = 1
+  } finally {
+    transport.close()
+  }
 }
 
 /** `mako thread`: the same host calls as the in-Thread `thread_move` and `thread`. A refusal exits 1. */
