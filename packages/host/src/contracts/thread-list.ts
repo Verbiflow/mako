@@ -13,7 +13,7 @@ export function internalReviewSession(ref: Pick<ThreadRef, "nativeAgent">): bool
 /** A record path can be reused; a placed Session further distinguishes otherwise identical native refs. */
 export function sameNativeSession(left: Pick<ThreadRef, "harness" | "nativeId" | "identity" | "sessionId">, right: Pick<ThreadRef, "harness" | "nativeId" | "identity" | "sessionId">): boolean {
   return left.harness === right.harness && left.nativeId === right.nativeId && left.identity === right.identity &&
-    (left.sessionId === undefined || right.sessionId === undefined || left.sessionId === right.sessionId)
+    left.sessionId === right.sessionId
 }
 
 /**

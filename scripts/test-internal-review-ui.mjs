@@ -81,6 +81,69 @@ async function check() {
     })()`)
     await frame()
     const only = process.env.MAKO_INTERNAL_UI_CASE
+    if (!only || only === "arrival") {
+      const arrival = await evaluate("import('/scripts/fixtures/session-tab-arrivals.tsx').then(f=>f.sessionTabArrivals())")
+      await writeFile(join(root,'arrival-results.json'),JSON.stringify(arrival,null,2))
+      assert.deepEqual(arrival,{initialNew:0,firstNew:false,laterNew:true},'initial identity cohort stays still during slow render; genuinely added tab animates')
+      console.log('PASS slow initial strip and genuine later tab arrival')
+    }
+    if (!only || only === "boundaries") {
+      const result = await evaluate(`(async () => {
+        const f=reviewFixture,d=await import('/src/state/drafts.ts'),before=window.mako.pageThread;
+        const internal={...f.internal,nativeId:'omitted-session',path:'/fixture/omitted-session.jsonl',sessionId:'internal-session'};
+        const worker={...f.worker,nativeId:internal.nativeId,path:internal.path,sessionId:'worker-session'};
+        f.t.applyThreadRef(internal);f.t.applyThreadRef(worker);
+        const view=f.v.viewedThread({ref:worker,entries:[{type:'text',id:'w',text:'Worker B'}]});
+        f.v.rememberThread(view);f.tabs.openThreadTab(worker.path);f.t.threadsStore.set({viewing:view,opening:null});d.rememberDraft(worker.path,'Placed worker draft');
+        const omitted={...internal};delete omitted.sessionId;f.t.applyThreadRef(omitted);
+        const wildcard={view:f.t.threadsStore.get().viewing===view,cache:f.v.rememberedThread(worker.path)===view,tab:f.tabs.threadTabsStore.get().tabs.includes(worker.path),row:f.t.threadsStore.get().threads.some(ref=>ref.sessionId===worker.sessionId),draft:d.draftText(worker.path)==='Placed worker draft'};
+        let release,entered;const gate=new Promise(r=>release=r),started=new Promise(r=>entered=r);
+        window.mako.pageThread=async()=>{entered();await gate;return {ref:omitted,entries:[],start:0,total:0,hasEarlier:false}};
+        const oldReply=f.v.readThreadForPane(worker.path);await started;f.t.applyThreadRef(omitted);release();
+        const delayed={returned:(await oldReply)!==null,view:f.t.threadsStore.get().viewing===view,cache:f.v.rememberedThread(worker.path)===view,tab:f.tabs.threadTabsStore.get().tabs.includes(worker.path),draft:d.draftText(worker.path)==='Placed worker draft'};
+        const originless={...internal};delete originless.sessionId;delete originless.nativeAgent;f.t.applyThreads([originless,worker]);
+        delayed.row=f.t.threadsStore.get().threads.some(ref=>ref.sessionId===worker.sessionId);
+        const pages=[];
+        for(const learns of [false,true]) {
+          const ref={...f.unknown,nativeId:'intermediate-'+learns,path:'/fixture/intermediate-'+learns+'.jsonl',bytes:40,revision:1};
+          f.t.applyThreadRef(ref);f.v.rememberThread({...f.v.viewedThread({ref,entries:[]}),pageStart:0,totalEntries:3});
+          let calls=0;
+          window.mako.pageThread=async(path,before)=>{calls++;return before===undefined?{ref,entries:[{type:'text',id:'tail',text:'tail'}],start:2,total:3,hasEarlier:true}:{ref:{...ref,nativeAgent:{kind:learns?'internal-review':'agent'}},entries:[{type:'user',id:'early',text:'early'},{type:'text',id:'answer',text:'answer'}],start:0,total:3,hasEarlier:false}};
+          const read=await f.v.readThreadForPane(ref.path);
+          pages.push({learns,calls,returned:read!==null,cache:Boolean(f.v.rememberedThread(ref.path)),entries:read?.entries.length??0});
+        }
+        const placed={...f.unknown,nativeId:'mixed-placement',path:'/fixture/mixed-placement.jsonl',sessionId:'ordinary-session',bytes:40,revision:1};
+        const partial={...placed};delete partial.sessionId;
+        f.t.applyThreadRef(placed);f.v.rememberThread({...f.v.viewedThread({ref:placed,entries:[]}),pageStart:0,totalEntries:3});
+        window.mako.pageThread=async(path,before)=>before===undefined?{ref:partial,entries:[{type:'text',id:'tail',text:'tail'}],start:2,total:3,hasEarlier:true}:{ref:placed,entries:[{type:'user',id:'u',text:'early'},{type:'text',id:'a',text:'answer'}],start:0,total:3,hasEarlier:false};
+        const mixed=await f.v.readThreadForPane(placed.path);
+        const earlyWorker={...f.worker,nativeId:'before-classification',path:'/fixture/before-classification',sessionId:'current-worker'};
+        const partialWorker={...earlyWorker};delete partialWorker.sessionId;delete partialWorker.nativeAgent;
+        f.t.applyThreadRef(earlyWorker);f.t.applyThreadRef(partialWorker);
+        window.mako.pageThread=async()=>({ref:partialWorker,entries:[],start:0,total:0,hasEarlier:false});
+        const earlyRead=await f.v.readThreadForPane(earlyWorker.path);
+        const lateInternal={...f.internal,nativeId:earlyWorker.nativeId,path:earlyWorker.path,sessionId:'older-internal'};
+        f.t.applyThreadRef(lateInternal);const partialInternal={...lateInternal};delete partialInternal.sessionId;f.t.applyThreadRef(partialInternal);
+        const placement={read:earlyRead?.ref.sessionId===earlyWorker.sessionId,row:f.t.threadsStore.get().threads.some(ref=>ref.nativeId===earlyWorker.nativeId&&ref.sessionId===earlyWorker.sessionId),cache:f.v.rememberedThread(earlyWorker.path)?.ref.sessionId===earlyWorker.sessionId};
+        const released=[];
+        for(const learns of [false,true]) {
+          const ref={...f.unknown,nativeId:'released-'+learns,path:'/fixture/released-'+learns,bytes:40,revision:1};f.t.applyThreadRef(ref);
+          f.v.rememberThread({...f.v.viewedThread({ref,entries:[{type:'user',id:'u',text:'released'},{type:'text',id:'a',text:''},{type:'text',id:'tail',text:'tail'}]}),releasedTurns:[{id:'released',label:'released',blocks:{start:0,end:0},base:{start:0,end:2}}]});
+          window.mako.pageThread=async()=>({ref:{...ref,...learns&&{nativeAgent:{kind:'internal-review'}}},entries:[{type:'user',id:'u',text:'restored'},{type:'text',id:'a',text:'answer'}],start:0,total:3,hasEarlier:false});
+          await f.v.loadReleasedThreadTurn(ref.path,'released');const restored=f.v.rememberedThread(ref.path);
+          released.push({learns,cache:Boolean(restored),restored:restored?.releasedTurns?.length===0});
+        }
+        window.mako.pageThread=before;return {wildcard,delayed,pages,mixed:{returned:Boolean(mixed),session:mixed?.ref.sessionId,entries:mixed?.entries.length},placement,released};
+      })()`)
+      await writeFile(join(root,'boundary-results.json'),JSON.stringify(result,null,2))
+      assert.deepEqual(result.wildcard,{view:true,cache:true,tab:true,row:true,draft:true},'omitted placement cannot bridge internal A into distinct known worker B')
+      assert.deepEqual(result.delayed,{returned:false,view:true,cache:true,tab:true,draft:true,row:true},'omitted old page and originless snapshot preserve placed worker B')
+      assert.deepEqual(result.pages,[{learns:false,calls:2,returned:true,cache:true,entries:3},{learns:true,calls:2,returned:false,cache:false,entries:0}],'every consumed page admits classification before aggregation')
+      assert.deepEqual(result.mixed,{returned:true,session:'ordinary-session',entries:3},'one unchanged ordinary capture can supply missing placement from its complete page')
+      assert.deepEqual(result.placement,{read:true,row:true,cache:true},'ordinary partial updates and single-page reads cannot erase a known worker placement before internal metadata arrives')
+      assert.deepEqual(result.released,[{learns:false,cache:true,restored:true},{learns:true,cache:false,restored:false}],'released-turn page admission preserves ordinary history and rejects internal classification')
+      console.log('PASS omitted placed identity and intermediate-page classification with ordinary pagination control')
+    }
     if (!only || only === "race") {
       const result = await evaluate(`(async () => {
         const f=reviewFixture, internal={...f.internal,nativeId:'uncached-review',path:'/fixture/uncached.jsonl'};

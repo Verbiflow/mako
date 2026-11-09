@@ -93,8 +93,8 @@ export function applyThreadRef(ref: ThreadRef) {
   if (retireInternalReview(ref)) {
     if (nativeSessionRefs.owns(ref)) noteHelpers([ref])
     const current = threadsStore.get().threads
-    if (current.some(candidate => sameNativeSession(candidate, ref)))
-      applyThreads(current.filter(candidate => !sameNativeSession(candidate, ref)))
+    if (current.some(candidate => sameNativeSession(nativeSessionRefs.classify(candidate), ref)))
+      applyThreads(current.filter(candidate => !sameNativeSession(nativeSessionRefs.classify(candidate), ref)))
     return
   }
   noteHelpers([ref])

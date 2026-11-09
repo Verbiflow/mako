@@ -170,11 +170,13 @@ export function loadReleasedThreadTurn(path: string, id: string): Promise<void> 
     const turn = thread?.releasedTurns?.find(item => item.id === id)
     if (!thread || !turn || !hasBridge()) return
     const release = transcriptReaders.protect(nativeReadingSource(path), id)
+    const version = nativeSessionRefs.version(path)
     try {
       let before = turn.base.end
       const entries: Entry[] = []
       while (before > turn.base.start) {
         const page = await getMako().pageThread(path, before)
+        if (page && (!admitThreadPage(page, path, version) || !pageRefForRead(thread.ref, page.ref))) return
         if (!page || page.start >= before || page.start + page.entries.length !== before ||
             nativeHistoryRevision(page) !== nativeHistoryRevision({ ...thread, total: thread.totalEntries })) {
           if (threadsStore.get().viewing?.ref.path === path) await recoverThreadReader(path)
@@ -215,7 +217,7 @@ export function retireInternalReview(ref: ThreadRef, notify = false): boolean {
   const paths = new Set([ref.path, ...nativeSessionRefs.pathsOf(ref)])
   for (const path of paths) nativeSessionRefs.observe({ ...ref, path })
   nativeSessionRefs.observe(ref)
-  const matches = (candidate: ThreadRef | undefined) => candidate !== undefined && sameNativeSession(candidate, ref)
+  const matches = (candidate: ThreadRef | undefined) => candidate !== undefined && sameNativeSession(nativeSessionRefs.classify(candidate), ref)
   const cached = [...threadCache.values()]
   let evicted = false
   for (const entry of cached) if (matches(entry.ref)) {
@@ -262,7 +264,7 @@ export function readThreadForPane(path: string): Promise<ViewedThread | null> {
       read.again = false
       const captured = nativeSessionRefs.version(path)
       const held = threadCache.get(path)
-      const page = await readThreadWindow(path, held?.pageStart ?? transcriptReaders.rememberedWindow(nativeReadingSource(path))?.base)
+      const page = await readThreadWindow(path, held?.pageStart ?? transcriptReaders.rememberedWindow(nativeReadingSource(path))?.base, captured)
       if (page && retireInternalReview(page.ref)) return null
       if (nativeSessionRefs.version(path) !== captured) return null
       // Streaming, paging, or a range reload published while this capture
@@ -291,10 +293,25 @@ const windowReads = new Map<string, { again: boolean; version: ReturnType<typeof
 
 /** Refresh the held reading window coherently. A fresh tail alone must not
  * discard the earlier pages a returning or unfocused pane still reads. */
-async function readThreadWindow(path: string, from?: number): Promise<ThreadPage | null> {
+function admitThreadPage(page: ThreadPage, path: string, version: ReturnType<typeof nativeSessionRefs.version>): boolean {
+  return !retireInternalReview(page.ref) && nativeSessionRefs.version(path) === version
+}
+
+/** Within one unchanged capture, a complete page can supply a missing placement. Conflicting complete identities cannot fold. */
+function pageRefForRead(ref: ThreadRef, page: ThreadRef): ThreadRef | null {
+  if (ref.harness !== page.harness || ref.nativeId !== page.nativeId || ref.identity !== page.identity ||
+      (ref.sessionId !== undefined && page.sessionId !== undefined && ref.sessionId !== page.sessionId)) return null
+  return ref.sessionId === undefined && page.sessionId !== undefined ? { ...ref, sessionId: page.sessionId } : ref
+}
+
+async function readThreadWindow(path: string, from: number | undefined, version: ReturnType<typeof nativeSessionRefs.version>): Promise<ThreadPage | null> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const latest = await getMako().pageThread(path)
-    if (!latest || from === undefined || latest.start <= from) return latest
+    if (latest && !admitThreadPage(latest, path, version)) return null
+    if (!latest) return null
+    let ref = latest.ref
+    if (version?.ref && ref.sessionId === undefined) ref = pageRefForRead(ref, version.ref) ?? ref
+    if (from === undefined || latest.start <= from) return ref === latest.ref ? latest : { ...latest, ref }
     let first = latest
     const chunks = [latest.entries]
     let changed = false
@@ -302,13 +319,17 @@ async function readThreadWindow(path: string, from?: number): Promise<ThreadPage
       const earlier = await getMako().pageThread(path, first.start)
       if (!earlier)
         throw new Error("Earlier conversation history could not be read")
+      if (!admitThreadPage(earlier, path, version)) return null
+      const canonical = pageRefForRead(ref, earlier.ref)
+      if (!canonical) return null
+      ref = canonical
       if (nativeHistoryRevision(earlier) !== nativeHistoryRevision(latest)) { changed = true; break }
       if (earlier.start >= first.start || earlier.start + earlier.entries.length !== first.start)
         throw new Error("Earlier conversation history could not be read")
       chunks.push(earlier.entries)
       first = earlier
     }
-    if (!changed) return { ...latest, entries: chunks.reverse().flat(), start: first.start, hasEarlier: first.hasEarlier }
+    if (!changed) return { ...latest, ref, entries: chunks.reverse().flat(), start: first.start, hasEarlier: first.hasEarlier }
   }
   throw new Error("The conversation kept changing while its history was refreshed. Try opening it again.")
 }
@@ -765,7 +786,7 @@ export const threadViewingActions = {
           before
         )
         if (!fetched) break
-        if (retireInternalReview(fetched.ref) || nativeSessionRefs.version(viewing.ref.path) !== version || !nativeSessionRefs.readable(fetched.ref)) return
+        if (!admitThreadPage(fetched, viewing.ref.path, version) || !pageRefForRead(viewing.ref, fetched.ref)) return
         if (fetched.start >= before || fetched.start + fetched.entries.length !== before ||
             nativeHistoryRevision(fetched) !== nativeHistoryRevision({ ...viewing, total: viewing.totalEntries })) {
           await recoverThreadReader(viewing.ref.path)

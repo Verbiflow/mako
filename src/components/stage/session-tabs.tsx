@@ -31,9 +31,6 @@ import { sameThreadStatus, threadStatus, useThreads, type ThreadStatus } from "@
 import { AGENT_TAB_ID, viewer } from "@/state/viewer"
 import { useWindowRoutes } from "@/state/window-routes"
 
-/** A tab that mounts this long after its Thread's strip did joined while you watched. */
-const ARRIVAL_MS = 32
-
 /** Only news belongs on a tab: running, waiting on background work, blocked, failed, or an answer you have not read. */
 function shownStatus(status: ThreadStatus, onScreen: boolean): ThreadStatus | null {
   if (status.kind === "working" || status.kind === "background" || status.kind === "external-active" || status.kind === "needs-permission" || status.kind === "failed")
@@ -123,7 +120,7 @@ function SessionTabButton({
   thread,
   paneId,
   selected,
-  stripSince,
+  arrived,
   closable,
   menu,
   titles,
@@ -132,7 +129,7 @@ function SessionTabButton({
   thread?: string
   paneId: string
   selected: boolean
-  stripSince: number
+  arrived: boolean
   /** Each of the strip's Sessions' titles by ID: a fork's tooltip names its parent. */
   titles: ReadonlyMap<string, string>
   /** False while this is the Thread's only Session: archiving it is archiving the Thread, from its row. */
@@ -140,7 +137,6 @@ function SessionTabButton({
   /** Its own menu: opening it in another pane, its transcript, archiving it. */
   menu: boolean
 }) {
-  const [arrived] = useState(() => performance.now() - stripSince > ARRIVAL_MS)
   const composerHarness = useThreads((state) => state.composerHarness)
   const title = tab.kind === "draft" && !selected ? "Draft" : sessionTabTitle(tab)
   const worked = useTabWorked(tab, thread, titles)
@@ -239,7 +235,9 @@ export function SessionTabList({
   paneId: string
   agentActive: boolean
 }) {
-  const [since] = useState(() => performance.now())
+  // Rendering the initial tabs can take more than a frame. Their identity,
+  // rather than elapsed mount time, distinguishes later arrivals.
+  const [initial] = useState(() => new Set(tabs.map(tab => tab.id)))
   const current = onScreenTab(here)
   // A window that routes has no host of its own to archive a Session through, nor panes to open one in.
   const routed = useWindowRoutes((state) => state.routes !== null)
@@ -254,7 +252,7 @@ export function SessionTabList({
           thread={here.thread}
           paneId={paneId}
           selected={agentActive && tab.id === current}
-          stripSince={since}
+          arrived={!initial.has(tab.id)}
           closable={closable}
           menu={!routed}
           titles={titles}
