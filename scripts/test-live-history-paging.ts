@@ -424,3 +424,5 @@ console.log("PASS: conditional refresh owner/epoch and eviction fences")
   assert.ok(raw?.type === "tool" && raw.input === patch.input!.slice(0, 2048), "input that isn't JSON keeps its head")
   console.log("PASS: a large call's preview keeps its input's JSON, so an agent with a long prompt is named while it runs")
 }
+
+await import("./test-released-live-turn")
