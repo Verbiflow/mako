@@ -1,5 +1,6 @@
 import { acpStore } from "@/state/acp-state"
 import { interfacePreview } from "@/state/development"
+import { inboxView } from "@/state/inbox-view"
 import {
   bindStageReaders,
   deskNotificationEnvironment,
@@ -27,18 +28,23 @@ async function openSubject(subject: NotificationSubject): Promise<void> {
     case "thread": {
       const ref = threadsStore.get().threads.find((entry) => entry.path === target.path)
       if (!ref) return
+      const current = inboxView.beginOpen()
       const { threads } = await import("@/state/threads")
-      await threads.view(ref)
+      if (current()) await threads.view(ref)
       return
     }
     case "live": {
+      if (!acpStore.get().conversations[target.key]) return
+      const current = inboxView.beginOpen()
       const { acp } = await import("@/state/acp")
-      acp.activate(target.key)
+      if (current()) acp.open(target.key)
       return
     }
     case "tab": {
+      if (!tabsStore.get().tabs.some((tab) => tab.id === target.id)) return
+      const current = inboxView.beginOpen()
       const { actions } = await import("@/state/session")
-      await actions.switchTab(target.id)
+      if (current()) await actions.switchTab(target.id)
     }
   }
 }

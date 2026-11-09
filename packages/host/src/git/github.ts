@@ -434,7 +434,7 @@ export interface PullTarget {
   cwd: string
 }
 
-const READING_FIELDS = "state,url,author,statusCheckRollup,latestReviews"
+const READING_FIELDS = "state,url,headRefOid,author,statusCheckRollup,latestReviews"
 
 function timeOf(text: string | undefined): number | undefined {
   const at = text ? Date.parse(text) : Number.NaN
@@ -460,9 +460,11 @@ export async function readPull(target: PullTarget, runner: GitHubRunner = gh): P
   const checks = parseJsonArray(value.statusCheckRollup, parseRawCheck) ?? []
   const reviews = parseJsonArray(value.latestReviews, parseRawReview) ?? []
   const author = parseOptionalUser(value.author)?.login
+  const head = stringValue(value.headRefOid)
   return {
     state: state === "MERGED" ? "merged" : state === "CLOSED" ? "closed" : "open",
     url,
+    ...(head && /^[a-f0-9]{40,64}$/.test(head) && { head }),
     ...(author && { author }),
     checks: checks.map((raw) => {
       const check = toCheck(raw)

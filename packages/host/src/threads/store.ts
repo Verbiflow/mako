@@ -49,7 +49,7 @@ import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
-import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
+import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, internalDiscoveredRun, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
@@ -221,6 +221,8 @@ export interface ThreadRecord {
  */
 export interface ThreadEdges {
   all: readonly ThreadParent[]
+  /** Historical discoveries reclassified as internal native reviews; only reconciliation reads these. */
+  internalRuns: readonly ThreadParent[]
   of(child: string): ThreadParent | undefined
   children(parent: string): readonly ThreadParent[]
   byOp(op: string): ThreadParent | undefined
@@ -632,14 +634,14 @@ function keptAnswer(row: Record<string, SQLOutputValue>): KeptAnswer {
 
 /**
  * The outcome of a pull request that woke a Fin waiting on it, claimed before it's delivered: the wait (its Fin, the
- * report that named the pull request, and the pull request), the outcome, and the note that carries it under the
+ * dependency's first report, pull request and observation cursor), the outcome, and the note that carries it under the
  * request it's sent as, so a host that stopped before it was delivered sends that same request once, and none sends
  * a wait's outcome twice.
  */
 export const KeptPullWakeSchema = z.object({
   wait: z.string().min(1).max(1200),
   child: ThreadIdSchema,
-  /** The report that named the pull request, and the pull request by `pullKey`: what must still stand for it to go. */
+  /** A report in the retained dependency registration, and its pull request by `pullKey`: what must still stand for it to go. */
   report: z.string().min(1).max(600),
   pull: z.string().min(1).max(300),
   outcome: z.enum(["settled", "failed", "review", "merged", "closed"]),
@@ -647,7 +649,7 @@ export const KeptPullWakeSchema = z.object({
   text: z.string().max(2_000),
   at: z.number(),
   delivered: z.object({ at: z.number(), delivery: z.enum(["turn", "steer", "queued", "interrupt"]) }).optional(),
-  /** When its wait stopped holding before its note was sent (a newer report, a stop): retired, never sent. */
+  /** When its wait stopped holding before its note was sent (withdrawal, changed condition, stop): retired, never sent. */
   obsolete: z.number().optional(),
 })
 export type KeptPullWake = z.infer<typeof KeptPullWakeSchema>
@@ -948,6 +950,7 @@ export class ThreadStore {
     const held = this.edgesSeen
     if (held && held.revision === this.revision && this.depth === 0) return held.edges
     const all: ThreadParent[] = []
+    const internalRuns: ThreadParent[] = []
     const byChild = new Map<string, ThreadParent>()
     const byParent = new Map<string, ThreadParent[]>()
     const byOp = new Map<string, ThreadParent>()
@@ -956,6 +959,8 @@ export class ThreadStore {
       const parsed = ThreadParentSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
       if (!parsed.success) continue
       const edge = parsed.data
+      // Keep the original edge and reports as history. A confirmed internal native reviewer was never delegated work.
+      if (internalDiscoveredRun(edge)) { internalRuns.push(edge); continue }
       all.push(edge)
       byChild.set(edge.child, edge)
       byOp.set(edge.op, edge)
@@ -975,6 +980,7 @@ export class ThreadStore {
       }
     const edges: ThreadEdges = {
       all,
+      internalRuns,
       of: (child) => byChild.get(child),
       children: (parent) => byParent.get(parent) ?? [],
       byOp: (op) => byOp.get(op),
@@ -998,6 +1004,8 @@ export class ThreadStore {
       const previous = kept ? ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record)) : undefined
       if (byOp && !previous) return ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(byOp).record))
       if (previous && (previous.parent !== edge.parent || previous.op !== edge.op)) return previous
+      // Reclassified discoveries are immutable history. Stale catalog/adoption or run callbacks cannot make them workers again.
+      if (previous && internalDiscoveredRun(previous)) return previous
       // The end of an edge that lives on another device has a row here only so the edge and its reports can name it:
       // a Thread with no Session, which nothing lists.
       if (edge.remote) this.keepAwayThread(edge.parent, edge.startedBy)
@@ -1016,6 +1024,16 @@ export class ThreadStore {
           record = excluded.record, closed_at = excluded.closed_at`)
         .run(next.child, next.parent, next.name, next.op, next.run?.harness ?? null, next.run?.nativeId ?? null, JSON.stringify(next), next.createdAt, next.closedAt ?? null)
       return next
+    })
+  }
+
+  /** Replace a followed run only while its persisted generation and delegation still match the caller's snapshot. */
+  keepRun(expected: ThreadParent, run: FollowedRun): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(expected.child)
+      const current = kept ? ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record)) : undefined
+      if (!current?.run || internalDiscoveredRun(current) || current.op !== expected.op || current.parent !== expected.parent || current.parentSession !== expected.parentSession || current.closedAt !== expected.closedAt || JSON.stringify(current.run) !== JSON.stringify(expected.run)) return undefined
+      return this.keepEdge({ ...current, run })
     })
   }
 
@@ -1271,6 +1289,17 @@ export class ThreadStore {
       })
   }
 
+  /** Report questions still owned by someone: notice delivery and later narration do not answer them. */
+  openReportAsks(child: string): Report[] {
+    const reports = this.reportsOf(child)
+    const answered = new Set(this.sql("SELECT ask FROM agent_answers WHERE child_thread = ?").all(child).map((row) => z.object({ ask: z.string() }).parse(row).ask))
+    const superseded = new Set(reports.flatMap((report) => report.supersedes ?? []))
+    const latest = reports.at(-1)
+    return reports.filter((report) => (report.retainsQuestion || report === latest) && !report.implicit &&
+      (report.status === "done" || report.status === "blocked" || report.status === "needs-input") && report.question?.trim() &&
+      !answered.has(report.id) && !superseded.has(report.id))
+  }
+
   /** Moves with every write to this store, this host's or another's, without reading a table. */
   version(): string {
     this.syncVersion()
@@ -1423,6 +1452,12 @@ export class ThreadStore {
     if (!children.length) return new Set()
     const rows = this.sql(`SELECT wait FROM agent_pull_wakes WHERE child_thread IN (${children.map(() => "?").join(", ")})`).all(...children)
     return new Set(rows.map((row) => z.object({ wait: z.string() }).parse(row).wait))
+  }
+
+  /** A Fin's durable outcome claims, including retired ones, for legacy-wait reconciliation. */
+  pullWakesFor(child: string): KeptPullWake[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM agent_pull_wakes WHERE child_thread = ? ORDER BY at, wait").all(child).map(keptPullWake)
   }
 
   /** Wakes claimed and not yet delivered to their Fin, oldest first: what a starting host sends once. */

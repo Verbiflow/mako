@@ -36,6 +36,7 @@ import { threadsStore, useThreads } from "@/state/thread-store"
 import { followThreadMoves } from "@/state/thread-moves"
 import { noteOutcome, noticeId, retireNotice, retireSubject } from "@/state/notifications"
 import { offerWindowRenames } from "@/state/thread-titles"
+import { inboxView } from "@/state/inbox-view"
 
 interface ThreadCatalog {
   ready: boolean
@@ -282,4 +283,9 @@ export const threads = {
   ...threadCatalogActions,
   ...threadViewingActions,
   ...threadContinuationActions,
+  /** The person's open action; background reader recovery uses threadViewingActions directly. */
+  view(ref: ThreadRef, mode?: "conversation" | "native") {
+    inboxView.close()
+    return threadViewingActions.view(ref, mode)
+  },
 }

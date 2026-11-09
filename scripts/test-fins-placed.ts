@@ -154,7 +154,8 @@ async function until(what: string, done: () => boolean, timeoutMs = 15_000): Pro
 }
 
 const isBrief = (text: string) => text.includes("You're fin:")
-const wakesOf = (apex: Device, conversation: string) => apex.world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.startsWith(FROM_AGENTS))
+const spoken = (text: string) => text.replace(/^<mako-local-control>[\s\S]*?<\/mako-local-control>\n\n/, "")
+const wakesOf = (apex: Device, conversation: string) => apex.world.prompts.filter((prompt) => prompt.conversation === conversation && spoken(prompt.text).startsWith(FROM_AGENTS)).map((prompt) => ({ ...prompt, text: spoken(prompt.text) }))
 const placedEdge = (apex: Device, child: string | undefined): ThreadParent => {
   const edge = child ? apex.world.store.edges().of(child) : undefined
   assert.ok(edge?.placed, "the Apex's device keeps where it placed the Fin")
@@ -323,6 +324,47 @@ async function operationsAreRouted(): Promise<void> {
     await mac.close()
     await studio.close()
   }
+}
+
+/** Exact question IDs never cross to a receiver whose support for that selection is unknown. */
+async function retainedQuestionCapability(): Promise<void> {
+  const cloud = account()
+  const mac = await device(cloud, "MacBook", () => "Noted.")
+  const studio = await device(cloud, "Studio", () => "ok")
+  try {
+    const apex = await mac.world.apex("codex", "full")
+    const fin = started(await mac.world.agents.start(apex.caller, { brief: { objective: "Prepare a review." }, harness: "claude", name: "review", place: "device:Studio", clientKey: "review", cwd: mac.world.root }))
+    await until("the placed Fin's first report", () => mac.world.store.reportsOf(fin.child!).length > 0)
+    await studio.world.settle()
+    const conversation = conversationOf(studio, fin.child!)
+    const caller = studio.world.caller(conversation)
+    const report = await studio.world.agents.report(caller, { status: "done", summary: "Review ready.", question: "Route this review?", clientKey: "ready" })
+    assert.ok(!("refused" in report), JSON.stringify(report))
+    await until("the retained question on the Apex's device", () => mac.world.store.openReportAsks(fin.child!).some((ask) => ask.id === report.id))
+    const calls = () => cloud.sent.filter((call) => ["mako:agents-read", "mako:agents-answer", "mako:agents-respond", "mako:agents-send"].includes(call.channel)).length
+    let before = calls()
+    const exact = await mac.world.agents.read(apex.caller, { child: fin.name, report: report.id })
+    assert.ok("refused" in exact && exact.refused === "unsupported")
+    const page = await mac.world.agents.read(apex.caller, { child: fin.name, afterAsk: report.id })
+    assert.ok("refused" in page && page.refused === "unsupported")
+    const answer = await mac.world.agents.answer(apex.caller, { to: fin.name, ask: report.id, answer: "Review", clientKey: "exact" })
+    assert.ok("refused" in answer && answer.refused === "unsupported")
+    const person = await mac.world.agents.respond(apex.conversation, { fin: fin.child!, ask: report.id, answer: "Review", request: randomUUID() })
+    assert.ok("refused" in person && person.refused === "unsupported", "person responses cannot bypass the unknown receiver capability")
+    assert.equal(calls(), before, "no exact request was silently downgraded and sent to the receiver")
+    assert.equal(studio.world.store.answerOf(report.id), undefined)
+    assert.equal(mac.world.store.answerOf(report.id), undefined)
+    const second = await studio.world.agents.report(caller, { status: "done", summary: "Another review ready.", question: "Route the second review?", clientKey: "second" })
+    assert.ok(!("refused" in second), JSON.stringify(second))
+    await until("both placed questions", () => mac.world.store.openReportAsks(fin.child!).length === 2)
+    before = calls()
+    const ambiguous = await mac.world.agents.answer(apex.caller, { to: fin.name, answer: "Review", clientKey: "ambiguous" })
+    assert.ok("refused" in ambiguous && ambiguous.refused === "unsupported")
+    assert.equal(calls(), before)
+    const ordinary = await mac.world.agents.read(apex.caller, { child: fin.name })
+    assert.ok("text" in ordinary && ordinary.pending?.asks.length === 2, "ordinary reads still reach a modern receiver")
+    console.log("placed questions: unknown exact-selection capability refuses reads, paging and both answer paths without a receiver call")
+  } finally { await mac.close(); await studio.close() }
 }
 
 /** The Apex's device is off while its Fin finishes: the notice waits on the Fin's device and is taken once when it's back. */
@@ -1001,6 +1043,7 @@ function remotes(): void {
 
 /** Every case by its name; naming some after the script runs those alone. */
 const CASES = {
+  "retained-questions": retainedQuestionCapability,
   remotes,
   starts: startsOnAnotherDevice,
   routed: operationsAreRouted,
