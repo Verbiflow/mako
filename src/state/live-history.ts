@@ -152,11 +152,21 @@ export function loadReleasedLiveTurn(id: string, turnId: string): Promise<void> 
   const key = JSON.stringify([id, turnId])
   const loading = turnLoads.get(key)
   if (loading) return loading
+  const owner = acpStore.get().conversations[id]
+  if (owner?.kind !== "live" || !owner.releasedTurns?.some(turn => turn.id === turnId)) return Promise.resolve()
   const work = (async () => {
     const release = transcriptReaders.protect(liveReadingSource(id), turnId)
-    // A view the host let go is renewed and the turn read again from the new one; a renewal that read the whole
-    // window back has brought the turn with it.
-    try { await (await import("@/state/live-recovery")).withLiveView(id, () => restoreReleasedTurn(id, turnId)) }
+    try {
+      const { recaptureLive, withLiveView } = await import("@/state/live-recovery")
+      // Streaming can complete a turn after the held view was captured. A conditional refresh keeps that old view;
+      // recapture it over the loaded window before reading coordinates the old view may never have held.
+      await recaptureLive(id)
+      await withLiveView(id, async () => {
+        const current = acpStore.get().conversations[id]
+        if (current?.kind !== "live" || current.epoch !== owner.epoch || current.sessionId !== owner.sessionId) return
+        await restoreReleasedTurn(id, turnId)
+      })
+    }
     finally { release() }
   })().finally(() => turnLoads.delete(key))
   turnLoads.set(key, work)
@@ -170,7 +180,8 @@ async function restoreReleasedTurn(id: string, turnId: string): Promise<void> {
   const page = await readLiveValue<LiveHistoryPage>(id, { kind: "range", token: held.history.token,
     from: { blocks: turn.blocks.start, base: turn.base.start }, to: { blocks: turn.blocks.end, base: turn.base.end } })
   const current = acpStore.get().conversations[id]
-  if (current?.kind !== "live" || current.history?.token !== held.history.token ||
+  if (current?.kind !== "live" || current.epoch !== held.epoch || current.sessionId !== held.sessionId ||
+      current.history?.token !== held.history.token ||
       current.releasedTurns?.find(item => item.id === turnId) !== turn) return
   if (page.history.token !== held.history.token || page.history.blockStart !== turn.blocks.start ||
       page.history.blockEnd !== turn.blocks.end || page.blocks.length !== turn.blocks.end - turn.blocks.start ||
