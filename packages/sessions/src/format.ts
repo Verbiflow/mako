@@ -1,6 +1,8 @@
 import type { SessionSettings } from "./settings.js"
 import type { z } from "zod"
-import type { DecodedBlockSchema, DecodedEntrySchema, NativeAgentOriginSchema } from "./thread-schema.js"
+import type { DecodedBlockSchema, DecodedEntrySchema } from "./thread-schema.js"
+import type { NativeAgentOrigin } from "./native-agent-origin.js"
+export type { NativeAgentOrigin } from "./native-agent-origin.js"
 import type { Entry } from "./entries.js"
 import type { ResumePoint } from "./jsonl.js"
 import type { AttachmentContent } from "./content.js"
@@ -25,7 +27,6 @@ export type { Entry, TurnUsage } from "./entries.js"
 
 /** Which harness a session came from, by its provider id. Open: the installed harnesses are whichever the host has. */
 export type Harness = string
-export type NativeAgentOrigin = z.infer<typeof NativeAgentOriginSchema>
 
 /**
  * One piece of a decoded reply. A tool call and its result are one block:

@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { NativeAgentOriginSchema } from "@mako/sessions/thread-schema"
+import { NativeAgentOriginSchema } from "@mako/sessions/native-agent-origin"
 import { ACCESS_TIER_NAMES, accessModeId, type AccessTier } from "./access.js"
 import { ASK_OPTIONS, AskOptionSchema, CHILDREN_BINDING, WAITING_ON_LIMIT, WaitingOnSchema, type ChildStateReading, type FinAnswered, type FinAsk, type FinDecision, type NativeAgent, type WaitingOn } from "./native-agents.js"
 import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"

@@ -1004,6 +1004,8 @@ export class ThreadStore {
       const previous = kept ? ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record)) : undefined
       if (byOp && !previous) return ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(byOp).record))
       if (previous && (previous.parent !== edge.parent || previous.op !== edge.op)) return previous
+      // Reclassified discoveries are immutable history. Stale catalog/adoption or run callbacks cannot make them workers again.
+      if (previous && internalDiscoveredRun(previous)) return previous
       // The end of an edge that lives on another device has a row here only so the edge and its reports can name it:
       // a Thread with no Session, which nothing lists.
       if (edge.remote) this.keepAwayThread(edge.parent, edge.startedBy)
@@ -1022,6 +1024,16 @@ export class ThreadStore {
           record = excluded.record, closed_at = excluded.closed_at`)
         .run(next.child, next.parent, next.name, next.op, next.run?.harness ?? null, next.run?.nativeId ?? null, JSON.stringify(next), next.createdAt, next.closedAt ?? null)
       return next
+    })
+  }
+
+  /** Replace a followed run only while its persisted generation and delegation still match the caller's snapshot. */
+  keepRun(expected: ThreadParent, run: FollowedRun): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(expected.child)
+      const current = kept ? ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record)) : undefined
+      if (!current?.run || internalDiscoveredRun(current) || current.op !== expected.op || current.parent !== expected.parent || current.parentSession !== expected.parentSession || current.closedAt !== expected.closedAt || JSON.stringify(current.run) !== JSON.stringify(expected.run)) return undefined
+      return this.keepEdge({ ...current, run })
     })
   }
 

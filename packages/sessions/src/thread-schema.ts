@@ -9,6 +9,7 @@ import {
 import { ToolEffectSchema } from "./tool-effects.js"
 import { EntrySchema, TurnUsageSchema, unfinished } from "./entries.js"
 import { entriesFromMessages } from "./entry-sink.js"
+import { NativeAgentOriginSchema } from "./native-agent-origin.js"
 
 /**
  * A decoder's working shape (`DecodedEntry` in `format.ts`): a message
@@ -99,15 +100,6 @@ export const DecodedEntrySchema = z.discriminatedUnion("kind", [
     opensTurn: z.literal(true).optional(),
   }),
 ])
-/** Provider facts about a native agent, distinct from a Mako delegation or permission. */
-export const NativeAgentOriginSchema = z.object({
-  kind: z.enum(["agent", "internal-review", "unknown"]),
-  role: z.string().optional(),
-  source: z.string().optional(),
-  parentNativeId: z.string().optional(),
-  originator: z.string().optional(),
-})
-
 export const ThreadRefSchema = z.object({
   harness: z.string(),
   nativeId: z.string(),

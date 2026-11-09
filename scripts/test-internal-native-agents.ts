@@ -5,12 +5,15 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { build } from "esbuild"
 import { z } from "zod"
 import { CodexProvider, ThreadRefSchema, type ThreadRef } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import type { CodexJsonObject } from "@mako/sessions/codex-records"
 import { ThreadParentSchema, type AgentCaller } from "@mako/host/contracts/agents"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
+import { HostJobs } from "@mako/host/base/host-jobs"
+import { AgentRuns } from "@mako/host/conversations/agent-runs"
 import { AgentsWorld, fakeCatalog } from "./lib/agents-world.ts"
 
 // Captured origin metadata; fixture IDs, paths and discovery timestamps are isolated.
@@ -196,16 +199,106 @@ async function stopping(root: string) {
     shell.kill("SIGKILL"); await exited
   }
 }
+/** Drive the real follower's scheduled check at exact boundaries, without private method access or native signals. */
+class ManualJobs extends HostJobs {
+  private check?: () => void | Promise<void>
+  override every(_name: string, _everyMs: number, run: () => void | Promise<void>): () => void {
+    this.check = run
+    return () => { this.check = undefined }
+  }
+  async tick(): Promise<void> { assert.ok(this.check); await this.check() }
+}
+async function successor(root: string, change: "internal" | "relink" | "store" | "none") {
+  const w = world(root), fake = fakeCatalog(), jobs = new ManualJobs(), gate = deferred(), entered = deferred()
+  const ended: string[] = []
+  let clock = Date.now(), parent = ""
+  const runs = new AgentRuns({ store: () => w.store, catalog: fake.catalog, jobs, runs: () => true, conversationOwns: () => false, changed: () => {}, ended: (edge) => { ended.push(edge.child) }, now: () => clock, processes: {
+    marked: async () => { entered.resolve(); await gate.promise; return [{ pid: 2147483647, value: parent }] },
+    holding: async () => new Set([2147483647]), folders: async () => new Map(), startedAt: async () => 2,
+  } })
+  try {
+    const apex = await w.apex("codex", "full"); await w.settle(); parent = agentSession(apex.caller)
+    const captured = await fixture(root); clock = Date.now()
+    const ref: ThreadRef = { ...stale(captured), childOf: { nativeId: guardian.parent_thread_id }, nativeAgent: { kind: "unknown" }, updatedAt: new Date(clock).toISOString() }
+    fake.write(ref, [])
+    const input = { parentSession: parent, ref, origin: "discovered" as const, startedBy: { kind: "agent" as const, session: SessionIdSchema.parse(parent) }, process: { pid: 2147483646, startedAt: 1 } }
+    const adopted = await runs.adopt(input); assert.ok(!("refused" in adopted))
+    await jobs.tick() // Its old process is gone, but the session has not advanced yet.
+    clock += 100; fake.write({ ...ref, updatedAt: new Date(clock).toISOString() }, [])
+    const checking = jobs.tick(); await reached(entered.promise)
+    if (change === "internal") fake.write({ ...captured, childOf: ref.childOf, updatedAt: new Date(clock).toISOString() }, [])
+    if (change === "relink") {
+      const linked = await runs.adopt({ ...input, origin: "linked", process: { pid: 2147483645, startedAt: 3 } }); assert.ok(!("refused" in linked))
+    }
+    if (change === "store") {
+      const old = w.store.edges().of(adopted.child)!
+      w.store.keepEdge({ ...old, run: { ...old.run!, process: { pid: 2147483645, startedAt: 3 } } })
+      assert.equal(w.store.keepRun(old, { ...old.run!, process: { pid: 2147483644, startedAt: 4 } }), undefined, "the store rejects an obsolete persisted generation")
+    }
+    gate.resolve(); await checking
+    if (change === "internal") {
+      assert.equal(w.store.edges().of(adopted.child), undefined, "a late successor cannot resurrect a reclassified internal reviewer")
+      assert.equal(keptEdge(root, adopted.child).run?.nativeAgent?.kind, "internal-review")
+      assert.equal(runs.following(), 0)
+    } else {
+      assert.deepEqual(w.store.edges().of(adopted.child)?.run?.process, change === "relink" || change === "store" ? { pid: 2147483645, startedAt: 3 } : { pid: 2147483647, startedAt: 2 }, "successor lookup must respect the current run generation and preserve genuine handoffs")
+      assert.equal(runs.following(), 1)
+    }
+    assert.deepEqual(ended, [], "no stale end was reported")
+  } finally { gate.resolve(); runs.dispose(); jobs.stop(); await w.close() }
+}
+async function successorInternal(root: string) { await successor(root, "internal") }
+async function successorRelink(root: string) { await successor(root, "relink") }
+async function successorWorker(root: string) { await successor(root, "none") }
+async function successorStore(root: string) { await successor(root, "store") }
+async function lateTail(root: string) {
+  const fake = fakeCatalog(), w = world(root, fake), gate = deferred(), entered = deferred()
+  try {
+    const apex = await w.apex("codex", "full"); await w.settle(); const ref = await fixture(root); fake.write(stale(ref), [])
+    const adopted = await w.agents.runs.adopt({ parentSession: agentSession(apex.caller), ref: stale(ref), origin: "discovered", process: { pid: process.pid, startedAt: 1 }, startedBy: { kind: "agent", session: SessionIdSchema.parse(agentSession(apex.caller)) } }); assert.ok(!("refused" in adopted))
+    await w.settle()
+    const read = fake.catalog.page
+    fake.catalog.page = async (...args) => { entered.resolve(); await gate.promise; return read(...args) }
+    const reading = w.agents.runs.tail(adopted.child, 10); await reached(entered.promise)
+    fake.write(ref, [{ type: "text", text: "Internal review content" }]); gate.resolve()
+    assert.deepEqual(await reading, [], "a late tail read cannot return a reclassified internal review's content")
+  } finally { gate.resolve(); await w.close() }
+}
+async function rediscovery(root: string) {
+  const fake = fakeCatalog(), marked: { pid: number; value: string }[] = [], w = world(root, fake, marked)
+  try {
+    const apex = await w.apex("codex", "full"); await w.settle(); const ref = await fixture(root), old = historical(w, apex.caller, ref)
+    const internal = w.store.keepEdge({ ...old.edge, run: { ...old.edge.run!, nativeAgent: ref.nativeAgent } })
+    assert.equal(w.store.edges().of(internal.child), undefined)
+    marked.push({ pid: process.pid, value: agentSession(apex.caller) })
+    for (const cached of [stale(ref), { ...stale(ref), nativeAgent: { kind: "unknown" as const } }]) {
+      fake.write(cached, []); await w.agents.runs.discovered()
+      assert.equal(w.store.edges().of(internal.child), undefined, "automatic same-native discovery cannot forget a persisted internal identity")
+      const linked = await w.agents.runs.adopt({ parentSession: agentSession(apex.caller), ref: cached, origin: "linked", startedBy: { kind: "agent", session: SessionIdSchema.parse(agentSession(apex.caller)) } })
+      assert.ok("refused" in linked && linked.refused === "unsupported")
+    }
+    const { nativeAgent: _nativeAgent, ...withoutOrigin } = internal.run!
+    w.store.keepEdge({ ...internal, run: withoutOrigin })
+    assert.equal(keptEdge(root, internal.child).run?.nativeAgent?.kind, "internal-review", "a same-operation stale store write cannot downgrade the known identity")
+    marked.length = 0
+    const worker = await fixture(root, { source: { subagent: { other: "future-worker" } } }); fake.write(worker, []); await w.agents.runs.discovered()
+    const linked = await w.agents.runs.adopt({ parentSession: agentSession(apex.caller), ref: worker, origin: "linked", startedBy: { kind: "agent", session: SessionIdSchema.parse(agentSession(apex.caller)) } })
+    assert.ok(!("refused" in linked)); assert.equal(w.store.edges().of(linked.child)?.origin, "linked", "an unknown new native identity remains a supported worker")
+  } finally { await w.close() }
+}
 if (process.argv[2] === "--guardian-crash") {
   const root = process.argv[3]!, cut = process.argv[4]!
   const ref = ThreadRefSchema.parse(JSON.parse(readFileSync(join(root, "native-ref.json"), "utf8"))), fake = fakeCatalog()
   const w = new AgentsWorld({ root, script: () => "ok", resumeInSlices: true, catalog: { ...fake.catalog, readRef: async () => { if (cut === "before") process.kill(process.pid, "SIGKILL"); return ref } } })
   await w.resumed; process.kill(process.pid, "SIGKILL")
 } else {
+  // The renderer imports this contract. Its complete dependency graph must remain usable without Node builtins.
+  await build({ entryPoints: ["packages/host/src/contracts/agents.ts"], bundle: true, platform: "browser", format: "esm", write: false, logLevel: "silent" })
+  console.log("internal native agents: renderer contract bundles without Node builtins")
   const root = mkdtempSync(join(tmpdir(), "mako-internal-native-agents-"))
   const selected = process.argv[2] === "--guardian-case" ? process.argv[3] : undefined
   try {
-    for (const test of [discovery, admission, ending, restart, realWorkers, queued, stopping]) {
+    for (const test of [discovery, admission, ending, restart, realWorkers, queued, stopping, successorInternal, successorRelink, successorWorker, successorStore, lateTail, rediscovery]) {
       if (selected && selected !== test.name) continue
       const folder = join(root, test.name); mkdirSync(folder); await test(folder); console.log(`internal native agents: ${test.name} passed`)
     }
