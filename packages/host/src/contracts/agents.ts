@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { NativeAgentOriginSchema } from "@mako/sessions/native-agent-origin"
 import { ACCESS_TIER_NAMES, accessModeId, type AccessTier } from "./access.js"
 import { ASK_OPTIONS, AskOptionSchema, CHILDREN_BINDING, WAITING_ON_LIMIT, WaitingOnSchema, type ChildStateReading, type FinAnswered, type FinAsk, type FinDecision, type NativeAgent, type WaitingOn } from "./native-agents.js"
 import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"
@@ -319,6 +320,8 @@ export function idleFor(state: ChildState, at: number, now: number): number | un
  */
 export const FollowedRunSchema = z.object({
   harness: z.string().min(1).max(64),
+  /** Native origin retained on historical discoveries, even once they leave the managed Fin lifecycle. */
+  nativeAgent: NativeAgentOriginSchema.optional(),
   /** Its harness's ID for its Session, once known. */
   nativeId: z.string().min(1).max(512).optional(),
   /** The device it runs on: only that device's hosts can see its process. */
@@ -437,6 +440,11 @@ export const ThreadParentSchema = z.object({
   placed: PlacedSchema.optional(),
 })
 export type ThreadParent = z.infer<typeof ThreadParentSchema>
+
+/** An old discovery of a provider's internal reviewer is history, never a managed delegation. */
+export function internalDiscoveredRun(edge: ThreadParent): boolean {
+  return edge.origin === "discovered" && edge.run?.nativeAgent?.kind === "internal-review"
+}
 
 /**
  * Whether a Fin is listed inside its Apex's Thread on this device. One whose Apex runs on another device

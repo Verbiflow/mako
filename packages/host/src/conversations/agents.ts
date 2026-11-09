@@ -285,7 +285,7 @@ type Live = Pick<
 
 export interface AgentsDeps {
   store(): ThreadStore | undefined
-  catalog: Pick<ThreadCatalog, "nativePath" | "ref" | "page" | "activity" | "subscribe" | "announce">
+  catalog: Pick<ThreadCatalog, "nativePath" | "ref" | "page" | "activity" | "subscribe" | "announce"> & Partial<Pick<ThreadCatalog, "readRef">>
   jobs: HostJobs
   live: Live
   /** This Thread continues on that harness (`continueOn`): a Fin's move and its relaunch both. */
@@ -772,6 +772,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** A digest never says a Fin ended, or was cut short, while its Session shows it at work: the end the host inferred for its run is past. */
   private current(notice: Pick<Notice, "report">): boolean {
     const { report } = notice
+    if (this.store()?.edges().internalRuns.some((edge) => edge.child === report.child)) return false
     if (report.retainsQuestion && !this.store()?.openReportAsks(report.child).some((open) => open.id === report.id)) return false
     // Nor a question a message answered before this digest went.
     if (this.answersHeld.get(report.child)?.ask === reportAsk(report).id) return false
@@ -807,6 +808,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   async resumeInSlices(): Promise<void> {
     const store = this.store()
     if (!store) return
+    await this.runs.reconciled()
+    if (this.stopped) return
     // A host that stops meanwhile resumes nothing: the next one takes up what this one would have.
     if ((await this.deps.live.readIn(this.resumeReads(store))) && !this.stopped) this.resume()
   }
@@ -832,6 +835,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       threads.add(this.rootOf(thread))
     }
     for (const edge of edges.all) if (edge.closedAt === undefined || edge.tuned?.rerouted) tree(edge.child)
+    for (const edge of edges.internalRuns) tree(edge.parent)
     for (const { report } of store.undeliveredReports()) tree(report.child)
     for (const kept of store.undeliveredAnswers()) tree(kept.child)
     for (const kept of store.undeliveredPullWakes()) tree(kept.child)
@@ -853,6 +857,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!store) return
     this.sync()
     const edges = store.edges()
+    // A crash can leave a reclassified review's old notice in its Apex's queue. Narrow that digest before it resumes;
+    // genuine sibling reports stay in it. Already handed-over input cannot be recalled.
+    for (const edge of edges.internalRuns)
+      for (const conversation of this.conversationsOfThread(edge.parent)) this.wakes.refresh(conversation)
     // Before anything launches: the account a Fin was placed on before its binding kept it.
     for (const edge of edges.all) {
       const to = edge.tuned?.rerouted?.to
@@ -4334,6 +4342,15 @@ export class Agents implements AgentOperations, ConversationChildren {
   private childMoved(edge: ThreadParent, progressOnly: boolean): void {
     if (this.stopped) return
     this.sync()
+    if (this.store()?.edges().internalRuns.some((internal) => internal.child === edge.child)) {
+      this.occupying.delete(edge.child)
+      for (const conversation of this.conversationsOfThread(edge.parent)) {
+        this.wakes.refresh(conversation)
+        this.deps.live.childrenChanged(conversation, false)
+      }
+      void this.drain()
+      return
+    }
     // A place it let go of is the next waiting Fin's at once, whether or not how it reads changed: a Fin shown stopped
     // lets go only when its harness or its process has actually stopped (`occupies`).
     const holds = this.occupies(edge)
