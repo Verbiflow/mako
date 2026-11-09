@@ -122,14 +122,57 @@ async function check() {
           const pending=read(kind);await started;
           const worker={...ref,sessionId:'session-B'};if(change!=='refresh')f.t.applyThreadRef(worker);
           const current=change==='aba'||change==='refresh'?ref:worker;f.t.applyThreadRef(current);
-          const replacement={...shown,ref:current,entries:[...shown.entries.slice(0,-1),{type:'text',id:'replacement',text:'new incarnation'}]};
+          const replacement={...(change==='refresh'?f.v.rememberedThread(ref.path):shown),ref:current,entries:[...shown.entries.slice(0,-1),{type:'text',id:'replacement',text:'new incarnation'}]};
           f.v.rememberThread(replacement);f.t.threadsStore.set({viewing:replacement});d.rememberDraft(ref.path,'New worker draft');
           const version=owners.nativeSessionRefs.version(ref.path);release();await pending;
           const view=f.t.threadsStore.get().viewing,cache=f.v.rememberedThread(ref.path);
           races.push({kind,change,view:change==='refresh'?view===cache&&view.entries.at(-1)?.id==='replacement'&&view.entries.filter(e=>e.id?.startsWith('page-')).length===4:view===replacement,cache:change==='refresh'?cache!==replacement:cache===replacement,
             owner:owners.nativeSessionRefs.version(ref.path)===version,tab:f.tabs.threadTabsStore.get().tabs.includes(ref.path),draft:d.draftText(ref.path)});
         }
-        window.mako.pageThread=before;return {results,races};
+        const mixed=[];
+        for(const mode of ['cancel','overlap','same-overlap','failure','retire','offscreen']) {
+          const {ref}=setup('earlier','mixed-'+mode,mode==='same-overlap'?'session-A':undefined);
+          const placed={...ref,sessionId:'session-A'};
+          const entries=Array.from({length:5},(_,i)=>({type:'text',id:'held-'+i,text:'held'}));
+          const shown={...f.v.viewedThread({ref,entries}),pageStart:4,totalEntries:9,hasEarlier:true,
+            releasedTurns:[{id:'released',label:'released',blocks:{start:0,end:0},base:{start:4,end:6}}]};
+          f.v.rememberThread(shown);f.t.threadsStore.set({viewing:shown});
+          let releaseOld,releaseNew,oldEntered,newEntered,calls=0,phase='old';
+          const oldGate=new Promise(r=>releaseOld=r),newGate=new Promise(r=>releaseNew=r);
+          const oldStarted=new Promise(r=>oldEntered=r),newStarted=new Promise(r=>newEntered=r);
+          window.mako.pageThread=async(path,before)=>{
+            calls++;
+            if(before===undefined)return {ref:placed,entries,start:4,total:9,hasEarlier:true};
+            if(before===4&&phase==='old'){oldEntered();await oldGate;if(mode==='failure')throw new Error('Earlier page failed')}
+            else if(before===4&&phase==='new'){newEntered();await newGate}
+            return {ref:placed,entries:[{type:'text',id:'page-'+before+'a',text:'session-A'},{type:'text',id:'page-'+before+'b',text:'session-A'}],start:before-2,total:9,hasEarlier:before>2};
+          };
+          const old=f.v.threadViewingActions.loadEarlier();await oldStarted;
+          const oldToken=f.t.threadsStore.get().viewing.loadingEarlier;
+          if(mode==='retire')f.t.applyThreadRef({...placed,nativeAgent:{kind:'internal-review',source:'guardian_review',role:'guardian'}});
+          else if(mode!=='failure'&&mode!=='same-overlap')await f.v.loadReleasedThreadTurn(ref.path,'released');
+          if(mode==='offscreen')f.v.threadViewingActions.closeViewer();
+          let newer,newToken;
+          if((mode==='overlap'||mode==='same-overlap')){
+            await f.v.readThreadForPane(ref.path);phase='new';
+            newer=f.v.threadViewingActions.loadEarlier();await newStarted;
+            newToken=f.t.threadsStore.get().viewing.loadingEarlier;
+          }
+          releaseOld();await old;
+          const settled=f.v.rememberedThread(ref.path),current=f.t.threadsStore.get().viewing;
+          const item={mode,loading:Boolean(settled?.loadingEarlier),shared:!current||current===settled,sessionId:settled?.ref.sessionId??null,
+            retired:!settled,distinctToken:!['overlap','same-overlap'].includes(mode)||oldToken!==newToken};
+          if((mode==='overlap'||mode==='same-overlap')){
+            item.newerStillBusy=Boolean(current.loadingEarlier)&&current.loadingEarlier===newToken;
+            releaseNew();await newer;
+          } else if(mode==='cancel'||mode==='failure') {
+            phase='ready';const previous=calls;await f.v.threadViewingActions.loadEarlier();item.retryCalled=calls>previous;
+          }
+          const final=f.v.rememberedThread(ref.path);
+          item.finalLoading=Boolean(final?.loadingEarlier);item.pageStart=final?.pageStart??null;
+          item.draft=d.draftText(ref.path);mixed.push(item);
+        }
+        window.mako.pageThread=before;return {results,races,mixed};
       })()`)
       } finally { reader.destroy() }
       await writeFile(join(root,'pagination-results.json'),JSON.stringify(result,null,2))
@@ -155,6 +198,18 @@ async function check() {
         }
       }
       for (const item of result.races) assert.deepEqual(item,{kind:item.kind,change:item.change,view:true,cache:true,owner:true,tab:true,draft:'New worker draft'},'superseded read cannot publish through path/identity reuse')
+      for (const item of result.mixed) {
+        assert.equal(item.shared,true,JSON.stringify(item))
+        assert.equal(item.draft,'Paging draft')
+        assert.equal(item.finalLoading,false,'only its operation can retain the busy state: '+JSON.stringify(item))
+        if(item.mode==='overlap'||item.mode==='same-overlap') {
+          assert.equal(item.distinctToken,true,'successor read owns a distinct busy token')
+          assert.equal(item.newerStillBusy,true,'older finally must not clear successor loading')
+        } else assert.equal(item.loading,false,'settled read leaves no inherited busy flag: '+JSON.stringify(item))
+        if(item.mode==='retire')assert.equal(item.retired,true)
+        if(item.mode==='cancel'||item.mode==='failure')assert.equal(item.retryCalled,true,'next ordinary load is admitted')
+        if(['cancel','overlap','same-overlap','failure'].includes(item.mode))assert.equal(item.pageStart,0,'next ordinary read completes')
+      }
       console.log('PASS accumulated page identity and coherent owner/view/cache publication; conflicting pages, ABA and new-worker refusal')
     }
     if (!only || only === "arrival") {

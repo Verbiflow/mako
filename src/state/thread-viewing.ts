@@ -524,7 +524,7 @@ export async function recoverThreadReader(path: string): Promise<void> {
   const viewing = threadsStore.get().viewing
   if (!viewing || viewing.ref.path !== path || !hasBridge()) return
   const generation = ++viewingGeneration
-  rememberThread({ ...viewing, loadingEarlier: false })
+  rememberThread({ ...viewing, loadingEarlier: undefined })
   const version = nativeSessionRefs.version(path)
   const current = () => {
     const ref = threadsStore.get().viewing?.ref
@@ -790,7 +790,8 @@ export const threadViewingActions = {
       return
     const generation = viewingGeneration
     const release = transcriptReaders.protect(nativeReadingSource(viewing.ref.path), "*")
-    rememberThread({ ...viewing, loadingEarlier: true })
+    const loadingEarlier = Symbol("earlier history read")
+    rememberThread({ ...viewing, loadingEarlier })
     const version = nativeSessionRefs.version(viewing.ref.path)
     try {
       const earlier: Entry[] = []
@@ -802,8 +803,9 @@ export const threadViewingActions = {
           viewing.ref.path,
           before
         )
+        if (fetched && !admitThreadPage(fetched, viewing.ref.path, version)) return
+        if (threadCache.get(viewing.ref.path)?.loadingEarlier !== loadingEarlier) return
         if (!fetched) break
-        if (!admitThreadPage(fetched, viewing.ref.path, version)) return
         const canonical = pageRefForRead(ref, fetched.ref)
         if (!canonical) return
         ref = canonical
@@ -828,10 +830,7 @@ export const threadViewingActions = {
         await recoverThreadReader(viewing.ref.path)
         return
       }
-      if (!page) {
-        rememberThread({ ...current, loadingEarlier: false })
-        return
-      }
+      if (!page) return
       const next: ViewedThread = {
         ...current,
         ref,
@@ -839,22 +838,21 @@ export const threadViewingActions = {
         pageStart: page.start,
         totalEntries: page.total,
         hasEarlier: page.hasEarlier,
-        loadingEarlier: false,
+        loadingEarlier: undefined,
         streamRevision: (current.streamRevision ?? 0) + 1,
         streamReplaceFrom: 0,
       }
       rememberThreadRead(next, version)
     } catch (error) {
-      const current = threadsStore.get().viewing
-      if (generation !== viewingGeneration || nativeSessionRefs.version(viewing.ref.path) !== version) return
-      if (current?.ref.path === viewing.ref.path)
-        rememberThread({ ...current, loadingEarlier: false })
+      if (generation !== viewingGeneration || nativeSessionRefs.version(viewing.ref.path) !== version ||
+          threadCache.get(viewing.ref.path)?.loadingEarlier !== loadingEarlier) return
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
-      const current = threadsStore.get().viewing
-      if (generation === viewingGeneration && nativeSessionRefs.version(viewing.ref.path) === version &&
-          current?.ref.path === viewing.ref.path && current.loadingEarlier)
-        rememberThread({ ...current, loadingEarlier: false })
+      // Compatible placement upgrades retain this operation's token. A new
+      // read replaces it; retirement or a new worker cannot inherit cleanup.
+      const current = threadCache.get(viewing.ref.path)
+      if (current?.loadingEarlier === loadingEarlier)
+        rememberThread({ ...current, loadingEarlier: undefined })
       release()
     }
   },
