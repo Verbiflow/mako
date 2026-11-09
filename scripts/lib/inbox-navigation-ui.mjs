@@ -10,7 +10,7 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
     const activate = acp.activate
     const activations = []
     acp.activate = (...args) => { activations.push(args[0]); return activate(...args) }
-    window.navigationProbe = {activations, selection: () => ({key: acpStore.get().activeKey, path: threadsStore.get().viewing?.ref.path, panes: viewerStore.get().panes, focus: viewerStore.get().focusedPaneId, openDraft: threadGroupsStore.get().open})}
+    window.navigationProbe = {key: acpStore.get().activeKey, activations, selection: () => ({key: acpStore.get().activeKey, path: threadsStore.get().viewing?.ref.path, panes: viewerStore.get().panes, focus: viewerStore.get().focusedPaneId, openDraft: threadGroupsStore.get().open})}
   })`)
   const liveRow = await evaluate(`document.querySelector('.thread-jump-scope [data-apex-row]').getAttribute('data-conversation-id')`)
   const selected = await evaluate(`document.querySelector('[data-session-tab][aria-selected="true"]').dataset.sessionTab`)
@@ -53,7 +53,8 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
     const state = acpStore.get(); const apex = state.conversations[state.activeKey].threadId
     const row = document.querySelector('[data-asking-fin][data-openable="true"]')
     const child = threadChildren(state, apex).find((agent) => agent.child?.thread === row.dataset.askingFin)
-    return {apex, thread: child.child.thread, key: finOpening(state, child).key}
+    window.navigationFin = {apex, thread: child.child.thread, key: finOpening(state, child).key}
+    return window.navigationFin
   })`)
   await openInbox()
   await evaluate(`window.navigationProbe.activations.length = 0`)
@@ -85,7 +86,7 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   await evaluate(`window.navigationProbe.activations.length = 0`)
   await click(`[data-child-tab="${fin.thread}"] + button`)
   await until(`!document.querySelector('[data-inbox]')`, "Back to Apex leaves Inbox")
-  await until(`window.navigationProbe.selection().key === ${JSON.stringify(liveRow)}`, "back to original Apex")
+  await until(`window.navigationProbe.selection().key === window.navigationProbe.key`, "back to original Apex")
   assert.deepEqual(await evaluate(`window.navigationProbe.activations`), [liveRow], "Back to Apex activates once")
   assert.equal(await evaluate(`document.querySelector('.composer-input')?.value`), "Keep this unsent navigation draft", "Apex draft survives Fin navigation")
   await evaluate(`window.navigationInput = document.querySelector('.composer-input'); window.navigationInput.setSelectionRange(5, 14)`)
@@ -94,25 +95,25 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   // The production toast and app-menu components exercise the audited explicit openers too.
   await openInbox()
   await evaluate(`window.navigationProbe.activations.length = 0`)
-  await evaluate(`import('/src/components/notifications/notification-toast.tsx').then(({showNotificationToast}) => showNotificationToast({id: 'navigation-notification', kind: 'finished', subject: {id: 'navigation-live', target: {kind: 'live', key: ${JSON.stringify(fin.key)}}, title: 'Navigation notification', agent: 'Codex'}, body: 'Open the saved fixture conversation', at: Date.now(), seen: false}))`)
+  await evaluate(`import('/src/components/notifications/notification-toast.tsx').then(({showNotificationToast}) => showNotificationToast({id: 'navigation-notification', kind: 'finished', subject: {id: 'navigation-live', target: {kind: 'live', key: window.navigationFin.key}, title: 'Navigation notification', agent: 'Codex'}, body: 'Open the saved fixture conversation', at: Date.now(), seen: false}))`)
   await until(`Boolean(document.querySelector('[data-sonner-toast] [role="status"] button'))`, "rendered live notification")
   await click('[data-sonner-toast] [role="status"] button')
-  await until(`!document.querySelector('[data-inbox]') && window.navigationProbe.selection().key === ${JSON.stringify(fin.key)}`, "live notification leaves Inbox")
+  await until(`!document.querySelector('[data-inbox]') && window.navigationProbe.selection().key === window.navigationFin.key`, "live notification leaves Inbox")
   assert.deepEqual(await evaluate(`window.navigationProbe.activations`), [fin.key])
   await click(liveSelector)
   await openInbox()
   await evaluate(`window.navigationProbe.activations.length = 0`)
-  await evaluate(`import('/src/state/workspace-moves.ts').then(({applyWorkspaceMoves}) => applyWorkspaceMoves({requests: [{id: 'navigation-move', conversationId: ${JSON.stringify(fin.key)}, harness: 'codex', project: '/Users/you/mako', changed: 0, state: 'asking'}], alwaysAllowed: []}))`)
+  await evaluate(`import('/src/state/workspace-moves.ts').then(({applyWorkspaceMoves}) => applyWorkspaceMoves({requests: [{id: 'navigation-move', conversationId: window.navigationFin.key, harness: 'codex', project: '/Users/you/mako', changed: 0, state: 'asking'}], alwaysAllowed: []}))`)
   await until(`[...document.querySelectorAll('[data-sonner-toast] button')].some((button) => button.textContent === 'Show')`, "workspace Show toast")
   await evaluate(`[...document.querySelectorAll('[data-sonner-toast] button')].find((button) => button.textContent === 'Show').setAttribute('data-navigation-show', '')`)
   await click('[data-navigation-show]')
-  await until(`!document.querySelector('[data-inbox]') && window.navigationProbe.selection().key === ${JSON.stringify(fin.key)}`, "workspace Show leaves Inbox")
+  await until(`!document.querySelector('[data-inbox]') && window.navigationProbe.selection().key === window.navigationFin.key`, "workspace Show leaves Inbox")
   assert.deepEqual(await evaluate(`window.navigationProbe.activations`), [fin.key])
   await evaluate(`import('/src/state/workspace-moves.ts').then(({workspaceMovesStore}) => workspaceMovesStore.set({requests: [], alwaysAllowed: []}))`)
   await click(liveSelector)
   await evaluate(`Promise.all([import('/src/state/thread-app.ts'), import('/src/state/session.ts')]).then(([{putThreadApp, threadAppStore}, {store}]) => {
     const cwd = store.get().meta.cwd
-    const view = {kind: 'setting-up', project: 'mako', root: cwd, thread: {title: 'Navigation Setup', harness: 'codex', conversation: ${JSON.stringify(fin.key)}}}
+    const view = {kind: 'setting-up', project: 'mako', root: cwd, thread: {title: 'Navigation Setup', harness: 'codex', conversation: window.navigationFin.key}}
     window.navigationApp = {cwd, previous: threadAppStore.get().byCwd[cwd], read: window.mako.threadApp}
     window.mako.threadApp = async (asked, ...rest) => asked === cwd ? view : window.navigationApp.read(asked, ...rest)
     putThreadApp(cwd, view)
@@ -122,7 +123,7 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   await click('[data-app-control]')
   await until(`Boolean(document.querySelector('[data-app-action="open-setup"]'))`, "Open Setup Thread menu item")
   await click('[data-app-action="open-setup"]')
-  await until(`!document.querySelector('[data-inbox]') && window.navigationProbe.selection().key === ${JSON.stringify(fin.key)}`, "Open Setup Thread leaves Inbox")
+  await until(`!document.querySelector('[data-inbox]') && window.navigationProbe.selection().key === window.navigationFin.key`, "Open Setup Thread leaves Inbox")
   assert.deepEqual(await evaluate(`window.navigationProbe.activations`), [fin.key])
   await evaluate(`import('/src/state/thread-app.ts').then(({putThreadApp}) => {window.mako.threadApp = window.navigationApp.read; putThreadApp(window.navigationApp.cwd, window.navigationApp.previous)})`)
   await click(liveSelector)
@@ -130,11 +131,11 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   console.log("PASS: rendered live notification, workspace Show and Open Setup Thread leave Inbox with one activation")
 
   await openInbox()
-  await evaluate(`import('/src/state/acp.ts').then(({acp}) => acp.activate(${JSON.stringify(fin.key)}, false))`)
+  await evaluate(`import('/src/state/acp.ts').then(({acp}) => acp.activate(window.navigationFin.key, false))`)
   await frames()
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-inbox]'))`), true, "generic activation remains non-navigating")
-  await evaluate(`Promise.all([import('/src/state/thread-sessions.ts'), import('/src/state/acp-presence.ts'), import('/src/state/acp-state.ts')]).then(([{openSessionTab}, {selectAcpPresence}, {acpStore}]) => {const presence = selectAcpPresence(acpStore.get()).find((item) => item.key === ${JSON.stringify(liveRow)}); openSessionTab({kind: 'session', id: presence.sessionId, presence}, 'restore')})`)
-  await until(`window.navigationProbe.selection().key === ${JSON.stringify(liveRow)}`, "background pane restores its Session")
+  await evaluate(`Promise.all([import('/src/state/thread-sessions.ts'), import('/src/state/acp-presence.ts'), import('/src/state/acp-state.ts')]).then(([{openSessionTab}, {selectAcpPresence}, {acpStore}]) => {const presence = selectAcpPresence(acpStore.get()).find((item) => item.key === window.navigationProbe.key); openSessionTab({kind: 'session', id: presence.sessionId, presence}, 'restore')})`)
+  await until(`window.navigationProbe.selection().key === window.navigationProbe.key`, "background pane restores its Session")
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-inbox]'))`), true, "pane restoration leaves Inbox open")
   await click(liveSelector)
   await evaluate(`window.navigationInput = document.querySelector('.composer-input'); window.navigationInput.setSelectionRange(5, 14)`)
@@ -148,7 +149,7 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   const other = "/mock/claude.jsonl"
   assert.ok(other, "a different Thread is rendered")
   await click(`.thread-jump-scope [data-flip-key="${other}"]`)
-  await until(`!document.querySelector('[data-inbox]') && (window.navigationProbe.selection().path === ${JSON.stringify(other)} || window.navigationProbe.selection().key !== ${JSON.stringify(liveRow)})`, "different Thread leaves Inbox")
+  await until(`!document.querySelector('[data-inbox]') && (window.navigationProbe.selection().path === ${JSON.stringify(other)} || window.navigationProbe.selection().key !== window.navigationProbe.key)`, "different Thread leaves Inbox")
   await click(liveSelector)
   await until(`document.querySelector('.composer-input')?.value === 'Keep this unsent navigation draft'`, "return restores the original draft")
   console.log("PASS: different Thread navigates, background hydration does not, original draft returns")
@@ -208,12 +209,13 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
     if (!rendered) throw new Error('Missing folded Thread')
     const first = members[0]
     threadGroupsStore.set({lastViewed: {...threadGroupsStore.get().lastViewed, [group.id]: first.sessionId}})
-    return {thread: group.id, row: rendered.dataset.flipKey, path: first.path}
+    window.navigationFolded = {thread: group.id, row: rendered.dataset.flipKey, path: first.path}
+    return window.navigationFolded
   })`)
   const foldedRow = `[data-thread-row][data-flip-key="${folded.row}"]`
   await click(foldedRow)
   await until(`!document.querySelector('[data-inbox]')`, "folded native Thread leaves Inbox")
-  await until(`import('/src/state/thread-store.ts').then(({threadsStore}) => threadsStore.get().viewing?.ref.path === ${JSON.stringify(folded.path)} && !threadsStore.get().opening)`, "folded row remembers its native Session")
+  await until(`import('/src/state/thread-store.ts').then(({threadsStore}) => threadsStore.get().viewing?.ref.path === window.navigationFolded.path && !threadsStore.get().opening)`, "folded row remembers its native Session")
   await openInbox()
   await click(foldedRow)
   await until(`!document.querySelector('[data-inbox]')`, "same folded native Thread leaves Inbox")
@@ -226,7 +228,7 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   await page.debugger.sendCommand("Input.insertText", { text: "Draft tab is not sent or discarded" })
   await until(`document.querySelector('.composer-input')?.value === 'Draft tab is not sent or discarded'`, "new-tab draft")
   const draftTab = await evaluate(`document.querySelector('[data-session-tab][aria-selected="true"]').dataset.sessionTab`)
-  await evaluate(`Promise.all([import('/src/state/thread-sessions.ts'), import('/src/state/session-panes.ts')]).then(([{currentThreadTabs}, {openInPane}]) => openInPane(currentThreadTabs(${JSON.stringify(folded.thread)})[0], ${JSON.stringify(folded.thread)}, 'down'))`)
+  await evaluate(`Promise.all([import('/src/state/thread-sessions.ts'), import('/src/state/session-panes.ts')]).then(([{currentThreadTabs}, {openInPane}]) => openInPane(currentThreadTabs(window.navigationFolded.thread)[0], window.navigationFolded.thread, 'down'))`)
   const draftState = await evaluate(`Promise.all([import('/src/state/viewer.ts'), import('/src/state/thread-groups.ts')]).then(([{viewerStore}, {threadGroupsStore}]) => ({viewer: viewerStore.get(), groups: threadGroupsStore.get()}))`)
   assert.equal(draftState.viewer.panes.length, 2, "a real split-pane layout")
   await openInbox()
