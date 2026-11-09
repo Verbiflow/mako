@@ -413,7 +413,7 @@ read a minute after it's first watched, doubling while unchanged up to
 outcome (`pullOutcome`, `contracts/pull-waits.ts`) matched to `until`
 (current-head checks settled, or one failed while others run, even before
 the report; a review submitted since, by anyone but the author; merged or
-closed, which end any wait) is claimed once per Fin, report and pull request
+closed, which end any wait) is claimed once per Fin, retained dependency and observation
 (`ThreadStore.claimPullWake`, `agent_pull_wakes`) and delivered to the Fin,
 never its Apex, through `deliver` under a named request as Mako's words
 (the `pull-watch` service actor): one line, "Mako: PR acme/app#371 checks
@@ -422,14 +422,22 @@ working Fin's turn, never steered. The reader also preserves `headRefOid` as
 `PullReading.head`; the wake and transcript event name that observed head.
 The wait follows the PR's current head when read, rather than pinning a commit.
 A queued note remains an observation of that head; it grants no authority to
-merge a later head, which must be verified at the action gate. A replacement
-report retaining a wait can regenerate an invalidated queued outcome on the
-next read, including after restart. It never reopens, resumes or takes over
+merge a later head, which must be verified at the action gate. Consecutive
+reports retaining the same PR and condition share their first registration
+(`pullWaitReports`), separately from narration timestamps. A head/check
+completion cursor keys the existing durable outcome claim, so clarification
+reports neither cancel queued outcomes nor re-fire unchanged terminal results.
+A changed head or completion cursor can produce a new observation; withdrawal,
+a failed report or a changed condition ends the registration. Legacy claims
+without a cursor retain their original identity; the receipt explains that
+re-arming one requires withdrawing and re-registering. Already retired legacy
+claims can regenerate under the current registration. It never reopens, resumes or takes over
 a stopped Fin (`deliver`'s automatic send), and goes through the one
 admission point every prompt does, the handoff with its Stop latch
 (`LiveDispatch`, #391): there `Agents.admits` reads the wait again, the
-Fin's exact newest report still naming the pull request and its delegation
-open, and one that no longer holds is refused (`HandoffRefused`'s
+Fin's newest report still retaining the original dependency and condition,
+without an intervening withdrawal, and its delegation open. One that no longer
+holds is refused (`HandoffRefused`'s
 `withdrawn`, the request canceled) and its claim retired as obsolete
 (`retirePullWake`), never sent. The same reading runs before the claim and
 before delivery. A host that stopped first sends a claim once on start

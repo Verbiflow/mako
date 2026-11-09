@@ -2020,14 +2020,16 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** What was actually registered, from the kept report, its current owner, configured reader and durable claims. */
   private waitSubscriptions(edge: ThreadParent, report: Report): WaitSubscription[] {
     this.pulls.refresh()
-    const claimed = this.store()!.pullWakesOf([edge.child])
+    const claimed = this.store()!.pullWakesFor(edge.child).filter((wake) => wake.obsolete === undefined)
     return (report.waitingOn ?? []).map((wait): WaitSubscription => {
       if (wait.kind !== "pull-request") return { wait, state: "unsupported", why: "Recorded only: no automatic wake. Actions runs and main-commit checks are not supported watch targets. Arrange a verified external notification or keep an explicit owner to verify the outcome; a merged PR cannot stand in for main CI." }
       const pull = waitedPull(wait)
       if (!pull) return { wait, state: "unsupported", why: "No valid PR target; use its URL or owner/repo#number. No automatic wake was registered." }
       if (!this.deps.readPull) return { wait, state: "unavailable", why: "This host has no PR reader; no automatic wake was registered. Keep an explicit outcome owner or arrange a verified external notification." }
       if (!this.pullWaitHolds(edge.child, report.id, pull.key)) return { wait, state: "inactive", why: "This is no longer the Fin's current open wait; no new wake was registered." }
-      if (claimed.has(`pull-wake:${edge.child}:${report.id}:${pull.key}`)) return { wait, state: "claimed", why: "The outcome has a durable delivery claim; this does not prove the Fin has heard it." }
+      const retained = pullWaitReports(this.store()!.reportsOf(edge.child), pull.key)
+      const prefix = `pull-wake:${edge.child}:${retained[0]!.id}:${pull.key}:observation:`
+      if (claimed.some(({ wait: key }) => key.startsWith(prefix) || retained.some((entry) => key === `pull-wake:${edge.child}:${entry.id}:${pull.key}`))) return { wait, state: "claimed", why: "An observed outcome has a durable delivery claim; this does not prove the Fin has heard it. Equivalent narration retains the dependency. New observations have separate claims; legacy claims without a cursor require withdrawing and re-registering the wait to re-arm it." }
       return { wait, state: "registered" }
     })
   }
@@ -2468,8 +2470,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * What the pull request watch reads: each open Fin's latest report's pull requests (`waitingOn`), less the waits
-   * that woke it already. A failed report, a stopped Fin and an archived one wait on nothing.
+   * What the pull request watch reads: each open Fin's retained dependencies (`waitingOn`). Equivalent narration
+   * keeps their first registration; claims deduplicate head/check observations. Failed, stopped and archived Fins wait on nothing.
    */
   private pullWaits(): PullWait[] {
     const store = this.store()
@@ -2485,29 +2487,39 @@ export class Agents implements AgentOperations, ConversationChildren {
       return [{ edge, report, conversation }]
     })
     if (!open.length) return []
-    const fired = store.pullWakesOf(open.map(({ edge }) => edge.child))
-    return open.flatMap(({ edge, report, conversation }) => report.waitingOn!.flatMap((item): PullWait[] => {
-      const pull = waitedPull(item)
-      if (!pull) return []
-      const key = `pull-wake:${edge.child}:${report.id}:${pull.key}`
-      if (fired.has(key)) return []
-      const cwd = (conversation && this.deps.live.session(conversation)?.cwd) || homedir()
-      return [{
-        key,
-        child: edge.child,
-        report: report.id,
-        pullKey: pull.key,
-        since: report.at,
-        pull: pull.repository ? `${pull.repository}#${pull.number}` : `#${pull.number}`,
-        target: { key: pull.repository ? pull.key : `${pull.key}@${cwd}`, ...(pull.repository && { repository: pull.repository }), number: pull.number, cwd },
-        ...(pull.until && { until: pull.until }),
-      }]
-    }))
+    return open.flatMap(({ edge, report, conversation }) => {
+      const reports = store.reportsOf(edge.child)
+      const claimed = store.pullWakesFor(edge.child)
+      const stopped = new Set((conversation ? this.deps.live.held(conversation)?.requests ?? [] : []).filter((request) => request.pause === "stop").map((request) => request.id))
+      return report.waitingOn!.flatMap((item): PullWait[] => {
+        const pull = waitedPull(item)
+        if (!pull) return []
+        const retained = pullWaitReports(reports, pull.key)
+        const anchor = retained[0]
+        if (!anchor) return []
+        // A direct Stop can hold a journal note without closing the delegation. Its latch also pauses this watch.
+        if (claimed.some((wake) => stopped.has(wake.request) && wake.pull === pull.key && retained.some((entry) => entry.id === wake.report))) return []
+        // Older builds kept no observation cursor. Preserve their still-live claim rather than replaying an unknown outcome.
+        if (claimed.some((wake) => wake.obsolete === undefined && retained.some((entry) => wake.wait === `pull-wake:${edge.child}:${entry.id}:${pull.key}`))) return []
+        const key = `pull-wake:${edge.child}:${anchor.id}:${pull.key}`
+        const cwd = (conversation && this.deps.live.session(conversation)?.cwd) || homedir()
+        return [{
+          key,
+          child: edge.child,
+          report: anchor.id,
+          pullKey: pull.key,
+          since: anchor.at,
+          pull: pull.repository ? `${pull.repository}#${pull.number}` : `#${pull.number}`,
+          target: { key: pull.repository ? pull.key : `${pull.key}@${cwd}`, ...(pull.repository && { repository: pull.repository }), number: pull.number, cwd },
+          ...(pull.until && { until: pull.until }),
+        }]
+      })
+    })
   }
 
   /**
    * Whether a Fin still waits on a pull request as one report named it: its delegation open, its Thread not archived
-   * nor stopped, and that report still its newest, naming the pull request. Read again before a wake is claimed, before
+   * nor stopped, and every report since the original still names the same pull request and condition. Read before a claim, before
    * it's handed to delivery, and at its handoff (`admits`), since a report or a stop can come between any two.
    */
   private pullWaitHolds(child: string, report: string, pull: string): boolean {
@@ -2518,23 +2530,22 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (conversation && this.deps.archived?.(conversation)) return false
     const state = this.stateOf(edge)
     if (state.kind === "ended" && state.outcome === "stopped") return false
-    const latest = store.reportsOf(child).at(-1)
-    if (latest?.id !== report || latest.status === "failed") return false
-    return Boolean(latest.waitingOn?.some((item) => waitedPull(item)?.key === pull))
+    return pullWaitReports(store.reportsOf(child), pull).some((entry) => entry.id === report)
   }
 
-  /** A pull request's outcome for a Fin waiting on it: claimed once for its wait, then sent as Mako's note. */
+  /** A pull request's outcome: claimed once per retained dependency and observation, then sent as Mako's note. */
   private async pullOutcome(wait: PullWait, outcome: PullOutcome, note: string): Promise<void> {
     const store = this.store()
     const edge = store?.edges().of(wait.child)
     if (!store || !edge || !this.pullWaitHolds(wait.child, wait.report, wait.pullKey)) return
+    const key = wait.observation ? `${wait.key}:observation:${wait.observation}` : wait.key
     const { wake, claimed } = store.claimPullWake({
-      wait: wait.key,
+      wait: key,
       child: ThreadIdSchema.parse(wait.child),
       report: wait.report,
       pull: wait.pullKey,
       outcome: outcome.kind,
-      request: namedUuid(`${wait.key}:${outcome.kind}`),
+      request: namedUuid(`${key}:${outcome.kind}`),
       text: note,
       at: this.now(),
     })
@@ -5843,8 +5854,25 @@ function queuedLead(record: string): z.infer<typeof QueuedLeadSchema> | undefine
   }
 }
 
-/** One thing a report waits on, within the report's limits. */
-/** A pull request a report waits on, by repository and number (`pullKey`); undefined for anything else, or a ref with no number. */
+/** Consecutive reports retaining the same dependency and condition share its first registration, in durable store order. */
+function pullWaitReports(reports: Report[], key: string): Report[] {
+  const latest = reports.at(-1)
+  const current = latest?.status !== "failed" && latest?.waitingOn?.flatMap((item) => waitedPull(item) ?? []).find((pull) => pull.key === key)
+  if (!current) return []
+  let first = reports.length - 1
+  while (first >= 0) {
+    const report = reports[first]!
+    const retained = report.status !== "failed" && report.waitingOn?.some((item) => {
+      const pull = waitedPull(item)
+      return pull?.key === key && pull.until === current.until
+    })
+    if (!retained) break
+    first -= 1
+  }
+  return reports.slice(first + 1)
+}
+
+/** A pull request a report waits on, by repository and number; undefined for another kind or an invalid reference. */
 function waitedPull(item: WaitingOn): { key: string; repository?: string; number: number; until?: PullWaitUntil } | undefined {
   if (item.kind !== "pull-request") return undefined
   const ref = pullRef(item.ref)

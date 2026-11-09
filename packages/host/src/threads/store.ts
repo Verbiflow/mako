@@ -632,14 +632,14 @@ function keptAnswer(row: Record<string, SQLOutputValue>): KeptAnswer {
 
 /**
  * The outcome of a pull request that woke a Fin waiting on it, claimed before it's delivered: the wait (its Fin, the
- * report that named the pull request, and the pull request), the outcome, and the note that carries it under the
+ * dependency's first report, pull request and observation cursor), the outcome, and the note that carries it under the
  * request it's sent as, so a host that stopped before it was delivered sends that same request once, and none sends
  * a wait's outcome twice.
  */
 export const KeptPullWakeSchema = z.object({
   wait: z.string().min(1).max(1200),
   child: ThreadIdSchema,
-  /** The report that named the pull request, and the pull request by `pullKey`: what must still stand for it to go. */
+  /** A report in the retained dependency registration, and its pull request by `pullKey`: what must still stand for it to go. */
   report: z.string().min(1).max(600),
   pull: z.string().min(1).max(300),
   outcome: z.enum(["settled", "failed", "review", "merged", "closed"]),
@@ -647,7 +647,7 @@ export const KeptPullWakeSchema = z.object({
   text: z.string().max(2_000),
   at: z.number(),
   delivered: z.object({ at: z.number(), delivery: z.enum(["turn", "steer", "queued", "interrupt"]) }).optional(),
-  /** When its wait stopped holding before its note was sent (a newer report, a stop): retired, never sent. */
+  /** When its wait stopped holding before its note was sent (withdrawal, changed condition, stop): retired, never sent. */
   obsolete: z.number().optional(),
 })
 export type KeptPullWake = z.infer<typeof KeptPullWakeSchema>
@@ -1423,6 +1423,12 @@ export class ThreadStore {
     if (!children.length) return new Set()
     const rows = this.sql(`SELECT wait FROM agent_pull_wakes WHERE child_thread IN (${children.map(() => "?").join(", ")})`).all(...children)
     return new Set(rows.map((row) => z.object({ wait: z.string() }).parse(row).wait))
+  }
+
+  /** A Fin's durable outcome claims, including retired ones, for legacy-wait reconciliation. */
+  pullWakesFor(child: string): KeptPullWake[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM agent_pull_wakes WHERE child_thread = ? ORDER BY at, wait").all(child).map(keptPullWake)
   }
 
   /** Wakes claimed and not yet delivered to their Fin, oldest first: what a starting host sends once. */

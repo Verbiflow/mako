@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { frontDoorNote } from "@mako/host/contracts/agent-tools"
-import { childState, ReportSchema, waitingStateWords, type ChildState, type Report, type ThreadParent } from "@mako/host/contracts/agents"
+import { childState, ReportSchema, waitingStateWords, type ChildState, type Report, type ThreadParent, type WaitingOn } from "@mako/host/contracts/agents"
 import { childLine, childWord } from "@mako/host/contracts/children"
 import { ChildStateSchema } from "@mako/host/contracts/native-agents"
 import { pullOutcome, pullWakeNote, pullWakeWords, type PullReading } from "@mako/host/contracts/pull-waits"
@@ -391,18 +391,19 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
     }
   }
   /** An Apex and one Fin whose first turn reports it waits on acme/app#7's merge; `busy` holds a turn of the Fin's that says so. */
-  const waiting = async (name: string, read: () => Promise<PullReading | null> = async () => MERGED, now?: () => number) => {
+  const waiting = async (name: string, read: () => Promise<PullReading | null> = async () => MERGED, now?: () => number, retain = false) => {
     const fin = { conversation: "", ready: false }
     const world: AgentsWorld = new AgentsWorld({
       root: join(roots, name),
       ...(now && { now }),
-      readPull: () => read(),
+      readPull: (target) => target.number === 7 ? read() : Promise.resolve(null),
       script: async (turn) => {
         if (turn.text.includes("You're fin:")) {
           fin.conversation = turn.conversation
           await turn.world.agents.report(turn.caller, { status: "progress", summary: "Waiting on #7.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: "wait" })
           fin.ready = true
         } else if (turn.text.includes("busy")) await turn.world.hold(turn.conversation)
+        else if (retain && turn.text.startsWith("Mako: PR")) await turn.world.agents.report(turn.caller, { status: "progress", summary: "Outcome received; another dependency remains.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: `retained-${turn.world.prompts.length}` })
         return "ok"
       },
     })
@@ -430,9 +431,9 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
   }
 
   try {
-    // #463: replacing narration cancels an old claim, but a retained dependency must be rediscovered after restart.
+    // #463: equivalent narration must preserve the already queued outcome and its identity.
     {
-      const { world, apex, fin, notes } = await waiting("retained-wait-at-handoff")
+      const { world, apex, fin, notes } = await waiting("retained-wait-at-handoff", undefined, undefined, true)
       const sent = await world.agents.send(apex.caller, { to: "one", text: "busy: clarify another PR", clientKey: "busy" })
       assert.ok(!("refused" in sent))
       await until("the Fin to be busy", () => world.live.session(fin.conversation)?.status === "running")
@@ -442,16 +443,122 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
       await world.agents.report(world.caller(fin.conversation), { status: "progress", summary: "Clarifying another PR; still waiting on #7.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: "clarification" })
       world.release(fin.conversation)
       await world.settle()
-      assert.deepEqual(notes(), [], "the obsolete claim is rejected before native handoff")
+      assert.equal(notes().length, 1, "retaining the dependency must not cancel its queued outcome")
+      assert.equal(world.live.held(fin.conversation)?.requests.find((request) => request.id === old.id)?.status, "completed", "the original request reaches native handoff")
       await world.restart()
       await world.agents.pulls.tick()
       await world.settle()
-      assert.equal(notes().length, 1, "the retained dependency is regenerated for the current report")
-      assert.equal(world.live.held(fin.conversation)?.requests.find((request) => request.id === old.id)?.status, "canceled")
+      assert.equal(notes().length, 1, "equivalent narration cannot create another wake after restart")
+      const child = world.store.edges().all.find((edge) => edge.name === "one")!.child
+      assert.equal(world.store.pullWakesOf([child]).size, 1, "the dependency keeps one durable outcome claim")
+      await world.agents.report(world.caller(fin.conversation), { status: "progress", summary: "Another PR finished; both dependencies still matter.", waitingOn: [{ kind: "pull-request", ref: "https://git.example.com/acme/app/pull/7", until: "merge" }, { kind: "pull-request", ref: "acme/app#8", until: "checks" }], clientKey: "multi-dependency" })
       await world.restart()
       await world.agents.pulls.tick()
       await world.settle()
-      assert.equal(notes().length, 1, "the replacement outcome wakes once across another restart")
+      assert.equal(notes().length, 1, "reporting another dependency cannot re-fire the finished one")
+      await world.close()
+    }
+
+    // Multiple unconsumed dependencies survive narration; observation changes, not narration, re-arm their outcomes.
+    {
+      let offset = 0
+      let seq = 0
+      let readable = false
+      const target = (number: number): WaitingOn => ({ kind: "pull-request", ref: `acme/app#${number}`, until: "checks" })
+      let waits = [target(7), target(8)]
+      const pulls = new Map([[7, reading({ head: "a".repeat(40), checks: [check("lint", "failed", 10)] })], [8, reading({ head: "b".repeat(40), checks: [check("unit", "passed", 10)] })]])
+      const world = new AgentsWorld({ root: join(roots, "observation-cursors"), now: () => Date.now() + offset, readPull: async (target) => readable ? pulls.get(target.number) ?? null : null, script: async (turn) => {
+        if (turn.text.includes("busy")) await turn.world.hold(turn.conversation)
+        else if (turn.text.includes("You're fin:") || turn.text.startsWith("Mako: PR")) await turn.world.agents.report(turn.caller, { status: "progress", summary: "Retain the dependencies while coordinating other work.", waitingOn: waits, clientKey: `keep-${seq++}` })
+        return "ok"
+      } })
+      try {
+        const apex = await world.apex("claude", "full")
+        const fin = await world.agents.start(apex.caller, { harness: "codex", brief: { objective: "Coordinate dependencies" }, name: "one", clientKey: "one", cwd: world.root })
+        assert.ok(!("refused" in fin) && fin.conversation)
+        const conversation = fin.conversation!
+        const child = world.store.edges().all.find((edge) => edge.name === "one")!.child
+        const notes = () => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.startsWith("Mako: PR"))
+        const report = () => world.agents.report(world.caller(conversation), { status: "progress", summary: "Other work finished; same dependencies remain.", waitingOn: waits, clientKey: `narration-${seq++}` })
+        const tick = async () => { offset += PULL_WATCH_MAX_MS; await world.agents.pulls.tick(); await world.settle(100) }
+        await world.settle(100)
+        await world.agents.send(apex.caller, { to: "one", text: "busy", clientKey: "busy" })
+        await until("both outcomes to queue behind busy work", () => world.live.session(conversation)?.status === "running")
+        readable = true
+        offset += PULL_WATCH_MAX_MS
+        await world.agents.pulls.tick()
+        const queued = world.live.held(conversation)!.requests.filter((request) => request.actor?.kind === "service" && request.status === "queued")
+        assert.equal(queued.length, 2)
+        await report()
+        world.release(conversation)
+        await world.settle(100)
+        assert.equal(notes().length, 2, "both already-finished dependencies survive another dependency's narration")
+        assert.ok(queued.every((request) => world.live.held(conversation)!.requests.find((row) => row.id === request.id)?.status === "completed"), "the original unconsumed requests are retained")
+        await world.restart()
+        await report()
+        await tick()
+        assert.equal(notes().length, 2, "same-head terminal observations do not form a green wake loop across reports/restart")
+        assert.equal(world.store.pullWakesOf([child]).size, 2)
+        pulls.set(7, reading({ head: "c".repeat(40), checks: [check("lint", "passed", 10)] }))
+        await tick()
+        assert.equal(notes().length, 3, "a different head is a new observation even with the same completion time")
+        pulls.set(7, reading({ head: "c".repeat(40), checks: [check("lint", "passed", 20)] }))
+        await tick()
+        assert.equal(notes().length, 4, "a same-head rerun with a different completion cursor is a new observation")
+        await report()
+        await tick()
+        assert.equal(notes().length, 4)
+        pulls.set(7, { ...pulls.get(7)!, reviews: [{ login: "reviewer", state: "commented", at: Date.now() + offset + 1 }] })
+        await tick()
+        assert.equal(notes().length, 4, "irrelevant review metadata does not re-fire a checks observation")
+        waits = [target(8)]
+        await report()
+        waits = [target(7), target(8)]
+        await report()
+        await tick()
+        assert.equal(notes().length, 5, "explicit withdrawal and re-registration deliberately starts a new dependency wait")
+      } finally { await world.close() }
+    }
+
+    // Existing durable claims keep their original identity after upgrade, including the old outbox boundary.
+    for (const retired of [false, true]) {
+      const { world, fin, notes } = await waiting(`legacy-equivalent-${retired}`, undefined, undefined, true)
+      const child = claimed(world)
+      const original = world.store.pullWakesFor(child)[0]!
+      if (retired) world.store.retirePullWake(original.wait, Date.now())
+      await world.agents.report(world.caller(fin.conversation), { status: "progress", summary: "Same dependency; updated narration.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: "clarification" })
+      await world.restart()
+      await world.agents.pulls.tick()
+      await world.settle(100)
+      assert.equal(notes().length, 1, "legacy outbox claims are preserved, or regenerated only if already retired by the old host")
+      if (!retired) assert.equal(world.live.held(fin.conversation)?.requests.find((request) => request.id === original.request)?.status, "completed", "upgrade retains the original unconsumed legacy request")
+      await world.restart()
+      await world.agents.pulls.tick()
+      await world.settle(100)
+      assert.equal(notes().length, 1, "legacy reconciliation does not replay an unchanged terminal result")
+      await world.close()
+    }
+
+    for (const boundary of ["archive", "condition", "withdraw-readd"] as const) {
+      const { world, apex, fin, notes } = await waiting(`retained-guard-${boundary}`)
+      await world.agents.send(apex.caller, { to: "one", text: "busy", clientKey: "busy" })
+      await until("the guard's busy turn", () => world.live.session(fin.conversation)?.status === "running")
+      await world.agents.pulls.tick()
+      const original = world.live.held(fin.conversation)!.requests.find((request) => request.actor?.kind === "service")!
+      const report = (waitingOn?: WaitingOn[]) => world.agents.report(world.caller(fin.conversation), { status: "progress", summary: "Changed dependency control.", ...(waitingOn && { waitingOn }), clientKey: `guard-${waitingOn ? "keep" : "withdraw"}` })
+      if (boundary === "archive") world.archived.add(fin.conversation)
+      else {
+        if (boundary === "withdraw-readd") await report()
+        await report([{ kind: "pull-request", ref: "acme/app#7", until: boundary === "condition" ? "checks" : "merge" }])
+      }
+      world.release(fin.conversation)
+      await world.settle(100)
+      assert.equal(notes().length, 0, `${boundary} still rejects the old queued claim`)
+      assert.equal(world.live.held(fin.conversation)?.requests.find((request) => request.id === original.id)?.status, "canceled")
+      await world.restart()
+      await world.agents.pulls.tick()
+      await world.settle(100)
+      assert.equal(notes().length, boundary === "archive" ? 0 : 1, "only the deliberately new dependency may produce a replacement outcome")
       await world.close()
     }
 
