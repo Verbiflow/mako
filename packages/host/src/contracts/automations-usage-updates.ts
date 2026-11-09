@@ -191,7 +191,7 @@ export interface Automation {
 }
 
 /** How a press of Run now went: its launch, or why it never began. */
-export type AutomationFired = { status: "completed" } | { status: "failed"; error: string } | { status: "not-run"; why: string }
+export type AutomationFired = { status: "completed" } | { status: "failed"; error: string } | { status: "unknown"; error: string } | { status: "not-run"; why: string }
 
 export interface AutomationRun {
   runId: string

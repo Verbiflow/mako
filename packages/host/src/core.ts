@@ -34,7 +34,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
+import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -1146,7 +1146,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     gate: late.agentAsks,
   })
   late.agentAsks.runs = {
-    automation: (_id, want) => late.automationTool?.allowed(want.action, want.id),
+    automation: (id, want, ask) => late.automationTool?.allowed(id, want, ask),
     harness: async (_id, want) => late.harnessTool?.allowed(want.action, want.harness),
     setting: async (_id, want) => void (await late.settingsTool?.run(want.setting)),
     move: (id, want) => late.threadMoves?.allowed(id, want),
@@ -1222,14 +1222,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     shell.jobs.every("watch whether to hand off on sleep", 60_000, () => sleepHandOff.refresh())
   }
   const workspaceAutomations = new Automations({
+    launches: new AutomationLaunches(join(environment.dataRoot, "automation-launches")),
     git,
     watch: watchBackend,
     emit,
     launch: async (cwd, prompt) => {
-      if (fixtureDesk) throw new Error("The fixture desk runs no automations")
+      if (fixtureDesk) throw new AutomationNotStartedError("The fixture desk runs no automations")
       const resumable = new Set(nativeHarnesses(providerHost.nativeRunners))
       const profile = (await harnesses.profiles.all()).find((candidate) => candidate.available && resumable.has(candidate.id))
-      if (!profile) throw new Error("No provider is available for this automation")
+      if (!profile) throw new AutomationNotStartedError("No provider is available for this automation")
       telemetry.feature("automation.ran", profile.id)
       await runs.startFresh(profile.id, cwd, prompt, resolveHarnessTuning(profile, undefined))
     },

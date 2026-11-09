@@ -5,7 +5,7 @@ import { hostLog } from "../base/host-log.js"
 import type { AgentAsk, AgentAskWant } from "../contracts/agent-asks.js"
 import type { LiveAsks } from "./live-asks.js"
 
-type Run<Kind extends AgentAskWant["kind"]> = (conversationId: string, want: Extract<AgentAskWant, { kind: Kind }>) => void | Promise<void>
+type Run<Kind extends AgentAskWant["kind"]> = (conversationId: string, want: Extract<AgentAskWant, { kind: Kind }>, askId: string) => void | Promise<void>
 
 /** What each tool does once the person allows what its agent asked. */
 export type AskRuns = { [Kind in AgentAskWant["kind"]]: Run<Kind> }
@@ -53,7 +53,7 @@ export class AgentAskGate {
       return
     }
     // Own this choice before its action starts; failure never removes and recreates a durable ask.
-    const outcome = Promise.resolve().then(() => this.#run(conversationId, ask.want)).then(() => { this.#asks.settle(conversationId, id) })
+    const outcome = Promise.resolve().then(() => this.#run(conversationId, ask.want, ask.id)).then(() => { this.#asks.settle(conversationId, id) })
     this.#allowing.set(key, outcome)
     try {
       await outcome
@@ -67,11 +67,11 @@ export class AgentAskGate {
     for (const ask of this.#asks.open(conversationId)) if (ask.want.kind === kind) this.#asks.settle(conversationId, ask.id)
   }
 
-  #run<Kind extends AgentAskWant["kind"]>(conversationId: string, want: Extract<AgentAskWant, { kind: Kind }>): void | Promise<void> {
+  #run<Kind extends AgentAskWant["kind"]>(conversationId: string, want: Extract<AgentAskWant, { kind: Kind }>, askId: string): void | Promise<void> {
     // SAFETY: `runs` is keyed by the want's own kind, so the run found here takes this want.
     const run = this.runs[want.kind as Kind] as Run<Kind> | undefined
     if (!run) throw new Error("This host can't answer that agent ask yet.")
-    return run(conversationId, want)
+    return run(conversationId, want, askId)
   }
 }
 

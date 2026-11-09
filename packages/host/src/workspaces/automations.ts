@@ -8,6 +8,7 @@ import { automationTriggerAvailable, type Automation, type AutomationFired, type
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { watchTree, type TreeWatch } from "./tree-watcher.js"
 import type { WatchBackend } from "./watch-backend.js"
+import { AutomationNotStartedError, type AutomationLaunches } from "./automation-launches.js"
 
 /**
  * Saved prompts that can fire on their own.
@@ -252,6 +253,8 @@ export interface AutomationsDeps {
   emit(event: HostEvent): void
   /** Starts the prompt in `cwd` as a new conversation, named `label`. */
   launch(cwd: string, prompt: string, label: string): Promise<void>
+  /** Receipts for agent-approved launches; without one those launches are refused. */
+  launches?: AutomationLaunches
 }
 
 /** The automations of the workspace in front, and what fires them. */
@@ -322,7 +325,12 @@ export class Automations {
    * watcher pointed at a directory an agent is editing will otherwise re-trigger
    * on the agent's own output, which is a loop that bills.
    */
-  async fire(id: string, reason: AutomationRun["reason"]): Promise<AutomationFired> {
+  async fire(id: string, reason: AutomationRun["reason"], operation?: string): Promise<AutomationFired> {
+    if (operation !== undefined) {
+      const state = this.runtime
+      if (reason !== "manual" || !this.deps.launches || !state) return { status: "not-run", why: "This host can't safely record that automation's approved run." }
+      return this.deps.launches.run(operation, { cwd: state.cwd, id }, () => this.runtime === state ? this.fire(id, reason) : Promise.resolve({ status: "not-run", why: "The workspace changed before this automation could start." }))
+    }
     const automation = this.automations.find((entry) => entry.id === id)
     const state = this.runtime
     if (!automation || !state) return { status: "not-run", why: "Mako can't find that automation here." }
@@ -376,7 +384,7 @@ export class Automations {
           error: message,
         },
       })
-      return { status: "failed", error: message }
+      return error instanceof AutomationNotStartedError ? { status: "not-run", why: message } : { status: "failed", error: message }
     } finally {
       state.inFlight.delete(id)
     }
