@@ -302,6 +302,8 @@ const replays = [
   "mako:threads-move",
   /** `ThreadActTool.act`: named by the caller's key, as Rename and Archive are by their operation. */
   "mako:threads-act",
+  /** `SettingsTool.call`: a read, or a setting set to a value; asked twice, the same end state. */
+  "mako:settings-act",
   /** `AgentAskGate.answer`: the ask's id; an answered ask ignores a repeat. */
   "mako:agent-ask-answer",
   /** Whether a machine has its folder for a move only reads. */
