@@ -3,7 +3,7 @@ import { z } from "zod"
 import type { ThreadPage } from "@mako/sessions"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { HISTORY_VIEW_EXPIRED, type LiveHistoryAddress, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor } from "../contracts/live-history.js"
-import { HistoryRecords, HistoryVersions, historyCapture, historyPage, historyRange, isPartial, type HistoryValue } from "../contracts/history-pages.js"
+import { HistoryCursorError, HistoryRecords, HistoryVersions, historyCapture, historyPage, historyRange, isPartial, type HistoryValue } from "../contracts/history-pages.js"
 import { nativeHistoryRevision } from "./native-history.js"
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
 import { inSlices } from "@mako/sessions/slices"
@@ -124,6 +124,16 @@ export class LiveHistoryReader {
   }
 
   async read(id: string, input: LiveHistoryRead, snapshot: () => Promise<LiveSnapshot | null>): Promise<LiveHistoryChunk> {
+    try { return await this.readValue(id, input, snapshot) }
+    catch (error) {
+      if (error instanceof HistoryCursorError) hostLog("history", "a read named a cursor outside its retained view", {
+        conversation: id, kind: input.kind, ...error.facts,
+      })
+      throw error
+    }
+  }
+
+  private async readValue(id: string, input: LiveHistoryRead, snapshot: () => Promise<LiveSnapshot | null>): Promise<LiveHistoryChunk> {
     if (this.pruneDue) this.prunePending()
     else if (Date.now() - this.pruned > PRUNE_MS) this.pruneViews()
     this.records.prune()

@@ -36,13 +36,32 @@ export class HistoryVersions {
   }
 }
 
+/** The bounds a retained cursor failed, without its token or any conversation content. */
+export class HistoryCursorError extends Error {
+  readonly facts: {
+    reason: "blocks-after-end" | "blocks-before-covered" | "base-before-start" | "base-after-end"
+    beforeBlocks: number; beforeBase: number
+    covered: number; blocks: number; baseStart: number; baseEnd: number
+    revision: number; epoch: string | undefined
+  }
+
+  constructor(facts: HistoryCursorError["facts"]) {
+    super("Invalid retained history cursor")
+    this.facts = facts
+  }
+}
+
 /** The page of `source` ending at `before`: its live blocks back from there, then its saved entries once they're done. */
 export function historyPage(token: string, source: LiveSnapshot, before: LiveHistoryCursor, versions: HistoryVersions): LiveHistoryPage {
   const covered = source.baseCoveredBlocks ?? 0
   const baseOrigin = source.base?.start ?? 0
-  if (before.blocks > source.blocks.length || before.blocks < covered || before.base < baseOrigin ||
-    before.base > baseOrigin + (source.base?.entries.length ?? 0))
-    throw new Error("Invalid retained history cursor")
+  const baseEnd = baseOrigin + (source.base?.entries.length ?? 0)
+  const invalid = before.blocks > source.blocks.length ? "blocks-after-end"
+    : before.blocks < covered ? "blocks-before-covered"
+    : before.base < baseOrigin ? "base-before-start"
+    : before.base > baseEnd ? "base-after-end" : undefined
+  if (invalid) throw new HistoryCursorError({ reason: invalid, beforeBlocks: before.blocks, beforeBase: before.base,
+    covered, blocks: source.blocks.length, baseStart: baseOrigin, baseEnd, revision: source.revision, epoch: source.epoch })
   const blocks: Entry[] = []
   const entries: Entry[] = []
   let chars = 0
