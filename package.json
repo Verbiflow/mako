@@ -40,6 +40,7 @@
     "test:opening-send-ui": "node scripts/test-opening-send-ui.mjs",
     "test:inbox-ui": "node scripts/test-inbox-ui.mjs",
     "test:rail-ui": "node scripts/test-rail-ui.mjs && node scripts/test-kept-session-ui.mjs && node scripts/test-versions-ui.mjs && node scripts/test-store-formats-ui.mjs",
+    "test:internal-review-ui": "node scripts/test-internal-review-ui.mjs",
     "test:fin-pips-ui": "node scripts/test-fin-pips-ui.mjs",
     "test:placed-fin-ui": "node scripts/test-placed-fin-ui.mjs",
     "test:follow-ui": "node scripts/test-follow-ui.mjs",

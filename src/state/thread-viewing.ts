@@ -14,7 +14,8 @@ import type {
 } from "@/state/thread-state"
 import { markObserved, markThreadReviewed } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
-import { openThreadTab } from "@/state/thread-tabs"
+import { closeThreadTab, openThreadTab } from "@/state/thread-tabs"
+import { internalReviewSession } from "@mako/host/contracts/thread-list"
 import { toast } from "sonner"
 import { createHook, createStore } from "@/state/store"
 import { nativeReadingSource, transcriptReaders } from "@/state/transcript-reading"
@@ -99,6 +100,7 @@ function viewedPage(page: ThreadPage): ViewedThread {
 }
 
 export function rememberThread(thread: ViewedThread) {
+  if (retireInternalReview(thread.ref)) return
   if (threadCache.get(thread.ref.path) === thread) return
   threadCache.delete(thread.ref.path)
   threadCache.set(thread.ref.path, thread)
@@ -204,6 +206,18 @@ export function rememberedThread(path: string): ViewedThread | undefined {
   return threadCache.get(path)
 }
 
+/** Reconcile an old opened/cached row when its provider identifies internal safety work. */
+export function retireInternalReview(ref: ThreadRef, notify = false): boolean {
+  if (!internalReviewSession(ref)) return false
+  if (threadCache.delete(ref.path)) threadCacheStore.set({ views: new Map(threadCache) })
+  closeThreadTab(ref.path)
+  const { viewing, opening } = threadsStore.get()
+  const shown = (opening?.ref ?? viewing?.ref)?.path === ref.path
+  if (shown) threadViewingActions.closeViewer()
+  if (shown || notify) toast.info("This is an internal safety review, not a conversation. Your agent handles its result.")
+  return true
+}
+
 /** A fresh read for a pane without focus, kept for the moment it takes focus. */
 export function readThreadForPane(path: string): Promise<ViewedThread | null> {
   if (!hasBridge()) return Promise.resolve(null)
@@ -225,6 +239,7 @@ export function readThreadForPane(path: string): Promise<ViewedThread | null> {
       // was in flight. Its bytes are no longer entitled to replace that view.
       if (read.again || threadCache.get(path) !== held) continue
       if (!page) return null
+      if (retireInternalReview(page.ref)) return null
       const arrived = new Set(page.entries.filter(entry => entry.type === "user").map(entry => entry.text))
       const echoes = held?.entries.filter(entry => isOptimisticEcho(entry) && entry.type === "user" && !arrived.has(entry.text)) ?? []
       const thread: ViewedThread = { ...viewedPage(page), entries: [...page.entries, ...echoes],
@@ -522,6 +537,7 @@ export const threadViewingActions = {
   /** Open a foreign session read-only, translated to the canonical shape. */
   async view(ref: ThreadRef, mode: "conversation" | "native" = "conversation") {
     if (!hasBridge()) return
+    if (retireInternalReview(ref, true)) return
     const generation = ++viewingGeneration
     handedOff = null
     const { acp, acpStore, activeAcp } = await liveModules
@@ -630,6 +646,7 @@ export const threadViewingActions = {
           state.opening?.kind !== "loading"
         )
           return
+        if (retireInternalReview(preview.ref)) return
         threadsStore.set({
           viewing: { ...viewedPage(preview), preview: true },
           composerHarness: liveHarness,

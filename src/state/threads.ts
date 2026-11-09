@@ -30,6 +30,7 @@ import { setComposerHarness } from "@/state/thread-tuning"
 import {
   applyThreadEntries,
   rememberThread,
+  retireInternalReview,
   threadViewingActions,
 } from "@/state/thread-viewing"
 import { threadsStore, useThreads } from "@/state/thread-store"
@@ -88,6 +89,7 @@ function noteHelpers(list: readonly ThreadRef[]): void {
 }
 
 export function applyThreadRef(ref: ThreadRef) {
+  retireInternalReview(ref)
   noteHelpers([ref])
   if (helpers.has(ref.path)) {
     clearObserved(ref.path)
@@ -209,6 +211,7 @@ export function applyThreads(list: ThreadRef[], loaded = true) {
   const { threads: previous, loaded: wasLoaded } = threadsStore.get()
   const initialHydration = loaded && !wasLoaded
   noteHelpers(list)
+  for (const ref of list) retireInternalReview(ref)
   const unique = threadList(list)
   threadsStore.set({ threads: unique, loaded })
   followThreadMoves(previous, unique)

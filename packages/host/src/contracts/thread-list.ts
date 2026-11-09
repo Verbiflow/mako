@@ -3,14 +3,20 @@ import type { ThreadRef } from "@mako/sessions"
 /** Rows the window's rail holds. Nobody scrolls ten years of history. */
 export const THREAD_LIST_CAP = 600
 
-type ListedRef = Pick<ThreadRef, "harness" | "nativeId" | "identity" | "archived" | "updatedAt" | "threadId" | "parent">
+type ListedRef = Pick<ThreadRef, "harness" | "nativeId" | "identity" | "archived" | "updatedAt" | "threadId" | "parent" | "nativeAgent">
+
+/** Provider-owned safety work has native history, but is not a conversation to open or reply to. */
+export function internalReviewSession(ref: Pick<ThreadRef, "nativeAgent">): boolean {
+  return ref.nativeAgent?.kind === "internal-review"
+}
 
 /**
  * Whether a session is a row of its own: a child's (`parent`) shows inside
- * its parent's Thread, never as a Thread.
+ * its parent's Thread, never as a Thread. Provider internal reviews are
+ * native history rather than person-facing conversations.
  */
-export function listedAsThread(ref: Pick<ThreadRef, "parent">): boolean {
-  return ref.parent === undefined
+export function listedAsThread(ref: Pick<ThreadRef, "parent" | "nativeAgent">): boolean {
+  return ref.parent === undefined && !internalReviewSession(ref)
 }
 
 /**
