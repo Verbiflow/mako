@@ -262,6 +262,7 @@ export class Automations {
   private readonly deps: AutomationsDeps
   private runtime: Runtime | null = null
   private automations: Automation[] = []
+  private loadedFor: string | undefined
 
   constructor(deps: AutomationsDeps) {
     this.deps = deps
@@ -273,18 +274,23 @@ export class Automations {
 
   /** The list and its owner are one reading, before a tool asks permission for any of it. */
   context() {
-    return { cwd: this.runtime?.cwd, automations: this.automations }
+    return { cwd: this.runtime?.cwd === this.loadedFor ? this.loadedFor : undefined, automations: this.automations }
   }
 
   async load(cwd: string): Promise<Automation[]> {
+    const runtime = this.runtime
+    let loaded: Automation[]
     try {
       const document = parseAutomationDocument(
         await readFile(join(cwd, FILE), "utf8")
       )
-      this.automations = document.automations
+      loaded = document.automations
     } catch {
-      this.automations = []
+      loaded = []
     }
+    if (this.runtime !== runtime) return this.automations
+    this.automations = loaded
+    this.loadedFor = cwd
     if (this.runtime?.cwd === cwd) this.syncFileWatcher(this.runtime)
     this.publish()
     return this.automations
@@ -292,6 +298,7 @@ export class Automations {
 
   async save(cwd: string, next: Automation[]): Promise<Automation[]> {
     this.automations = next
+    this.loadedFor = cwd
     if (this.runtime?.cwd === cwd) this.syncFileWatcher(this.runtime)
     this.publish()
     try {
@@ -312,7 +319,7 @@ export class Automations {
 
   /** Enabling is per-machine and is not written to the shared file. */
   setEnabled(id: string, enabled: boolean, cwd?: string): Automation[] {
-    if (cwd !== undefined && this.runtime?.cwd !== cwd) throw new Error("The workspace changed. Open the automation's original workspace to answer its ask.")
+    if (cwd !== undefined && (this.runtime?.cwd !== cwd || this.loadedFor !== cwd)) throw new Error("The workspace changed. Open the automation's original workspace to answer its ask.")
     this.automations = this.automations.map((entry) =>
       entry.id === id && (!enabled || automationTriggerAvailable(entry.trigger))
         ? { ...entry, enabled }
@@ -332,7 +339,7 @@ export class Automations {
    * on the agent's own output, which is a loop that bills.
    */
   async fire(id: string, reason: AutomationRun["reason"], operation?: string, cwd?: string): Promise<AutomationFired> {
-    if (cwd !== undefined && this.runtime?.cwd !== cwd) return { status: "not-run", why: "The workspace changed. Open the automation's original workspace to answer its ask." }
+    if (cwd !== undefined && (this.runtime?.cwd !== cwd || this.loadedFor !== cwd)) return { status: "not-run", why: "The workspace changed. Open the automation's original workspace to answer its ask." }
     if (operation !== undefined) {
       const state = this.runtime
       if (reason !== "manual" || !this.deps.launches || !state || !cwd) return { status: "not-run", why: "This host can't safely record that automation's approved run." }
@@ -340,7 +347,7 @@ export class Automations {
     }
     const automation = this.automations.find((entry) => entry.id === id)
     const state = this.runtime
-    if (!automation || !state) return { status: "not-run", why: "Mako can't find that automation here." }
+    if (!automation || !state || this.loadedFor !== state.cwd) return { status: "not-run", why: "Mako can't find that automation here." }
     if (reason !== "manual" && (!automation.enabled || automation.trigger.kind !== reason)) return { status: "not-run", why: "It isn't on for this." }
     if (state.inFlight.has(id)) return { status: "not-run", why: "It's running already." }
 
