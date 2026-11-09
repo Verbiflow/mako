@@ -26,6 +26,8 @@ export interface SettingsSection {
   readonly group: SettingsGroup
   readonly icon: LucideIcon
   readonly keywords: readonly string[]
+  /** Select a destination within the section for a search result, using the trimmed, lowercase query. */
+  readonly onSearch?: (query: string) => void
   /** The section has a row per harness, so every harness's name finds it too. */
   readonly perHarness?: true
   readonly Component: ComponentType
