@@ -4493,6 +4493,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!latest) return `${this.latest.has(edge.child) ? "No current report" : "No report yet"}. It is ${state.kind}${state.kind === "working" && state.step ? `: ${state.step}` : ""}.`
     const lines = [`${latest.status}${latest.implicit ? " (its turn ended without a report; this is its last reply)" : ""}:`, latest.summary]
     if (latest.question) lines.push(`Question: ${latest.question}`)
+    const waiting = waitingWords(latest.waitingOn)
+    if (waiting) lines.push(waiting)
     for (const artifact of latest.artifacts ?? []) lines.push(`${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
     return lines.join("\n")
   }

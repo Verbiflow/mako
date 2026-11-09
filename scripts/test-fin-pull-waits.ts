@@ -201,7 +201,7 @@ console.log("PullWatch: read at once, then a minute doubling to eight while unch
     const fin = await world.agents.start(apex.caller, { harness: "claude", brief: { objective: "Observe main CI" }, name: "ci", clientKey: "ci", cwd: dir })
     assert.ok(!("refused" in fin) && fin.conversation)
     await world.settle(100)
-    const input = { status: "progress" as const, summary: "Waiting for main CI.", waitingOn: [wait], artifacts, clientKey: "prose" }
+    const input = { status: "done" as const, summary: "Waiting for main CI.", waitingOn: [wait], artifacts, clientKey: "prose" }
     const receipt = await world.agents.report(world.caller(fin.conversation!), input)
     assert.ok(!("refused" in receipt))
     assert.equal(receipt.subscriptions?.[0]?.state, "unsupported", "recorded prose must not masquerade as an automatic watch")
@@ -219,6 +219,9 @@ console.log("PullWatch: read at once, then a minute doubling to eight while unch
     const kept = world.store.reportsOf(child).find((report) => report.id.endsWith(":prose"))!
     assert.deepEqual(kept.waitingOn, [wait])
     assert.deepEqual(kept.artifacts, artifacts)
+    const readBack = await world.agents.read(apex.caller, { child: "ci" })
+    assert.ok(!("refused" in readBack))
+    assert.match(readBack.text, /run7 attempt1 job71 at a{40} \(no automatic wake\)/, "reading an old done report shows its unsupported wait explicitly")
     assert.deepEqual(world.agents.pulls.keys(), [])
     assert.equal(reads, 0, "restart doesn't invent a subscription")
     const validInput = { status: "progress" as const, summary: "Waiting on an actual PR.", waitingOn: [{ kind: "pull-request" as const, ref: "acme/app#371", until: "checks" as const }], clientKey: "valid" }
