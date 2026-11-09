@@ -2353,7 +2353,7 @@ const inputs = {
   "mako:restore-version": () => z.tuple([z.string(), z.number()]),
   "mako:reveal": () => z.tuple([z.string()]),
   "mako:reveal-plugins": () => z.tuple([]),
-  "mako:run-automation": () => z.tuple([z.string()]),
+  "mako:run-automation": () => z.tuple([z.string(), z.string().optional()]),
   "mako:run-command": () => z.tuple([z.string(), z.string().optional()]),
   "mako:save-automations": () =>
     z.tuple([

@@ -3,6 +3,7 @@ import type { MethodTable } from "../base/methods.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
 import type { JsonValue } from "../contracts/json.js"
+import type { AgentAskWant } from "../contracts/agent-asks.js"
 import { AFTER_ACT, type AutomationActInput, type AutomationActResult } from "../contracts/thread-tools.js"
 import type { AgentAskGate } from "./agent-ask-gate.js"
 import { OnceByKey } from "./once-by-key.js"
@@ -23,6 +24,7 @@ const EnabledSchema = z.array(z.object({ id: z.string(), enabled: z.boolean() })
 const FiredSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("completed") }),
   z.object({ status: z.literal("failed"), error: z.string() }),
+  z.object({ status: z.literal("unknown"), error: z.string() }),
   z.object({ status: z.literal("not-run"), why: z.string() }),
 ])
 
@@ -53,21 +55,25 @@ export class AutomationTool {
   }
 
   /** The person allowed the ask: what the call would have run, and its failure is their answer's to say. */
-  async allowed(action: Change, id: string): Promise<void> {
-    const answer = await this.run(action, id)
+  async allowed(conversationId: string, want: Extract<AgentAskWant, { kind: "automation" }>, askId: string): Promise<void> {
+    // The gate passes this exact durable identity, even if another snapshot read replaced its objects.
+    const ask = this.#deps.gate.open(conversationId).find((ask) => ask.id === askId)
+    if (ask?.want.kind !== "automation" || ask.want.action !== want.action || ask.want.id !== want.id) throw new Error("That automation approval is no longer waiting here.")
+    const answer = await this.run(want.action, want.id, JSON.stringify([conversationId, ask.id]))
     if ("refused" in answer) throw new Error(answer.why)
   }
 
   /** Run now, or the switch, as Settings › Automations presses them; what's said is what the host says happened. */
-  async run(action: Change, id: string): Promise<AutomationActResult> {
+  async run(action: Change, id: string, operation?: string): Promise<AutomationActResult> {
     if (action !== "run") {
       const kept = EnabledSchema.safeParse(await this.#deps.invoke("mako:automation-enabled", [id, action === "on"])).data?.find((each) => each.id === id)
       if (kept?.enabled !== (action === "on")) return { refused: "failed", why: `This automation's trigger can't run here, so it stays ${kept?.enabled ? "on" : "off"}.` }
       return { outcome: "done", action, id }
     }
     // A launch that failed, or a run that never began, resolves with how it went.
-    const fired = FiredSchema.safeParse(await this.#deps.invoke("mako:run-automation", [id])).data
-    if (fired?.status === "failed") return { refused: "failed", why: fired.error }
+    const fired = FiredSchema.safeParse(await this.#deps.invoke("mako:run-automation", operation === undefined ? [id] : [id, operation])).data
+    if (!fired) return { refused: "failed", why: "Mako didn't confirm that automation's launch." }
+    if (fired.status === "failed" || fired.status === "unknown") return { refused: "failed", why: fired.error }
     if (fired?.status === "not-run") return { refused: "failed", why: fired.why }
     return { outcome: "done", action, id }
   }

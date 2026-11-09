@@ -53,6 +53,7 @@ import type { ThreadWorktreeMoveDeps } from "./thread-worktree-moves.js"
 
 export { ArtifactPreviews, type ProviderArtifactPreview } from "./artifact-previews.js"
 export { Automations } from "./automations.js"
+export { AutomationLaunches, AutomationNotStartedError } from "./automation-launches.js"
 export { checkoutConversations } from "./checkout-conversations.js"
 export { WorkspaceClients } from "./clients.js"
 export { applyMoveCheckpoint, captureMoveCheckpoint, MoveCheckpointError, verifyMoveCheckpoint } from "./move-checkpoint.js"
@@ -413,7 +414,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
     withHost((h) => automations.save(h.workspace, next))
   )
   methods.handle("mako:automation-enabled", (id: string, enabled: boolean) => automations.setEnabled(id, enabled))
-  methods.handle("mako:run-automation", (id: string) => automations.fire(id, "manual"))
+  methods.handle("mako:run-automation", (id: string, operation?: string) => automations.fire(id, "manual", operation))
   methods.handle("mako:reload-automations", () => withHost((h) => automations.load(h.workspace)))
   declareWorktreeMethods(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls })
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
