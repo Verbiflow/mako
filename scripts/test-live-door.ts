@@ -15,7 +15,7 @@ import type { LiveBatch, LiveSnapshot, LiveSummary } from "@mako/host/contracts/
 const reads: ((snapshot: LiveSnapshot) => void)[] = []
 let answer: ((id: string) => LiveSnapshot) | undefined
 const read = (id: string) => answer ? Promise.resolve(answer(id)) : new Promise<LiveSnapshot>((done) => reads.push(done))
-const legacy = { liveSnapshot: read, livePermission: async () => {}, liveEarlier: (id: string) => read(id), liveTransfer: (id: string) => read(id), liveAcknowledgeAction: async () => {}, answerAgentAsk: async () => {},
+const legacy = { liveSnapshot: read, livePermission: async () => {}, liveEarlier: (id: string) => read(id), liveTransfer: (id: string) => read(id), liveAcknowledgeAction: async () => {}, answerAgentAsk: async (id: string, ask: string, allow: boolean) => { const want = held(id)?.control?.asks?.find(each => each.id === ask)?.want; return want ? { outcome: "answered", ask, allow, want } : { outcome: "missing", ask } },
   // A rewind answers with the fork it makes; a capture, with the conversation that holds its session, which may be one
   // already there.
   liveRewind: (_id: string, input: { id: string }) => read(input.id), liveCapture: (id: string) => read(id),

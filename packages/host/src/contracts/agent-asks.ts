@@ -43,6 +43,13 @@ export type AgentAskWant = z.infer<typeof AgentAskWantSchema>
 export const AgentAskSchema = z.object({ id: z.string(), at: z.number(), want: AgentAskWantSchema })
 export type AgentAsk = z.infer<typeof AgentAskSchema>
 
+/** Only a fresh accepted choice can begin a client action; joined and missing answers confer no new permission. */
+export const AgentAskAnswerSchema = z.discriminatedUnion("outcome", [
+  z.object({ outcome: z.enum(["answered", "joined"]), ask: z.string(), allow: z.boolean(), want: AgentAskWantSchema }),
+  z.object({ outcome: z.enum(["missing", "unavailable"]), ask: z.string() }),
+])
+export type AgentAskAnswer = z.infer<typeof AgentAskAnswerSchema>
+
 /** An ask's two answers as an approval's options, on the path a Fin's asks take to its Apex and the person. */
 export const AGENT_ASK_ALLOW = "allow"
 export const AGENT_ASK_KEEP = "keep"

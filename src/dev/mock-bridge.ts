@@ -1098,11 +1098,13 @@ export function installMockBridge() {
       }
       agentAskAnswers.push({ conversationId, ask, allow })
       const snapshot = liveSnapshots.get(conversationId)
-      if (!snapshot?.control) return
+      const pending = snapshot?.control?.asks?.find((each) => each.id === ask)
+      if (!snapshot?.control || !pending) return { outcome: "missing", ask } as const
       const control = { ...snapshot.control, asks: snapshot.control.asks?.filter((each) => each.id !== ask) }
       const next = { ...snapshot, revision: snapshot.revision + 1, control }
       liveSnapshots.set(conversationId, next)
       emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversationId, revision: next.revision, updates: [], control })) })
+      return { outcome: "answered", ask, allow, want: pending.want } as const
     },
     threadChanges: async () => null,
     changeUsage: async () => null,

@@ -1,5 +1,5 @@
 import { toast } from "sonner"
-import { agentAskLine, agentAskWords, type AgentAsk } from "@mako/host/contracts/agent-asks"
+import { AgentAskAnswerSchema, AgentAskWantSchema, agentAskLine, agentAskWords, type AgentAsk } from "@mako/host/contracts/agent-asks"
 import type { AskCard } from "@/lib/ask-card"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveAcpConversation } from "@/state/acp-state"
@@ -46,11 +46,18 @@ export async function answerAgentAsk(conversationId: string, ask: AgentAsk, allo
   // Ask selectors also load while threads initialize; recovery is an action dependency, loaded before the RPC.
   const { readBackLive } = await import("@/state/live-recovery")
   let failure: unknown
-  try { await getMako().answerAgentAsk(conversationId, ask.id, allow) } catch (error) { failure = error }
+  let result: unknown
+  try { result = await getMako().answerAgentAsk(conversationId, ask.id, allow) } catch (error) { failure = error }
   // The accepted answer may arrive without its event. Read it through the same lifecycle as an approval's receipt;
   // never replay an answer whose outcome is unknown.
   await readBackLive(conversationId)
-  if (!failure) return true
+  if (!failure) {
+    const answer = AgentAskAnswerSchema.safeParse(result).data
+    const want = AgentAskWantSchema.safeParse(ask.want).data
+    if (answer?.outcome === "answered" && answer.ask === ask.id && answer.allow === allow && want && JSON.stringify(answer.want) === JSON.stringify(want)) return true
+    if (allow && ask.want.kind === "back" && answer?.outcome !== "joined") toast.error("Mako couldn't confirm that return request", { description: answer?.outcome === "missing" ? "The ask is no longer waiting. Open the Thread's menu to bring it back." : "The host didn't confirm that choice. Open the Thread's menu to bring it back." })
+    return false
+  }
   toast.error("Mako couldn't record that answer", { description: failure instanceof Error ? failure.message : String(failure) })
   return false
 }
