@@ -306,7 +306,7 @@
     "test:orch-front-door": "tsx scripts/test-orch-front-door.ts && tsx --tsconfig tsconfig.app.json scripts/test-routed-transcript.ts",
     "test:orch-answer": "tsx scripts/test-orch-answer.ts",
     "test:fin-resume": "tsx scripts/test-fin-resume.ts",
-    "test:resume-holds": "tsx scripts/test-resume-holds.ts",
+    "test:resume-holds": "node scripts/test-loop-hold.mjs && tsx scripts/test-resume-holds.ts",
     "test:fin-move": "tsx scripts/test-fin-move.ts",
     "test:fins-placed": "tsx scripts/test-fins-placed.ts",
     "test:limit-replay": "tsx scripts/test-limit-replay.ts",

@@ -11,6 +11,7 @@ import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { LiveRecords } from "@mako/host/conversations/live-records"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { longestHold, type LoopHold } from "./lib/loop-hold.ts"
 
 /**
  * A host starting takes up what the last one left without holding its loop (`npm run test:resume-holds`).
@@ -49,24 +50,6 @@ async function until(what: string, done: () => boolean, timeoutMs = 20_000): Pro
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`)
     await pause(10)
   }
-}
-
-/** The longest the loop went without turning while `work` ran, and a moment after, sampled every millisecond. */
-async function longestHold(work: () => Promise<void>): Promise<number> {
-  let longest = 0
-  let last = performance.now()
-  let running = true
-  const tick = () => {
-    const now = performance.now()
-    longest = Math.max(longest, now - last)
-    last = now
-    if (running) setTimeout(tick, 1)
-  }
-  setTimeout(tick, 1)
-  await work()
-  await pause(100)
-  running = false
-  return Math.max(longest, performance.now() - last)
 }
 
 function block(fin: number, index: number): Entry {
@@ -110,6 +93,8 @@ async function leftByTheLastHost(at: string): Promise<{ fins: Map<string, string
 
 interface Taken {
   holdMs: number
+  gap: LoopHold
+  constructedMs: number
   /** From the host's opening to its resume settling. */
   resumeMs: number
   /** What each Fin was sent once the host was back, in order. */
@@ -159,12 +144,14 @@ async function readWhole(run: () => Promise<void>): Promise<string[]> {
 async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: boolean): Promise<Taken> {
   const script: Script = () => "Done after the restart."
   let world: AgentsWorld | undefined
-  let holdMs = 0
+  let gap: LoopHold = { ms: 0, fromMs: 0, toMs: 0, cpuMs: 0 }
+  let constructedMs = 0
   let resumeMs = 0
   const whole = await readWhole(async () => {
-    holdMs = await longestHold(async () => {
+    gap = await longestHold(async () => {
       const opened = performance.now()
       world = new AgentsWorld({ root: at, script, finLimit: () => FINS * 2, ...(inSlices && { resumeInSlices: true }) })
+      constructedMs = performance.now() - opened
       await world.resumed
       resumeMs = performance.now() - opened
     })
@@ -180,7 +167,7 @@ async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: b
     requests[name] = (world.live.snapshot(conversation)?.requests ?? []).map((request) => [request.status, request.actor?.kind ?? "person", String(request.continues?.auto ?? false), withoutTimes(request.text)])
   }
   await world.close()
-  return { holdMs, resumeMs, sent, requests }
+  return { holdMs: gap.ms, gap, constructedMs, resumeMs, sent, requests }
 }
 
 /**
@@ -249,6 +236,7 @@ try {
   assert.deepEqual(inSlices.sent, atOnce.sent, "every Fin was sent what it was when resumed at once")
   const continued = Object.values(atOnce.sent).filter((prompts) => prompts.length > 0).length
   assert.ok(continued >= FINS / 2, `the Fins the exit cut went on: ${continued} of ${FINS} were sent a message`)
+  console.log("resume timing: " + JSON.stringify({ atOnce: { gap: atOnce.gap, constructedMs: atOnce.constructedMs, resumeMs: atOnce.resumeMs }, inSlices: { gap: inSlices.gap, constructedMs: inSlices.constructedMs, resumeMs: inSlices.resumeMs } }))
   const limit = atOnce.holdMs / TIMES
   console.log(`resumed ${FINS} Fins, ${continued} sent on: at once the loop held ${Math.round(atOnce.holdMs)} ms, in slices ${Math.round(inSlices.holdMs)} ms (limit ${Math.round(limit)} ms, a ${TIMES}th of at once)`)
   assert.ok(inSlices.holdMs < limit, `resuming in slices held the loop ${Math.round(inSlices.holdMs)} ms, not under ${Math.round(limit)} ms, a ${TIMES}th of the ${Math.round(atOnce.holdMs)} ms at once`)
