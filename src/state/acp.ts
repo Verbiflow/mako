@@ -603,8 +603,9 @@ export const acp = {
   },
 
   async openRelated(id: string): Promise<void> {
+    const current = acpStore.get().conversations[id] ? inboxView.beginOpen() : inboxView.pendingOpen()
     await hydrateLive(id)
-    acp.open(id)
+    if (current()) acp.open(id, false)
   },
 
   async mergeFork(): Promise<void> {

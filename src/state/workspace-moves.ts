@@ -5,6 +5,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import { harnessLabel } from "@/lib/harness-label"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { acpStore } from "@/state/acp-state"
+import { inboxView } from "@/state/inbox-view"
 import { readLive } from "@/state/live-recovery"
 import { createHook, createStore } from "@/state/store"
 import { acknowledgeThread } from "@/state/thread-lifecycle"
@@ -28,8 +29,10 @@ export function projectName(project: string): string {
 }
 
 async function show(conversationId: string): Promise<void> {
+  if (!acpStore.get().conversations[conversationId]) return
+  const current = inboxView.beginOpen()
   const { acp } = await import("@/state/acp")
-  acp.open(conversationId)
+  if (current()) acp.open(conversationId)
 }
 
 export function applyWorkspaceMoves(moves: WorkspaceMoves): void {

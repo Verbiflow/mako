@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { checkInboxOpenBoundaries } from "./inbox-open-boundaries-ui.mjs"
 
 /** Explicit navigation through the rendered rail and strip, without starting an agent. */
 export async function checkInboxNavigation({ window, page, base, evaluate, until, frames, click, capture }) {
@@ -238,4 +239,5 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   assert.deepEqual(await evaluate(`Promise.all([import('/src/state/viewer.ts'), import('/src/state/thread-groups.ts')]).then(([{viewerStore}, {threadGroupsStore}]) => ({viewer: viewerStore.get(), groups: threadGroupsStore.get()}))`), draftState, "selected draft retains group, draft and exact split-pane layout")
   await capture("navigation-selected-draft-split.png")
   console.log("PASS: already-selected draft tab retains draft, Session selection and split-pane layout")
+  await checkInboxOpenBoundaries({ window, base, evaluate, until, frames, click })
 }
