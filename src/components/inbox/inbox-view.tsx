@@ -11,7 +11,6 @@ import { harnessLabel } from "@/components/rail/harness-meta"
 import { formatRelative } from "@/lib/format"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { acpStore } from "@/state/acp-state"
 import { agentAskCard } from "@/state/agent-asks"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
 import { ASK_TOUCH, runChoice, type AskCard as AskWords } from "@/lib/ask-card"
@@ -29,7 +28,6 @@ import {
   type InboxModel,
   type ReadInboxItem,
 } from "@/state/inbox"
-import { threadsStore } from "@/state/thread-store"
 
 function sameModel(left: InboxModel, right: InboxModel): boolean {
   return sameItems(left.asks, right.asks) && sameItems(left.toRead, right.toRead)
@@ -43,25 +41,6 @@ function useMinute(): number {
     return () => window.clearInterval(timer)
   }, [])
   return now
-}
-
-/** Leaves when the person opens something else: a row, a tab, a new Thread. */
-function useCloseOnNavigate(open: boolean) {
-  useEffect(() => {
-    if (!open) return
-    const where = () => [acpStore.get().activeKey, threadsStore.get().viewing?.ref.path ?? threadsStore.get().opening?.ref.path] as const
-    const at = where()
-    const check = () => {
-      const now = where()
-      if (now[0] !== at[0] || now[1] !== at[1]) inboxView.close()
-    }
-    const offAcp = acpStore.subscribe(check)
-    const offThreads = threadsStore.subscribe(check)
-    return () => {
-      offAcp()
-      offThreads()
-    }
-  }, [open])
 }
 
 function summary(model: InboxModel): string {
@@ -81,7 +60,6 @@ function summary(model: InboxModel): string {
  */
 export function InboxView() {
   const open = useInboxView((state) => state.open)
-  useCloseOnNavigate(open)
   useEffect(() => {
     if (!open) return
     const onKey = (event: KeyboardEvent) => {

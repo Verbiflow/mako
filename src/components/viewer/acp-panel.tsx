@@ -3,7 +3,7 @@ import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
 import { carriedHistories, promptDelivery, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
 import { FailureRow } from "@/components/transcript/failure-row"
 import { FailedRequestsContext } from "@/components/transcript/failed-requests"
-import { agentActivity, startLabel } from "@/state/agent-activity"
+import { agentActivity, startLabel, switchLabel } from "@/state/agent-activity"
 import { shallowEqual } from "@/state/store"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import { useLasting } from "@/components/ui/use-lasting"
@@ -326,6 +326,10 @@ function AcpActivity({
     if (current?.kind === "starting") return startLabel(labels[current.harness], current.cloudStep)
     return current?.kind === "live" ? startLabel(labels[current.session.harness]) : undefined
   })
+  const switching = useAcp((state) => {
+    const live = scopedLiveAcp(state, scope)
+    return live ? switchLabel(live, (harness) => labels[harness]) : undefined
+  })
   const activity = useAcp((state) => {
     const live = scopedLiveAcp(state, scope)
     const approval = live?.control?.approvalResponses?.find(receipt => receipt.id === live.permission?.id)
@@ -333,7 +337,7 @@ function AcpActivity({
     // status; do not repeat it in the transcript.
     if (approval || live?.permission?.implementsPlan) return { kind: "idle" as const, label: "" }
     const switchingAccount = Boolean(live?.requests?.some((request) => request.status === "queued" && request.accountSwitch))
-    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, starting: startingAs, makingWorktree, worktreeStep, preparing, checkingOwner, switchingAccount, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
+    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, starting: startingAs, switching, makingWorktree, worktreeStep, preparing, checkingOwner, switchingAccount, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
   }, shallowEqual)
   const waiting = running && activity.kind === "connecting"
   // The wait ended (it started, or the send went): the next one is timed afresh.

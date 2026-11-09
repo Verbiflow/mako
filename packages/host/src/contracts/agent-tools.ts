@@ -160,6 +160,8 @@ export interface AgentStrip {
   toolUses?: number
   /** Its last report, as one line. */
   report?: { status: ReportStatus; line: string; at: number }
+  /** Outstanding explicit report questions, independently of its latest activity. */
+  pendingQuestions?: number
   /** What it waits on outside its tree, in words (`waitingWords`): "waiting on #412 checks". */
   waiting?: string
   /** Seconds since its last activity, while it isn't working (`idleFor`). */
@@ -231,12 +233,23 @@ export interface AgentsReadInput {
   child: string
   view?: "report" | "transcript"
   maxChars?: number
+  /** Exact stored report ID to inspect instead of the latest narration; reading never resolves it. */
+  report?: string
+  /** Page outstanding report questions after this exact report ID; reading never resolves them. */
+  afterAsk?: string
+}
+export interface PendingReportQuestion {
+  id: string
+  question: string
+  on: "lead" | "person"
+  action?: string
 }
 export type AgentsReadResult = {
   child: string
   name: string
   state: ChildState
   text: string
+  pending?: { asks: PendingReportQuestion[]; more?: number; next?: string }
   truncated?: true
   /** A transcript's end is a tail: where the whole is. */
   whole?: string
@@ -248,6 +261,8 @@ export interface AgentsReportInput {
   summary: string
   artifacts?: Artifact[]
   question?: string
+  /** Exact IDs of your own report questions this report withdraws or replaces. Progress remains quiet. */
+  supersedes?: string[]
   /** The answers the question offers; each a tap for the person. */
   options?: AskOption[]
   /** The option you recommend, by its place in `options`, from 0. */
@@ -261,10 +276,16 @@ export interface AgentsReportInput {
   /** A repeat with the same key is the same report. */
   clientKey: string
 }
-export type AgentsReportResult = { id: string; deduped?: true; delivered: "notice" | "none" } | AgentRefused
+/** An automatic subscription receipt, distinct from a report merely recording what it waits on. */
+export interface WaitSubscription {
+  wait: WaitingOn
+  state: "registered" | "claimed" | "unsupported" | "unavailable" | "inactive"
+  why?: string
+}
+export type AgentsReportResult = { id: string; deduped?: true; delivered: "notice" | "none"; subscriptions?: WaitSubscription[]; superseded?: string[] } | AgentRefused
 
 export interface AgentsSendInput {
-  /** The Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. */
+  /** Your own Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. Crew siblings need a parent relay through agents_report; discovery grants no send authority. */
   to: string
   /** Pass on the person's message this turn answers, word for word, as theirs: the host fills it in, so the call stays short. */
   forward?: boolean
@@ -272,6 +293,8 @@ export interface AgentsSendInput {
   text?: string
   /** For a working Fin; `queue` when absent. */
   deliver?: FinDeliver
+  /** An informational message: no automatic completion reply; explicit reports, questions and failures still report. */
+  reply?: "none"
   /** Threads this message refers to, each attached as a person's chip attaches one. */
   context?: AgentContextInput[]
   /** A repeat with the same key is the same message. */
@@ -296,6 +319,8 @@ export type AgentsSendResult = AgentsSent | AgentRefused
 export interface AgentsAnswerInput {
   /** The Fin's name or Thread ID. */
   to: string
+  /** Exact ask/report ID. Required when the Fin has several pending report questions. */
+  ask?: string
   /** Your answer: one of its options, by its label, or your own words. For an approval, what you say with a refusal. */
   answer?: string
   /** For an approval its harness asks: true allows it once, false refuses it. */
@@ -310,6 +335,8 @@ export interface AgentsAnswered {
   name: string
   /** What it answered: a question in its report, its harness's question or approval; `person` when it was left to them. */
   answered: FinAsk["kind"] | "person"
+  /** Exact obligation this receipt answers or hands off. */
+  ask?: string
   /** How a report's answer reached it, as a message does. */
   delivery?: FinDelivery
   deduped?: true
@@ -667,7 +694,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     mcp: {
       name: "agents_read",
       description: `One ${FIN_WORD}'s last report in full, or the end of its transcript: a quick, bounded tail, for when its digest line isn't enough. thread_history with its Thread ID reads it whole.`,
-      fields: { child: "Its name or Thread ID.", view: "report (default) or transcript.", maxChars: "At most this many characters (default 8000)." },
+      fields: { child: "Its name or Thread ID.", view: "report (default) or transcript.", maxChars: "At most this many characters (default 8000).", report: "Exact stored report ID to inspect instead of latest narration. Reading never resolves its question.", afterAsk: "Page pending report questions after this exact report ID. Reading does not answer them." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
@@ -685,11 +712,12 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         artifacts: "Branches, commits, pull requests, files, screenshots or test runs, each by reference.",
         question: "For blocked or needs-input: the decision you need. With done: the decision your finished work leaves (a merge, a pick between results), with its options.",
         decides: "With a done question: apex (default) or person, who decides it.",
-        waitingOn: "What you wait on outside your tree, with a question or on progress, each {kind: \"pull-request\", ref: \"owner/name#412\" or its URL, until: \"checks\" | \"review\" | \"merge\"}, {kind: \"person\", what: \"merge\"}, or {kind: \"other\", text} in a few words. Mako wakes you with a pull request's outcome.",
+        waitingOn: 'Automatic wakes: {kind:"pull-request", ref:"owner/repo#412" or its URL, until:"checks"|"review"|"merge"}. {kind:"person",what} and {kind:"other",text} record prose only: NO automatic subscription, including for Actions runs or main-commit CI. Inspect subscriptions in the result; an unsupported/unavailable wait needs a verified external notification or an explicit owner to verify its outcome.',
         options: "For a decision: the answers to pick from, each a label of a few words and what it does (detail). The person can pick one with a tap.",
         recommended: "The option you recommend, by its place in options, from 0.",
         action: "What whoever answers does, in one sentence: \"Pick the branch the release goes from.\"",
         clientKey: "Your own key for this report: a repeat with it is the same report.",
+        supersedes: "Exact IDs of your own report questions to withdraw or replace; summary gives the reason. An unrelated update settles nothing. Progress remains quiet.",
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -708,6 +736,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       ].join(" "),
       fields: {
         to: `The ${FIN_WORD}'s name (fin:<name>) or Thread ID.`,
+        ask: "Exact ask/report ID from agents_read pending. Required when several report questions remain; the receipt names only this question. Completing the requested review/dispatch is separate.",
         answer: "One of its options by its label, or your own words. For an approval you refuse, why.",
         allow: "For an approval: true allows it once, false refuses it.",
         person: "true: leave it to the person instead of answering.",
@@ -735,6 +764,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         forward: "true: pass on the person's message this turn answers, as their words.",
         text: "Your own words: beneath the person's with forward, else the whole message.",
         deliver: `For a working ${FIN_WORD}: queue (default), steer or interrupt.`,
+        reply: "none: information that needs no reply; failures, questions and explicit reports still reach you.",
         context: `Threads this message refers to, as [{ thread }], each a thread:<harness>:<id> ref, a Thread ID or a ${FIN_WORD}'s name: attached as the person's @ chip attaches one.`,
         clientKey: "Your own key for this message: a repeat with it is the same message.",
       },

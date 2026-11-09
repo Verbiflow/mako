@@ -118,8 +118,8 @@ export class CodexProvider implements SessionProvider {
   /** Where its records state the build that wrote them. */
   readonly recordWriter = CODEX_WRITER
   harness = "codex" as const
-  /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. 3: archived rows carry `nativeArchiveStamp`. 4: that stamp is the rollout's mtime. 5: archived rows carry `resumeUnavailable`. */
-  peekVersion = 5
+  /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. 3: archived rows carry `nativeArchiveStamp`. 4: that stamp is the rollout's mtime. 5: archived rows carry `resumeUnavailable`. 6: native agent origin distinguishes internal approval reviews. */
+  peekVersion = 6
   displayName = "Codex"
   /** How a session is written again as its own fork (`codex-fork.ts`). */
   readonly fork = codexFork
@@ -369,6 +369,7 @@ export class CodexProvider implements SessionProvider {
         found.ref = {
           harness: this.harness,
           nativeId: event.id,
+          ...(event.nativeAgent && { nativeAgent: event.nativeAgent }),
           path: file.path,
           cwd: event.cwd,
           startedAt: event.startedAt ?? event.at,

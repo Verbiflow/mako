@@ -21,6 +21,7 @@ export {
   type DecodedBlock,
   type DecodedEntry,
   type Harness,
+  type NativeAgentOrigin,
   type Thread,
   type ThreadOrigin,
   type ThreadPage,

@@ -1,6 +1,8 @@
 import type { SessionSettings } from "./settings.js"
 import type { z } from "zod"
 import type { DecodedBlockSchema, DecodedEntrySchema } from "./thread-schema.js"
+import type { NativeAgentOrigin } from "./native-agent-origin.js"
+export type { NativeAgentOrigin } from "./native-agent-origin.js"
 import type { Entry } from "./entries.js"
 import type { ResumePoint } from "./jsonl.js"
 import type { AttachmentContent } from "./content.js"
@@ -63,6 +65,8 @@ export interface ThreadRef {
   harness: Harness
   /** The harness's own id for the session — what its resume flag wants. */
   nativeId: string
+  /** Native role and origin, classified by the provider. Internal reviews are never delegated workers. */
+  nativeAgent?: NativeAgentOrigin
   /** The native file (or directory) holding the full session. */
   path: string
   cwd?: string

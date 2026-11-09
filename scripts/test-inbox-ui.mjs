@@ -7,6 +7,7 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
 import { atSize, withMotion } from "./lib/test-window.mjs"
+import { checkInboxNavigation } from "./lib/inbox-navigation-ui.mjs"
 
 /**
  * The rail's top rows and the Inbox, against the production components on the Apex scene (`?mock&app=apex`, "Mobile
@@ -119,12 +120,83 @@ async function checkWindow() {
 
   // 1. The fixed top rows, in order, each 28px, and no Projects / Recent / Status switch under them.
   const rows = await evaluate(`[...document.querySelectorAll('[data-rail-top-row]')].map((node) => ({ id: node.dataset.railTopRow, text: node.innerText.split('\\n')[0], height: Math.round(node.getBoundingClientRect().height) }))`)
-  assert.deepEqual(rows.map((row) => row.text), ["New thread", "Search", "Inbox", "Pull requests", "Automations"])
+  assert.deepEqual(rows.map((row) => row.text), ["New thread", "Search", "Inbox", "Pull requests", "Setup", "Automations"])
   assert.ok(rows.every((row) => row.height === 28), `the top rows are 28px: ${JSON.stringify(rows)}`)
   assert.equal(await evaluate(`document.querySelector('[aria-label="Thread view"]')`), null, "no view switch")
   assert.equal(await evaluate(`document.querySelector('[data-rail-threads-heading]')?.textContent`), "Threads")
   assert.equal(await evaluate(`[...document.querySelectorAll('.thread-jump-scope button')].some((node) => ['Projects', 'Recent', 'Status'].includes(node.innerText.trim()))`), false, "no Projects, Recent or Status button in the rail")
-  console.log("PASS: five top rows, then Threads, no view switch")
+  console.log("PASS: six top rows, then Threads, no view switch")
+
+  // Setup is reachable without opening Settings or the right rail first.
+  await click('[data-rail-top-row="setup"]')
+  await until(`Boolean(document.querySelector('[data-project-tab="setup"][aria-selected="true"], [data-app-project]'))`, "Setup from the left rail")
+  if (await evaluate(`!document.querySelector('[data-project-tab="setup"][aria-selected="true"]')`))
+    await click('[data-app-project]')
+  await until(`Boolean(document.querySelector('[data-project-tab="setup"][aria-selected="true"]'))`, "the chosen project's Setup, not its recipe")
+  await evaluate(`Promise.all(document.querySelector('[data-project-tab="setup"]').closest('[role="dialog"]').getAnimations().map((animation) => animation.finished)).then(() => true)`)
+  await capture("setup-from-rail.png")
+  await evaluate(`window.dispatchEvent(new CustomEvent('mako:close-settings'))`)
+  await until(`document.querySelector('[data-project-tab="setup"]') === null`, "Setup closed")
+  await evaluate(`import('/src/extend/commands.ts').then(({runCommand}) => runCommand('view.project-setup'))`)
+  await until(`Boolean(document.querySelector('[data-project-tab="setup"][aria-selected="true"], [data-app-project]'))`, "Project setup command")
+  await evaluate(`window.dispatchEvent(new CustomEvent('mako:close-settings'))`)
+  await until(`document.querySelector('[data-project-tab="setup"]') === null`, "Setup command closed")
+  console.log("PASS: Setup rail entry and command reuse the project's Setup page")
+
+  // Search through the rendered inputs, not the command registry or Settings store.
+  const searchFailures = []
+  const replaceInput = async (selector, text) => {
+    await click(selector)
+    await evaluate(`document.querySelector(${JSON.stringify(selector)}).select()`)
+    await page.debugger.sendCommand("Input.insertText", { text })
+    await until(`document.querySelector(${JSON.stringify(selector)})?.value === ${JSON.stringify(text)}`, `typed ${text}`)
+    await frames()
+  }
+  for (const term of ["drive", "credentials", "packages", "grants", "secrets", "environment", "Project setup"]) {
+    await chord("k", 75, process.platform === "darwin" ? 4 : 2)
+    await until(`Boolean(document.querySelector('[aria-label="Command palette"] input'))`, "Cmd+K palette")
+    await replaceInput('[aria-label="Command palette"] input', term)
+    const index = await evaluate(`[...document.querySelectorAll('[aria-label="Command palette"] button')].find((button) => button.querySelector('span')?.textContent === 'Project setup')?.dataset.index ?? null`)
+    if (index === null) searchFailures.push(`Cmd+K ${term} omits Project setup`)
+    if (term === "drive" && index !== null) {
+      await click(`[aria-label="Command palette"] button[data-index="${index}"]`)
+      await until(`Boolean(document.querySelector('[data-project-tab="setup"][aria-selected="true"], [data-app-project]'))`, "Drive palette result opens Setup")
+      await evaluate(`window.dispatchEvent(new CustomEvent('mako:close-settings'))`)
+      await until(`!document.querySelector('[aria-label="Search settings"]')`, "palette's Setup closed")
+    } else {
+      await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+      await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+    }
+    await until(`!document.querySelector('[aria-label="Command palette"]')`, "palette closed")
+  }
+  for (const [term, tab] of [["Drive", "setup"], ["credentials", "setup"], ["packages", "setup"], ["grants", "setup"], ["app", "recipe"], ["run", "recipe"], ["checks", "recipe"]]) {
+    await evaluate(`import('/src/state/app-setup.ts').then(({appSetupStore}) => {appSetupStore.set({chosen: undefined, tab: undefined}); window.dispatchEvent(new CustomEvent('mako:settings', {detail: 'models'}))})`)
+    await until(`Boolean(document.querySelector('[aria-label="Search settings"]'))`, "fresh Settings")
+    await replaceInput('[aria-label="Search settings"]', term)
+    if (term === "Drive" && !(await evaluate(`document.querySelector('[role="dialog"] main').textContent.includes('Choose a project to see its files')`))) searchFailures.push("Settings Drive auto-selection loses Setup intent")
+    await click('[data-settings-section="apps"]')
+    await until(`Boolean(document.querySelector('[data-app-project="mako"]'))`, `${term} project picker`)
+    if (term === "Drive" && !(await evaluate(`document.querySelector('[role="dialog"] main').textContent.includes('Choose a project to see its files')`))) searchFailures.push("Settings Drive picker loses Setup intent")
+    await click('[data-app-project="mako"]')
+    await until(`Boolean(document.querySelector('[data-project-tab]'))`, `${term} chosen project`)
+    if (!(await evaluate(`Boolean(document.querySelector('[data-project-tab="${tab}"][aria-selected="true"]'))`))) searchFailures.push(`Settings ${term} opens the wrong project tab`)
+    if (term === "Drive") {
+      await replaceInput('[aria-label="Search settings"]', "run")
+      if (!(await evaluate(`Boolean(document.querySelector('[data-project-tab="recipe"][aria-selected="true"]'))`))) searchFailures.push("Settings run does not return the open project to Recipe")
+      await replaceInput('[aria-label="Search settings"]', "Drive")
+      if (!(await evaluate(`Boolean(document.querySelector('[data-project-tab="setup"][aria-selected="true"]'))`))) searchFailures.push("Settings Drive does not return the open project to Setup")
+      await click('[role="dialog"] main button')
+      await until(`Boolean(document.querySelector('[data-app-project="api"]'))`, "All projects preserves Setup")
+      await click('[data-app-project="api"]')
+      await until(`Boolean(document.querySelector('[data-project-tab]'))`, "another project")
+      if (!(await evaluate(`Boolean(document.querySelector('[data-project-tab="setup"][aria-selected="true"]'))`))) searchFailures.push("All projects loses Setup on another project")
+      await capture("setup-settings-search.png")
+    }
+    await click('[role="dialog"] header button')
+    await until(`!document.querySelector('[aria-label="Search settings"]')`, "Settings closed")
+  }
+  assert.deepEqual(searchFailures, [], "command aliases and Settings search keep the intended destination")
+  console.log("PASS: actual Cmd+K aliases and Settings resource/recipe searches, including another project")
 
   // 2. The Inbox's count is the needs-you facts.
   // The facts as the Inbox's count reads them: a Setup ask arrives once its folder's Setup is read.
@@ -171,6 +243,8 @@ async function checkWindow() {
   assert.equal(await inboxCount(), expected - 1)
   console.log(`PASS: answering ${answer === "allow" ? "Allow once" : "the first option"} in the Inbox moves the Fin to working everywhere (${await rollup()})`)
   await capture("desktop-inbox-answered.png")
+
+  await checkInboxNavigation({ window, page, base, evaluate, until, frames, click, capture })
 
   // 5. The phone: the Inbox chip with its count, Needs you / Working / Recent, the asking Fins as rows of their own.
   window.setContentSize(390, 844)
