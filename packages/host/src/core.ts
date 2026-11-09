@@ -1150,6 +1150,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     harness: async (_id, want) => late.harnessTool?.allowed(want.action, want.harness),
     setting: async (_id, want) => void (await late.settingsTool?.run(want.setting)),
     move: (id, want) => late.threadMoves?.allowed(id, want),
+    back: (id) => late.threadMoves?.allowedBack(id),
     rename: async (id, want) => void (await late.threadActs?.run(id, want)),
     archive: async (id, want) => void (await late.threadActs?.run(id, want)),
     restore: async (id, want) => void (await late.threadActs?.run(id, want)),

@@ -101,6 +101,12 @@ export class ThreadMoveTool {
     if (this.#deps.place(conversationId) === "here") this.#go(conversationId, want.move, this.#deps.ownWorktree(conversationId))
   }
 
+  /** Acknowledge the person's choice on its cloud owner; the answering client opens Bring it back on their Mac. */
+  allowedBack(conversationId: string): void {
+    if (!this.#deps.machine || !this.#deps.place(conversationId)) throw new Error("That cloud Thread is no longer here to answer. Open its Thread on your Mac to bring it back.")
+    // No host move runs here, and this acknowledgement says nothing of whether the client completed its return.
+  }
+
   /** A conversation's turn ended: a move waiting for it goes now. */
   settled(conversationId: string): void {
     const pending = this.#afterTurn.get(conversationId)
