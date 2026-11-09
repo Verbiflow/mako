@@ -1271,6 +1271,17 @@ export class ThreadStore {
       })
   }
 
+  /** Report questions still owned by someone: notice delivery and later narration do not answer them. */
+  openReportAsks(child: string): Report[] {
+    const reports = this.reportsOf(child)
+    const answered = new Set(this.sql("SELECT ask FROM agent_answers WHERE child_thread = ?").all(child).map((row) => z.object({ ask: z.string() }).parse(row).ask))
+    const superseded = new Set(reports.flatMap((report) => report.supersedes ?? []))
+    const latest = reports.at(-1)
+    return reports.filter((report) => (report.retainsQuestion || report === latest) && !report.implicit &&
+      (report.status === "done" || report.status === "blocked" || report.status === "needs-input") && report.question?.trim() &&
+      !answered.has(report.id) && !superseded.has(report.id))
+  }
+
   /** Moves with every write to this store, this host's or another's, without reading a table. */
   version(): string {
     this.syncVersion()

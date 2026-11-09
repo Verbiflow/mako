@@ -476,6 +476,10 @@ export const ReportSchema = z.object({
   artifacts: z.array(ArtifactSchema).max(64).optional(),
   /** What it waits on, for `blocked` and `needs-input`; on `done`, the decision its finished work leaves. */
   question: z.string().max(4_000).optional(),
+  /** New explicit report questions persist independently of later narration. Absent in legacy reports. Host-owned. */
+  retainsQuestion: z.literal(true).optional(),
+  /** This Fin explicitly withdraws/replaces these report questions; an unrelated report settles nothing. */
+  supersedes: z.array(z.string().min(1).max(600)).max(8).optional(),
   /** Who decides a done report's question (`decisionOn`): its Apex when absent, or the person. */
   decides: z.enum(["apex", "person"]).optional(),
   /**

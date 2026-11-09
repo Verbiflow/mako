@@ -49,6 +49,7 @@ const inputs = {
       ]),
       z.object({
         to: z.string(),
+        ask: z.string().optional(),
         answer: z.string().optional(),
         allow: z.boolean().optional(),
         person: z.boolean().optional(),
@@ -251,6 +252,8 @@ const inputs = {
             )
             .optional(),
           question: z.string().optional(),
+          retainsQuestion: z.literal(true).optional(),
+          supersedes: z.array(z.string()).optional(),
           decides: z.union([z.literal("person"), z.literal("apex")]).optional(),
           waitingOn: z
             .array(
@@ -392,6 +395,8 @@ const inputs = {
           .union([z.literal("report"), z.literal("transcript")])
           .optional(),
         maxChars: z.number().optional(),
+        report: z.string().optional(),
+        afterAsk: z.string().optional(),
       }),
     ]),
   "mako:agents-redirect": () =>
@@ -450,6 +455,7 @@ const inputs = {
           )
           .optional(),
         question: z.string().optional(),
+        supersedes: z.array(z.string()).optional(),
         options: z
           .array(z.object({ label: z.string(), detail: z.string().optional() }))
           .optional(),
