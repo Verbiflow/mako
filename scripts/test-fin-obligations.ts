@@ -147,6 +147,13 @@ try {
     assert.deepEqual(next.store.openReportAsks(child), [], "legacy rows do not acquire invented unresolved obligations")
     await next.restart()
     assert.deepEqual(next.store.openReportAsks(child), [])
+    const legacy = `report:${child}:legacy-current`
+    next.store.keepReport({ id: legacy, child, status: "needs-input", summary: "An older host's current question.", question: "Which option?", ownerGeneration: next.store.latestReports().get(child)!.ownerGeneration, at: Date.now() })
+    next.store.markReportsDelivered([legacy], Date.now())
+    kept(await next.agents.read(apex.caller, { child: "worker" }))
+    kept(await next.agents.send(apex.caller, { to: "worker", text: "Use the first option.", clientKey: "legacy-reply" }))
+    await next.settle(100)
+    assert.equal(next.store.answerOf(legacy)?.by, "lead", "a delivered agent reply keeps the prior contract for an unmarked legacy question")
     console.log("fin obligations: original escalation due time, explicit owner handoff and legacy rollout boundaries pass")
   } finally { await next.close(); rmSync(dir, { recursive: true, force: true }) }
 }
