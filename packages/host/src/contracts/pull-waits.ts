@@ -11,6 +11,8 @@ export type PullWaitUntil = "checks" | "review" | "merge"
 export interface PullReading {
   state: "open" | "merged" | "closed"
   url: string
+  /** Head observed with this check rollup. A wake is a snapshot of it, never authorization to merge the later head. */
+  head?: string
   /** Its author's login: their own review comments are replies, not a review. */
   author?: string
   checks: { name: string; state: "passed" | "failed" | "running" | "unknown"; at?: number }[]
@@ -77,16 +79,16 @@ function outcomeWords(outcome: PullOutcome): string {
 }
 
 /** The one line Mako wakes the Fin with: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e). <url>". */
-export function pullWakeNote(pull: string, url: string | undefined, outcome: PullOutcome): string {
-  return `${PULL_WAKE_HEAD}${pull} ${outcomeWords(outcome)}.${url ? ` ${url}` : ""}`
+export function pullWakeNote(pull: string, url: string | undefined, outcome: PullOutcome, head?: string): string {
+  return `${PULL_WAKE_HEAD}${pull} ${outcomeWords(outcome)}${head ? `; observed head ${head}` : ""}.${url ? ` ${url}` : ""}`
 }
 const PULL_WAKE_HEAD = "Mako: PR "
 const OUTCOME_WORDS = String.raw`checks settled: (?:all \d+ passed|1 passed|\d+ failed \([^\n)]*\))|check failed: [^\n]+?|review: \S+ (?:approved|requested changes|commented)|merged|closed without merging`
-const PULL_WAKE = new RegExp(String.raw`^Mako: PR ([\w.-]+\/[\w.-]+#\d+|#\d+) (${OUTCOME_WORDS})\.(?: (https?:\/\/\S+))?$`)
+const PULL_WAKE = new RegExp(String.raw`^Mako: PR ([\w.-]+\/[\w.-]+#\d+|#\d+) (${OUTCOME_WORDS})(; observed head [a-f0-9]{40,64})?\.(?: (https?:\/\/\S+))?$`)
 
 /** A wake's note read back from its words, as a saved transcript keeps it: what its event line says, and the link. */
 export function pullWakeWords(text: string): { line: string; url?: string } | undefined {
   const found = PULL_WAKE.exec(text.trim())
   if (!found) return undefined
-  return { line: `${PULL_WAKE_HEAD}${found[1]} ${found[2]}.`, ...(found[3] && { url: found[3] }) }
+  return { line: `${PULL_WAKE_HEAD}${found[1]} ${found[2]}${found[3] ?? ""}.`, ...(found[4] && { url: found[4] }) }
 }

@@ -270,7 +270,7 @@ export interface WaitSubscription {
 export type AgentsReportResult = { id: string; deduped?: true; delivered: "notice" | "none"; subscriptions?: WaitSubscription[] } | AgentRefused
 
 export interface AgentsSendInput {
-  /** The Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. */
+  /** Your own Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. Crew siblings need a parent relay through agents_report; discovery grants no send authority. */
   to: string
   /** Pass on the person's message this turn answers, word for word, as theirs: the host fills it in, so the call stays short. */
   forward?: boolean

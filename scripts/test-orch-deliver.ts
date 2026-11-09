@@ -369,6 +369,8 @@ async function oldQueuedKeepsNewerInstructions(): Promise<void> {
       assert.match(prompt, /queued before newer instructions/, "an overtaken dispatch identifies itself as older")
       assert.match(prompt, /HOLD all landing until I explicitly RESUME/, "the current instruction accompanies the old dispatch")
       assert.match(prompt, /cannot revoke/, "later delivery cannot revoke a newer instruction")
+      assert.ok(prompt.includes(`request ${old.request}`), "the delayed dispatch names its original request")
+      assert.ok(prompt.includes(`admitted at ${snapshot.requests.find((request) => request.id === old.request)!.createdAt}`), "the original admission time survives delayed handoff and restart")
       const kept = world.live.held(fin.claude!)?.requests.find((request) => request.id === old.request)
       assert.ok(kept, "the old work is preserved")
       assert.equal(kept.text.endsWith("Land the approved change."), true)
@@ -378,8 +380,39 @@ async function oldQueuedKeepsNewerInstructions(): Promise<void> {
   }
 }
 
+/** Crew discovery gives no peer-send authority; a refusal names the relation and the existing parent relay. */
+async function siblingRefusalNamesRelay(): Promise<void> {
+  const { world, apex, fin } = await team("sibling-relay", "codex", ["claude", "cursor"])
+  try {
+    const caller = world.caller(fin.claude!)
+    const sibling = world.store.edges().all.find((edge) => edge.name === "cursor")!
+    const crew = await world.agents.list(caller, { scope: "crew" })
+    assert.ok("crew" in crew && crew.crew.some((mate) => mate.name === "cursor"))
+    const before = world.live.snapshot(fin.cursor!)!.requests.length
+    for (const to of ["cursor", "fin:cursor", sibling.child]) {
+      const receipt = await world.agents.send(caller, { to, text: "Coordinate this change.", clientKey: to })
+      assert.ok("refused" in receipt && receipt.refused === "unknown-child")
+      assert.match(receipt.why, /sibling/)
+      assert.ok(receipt.why.includes(sibling.child), "the refused target is identified")
+      assert.ok(receipt.why.includes(sibling.parent), "the relay owner is identified")
+      assert.match(receipt.why, /agents_report.*done/)
+      assert.match(receipt.why, /No message was sent/)
+    }
+    assert.equal(world.live.snapshot(fin.cursor!)!.requests.length, before, "refusal does not deliver to the sibling")
+    const relay = await world.agents.report(caller, { status: "done", summary: `Please relay this change to cursor (${sibling.child}).`, clientKey: "relay" })
+    assert.ok(!("refused" in relay) && relay.delivered === "notice", "an explicit parent relay uses the existing wake receipt")
+    await world.settle()
+    assert.ok(world.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes("Please relay this change")), "the parent actually receives the relay request")
+    assert.equal(world.live.snapshot(fin.cursor!)!.requests.length, before, "reporting asks the parent; it never silently forwards to the sibling")
+    const unknown = await world.agents.send(caller, { to: "missing", text: "No target", clientKey: "missing" })
+    assert.ok("refused" in unknown && !unknown.why.includes("sibling"), "unknown targets are not guessed to be siblings")
+  } finally {
+    await world.close()
+  }
+}
+
 try {
-  for (const test of [notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice]) {
+  for (const test of [siblingRefusalNamesRelay, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice]) {
     await test()
     console.log(`ok ${test.name}`)
   }

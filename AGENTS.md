@@ -418,7 +418,13 @@ closed, which end any wait) is claimed once per Fin, report and pull request
 never its Apex, through `deliver` under a named request as Mako's words
 (the `pull-watch` service actor): one line, "Mako: PR acme/app#371 checks
 settled: 2 failed (lint, e2e). <url>" (`pullWakeNote`), queued after a
-working Fin's turn, never steered. It never reopens, resumes or takes over
+working Fin's turn, never steered. The reader also preserves `headRefOid` as
+`PullReading.head`; the wake and transcript event name that observed head.
+The wait follows the PR's current head when read, rather than pinning a commit.
+A queued note remains an observation of that head; it grants no authority to
+merge a later head, which must be verified at the action gate. A replacement
+report retaining a wait can regenerate an invalidated queued outcome on the
+next read, including after restart. It never reopens, resumes or takes over
 a stopped Fin (`deliver`'s automatic send), and goes through the one
 admission point every prompt does, the handoff with its Stop latch
 (`LiveDispatch`, #391): there `Agents.admits` reads the wait again, the
@@ -732,7 +738,10 @@ its last step, what it was asked when it is a Fin too, and each other Fin as
 the front door's note names it (name, harness, state, what it was asked, its
 branch and last report). The person's direct words to a Fin stay out. It
 reads typed state, never a transcript, and its brief's first line says it's
-there. `npm run test:orch-comms` covers all three.
+there. Crew discovery grants no sibling-send authority. A refused sibling
+send names the target and parent, sends nothing, and points to an explicit
+`agents_report` parent relay; `delivered: notice` proves that handoff, not
+a send to the sibling. `npm run test:orch-comms` covers all three.
 An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
 (`AgentsApexes`): every tree's top Apex but its own whose conversation is
 open here, each with its title, harness, whether it works and its last step,
@@ -781,9 +790,13 @@ across harnesses, and `eval:orch-tools`' `deliver` cases
 A request keeps its `admissionOrder` in the journal, independent of queue
 priority and wall clocks. If a queued agent message follows newer instructions
 already handed over (including accepted steers), its handoff note restates
-those instructions and preserves their precedence (`agent-message-order.ts`).
+those instructions with request IDs, original admission times/orders and
+accepted steer receipts (`agent-message-order.ts`).
 Older journals use their saved admission times when available. This conveys
-instruction order; it does not enforce a hold on external operations.
+instruction order; it does not enforce a hold on external operations. Prose
+in `agents_answer` does not invoke Stop; admission order and host ownership
+are not a permission generation. Only explicit newer instructions may release
+a newer prose restriction; queue delivery is no release.
 `agents_send` with `reply: "none"` marks an informational message durably. A
 successful notification synthesizes no result and preserves an existing wait;
 failures, questions and explicit reports still report. A completed task turn

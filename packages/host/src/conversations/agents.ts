@@ -2038,7 +2038,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if ("refused" in apex) return apex
     if (input.to.startsWith(APEX_PREFIX)) return this.sendToApex(apex, input, began)
     const edge = this.resolve(apex, input.to, false)
-    if (!edge) return unknownFin(input.to)
+    if (!edge) return this.unsendableFin(apex, input.to)
     const op = `send:${apex.session}:${input.clientKey}`
     const request = namedUuid(op)
     const kept = this.sent.get(op)
@@ -4597,6 +4597,15 @@ export class Agents implements AgentOperations, ConversationChildren {
   private apexOfEdge(edge: ThreadParent): Apex {
     const conversation = this.conversationOfSession(edge.parentSession)
     return { session: edge.parentSession, thread: edge.parent, ...(conversation && { conversation }) }
+  }
+
+  /** A discovered sibling is readable crew, not an authorized send target. Name its existing parent relay. */
+  private unsendableFin(caller: Apex, ref: string): AgentRefused {
+    const edges = this.store()!.edges()
+    const own = edges.of(caller.thread)
+    const sibling = own && edges.children(own.parent).find((edge) => edge.child !== caller.thread && (edge.child === ref || edge.name === finName(ref)))
+    if (!sibling) return unknownFin(ref)
+    return { refused: "unknown-child", why: `${sibling.name} (${sibling.child}) is your sibling, owned by your ${APEX_WORD} (${sibling.parent}); crew discovery does not grant permission to send to it. No message was sent. Ask your ${APEX_WORD} to relay it with agents_report status done and the target name/Thread ID; progress does not wake it. The report's delivered: notice receipt confirms the parent handoff, not delivery to the sibling.` }
   }
 
   /** A Fin by its name, `fin:<name>` (`child:<name>` before the names) or its Thread: the Apex's own, or with `deep` a descendant's. */

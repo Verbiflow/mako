@@ -22,7 +22,7 @@ export interface PullWait {
   /** The report that named it, and the pull request by `pullKey`. */
   report: string
   pullKey: string
-  /** When the report was written: what happened before it, the Fin knew or could have. */
+  /** Report registration time: a cutoff for review events, never for the condition that current checks have settled. */
   since: number
   /** How its note names it: `acme/app#371`, or `#371`. */
   pull: string
@@ -115,7 +115,7 @@ export class PullWatch {
         if (wait.target.key !== key) continue
         const outcome = pullOutcome(reading, wait.until, wait.since)
         if (!outcome) continue
-        const note = pullWakeNote(wait.pull, reading.url, outcome)
+        const note = pullWakeNote(wait.pull, reading.url, outcome, reading.head)
         hostLog("agents", "pull request outcome", { wait: wait.key, child: wait.child, outcome: outcome.kind })
         try {
           await this.deps.fire(wait, outcome, note)

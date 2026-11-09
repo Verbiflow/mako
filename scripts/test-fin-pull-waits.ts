@@ -105,7 +105,7 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
 {
   const asked: { cwd: string; args: string[] }[] = []
   const printed = JSON.stringify({
-    state: "OPEN", url: URL, author: { login: "fin-bot" },
+    state: "OPEN", url: URL, headRefOid: "a".repeat(40), author: { login: "fin-bot" },
     statusCheckRollup: [
       { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "FAILURE", completedAt: "2026-11-04T10:00:00Z" },
       { __typename: "StatusContext", context: "deploy", state: "PENDING", startedAt: "2026-11-04T09:59:00Z" },
@@ -113,18 +113,40 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
     latestReviews: [{ author: { login: "ada" }, state: "APPROVED", submittedAt: "2026-11-04T10:05:00Z" }],
   })
   const read = await readPull({ repository: "acme/app", number: 371, cwd: "/work" }, async (cwd, args) => (asked.push({ cwd, args }), printed))
-  assert.deepEqual(asked, [{ cwd: "/work", args: ["pr", "view", "371", "--repo", "acme/app", "--json", "state,url,author,statusCheckRollup,latestReviews"] }])
+  assert.deepEqual(asked, [{ cwd: "/work", args: ["pr", "view", "371", "--repo", "acme/app", "--json", "state,url,headRefOid,author,statusCheckRollup,latestReviews"] }])
   assert.deepEqual(read, {
-    state: "open", url: URL, author: "fin-bot",
+    state: "open", url: URL, head: "a".repeat(40), author: "fin-bot",
     checks: [{ name: "lint", state: "failed", at: Date.parse("2026-11-04T10:00:00Z") }, { name: "deploy", state: "running", at: Date.parse("2026-11-04T09:59:00Z") }],
     reviews: [{ login: "ada", state: "approved", at: Date.parse("2026-11-04T10:05:00Z") }],
   })
   const bare = await readPull({ number: 12, cwd: "/work" }, async (_cwd, args) => (asked.push({ cwd: _cwd, args }), JSON.stringify({ state: "MERGED", url: URL })))
-  assert.deepEqual(asked.at(-1)?.args, ["pr", "view", "12", "--json", "state,url,author,statusCheckRollup,latestReviews"], "a bare number is read in the Fin's folder")
+  assert.deepEqual(asked.at(-1)?.args, ["pr", "view", "12", "--json", "state,url,headRefOid,author,statusCheckRollup,latestReviews"], "a bare number is read in the Fin's folder")
   assert.equal(bare?.state, "merged")
   assert.equal(await readPull({ number: 1, cwd: "/work" }, async () => { throw new Error("gh: not logged in") }), null, "a reader that can't answer says nothing")
 }
 console.log("readPull: one gh pr view by repository and number, parsed as the status tool parses it")
+
+// A PR condition follows the head in the current reading, with that observation preserved in its durable note.
+{
+  const oldHead = "a".repeat(40)
+  const currentHead = "b".repeat(40)
+  let now = 0
+  let pull = reading({ head: oldHead, checks: [check("lint", "running")] })
+  let waits: PullWait[] = [{ key: "head-wait", child: "fin", report: "r", pullKey: "acme/app#371", since: SINCE, pull: "acme/app#371", target: { key: "acme/app#371", repository: "acme/app", number: 371, cwd: "/work" }, until: "checks" }]
+  const notes: string[] = []
+  const watch = new PullWatch({ waits: () => waits, read: async () => pull, now: () => now, fire: async (_wait, _outcome, note) => { notes.push(note); waits = [] } })
+  await watch.tick()
+  assert.equal(notes.length, 0, "the earlier head is still running")
+  pull = reading({ head: currentHead, checks: [check("lint", "passed", SINCE - 50)] })
+  now = PULL_WATCH_EVERY_MS
+  await watch.tick()
+  assert.equal(notes.length, 1, "a new current head already complete at registration satisfies the condition")
+  assert.ok(notes[0]!.includes(`observed head ${currentHead}`))
+  assert.ok(!notes[0]!.includes(oldHead), "the previous reading's head cannot label the new check rollup")
+  const restored = pullWakeWords(notes[0]!)
+  assert.ok(restored?.line.includes(currentHead), "transcript readback preserves the observed head")
+  assert.equal(restored?.url, URL)
+}
 
 // The watched set on a fake clock: what waits is read, at once, then each minute doubling while nothing changes; dropped once nothing waits.
 {
@@ -336,7 +358,8 @@ try {
   // A new report may renew an unchanged wait after all checks finished (#544 and #470). It is a new wait,
   // answered from the current head's state, even after restart and even when every check predates that report.
   const finishedAt = now() - 10_000
-  pull = reading({ checks: [check("lint", "passed", finishedAt), check("e2e", "passed", finishedAt)] })
+  const observedHead = "c".repeat(40)
+  pull = reading({ head: observedHead, checks: [check("lint", "passed", finishedAt), check("e2e", "passed", finishedAt)] })
   await world.agents.report(world.caller(ciConversation), {
     status: "progress", summary: "Rerun accepted; waiting for checks.", clientKey: "renewed-after-completion",
     waitingOn: [{ kind: "pull-request", ref: URL, until: "checks" }],
@@ -344,7 +367,7 @@ try {
   await world.restart()
   await world.agents.pulls.tick()
   await world.settle(300)
-  const greenNote = `Mako: PR acme/app#371 checks settled: all 2 passed. ${URL}`
+  const greenNote = `Mako: PR acme/app#371 checks settled: all 2 passed; observed head ${observedHead}. ${URL}`
   assert.equal(finTexts.filter((text) => text === greenNote).length, 1, "a renewed wait wakes on checks that finished before its report")
   await world.restart()
   await world.agents.pulls.tick()
@@ -407,6 +430,31 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
   }
 
   try {
+    // #463: replacing narration cancels an old claim, but a retained dependency must be rediscovered after restart.
+    {
+      const { world, apex, fin, notes } = await waiting("retained-wait-at-handoff")
+      const sent = await world.agents.send(apex.caller, { to: "one", text: "busy: clarify another PR", clientKey: "busy" })
+      assert.ok(!("refused" in sent))
+      await until("the Fin to be busy", () => world.live.session(fin.conversation)?.status === "running")
+      await world.agents.pulls.tick()
+      const old = world.live.held(fin.conversation)!.requests.find((request) => request.actor?.kind === "service")!
+      assert.equal(old.status, "queued")
+      await world.agents.report(world.caller(fin.conversation), { status: "progress", summary: "Clarifying another PR; still waiting on #7.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: "clarification" })
+      world.release(fin.conversation)
+      await world.settle()
+      assert.deepEqual(notes(), [], "the obsolete claim is rejected before native handoff")
+      await world.restart()
+      await world.agents.pulls.tick()
+      await world.settle()
+      assert.equal(notes().length, 1, "the retained dependency is regenerated for the current report")
+      assert.equal(world.live.held(fin.conversation)?.requests.find((request) => request.id === old.id)?.status, "canceled")
+      await world.restart()
+      await world.agents.pulls.tick()
+      await world.settle()
+      assert.equal(notes().length, 1, "the replacement outcome wakes once across another restart")
+      await world.close()
+    }
+
     // A stop after the claim, before delivery: a restart's replay finds the Fin stopped, sends nothing, reopens nothing.
     {
       const { world, apex, notes } = await waiting("stop-after-claim")
