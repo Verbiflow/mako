@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { parseArgs } from "node:util"
 import type { AgentCaller } from "@mako/host/contracts/agents"
 import { SESSION_VARIABLE } from "@mako/host/contracts/agent-tools"
-import { SETTINGS_TOOL, THREAD_ACT_TOOL, THREAD_MOVE_TOOL, type SettingsInput, type ThreadActInput, type ThreadsMoveInput } from "@mako/host/contracts/thread-tools"
+import { HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, THREAD_MOVE_TOOL, type HarnessActInput, type SettingsInput, type ThreadActInput, type ThreadsMoveInput } from "@mako/host/contracts/thread-tools"
 import { ThreadMoveAnswerSchema, threadToolText } from "@mako/host/conversations/thread-move-tool"
 import { localHost } from "./transport.js"
 
@@ -14,7 +14,9 @@ export const THREAD_HELP = `  mako thread move cloud|back [--conversation <id>] 
                     Rename, Archive and Restore on the Thread's menu, as the thread tool does.
   mako settings read | set <setting> <value>
                     What the settings tool reads and changes: hand-off-on-sleep, continue-after-restart, harness-order
-                    (harnesses first to last, comma-separated), commit-model, keep-awake and keep-awake-lid-closed.`
+                    (harnesses first to last, comma-separated), commit-model, keep-awake and keep-awake-lid-closed.
+  mako harness read | install <harness> | update <harness>
+                    Install and Update in Settings › Harnesses, as the harness tool does.`
 
 const OPTIONS = {
   conversation: { type: "string" },
@@ -56,14 +58,22 @@ export function settingsInput(argv: string[]): SettingsInput {
   return { action, setting, value: parsed, clientKey: key }
 }
 
-/** `mako settings`: the same host call as the in-Thread `settings`. A refusal exits 1. */
+/** `mako harness read|install|update`'s input, from its arguments. */
+export function harnessInput(argv: string[]): HarnessActInput {
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS })
+  const [, action, harness] = positionals
+  if (action !== "read" && action !== "install" && action !== "update") throw new Error("harness needs read, install <harness> or update <harness>")
+  return { action, clientKey: values.key ?? randomUUID(), ...(harness && { harness }) }
+}
+
+/** `mako settings` and `mako harness`: the same host calls as the in-Thread `settings` and `harness`. A refusal exits 1. */
 export async function settingsMain(argv: string[]): Promise<void> {
-  const { values } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS })
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS })
   if (values.help) return void process.stdout.write(`${THREAD_HELP}\n`)
-  const input = settingsInput(argv)
+  const [tool, input] = positionals[0] === "harness" ? [HARNESS_TOOL, harnessInput(argv)] : [SETTINGS_TOOL, settingsInput(argv)]
   const transport = localHost(values.socket ? { socket: values.socket } : {})
   try {
-    const result = ThreadMoveAnswerSchema.parse(await transport.call(SETTINGS_TOOL.channel, [caller(), input]))
+    const result = ThreadMoveAnswerSchema.parse(await transport.call(tool.channel, [caller(), input]))
     process.stdout.write(`${values.json ? JSON.stringify(result) : threadToolText(result)}\n`)
     if (result.refused !== undefined) process.exitCode = 1
   } finally {

@@ -304,6 +304,8 @@ const replays = [
   "mako:threads-act",
   /** `SettingsTool.call`: a read, or a setting set to a value; asked twice, the same end state. */
   "mako:settings-act",
+  /** `HarnessTool.act`: a repeat under its key gets the first outcome (`OnceByKey`), and after a restart an install under way refuses a second and one done is the same end state. */
+  "mako:harnesses-act",
   /** `AgentAskGate.answer`: the ask's id; an answered ask ignores a repeat. */
   "mako:agent-ask-answer",
   /** Whether a machine has its folder for a move only reads. */
