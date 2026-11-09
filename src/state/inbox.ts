@@ -397,7 +397,7 @@ export function openInboxItem(item: InboxAsk | ReadInboxItem): void {
   const conversation = (key: string) => {
     const presence = routes ? selectAcpPresence(acpStore.get()).find((entry) => entry.key === key) : undefined
     if (presence) openConversation(presence)
-    else acp.activate(key)
+    else acp.open(key)
   }
   if (item.kind === "setup") {
     openAppSetup(setupStore.get().byFolder[item.folder]?.root ?? item.folder, "setup")

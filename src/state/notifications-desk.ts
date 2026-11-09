@@ -33,7 +33,7 @@ async function openSubject(subject: NotificationSubject): Promise<void> {
     }
     case "live": {
       const { acp } = await import("@/state/acp")
-      acp.activate(target.key)
+      acp.open(target.key)
       return
     }
     case "tab": {

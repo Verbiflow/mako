@@ -502,7 +502,7 @@ function SetupRow({ step, children }: { step: SetupStep; children: ReactNode }) 
 
 async function openConversation(id: string): Promise<void> {
   const { acp } = await import("@/state/acp")
-  if (!acp.activate(id)) toast("That Thread isn't open in this window")
+  if (!acp.open(id)) toast("That Thread isn't open in this window")
 }
 
 function ReadyMenu({ cwd, view, target }: { cwd: string; view: Ready; target: string | undefined }) {

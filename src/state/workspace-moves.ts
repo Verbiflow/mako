@@ -29,7 +29,7 @@ export function projectName(project: string): string {
 
 async function show(conversationId: string): Promise<void> {
   const { acp } = await import("@/state/acp")
-  acp.activate(conversationId)
+  acp.open(conversationId)
 }
 
 export function applyWorkspaceMoves(moves: WorkspaceMoves): void {

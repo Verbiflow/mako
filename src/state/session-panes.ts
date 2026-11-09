@@ -245,7 +245,7 @@ function keepPaneLayout(): () => void {
       if (state === "gone") focused = undefined
       if (tab) {
         focused = undefined
-        openSessionTab(tab)
+        openSessionTab(tab, "restore")
       }
     }
     if (resting) {

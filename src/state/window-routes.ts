@@ -53,8 +53,9 @@ export function toggleAgentsPanel(): void {
 
 /** Open a listed conversation: in place on the desktop, at its address where the window routes. */
 export function openConversation(presence: AcpPresence): void {
-  inboxView.close()
   const { routes } = windowRoutesStore.get()
-  if (routes) routes.open(presence)
-  else acp.activate(presence.key)
+  if (routes) {
+    inboxView.close()
+    routes.open(presence)
+  } else acp.open(presence.key)
 }

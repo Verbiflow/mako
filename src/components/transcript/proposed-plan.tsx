@@ -92,7 +92,7 @@ function PlanLead({ state, folded, onFold }: { state: PlanState; folded: boolean
       {state.openBuild ? (
         <button
           type="button"
-          onClick={() => acp.activate(state.openBuild!)}
+          onClick={() => acp.open(state.openBuild!)}
           className="pressable px-1 text-faint underline-offset-2 hover:text-foreground hover:underline"
         >
           Open that session

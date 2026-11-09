@@ -1,4 +1,5 @@
 import { answerLiveApproval } from "./live-approvals"
+import { inboxView } from "@/state/inbox-view"
 import type { WorktreeStart } from "@mako/host/contracts/thread-worktrees"
 import type { TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "@mako/host/contracts/turn-review"
 import { durableAttachments, saveMessage, settleMessage } from "@/state/message-outbox"
@@ -195,6 +196,13 @@ export const acp = {
     const request = current.requests?.find((item) => item.id === requestId && item.status === "failed")
     if (!request) return false
     return acp.startFresh(current.harness, current.cwd, request.text, request.attachments)
+  },
+
+  /** The person's explicit open; activation by recovery or an operation's completion is not navigation. */
+  open(key: string, refresh = true): boolean {
+    if (!acpStore.get().conversations[key]) return false
+    inboxView.close()
+    return acp.activate(key, refresh)
   },
 
   activate(key: string, refresh = true): boolean {
@@ -596,7 +604,7 @@ export const acp = {
 
   async openRelated(id: string): Promise<void> {
     await hydrateLive(id)
-    acp.activate(id)
+    acp.open(id)
   },
 
   async mergeFork(): Promise<void> {
