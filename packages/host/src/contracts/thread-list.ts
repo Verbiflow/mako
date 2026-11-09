@@ -10,6 +10,12 @@ export function internalReviewSession(ref: Pick<ThreadRef, "nativeAgent">): bool
   return ref.nativeAgent?.kind === "internal-review"
 }
 
+/** A record path can be reused; a placed Session further distinguishes otherwise identical native refs. */
+export function sameNativeSession(left: Pick<ThreadRef, "harness" | "nativeId" | "identity" | "sessionId">, right: Pick<ThreadRef, "harness" | "nativeId" | "identity" | "sessionId">): boolean {
+  return left.harness === right.harness && left.nativeId === right.nativeId && left.identity === right.identity &&
+    (left.sessionId === undefined || right.sessionId === undefined || left.sessionId === right.sessionId)
+}
+
 /**
  * Whether a session is a row of its own: a child's (`parent`) shows inside
  * its parent's Thread, never as a Thread. Provider internal reviews are

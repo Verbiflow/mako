@@ -81,6 +81,84 @@ async function check() {
     })()`)
     await frame()
     const only = process.env.MAKO_INTERNAL_UI_CASE
+    if (!only || only === "race") {
+      const result = await evaluate(`(async () => {
+        const f=reviewFixture, internal={...f.internal,nativeId:'uncached-review',path:'/fixture/uncached.jsonl'};
+        const stale={...internal}; delete stale.nativeAgent;
+        f.t.applyThreads([stale,f.worker,f.unknown]);
+        let release,entered; const gate=new Promise(r=>release=r),started=new Promise(r=>entered=r);
+        const before=window.mako.pageThread;
+        window.mako.pageThread=async path=>{entered();await gate;return {ref:stale,entries:[],start:0,total:0,hasEarlier:false}};
+        const reading=f.v.readThreadForPane(stale.path); await started;
+        f.t.applyThreadRef(internal); release(); const returned=await reading;
+        const cached=Boolean(f.v.rememberedThread(stale.path));
+        f.t.applyThreads([stale,f.worker,f.unknown]);
+        const listed=f.t.threadsStore.get().threads.some(ref=>ref.nativeId===internal.nativeId);
+        f.t.applyThreadRef(stale);
+        const listedByEvent=f.t.threadsStore.get().threads.some(ref=>ref.nativeId===internal.nativeId);
+        window.mako.pageThread=before;
+        return {returned:returned!==null,cached,listed,listedByEvent};
+      })()`)
+      await writeFile(join(root,"race-results.json"),JSON.stringify(result,null,2))
+      assert.deepEqual(result,{returned:false,cached:false,listed:false,listedByEvent:false}, "late originless pane/list/event cannot resurrect a classified native identity")
+      console.log("PASS uncached read and stale list/event classification fences")
+    }
+    if (!only || only === "identity") {
+      const result = await evaluate(`(async () => {
+        const f=reviewFixture,d=await import('/src/state/drafts.ts');
+        const internal={...f.internal,path:'/fixture/reused.jsonl',nativeId:'reused-review'};
+        const worker={...f.worker,path:internal.path,nativeId:'reused-worker',sessionId:'worker-session'};
+        f.t.applyThreads([worker,f.unknown]);
+        const view=f.v.viewedThread({ref:worker,entries:[{type:'text',id:'worker',text:'Real worker still here'}]});
+        f.v.rememberThread(view);f.tabs.openThreadTab(worker.path);f.t.threadsStore.set({viewing:view,opening:null});
+        d.rememberDraft(worker.path,'Keep the worker draft');
+        f.t.applyThreadRef({...internal,sessionId:'review-session'});
+        const after={view:f.t.threadsStore.get().viewing?.ref.nativeId===worker.nativeId,cache:f.v.rememberedThread(worker.path)?.ref.nativeId===worker.nativeId,tab:f.tabs.threadTabsStore.get().tabs.includes(worker.path),row:f.t.threadsStore.get().threads.some(ref=>ref.nativeId===worker.nativeId),draft:d.draftText(worker.path)==='Keep the worker draft'};
+        f.t.applyThreads([internal,f.unknown]);
+        after.snapshot=f.t.threadsStore.get().threads.some(ref=>ref.nativeId===worker.nativeId);
+        return after;
+      })()`)
+      await writeFile(join(root,"identity-results.json"),JSON.stringify(result,null,2))
+      assert.deepEqual(result,{view:true,cache:true,tab:true,row:true,draft:true,snapshot:true}, "retirement belongs to the native/session identity, not a reused path")
+      console.log("PASS genuine worker view/cache/tab/draft/row at reused path preserved")
+    }
+    if (!only || only === "successor") {
+      const result = await evaluate(`(async () => {
+        const f=reviewFixture,internal={...f.internal,nativeId:'reading-review',path:'/fixture/reading-reuse.jsonl'};
+        const stale={...internal}; delete stale.nativeAgent;
+        const worker={...f.unknown,nativeId:'new-native-worker',path:internal.path}; delete worker.nativeAgent;
+        f.t.applyThreadRef(stale);
+        let release,entered; const gate=new Promise(r=>release=r),started=new Promise(r=>entered=r);
+        let calls=0; const before=window.mako.pageThread;
+        window.mako.pageThread=async () => {calls++;if(calls===1){entered();await gate;return {ref:stale,entries:[],start:0,total:0,hasEarlier:false}}return {ref:worker,entries:[],start:0,total:0,hasEarlier:false}};
+        const oldRead=f.v.readThreadForPane(stale.path); await started;
+        f.t.applyThreadRef(worker);
+        const newRead=await f.v.readThreadForPane(worker.path);
+        f.t.applyThreadRef(internal);release();const retired=await oldRead;
+        const result={calls,newWorker:newRead?.ref.nativeId===worker.nativeId,oldReturned:retired!==null,cache:f.v.rememberedThread(worker.path)?.ref.nativeId===worker.nativeId};
+        const retiredOnly={...internal,path:'/fixture/fresh-reuse.jsonl',nativeId:'retired-only'};
+        const fresh={...worker,path:retiredOnly.path,nativeId:'fresh-reader-worker'};
+        f.t.applyThreadRef(retiredOnly);
+        window.mako.pageThread=async ()=>({ref:fresh,entries:[],start:0,total:0,hasEarlier:false});
+        result.freshWorker=(await f.v.readThreadForPane(fresh.path))?.ref.nativeId===fresh.nativeId;
+        window.mako.pageThread=before;return result;
+      })()`)
+      await writeFile(join(root,"successor-results.json"),JSON.stringify(result,null,2))
+      assert.deepEqual(result,{calls:2,newWorker:true,oldReturned:false,cache:true,freshWorker:true},"new worker owns a separate pane read at the reused path")
+      const identities = await evaluate(`(() => {
+        const f=reviewFixture,result=[];
+        for(const variant of ['harness','identity','sessionId']) {
+          const internal={...f.internal,path:'/fixture/'+variant+'.jsonl',nativeId:'identity-'+variant,sessionId:'old-session'};
+          const worker={...internal,[variant]:variant==='harness'?'claude':variant==='identity'?'new-native-store':'new-session',nativeAgent:{kind:'unknown'},title:'New worker'};
+          f.t.applyThreadRef(internal);f.t.applyThreadRef(worker);
+          const view=f.v.viewedThread({ref:worker,entries:[]});f.v.rememberThread(view);f.tabs.openThreadTab(worker.path);f.t.threadsStore.set({viewing:view,opening:variant==='harness'?{kind:'loading',ref:internal}:null,composerHarness:internal.harness});
+          f.t.applyThreadRef(internal);
+          result.push({variant,view:f.t.threadsStore.get().viewing===view,cache:f.v.rememberedThread(worker.path)===view,tab:f.tabs.threadTabsStore.get().tabs.includes(worker.path),opening:f.t.threadsStore.get().opening===null,composer:variant!=='harness'||f.t.threadsStore.get().composerHarness===worker.harness});
+        }return result;
+      })()`)
+      assert.ok(identities.every(result=>result.view&&result.cache&&result.tab&&result.opening&&result.composer),JSON.stringify(identities))
+      console.log("PASS concurrent new worker read and harness/store/placed-session identity controls")
+    }
     if (!only || only === "rail") {
       const rows = await evaluate("[...document.querySelectorAll('[data-thread-row]')].map(n=>n.textContent)")
       assert.ok(!rows.some(text => text.includes("Guardian review")), "internal review absent from rendered rail")
@@ -123,6 +201,15 @@ async function check() {
     assert.equal(await evaluate("reviewFixture.t.threadsStore.get().viewing.ref.path"), "/fixture/worker.jsonl", "a late internal update cannot close another conversation")
     await writeFile(join(root, "guardian-ui.png"), (await page.capturePage()).toPNG())
     console.log("PASS normal worker opens; internal history remains a host-owned record")
+    const capped = await evaluate(`(() => {
+      const f=reviewFixture;
+      const internal=Array.from({length:700},(_,i)=>({...f.internal,path:'/fixture/cap-review-'+i,nativeId:'cap-review-'+i}));
+      const workers=Array.from({length:601},(_,i)=>({...f.unknown,path:'/fixture/cap-worker-'+i,nativeId:'cap-worker-'+i,title:'Guardian worker '+i,model:'codex-auto-review',nativeAgent:i%2?{kind:'unknown',role:'guardian'}:{kind:'agent',role:'guardian'}}));
+      f.t.applyThreads([...internal,...workers]);const rows=f.t.threadsStore.get().threads;
+      return {count:rows.length,workersOnly:rows.every(ref=>ref.nativeId.startsWith('cap-worker-'))};
+    })()`)
+    assert.deepEqual(capped,{count:600,workersOnly:true},"internal reviews do not consume the rail cap or classify worker title/model/role")
+    console.log("PASS 700 internal / 601 ordinary workers preserve 600 capped rows")
     guard.done()
     window.destroy()
     app.exit(0)
