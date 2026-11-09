@@ -43,6 +43,13 @@ try {
     return { gate, tool }
   }
   let current = compose()
+  await service.watch(a)
+  const loadingB = service.watch(b)
+  assert.equal(service.context().cwd, undefined, "a loading B runtime cannot claim ownership of A's previous list")
+  const whileLoading = await current.tool.act({ kind: "agent", session: "own" }, { action: "run", id: "shared", clientKey: "while-loading" })
+  assert.ok("refused" in whileLoading && whileLoading.refused === "unavailable")
+  await loadingB
+  assert.equal(service.context().cwd, b)
   for (const action of ["run", "on", "off"] as const) {
     await service.watch(a)
     const requested = await current.tool.act({ kind: "agent", session: "own" }, { action, id: "shared", clientKey: action })
