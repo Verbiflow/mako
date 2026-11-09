@@ -277,7 +277,7 @@ const FORMS = [
 ]
 
 async function check() {
-  const { app, BrowserWindow, contentTracing, nativeImage } = await import("electron")
+  const { app, BrowserWindow, contentTracing, nativeImage, screen } = await import("electron")
   const root = process.env.MAKO_UI_TEST_ROOT
   const evidence = process.env.MAKO_SEND_SHOTS ?? root
   const base = process.env.MAKO_UI_TEST_URL.replace(/\/$/, "")
@@ -310,7 +310,55 @@ async function check() {
   // Released payloads change a measured row's height. Corrections and their scrollend must retain the intended
   // paragraph, while even a half-pixel external scroll supplies a new anchor. The existing CI entry runs this first.
   guard.at("released history: painted answer and reading anchor")
-  await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: 1600, height: 1000, deviceScaleFactor: 2, mobile: false })
+  // CDP's emulated DPR does not set scrollTop quantization. Chromium rounds at the window's native scale × zoom.
+  // Keep this fixture's CSS viewport fixed while explicitly exercising both resolutions; restore the original zoom
+  // before the unrelated desk/phone matrix. Each profile proves its actual DOM readback before any app corrections.
+  const nativeScale = screen.getDisplayMatching(window.getBounds()).scaleFactor
+  const originalZoom = page.getZoomFactor()
+  const inputProfiles = []
+  const inputProfile = async (scale) => {
+    const zoom = scale / nativeScale
+    // Zoom belongs to the origin; applying it on about:blank would be lost on this navigation.
+    await window.loadURL(`${base}/scripts/released-turn-incident-browser.html`)
+    await until("Boolean(document.querySelector('iframe')?.contentWindow.incidentCheck)", "released history input profile")
+    page.setZoomFactor(zoom)
+    await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", {
+      width: Math.round(1600 * zoom), height: Math.round(1000 * zoom), deviceScaleFactor: nativeScale, mobile: false,
+    })
+    await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    const readback = await evaluate(`(() => {
+      const frame = document.querySelector('iframe').contentWindow
+      const node = frame.document.createElement('div')
+      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;overflow:auto'
+      const child = frame.document.createElement('div')
+      child.style.height = '1000px'
+      node.append(child); frame.document.body.append(node)
+      const writes = [0.5, 80].map(requested => {
+        node.scrollTop = 100
+        const before = node.scrollTop
+        node.scrollTop = before + requested
+        return { requested, before, after: node.scrollTop, movement: node.scrollTop - before }
+      })
+      node.remove()
+      return { dpr: frame.devicePixelRatio, width: frame.innerWidth, height: frame.innerHeight,
+        syntheticWheelIsTrusted: new frame.WheelEvent('wheel', { deltaY: 0.5 }).isTrusted, writes }
+    })()`)
+    const profile = { scale, nativeScale, zoom: page.getZoomFactor(), versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+      platform: process.platform, arch: process.arch, input: 'DOM scrollTop assignment and synthetic untrusted events; no native gesture claim', ...readback }
+    inputProfiles.push(profile)
+    await writeFile(join(evidence, "released-history-input-profiles.json"), JSON.stringify(inputProfiles, null, 2))
+    console.log(`Released history input profile: ${JSON.stringify(profile)}`)
+    assert.equal(profile.syntheticWheelIsTrusted, false)
+    assert.equal(profile.zoom, zoom)
+    assert.equal(profile.dpr, scale)
+    assert.equal(profile.width, 1600)
+    assert.equal(profile.height, 1000)
+    assert.equal(profile.writes[0].movement, scale === 1 ? 1 : 0.5, 'isolated DOM proves the profile scroll resolution')
+    assert.equal(profile.writes[1].movement, 80)
+    return profile
+  }
+  await mkdir(evidence, { recursive: true })
+  await inputProfile(2)
   await window.loadURL(`${base}/scripts/released-turn-incident-browser.html`)
   await until("Boolean(document.querySelector('iframe')?.contentWindow.incidentCheck)", "released history fixture")
   await mkdir(evidence, { recursive: true })
@@ -318,10 +366,8 @@ async function check() {
   const beforeRelease = await incident("prepare()")
   assert.equal(beforeRelease.released, true, "default residency really released the measured target")
   await shot("released history before restoration")
-  let restoredTop
   try {
     const restored = await incident("reveal()")
-    restoredTop = restored.top
     assert.equal(restored.released, false)
     await shot("released history restored")
     // Compare the painted paragraph, away from the scroller and fixture controls, across writes below the reader.
@@ -351,25 +397,32 @@ async function check() {
     throw error
   }
   const movementCases = []
-  for (const timing of ["settledScroll", "overlappingScroll"]) {
-    for (const amount of [0.5, 80]) {
-      guard.at(`released history: ${timing} ${amount}px`)
-      await window.loadURL(`${base}/scripts/released-turn-incident-browser.html`)
-      await until("Boolean(document.querySelector('iframe')?.contentWindow.incidentCheck)", "fresh released history fixture")
-      await incident("prepare()")
-      const result = await incident(`${timing}(${amount})`)
-      const error = result.state.top - (restoredTop - result.movement)
-      movementCases.push({ timing, amount, ...result, error })
-      await shot(`released history ${timing} ${amount}px`)
+  for (const scale of [2, 1]) {
+    const profile = await inputProfile(scale)
+    await incident("prepare()")
+    const reference = await incident("reveal()")
+    for (const timing of ["settledScroll", "overlappingScroll"]) {
+      for (const amount of [0.5, 80]) {
+        guard.at(`released history: scale ${scale} ${timing} ${amount}px`)
+        await window.loadURL(`${base}/scripts/released-turn-incident-browser.html`)
+        await until("Boolean(document.querySelector('iframe')?.contentWindow.incidentCheck)", "fresh released history fixture")
+        await incident("prepare()")
+        const result = await incident(`${timing}(${amount})`)
+        const error = result.state.top - (reference.top - result.movement)
+        movementCases.push({ scale, timing, amount, expectedMovement: profile.writes.find(write => write.requested === amount).movement, ...result, error })
+        await shot(`released history scale ${scale} ${timing} ${amount}px`)
+      }
     }
   }
   await writeFile(join(evidence, "released-history-movement.json"), JSON.stringify(movementCases, null, 2))
   for (const result of movementCases) {
     assert.equal(result.injected, true, `${result.timing}: a real correction write was exercised`)
-    assert.equal(result.movement, result.amount, `${result.timing}: requested external movement actually occurred`)
+    assert.equal(result.movement, result.expectedMovement, `${result.timing}: actual movement matches the independently measured profile`)
     assert.ok(result.state.text?.includes("Finding 2"), `${result.timing} ${result.amount}px: the intended answer stays painted`)
     assert.ok(Math.abs(result.error) <= 0.1, `${result.timing} ${result.amount}px: reader displacement error ${result.error}px`)
   }
+  page.setZoomFactor(originalZoom)
+  await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: 1600, height: 1000, deviceScaleFactor: 2, mobile: false })
   guard.at("shared history: two reading panes, selection, drag and bookmarks")
   await window.loadURL(`${base}/scripts/transcript-residency-browser.html`)
   await until("Boolean(document.querySelector('button'))", "shared history fixture")
