@@ -42,6 +42,16 @@ async function until(what: string, done: () => boolean, ms = 20_000): Promise<vo
   }
 }
 
+function deliveryPayload(text: string): string {
+  return text.replace(/^<mako-local-control>[\s\S]*?<\/mako-local-control>\n\n/, "")
+}
+
+function questionWords(text: string, report: string, label: string): void {
+  const payload = readFinReports(deliveryPayload(text))
+  assert.ok(payload.text.includes(QUESTION), `${label}: the delivered prose contains the original question`)
+  assert.ok(payload.reports.find((card) => card.report === report)?.line.includes(QUESTION), `${label}: the matching report card contains the original question`)
+}
+
 async function host(root: string, harness: string, point: Point): Promise<void> {
   mkdirSync(root, { recursive: true })
   const heard = join(root, "heard.ndjson")
@@ -153,7 +163,12 @@ async function next(root: string, point: Point): Promise<void> {
     const observed = lines()
     const once = (heard: readonly Heard[]) => assert.equal(deliveries(heard).length, 1, `${label}: once, a transcript that shows it saying so`)
     once(observed)
-    assert.ok(readFinReports(told()[0]!.text).text.includes(QUESTION), `${label}: its report identity carries the original question words`)
+    questionWords(told()[0]!.text, question.id, label)
+    const original = told()[0]!
+    const payload = deliveryPayload(original.text)
+    const missingWords = { ...original, text: original.text.slice(0, original.text.length - payload.length) + payload.replaceAll(QUESTION, "Question removed.") }
+    assert.equal(deliveries([missingWords]).length, 1, `${label}: removing question words preserves the report identity`)
+    assert.throws(() => questionWords(missingWords.text, question.id, label), { code: "ERR_ASSERTION" }, `${label}: control context cannot replace missing delivered question words`)
     const planted = [...observed, { ...told()[0]! }]
     assert.equal(deliveries(planted).length, 2, `${label}: a planted duplicate is still counted`)
     assert.throws(() => once(planted), { code: "ERR_ASSERTION" }, `${label}: the same once-only guard rejects the duplicate`)
@@ -161,10 +176,10 @@ async function next(root: string, point: Point): Promise<void> {
     if (evidence) {
       const mentions = observed.filter((line) => line.conversation === apex && line.text.includes(QUESTION))
       const entries = mentions.map((line) => {
-        const payload = line.text.replace(/^<mako-local-control>[\s\S]*?<\/mako-local-control>\n\n/, "")
+        const payload = deliveryPayload(line.text)
         return { kind: line.kind, payload, contextOnly: !payload.includes(QUESTION), reports: readFinReports(line.text).reports.map((report) => report.report) }
       })
-      appendFileSync(evidence, `${JSON.stringify({ point, harness: told()[0]!.harness, report: question.id, rawQuestionEntries: mentions.length, payloadQuestionEntries: entries.filter((entry) => !entry.contextOnly).length, reportDeliveries: deliveries(observed).length, plantedDuplicateDeliveries: deliveries(planted).length, duplicateRejected: true, entries })}\n`)
+      appendFileSync(evidence, `${JSON.stringify({ point, harness: told()[0]!.harness, report: question.id, rawQuestionEntries: mentions.length, payloadQuestionEntries: entries.filter((entry) => !entry.contextOnly).length, reportDeliveries: deliveries(observed).length, plantedDuplicateDeliveries: deliveries(planted).length, duplicateRejected: true, missingQuestionRejected: true, entries })}\n`)
     }
     if (point.startsWith("digest-sent")) assert.ok(told()[0]!.text.includes(DIGEST_AGAIN), `${label}: framed as maybe repeated`)
   } finally {
