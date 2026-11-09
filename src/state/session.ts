@@ -39,6 +39,7 @@ import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOw
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
 import { createHook, createStore, shallowEqual } from "@/state/store"
+import { inboxView } from "@/state/inbox-view"
 import type {
   Capabilities,
   BootPayload,
@@ -904,6 +905,7 @@ export const actions = {
    * screen rather than replacing it.
    */
   async switchTab(id: string) {
+    inboxView.close()
     const { activeId } = tabsStore.get()
     if (id === activeId) return
     workspaceGeneration += 1
@@ -940,6 +942,7 @@ export const actions = {
 
   /** Open another conversation beside this one. */
   async openTab(options: { cwd?: string; sessionPath?: string } = {}) {
+    inboxView.close()
     workspaceGeneration += 1
     workspaceTransitionStore.set({ kind: "ready" })
     const current = store.get()

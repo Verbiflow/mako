@@ -34,6 +34,7 @@ import { threadTitle } from "@/state/thread-titles"
 import { followCheckouts } from "@/state/checkout-heads"
 import { useWorktrees, workingFolder, worktreesStore, type WorktreePlaces } from "@/state/worktrees"
 import { openConversation, windowRoutesStore } from "@/state/window-routes"
+import { inboxView } from "@/state/inbox-view"
 
 interface LiveSlot {
   key: string
@@ -302,6 +303,7 @@ export function noteOpenedByScreen(session: string | undefined): void {
 }
 
 export function openSessionTab(tab: SessionTab): void {
+  inboxView.close()
   openedByScreen = undefined
   const here = currentOnScreen()
   if (tab.id === onScreenTab(here)) return
@@ -321,6 +323,7 @@ export function openSessionTab(tab: SessionTab): void {
  * until the first message is sent.
  */
 export function newSessionInThread(): boolean {
+  inboxView.close()
   const { routes } = windowRoutesStore.get()
   if (routes) return routes.newSession()
   const here = currentOnScreen()

@@ -14,7 +14,7 @@ import { hydrateLive } from "@/state/live-recovery"
 import { threads } from "@/state/threads"
 import { openConversation, windowRoutesStore } from "@/state/window-routes"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
-import { createHook, createStore } from "@/state/store"
+import { inboxView } from "@/state/inbox-view"
 import type { ThreadsState } from "@/state/thread-state"
 import { threadStatus } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
@@ -22,6 +22,8 @@ import { threadTitle } from "@/state/thread-titles"
 import { allAsks, setupAskWords, setupStore } from "@/state/setup"
 import { openAppSetup } from "@/state/app-setup"
 import type { SetupAsk } from "@mako/host/contracts/setup"
+
+export { inboxView, inboxViewStore, useInboxView } from "@/state/inbox-view"
 
 /**
  * The Inbox: everything waiting on the person, across every Thread and Fin,
@@ -414,14 +416,4 @@ export function openInboxItem(item: InboxAsk | ReadInboxItem): void {
 /** Answers a Thread's approval with one of its options, as its own card would; false when it didn't land. */
 export function answerApproval(item: ApprovalInboxItem, optionId: string): Promise<boolean> {
   return answerLiveApproval(item.conversation, item.permission.id, { kind: "choice", optionId })
-}
-
-/** Whether the Inbox is what the main pane shows. */
-export const inboxViewStore = createStore<{ open: boolean }>({ open: false })
-export const useInboxView = createHook(inboxViewStore)
-
-export const inboxView = {
-  open: () => inboxViewStore.set({ open: true }),
-  close: () => inboxViewStore.set({ open: false }),
-  toggle: () => inboxViewStore.set({ open: !inboxViewStore.get().open }),
 }

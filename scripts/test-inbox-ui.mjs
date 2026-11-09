@@ -7,6 +7,7 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
 import { atSize, withMotion } from "./lib/test-window.mjs"
+import { checkInboxNavigation } from "./lib/inbox-navigation-ui.mjs"
 
 /**
  * The rail's top rows and the Inbox, against the production components on the Apex scene (`?mock&app=apex`, "Mobile
@@ -242,6 +243,8 @@ async function checkWindow() {
   assert.equal(await inboxCount(), expected - 1)
   console.log(`PASS: answering ${answer === "allow" ? "Allow once" : "the first option"} in the Inbox moves the Fin to working everywhere (${await rollup()})`)
   await capture("desktop-inbox-answered.png")
+
+  await checkInboxNavigation({ window, page, base, evaluate, until, frames, click, capture })
 
   // 5. The phone: the Inbox chip with its count, Needs you / Working / Recent, the asking Fins as rows of their own.
   window.setContentSize(390, 844)
