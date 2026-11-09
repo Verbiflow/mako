@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { mock } from "node:test"
+import { setImmediate as tick } from "node:timers/promises"
 import { LiveHistoryReader } from "@mako/host/conversations/live-history-reader"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { LiveHistoryReadSchema, type LiveHistoryRead } from "@mako/host/contracts/live-history"
@@ -21,9 +22,10 @@ Object.defineProperty(globalThis, "requestIdleCallback", { configurable: true, v
 const { installMockBridge } = await import("../src/dev/mock-bridge")
 const { getMako } = await import("../src/lib/bridge")
 const { acpStore } = await import("../src/state/acp-state")
-const { hydrateLive, applyLiveBatch, unlistLive } = await import("../src/state/live-recovery")
+const { hydrateLive, applyLiveBatch, applyLiveSnapshot, listLive, recaptureLive, unlistLive } = await import("../src/state/live-recovery")
 const { loadReleasedLiveTurn } = await import("../src/state/live-history")
 const { watchLiveResidency } = await import("../src/state/live-residency")
+const { readingLive } = await import("../src/state/live-door")
 const { liveReadingSource, transcriptReaders } = await import("../src/state/transcript-reading")
 installMockBridge()
 
@@ -118,6 +120,92 @@ try {
     assert.deepEqual(restored.requests, fixture.source.requests)
     console.log("PASS: default 24/64 MiB residency restores a streamed turn absent from the original capture")
   }
+  for (const change of ["unlisted", "relisted", "session", "epoch", "concurrent"] as const) {
+    const { fixture, turn } = await released()
+    const id = fixture.source.session.id
+    const waiting = gate(fixture, "snapshot")
+    const refresh = hydrateLive(id)
+    await waiting.arrived
+    const restoring = [loadReleasedLiveTurn(id, turn.id)]
+    if (change === "concurrent") {
+      const other = current(fixture).releasedTurns!.find(each => each.blocks.start === 9)!
+      assert.ok(other)
+      restoring.push(loadReleasedLiveTurn(id, other.id))
+    }
+    await tick()
+    await tick()
+    assert.equal(fixture.calls.filter(input => input.kind === "snapshot").length, 1, "restores wait for the existing hydration")
+    if (change === "session" || change === "epoch") {
+      fixture.source = { ...fixture.source, revision: 3, ...change === "epoch" ? { epoch: "g2.restore00.two" }
+        : { sessionId: SessionIdSchema.parse(auditId(sequence++)) } }
+      applyLiveSnapshot(fixture.reader.capture(fixture.source))
+    } else {
+      unlistLive([id])
+      assert.equal(acpStore.get().conversations[id], undefined)
+      if (change === "relisted") {
+        acpStore.set({ activeKey: null })
+        listLive([fixture.source])
+      }
+    }
+    const replacement = acpStore.get().conversations[id]
+    waiting.release()
+    await Promise.all([refresh, ...restoring])
+    assert.equal(Boolean(acpStore.get().conversations[id]), Boolean(replacement), "a restore waiting on hydration must not resurrect an unlisted conversation")
+    assert.equal(acpStore.get().conversations[id], replacement, "old restores leave the replacement owner or listing unchanged")
+    assert.equal(fixture.calls.filter(input => input.kind === "snapshot" && !input.ifCurrent).length, 0, "retired operations admit no new recapture")
+    if (change === "relisted") {
+      assert.ok(await hydrateLive(id), "a later explicit open still works for the same ID and Session")
+      complete(fixture)
+    }
+  }
+  {
+    const { fixture, turn } = await released()
+    const id = fixture.source.session.id
+    const loading = loadReleasedLiveTurn(id, turn.id)
+    unlistLive([id])
+    acpStore.set({ activeKey: null })
+    listLive([fixture.source])
+    const relisted = acpStore.get().conversations[id]
+    await loading
+    assert.equal(acpStore.get().conversations[id], relisted, "the retirement fence starts before the dynamic-import await")
+    assert.equal(fixture.calls.length, 0, "unlist/relist before the first await settles admits no recapture")
+  }
+  {
+    const { fixture, turn } = await released()
+    const id = fixture.source.session.id
+    const waiting = gate(fixture, "snapshot")
+    const refresh = hydrateLive(id)
+    await waiting.arrived
+    const loading = loadReleasedLiveTurn(id, turn.id)
+    await tick()
+    const updates = LiveUpdateSchema.array().parse([{ kind: "text", id: "text-4", text: " WHILE WAITING" }])
+    fixture.source = { ...fixture.source, revision: 3, blocks: reduceLiveUpdates(fixture.source.blocks, updates) }
+    applyLiveBatch({ id, epoch: fixture.source.epoch, revision: 3, updates, changedFrom: 14, blockCount: 15 })
+    waiting.release()
+    await Promise.all([refresh, loading])
+    const restored = complete(fixture)
+    const last = restored.blocks.at(-1)
+    assert.ok(last?.type === "text" && last.text.endsWith(" WHILE WAITING"), "same-owner streaming during the wait remains authoritative")
+    assert.equal(restored.releasedTurns, undefined)
+    assert.equal(fixture.calls.filter(input => input.kind === "snapshot" && !input.ifCurrent).length, 1, "a legitimate restore still recaptures after hydration")
+    console.log("PASS: pre-read retirement fences unlist/relist, owner changes and concurrent restores while preserving legitimate streaming")
+  }
+  {
+    const { fixture } = await released()
+    const id = fixture.source.session.id
+    const waiting = gate(fixture, "snapshot")
+    let permitted = true
+    const capture = recaptureLive(id, () => permitted)
+    await waiting.arrived
+    const updates = LiveUpdateSchema.array().parse([{ kind: "text", id: "text-4", text: " PAST CAPTURE" }])
+    fixture.source = { ...fixture.source, revision: 3, blocks: reduceLiveUpdates(fixture.source.blocks, updates) }
+    applyLiveBatch({ id, epoch: fixture.source.epoch, revision: 3, updates, changedFrom: 14, blockCount: 15 })
+    const newer = current(fixture)
+    permitted = false
+    waiting.release()
+    await capture
+    assert.equal(current(fixture), newer, "revoked authority also refuses a stale snapshot's token-only publication")
+  }
   {
     const { fixture } = await released()
     const old = current(fixture).releasedTurns!.find(each => each.blocks.start === 0)!
@@ -211,6 +299,7 @@ try {
     assert.ok(current(fixture).releasedTurns?.includes(turn))
     assert.equal(fixture.calls.filter(input => input.kind === "range").length, 0, "a failed recapture never falls back to the stale range")
   }
+  assert.equal(readingLive(), false, "every operation releases its retirement record")
 } finally {
   bridge.mock.restore()
   if (animation) Object.defineProperty(globalThis, "requestAnimationFrame", animation)

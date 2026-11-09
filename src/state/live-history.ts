@@ -1,6 +1,6 @@
 import { getMako } from "@/lib/bridge"
 import { acpStore, replaceAcpConversation } from "@/state/acp-state"
-import { receiveLive } from "@/state/live-door"
+import { receiveLive, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut } from "@/state/live-door"
 import { projectAcp, projectLive } from "@/state/live-projection"
 import { responseText, type Exchange } from "@/lib/exchanges"
 import type { LiveSnapshot } from "@/lib/types"
@@ -155,19 +155,26 @@ export function loadReleasedLiveTurn(id: string, turnId: string): Promise<void> 
   const owner = acpStore.get().conversations[id]
   if (owner?.kind !== "live" || !owner.releasedTurns?.some(turn => turn.id === turnId)) return Promise.resolve()
   const work = (async () => {
+    // Keep the door's retirement record through the import and any existing hydration, including unlist/relist of
+    // the same Session and epoch. Equality with the eventual owner alone cannot distinguish that new incarnation.
+    const since = unplacedReadGoesOut()
     const release = transcriptReaders.protect(liveReadingSource(id), turnId)
+    const isCurrent = () => {
+      const current = acpStore.get().conversations[id]
+      return !unlistedSince(id, since) && current?.kind === "live" && current.epoch === owner.epoch && current.sessionId === owner.sessionId
+    }
     try {
       const { recaptureLive, withLiveView } = await import("@/state/live-recovery")
       // Streaming can complete a turn after the held view was captured. A conditional refresh keeps that old view;
       // recapture it over the loaded window before reading coordinates the old view may never have held.
-      await recaptureLive(id)
+      if (!isCurrent()) return
+      await recaptureLive(id, isCurrent)
       await withLiveView(id, async () => {
-        const current = acpStore.get().conversations[id]
-        if (current?.kind !== "live" || current.epoch !== owner.epoch || current.sessionId !== owner.sessionId) return
+        if (!isCurrent()) return
         await restoreReleasedTurn(id, turnId)
       })
     }
-    finally { release() }
+    finally { release(); unplacedReadAnswered() }
   })().finally(() => turnLoads.delete(key))
   turnLoads.set(key, work)
   return work
