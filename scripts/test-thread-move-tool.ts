@@ -17,6 +17,7 @@ import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { decodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import type { AgentAsk } from "@mako/host/contracts/agent-asks"
 import { THREAD_MOVE_TOOL, type ThreadsMoveResult } from "@mako/host/contracts/thread-tools"
+import { AgentAskGate } from "@mako/host/conversations/agent-ask-gate"
 import { declareThreadMoveMethods, registerThreadTools, ThreadMoveAnswerSchema, ThreadMoveTool, type HostMoves, type ThreadMoveToolDeps, type ThreadPlace } from "@mako/host/conversations/thread-move-tool"
 import { HostMethods } from "@mako/host/transport/methods"
 import { startWebHost } from "@mako/host/transport/server"
@@ -62,6 +63,15 @@ function world(conversations: Record<string, Conversation>, options: { refusal?:
       return { kind: "continued", cloudThread: "t-continued" }
     },
   }
+  const gate = new AgentAskGate({
+    open: (id) => kept.get(id) ?? [],
+    raise: (id, ask) => void kept.set(id, [...(kept.get(id) ?? []), ask]),
+    settle: (id, ask) => {
+      const found = kept.get(id)?.find((each) => each.id === ask)
+      if (found) kept.set(id, (kept.get(id) ?? []).filter((each) => each !== found))
+      return found
+    },
+  })
   const deps: ThreadMoveToolDeps = {
     conversationOf: (session) => Object.entries(conversations).find(([, conversation]) => conversation.session === session)?.[0],
     place: (id) => conversations[id]?.place,
@@ -70,18 +80,12 @@ function world(conversations: Record<string, Conversation>, options: { refusal?:
     ownWorktree: (id) => conversations[id]?.worktree === true,
     machine: options.machine === true,
     moves: () => (options.signedOut ? undefined : moves),
-    asks: {
-      open: (id) => kept.get(id) ?? [],
-      raise: (id, ask) => void kept.set(id, [...(kept.get(id) ?? []), ask]),
-      settle: (id, ask) => {
-        const found = kept.get(id)?.find((each) => each.id === ask)
-        if (found) kept.set(id, (kept.get(id) ?? []).filter((each) => each !== found))
-        return found
-      },
-    },
+    gate,
     handOffAfterMs: 0,
   }
-  return { tool: new ThreadMoveTool(deps), calls, kept, conversations }
+  const tool = new ThreadMoveTool(deps)
+  gate.runs = { move: (id, want) => tool.allowed(id, want) }
+  return { tool, gate, calls, kept, conversations }
 }
 
 {
@@ -114,7 +118,7 @@ function world(conversations: Record<string, Conversation>, options: { refusal?:
 
 {
   // Below full access: the person is asked, once; Keep here moves nothing, Move to the cloud moves it.
-  const { tool, calls, kept, conversations } = world({ c: { session: "s-c", place: "here", tier: "auto", worktree: true } })
+  const { tool, gate, calls, kept, conversations } = world({ c: { session: "s-c", place: "here", tier: "auto", worktree: true } })
   const askOf = (result: ThreadsMoveResult) => ("ask" in result ? result.ask : "")
   const asked = await tool.move(agent("s-c"), { to: "cloud", clientKey: "k1" })
   assert.equal("outcome" in asked && asked.outcome, "asked")
@@ -123,34 +127,34 @@ function world(conversations: Record<string, Conversation>, options: { refusal?:
   assert.equal(kept.get("c")?.length, 1)
   assert.equal(kept.get("c")?.[0]?.want.kind, "move")
   assert.equal(tool.pending("c"), true)
-  tool.answer("c", askOf(asked), false)
+  await gate.answer("c", askOf(asked), false)
   await tick()
   assert.equal(calls.length, 0, "kept here")
   assert.equal(kept.get("c")?.length, 0)
-  tool.answer("c", askOf(asked), true)
+  await gate.answer("c", askOf(asked), true)
   await tick()
   assert.equal(calls.length, 0, "a repeat of an answer finds nothing")
   const again = await tool.move(agent("s-c"), { to: "cloud", clientKey: "k3" })
-  tool.answer("c", askOf(again), true)
+  await gate.answer("c", askOf(again), true)
   await tick()
   assert.deepEqual(calls.map((call) => call.kind), ["move"], "allowed, it moves")
 
   // The ask is the conversation's: an answer after a restart moves it, under the move it was asked for.
   const third = await tool.move(agent("s-c"), { to: "cloud", clientKey: "k4" })
   const restarted = world(conversations, { kept })
-  restarted.tool.answer("c", askOf(third), true)
+  await restarted.gate.answer("c", askOf(third), true)
   await tick()
   assert.deepEqual(restarted.calls.map((call) => call.kind), ["move"], "a new host answers what the last one asked")
 
   // The person moving it by hand retires the ask; one that outlives the move moves nothing.
   const fourth = await tool.move(agent("s-c"), { to: "cloud", clientKey: "k5" })
-  tool.retire("c")
+  gate.retire("c", "move")
   assert.equal(kept.get("c")?.length, 0)
   const fifth = await tool.move(agent("s-c"), { to: "cloud", clientKey: "k6" })
   assert.notEqual(askOf(fifth), askOf(fourth))
   conversations.c!.place = "cloud"
   const moves = calls.length
-  tool.answer("c", askOf(fifth), true)
+  await gate.answer("c", askOf(fifth), true)
   await tick()
   assert.equal(calls.length, moves, "an ask answered once the Thread left moves nothing")
 }
