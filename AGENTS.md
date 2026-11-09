@@ -386,8 +386,24 @@ question is open even in the same millisecond. A delivery that reached the
 Fin but couldn't be stamped stays pending, and the next start finds it under
 its request and stamps it. The answer is the Fin's next message, and
 until its next report its row says who answered (`working.answered`). `test:fin-decisions` holds the matrix,
-`test:fin-decision-ui` the surfaces (`?mock&app=apex&fins=decisions`). A
-report may name what it waits on outside its tree
+`test:fin-decision-ui` the surfaces (`?mock&app=apex&fins=decisions`).
+New explicit report questions carry `retainsQuestion`: later narration,
+notice delivery, and reads do not resolve them. `ThreadStore.openReportAsks`
+derives pending questions from report IDs, exact answer claims and explicit
+`supersedes` IDs. Legacy rows keep their prior latest-report semantics; never
+invent outstanding work from every old unclaimed question. `agents_read`
+returns eight pending IDs per page (`afterAsk`), `agents_list` gives counts,
+and every Apex dispatch, including autonomous continuations, gets a bounded
+pending view. `agents_answer` accepts `ask`, required when several remain;
+its receipt names that decision, not completion of the requested review.
+`personAsk` also keeps person-owned retained questions reachable after narration.
+A Fin may withdraw/replace its own question IDs with `supersedes` and a reason
+in summary; progress remains quiet. Existing escalation keeps the question's
+original due time across narration/restart and explicitly hands off ownership.
+Placed-Fin exact selection is refused until receiver capability is verified.
+Ordinary readiness prose still needs an explicit question/action handoff.
+`test-fin-obligations.ts`, run by `test:orch-answer`, covers the burst boundary.
+A report may name what it waits on outside its tree
 (`waitingOn`: a pull request until its checks, review or merge, the person,
 or `other` in a few words), carried on the blocked state and the open
 decision and said as "waiting on #412 checks" (`waitingWords`) in the digest,

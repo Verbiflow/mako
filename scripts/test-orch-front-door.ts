@@ -249,7 +249,7 @@ async function addressedFromTheApex(): Promise<void> {
   try {
     const fin = world.store.journalPlacement(android)!.thread
     // The Fin's turn ends with a report that wakes the Apex, as any of its turns does; the message itself starts none.
-    const personTurns = () => promptsOf(world, apex.conversation).filter((prompt) => !prompt.text.startsWith(FROM_AGENTS)).length
+    const personTurns = () => promptsOf(world, apex.conversation).filter((prompt) => !spoken(prompt.text).startsWith(FROM_AGENTS)).length
     const apexTurns = personTurns()
     const words = "Use the new signing key from the vault, not the old keystore."
     const request = randomUUID()
