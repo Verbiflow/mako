@@ -34,6 +34,8 @@ import { threadTitle } from "@/state/thread-titles"
 import { followCheckouts } from "@/state/checkout-heads"
 import { useWorktrees, workingFolder, worktreesStore, type WorktreePlaces } from "@/state/worktrees"
 import { openConversation, windowRoutesStore } from "@/state/window-routes"
+import { inboxView } from "@/state/inbox-view"
+import { threadViewingActions } from "@/state/thread-viewing"
 
 interface LiveSlot {
   key: string
@@ -301,7 +303,9 @@ export function noteOpenedByScreen(session: string | undefined): void {
   openedByScreen = session
 }
 
-export function openSessionTab(tab: SessionTab): void {
+/** A restored pane chooses its Session without leaving the page the person opened while it loaded. */
+export function openSessionTab(tab: SessionTab, intent: "person" | "restore" = "person"): void {
+  if (intent === "person") inboxView.close()
   openedByScreen = undefined
   const here = currentOnScreen()
   if (tab.id === onScreenTab(here)) return
@@ -311,8 +315,13 @@ export function openSessionTab(tab: SessionTab): void {
   }
   const { ref, presence } = tab
   const owns = presence && ref && (presence.threadPath === ref.path || presence.nativePaths?.includes(ref.path))
-  if (ref && (!presence || owns)) void threads.view(ref)
-  else if (presence) openConversation(presence)
+  if (ref && (!presence || owns)) {
+    if (intent === "restore") void threadViewingActions.view(ref)
+    else void threads.view(ref)
+  } else if (presence) {
+    if (intent === "restore") acp.activate(presence.key)
+    else openConversation(presence)
+  }
 }
 
 /**
@@ -321,6 +330,7 @@ export function openSessionTab(tab: SessionTab): void {
  * until the first message is sent.
  */
 export function newSessionInThread(): boolean {
+  inboxView.close()
   const { routes } = windowRoutesStore.get()
   if (routes) return routes.newSession()
   const here = currentOnScreen()
