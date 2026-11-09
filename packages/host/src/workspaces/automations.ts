@@ -271,6 +271,11 @@ export class Automations {
     return this.automations
   }
 
+  /** The list and its owner are one reading, before a tool asks permission for any of it. */
+  context() {
+    return { cwd: this.runtime?.cwd, automations: this.automations }
+  }
+
   async load(cwd: string): Promise<Automation[]> {
     try {
       const document = parseAutomationDocument(
@@ -306,7 +311,8 @@ export class Automations {
   }
 
   /** Enabling is per-machine and is not written to the shared file. */
-  setEnabled(id: string, enabled: boolean): Automation[] {
+  setEnabled(id: string, enabled: boolean, cwd?: string): Automation[] {
+    if (cwd !== undefined && this.runtime?.cwd !== cwd) throw new Error("The workspace changed. Open the automation's original workspace to answer its ask.")
     this.automations = this.automations.map((entry) =>
       entry.id === id && (!enabled || automationTriggerAvailable(entry.trigger))
         ? { ...entry, enabled }
@@ -325,11 +331,12 @@ export class Automations {
    * watcher pointed at a directory an agent is editing will otherwise re-trigger
    * on the agent's own output, which is a loop that bills.
    */
-  async fire(id: string, reason: AutomationRun["reason"], operation?: string): Promise<AutomationFired> {
+  async fire(id: string, reason: AutomationRun["reason"], operation?: string, cwd?: string): Promise<AutomationFired> {
+    if (cwd !== undefined && this.runtime?.cwd !== cwd) return { status: "not-run", why: "The workspace changed. Open the automation's original workspace to answer its ask." }
     if (operation !== undefined) {
       const state = this.runtime
-      if (reason !== "manual" || !this.deps.launches || !state) return { status: "not-run", why: "This host can't safely record that automation's approved run." }
-      return this.deps.launches.run(operation, { cwd: state.cwd, id }, () => this.runtime === state ? this.fire(id, reason) : Promise.resolve({ status: "not-run", why: "The workspace changed before this automation could start." }))
+      if (reason !== "manual" || !this.deps.launches || !state || !cwd) return { status: "not-run", why: "This host can't safely record that automation's approved run." }
+      return this.deps.launches.run(operation, { cwd, id }, () => this.runtime === state ? this.fire(id, reason, undefined, cwd) : Promise.resolve({ status: "not-run", why: "The workspace changed before this automation could start." }))
     }
     const automation = this.automations.find((entry) => entry.id === id)
     const state = this.runtime

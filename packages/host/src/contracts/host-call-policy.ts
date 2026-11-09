@@ -209,6 +209,7 @@ const reads = [
   "mako:skills-discover",
   "mako:skills-resolve",
   "mako:automations",
+  "mako:automation-context",
   "mako:external-editors",
   "mako:default-commit-prompt",
   "mako:native-requests",

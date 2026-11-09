@@ -34,7 +34,7 @@ export const AgentAskWantSchema = z.discriminatedUnion("kind", [
   /** Install or Update in Settings › Harnesses: software on the person's machine. */
   z.object({ kind: z.literal("harness"), action: z.enum(["install", "update"]), harness: z.string() }),
   /** Run now, or the switch, on an automation. */
-  z.object({ kind: z.literal("automation"), action: z.enum(["run", "on", "off"]), id: z.string() }),
+  z.object({ kind: z.literal("automation"), action: z.enum(["run", "on", "off"]), id: z.string(), cwd: z.string().min(1).optional() }),
 ])
 export type AgentAskWant = z.infer<typeof AgentAskWantSchema>
 
