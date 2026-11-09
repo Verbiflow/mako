@@ -58,7 +58,7 @@ import { ControlResidency, controlLine, openControl, declareControlMethods, cont
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { AgentAskGate, SettingsTool, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
+import { AgentAskGate, HarnessTool, SettingsTool, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -188,6 +188,7 @@ interface LateParts {
   threadMoves?: ThreadMoveTool
   threadActs?: ThreadActTool
   settingsTool?: SettingsTool
+  harnessTool?: HarnessTool
   agentAsks?: AgentAskGate
   /** The worktrees here of Threads that run in the cloud, following them at each turn's end. */
   cloudFollow?: CloudFollow
@@ -1130,7 +1131,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     invoke: async (channel, args) => z.json().optional().parse(decodeRuntimeValue(await methods.invoke(channel, args))),
     gate: late.agentAsks,
   })
+  late.harnessTool = new HarnessTool({
+    conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
+    tier: (id) => sessionAccessTier(live.session(id)),
+    invoke: async (channel, args) => z.json().optional().parse(decodeRuntimeValue(await methods.invoke(channel, args))),
+    machine: config.machineAgentFd !== undefined,
+    gate: late.agentAsks,
+  })
   late.agentAsks.runs = {
+    harness: async (_id, want) => late.harnessTool?.allowed(want.action, want.harness),
     setting: async (_id, want) => void (await late.settingsTool?.run(want.setting)),
     move: (id, want) => late.threadMoves?.allowed(id, want),
     rename: async (id, want) => void (await late.threadActs?.run(id, want)),
@@ -1522,6 +1531,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareThreadMoveMethods(methods, () => late.threadMoves)
   declareThreadActMethods(methods, () => late.threadActs)
   declareSettingsMethods(methods, () => late.settingsTool)
+  declareHarnessToolMethods(methods, () => late.harnessTool)
   declareAgentAskMethods(methods, () => late.agentAsks)
   const application: Application = declareApplicationMethods(methods, {
     live,

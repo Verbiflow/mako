@@ -1043,6 +1043,40 @@ const inputs = {
     z.tuple([z.string(), z.string().optional(), z.boolean().optional()]),
   "mako:harness-update": () => z.tuple([z.string()]),
   "mako:harness-updates": () => z.tuple([z.boolean().optional()]),
+  "mako:harnesses-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        action: z.union([
+          z.literal("install"),
+          z.literal("read"),
+          z.literal("update"),
+        ]),
+        harness: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:host-log-path": () => z.tuple([]),
   "mako:install-update": () => z.tuple([]),
   "mako:installation-state": () => z.tuple([]),
@@ -3321,6 +3355,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:harness-tuning", "harnesses"],
   ["mako:harness-update", "harnesses"],
   ["mako:harness-updates", "harnesses"],
+  ["mako:harnesses-act", "conversations"],
   ["mako:host-log-path", "application"],
   ["mako:install-update", "application"],
   ["mako:installation-state", "application"],
