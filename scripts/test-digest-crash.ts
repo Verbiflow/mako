@@ -5,6 +5,7 @@ import { mock } from "node:test"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DIGEST_AGAIN } from "@mako/host/contracts/children"
+import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { AgentsWorld, HARNESSES, type Heard } from "./lib/agents-world.ts"
 
@@ -113,7 +114,12 @@ async function next(root: string, point: Point): Promise<void> {
     },
   })
   try {
-    const told = () => lines().filter((line) => line.conversation === apex && line.text.includes(QUESTION))
+    const fin = world.store.journalPlacement(readFileSync(join(root, "fin"), "utf8"))!
+    const question = world.store.reportsOf(fin.thread).find((report) => report.id.endsWith(":question"))!
+    assert.ok(question, `${label}: the original question is stored`)
+    // Later inputs can repeat this question in pending control context. Only its structured report card is delivery.
+    const deliveries = (heard: readonly Heard[]) => heard.filter((line) => line.conversation === apex && readFinReports(line.text).reports.some((report) => report.report === question.id))
+    const told = () => deliveries(lines())
     if (point === "digest-sent-limit") {
       const replay = () => world.live.snapshot(apex)?.requests.find((request) => request.continues?.brief && request.digest)
       await until(`${label}: the replay, a digest, to be refused`, () => replay()?.retry !== undefined)
@@ -144,7 +150,22 @@ async function next(root: string, point: Point): Promise<void> {
     if (point !== "digest-sent-limit") await world.settle(400, 20_000, "ignore")
     else await pause(300)
     assert.equal(world.store.undeliveredReports().length, 0, `${label}: every report is heard`)
-    assert.equal(told().length, 1, `${label}: once, a transcript that shows it saying so`)
+    const observed = lines()
+    const once = (heard: readonly Heard[]) => assert.equal(deliveries(heard).length, 1, `${label}: once, a transcript that shows it saying so`)
+    once(observed)
+    assert.ok(readFinReports(told()[0]!.text).text.includes(QUESTION), `${label}: its report identity carries the original question words`)
+    const planted = [...observed, { ...told()[0]! }]
+    assert.equal(deliveries(planted).length, 2, `${label}: a planted duplicate is still counted`)
+    assert.throws(() => once(planted), { code: "ERR_ASSERTION" }, `${label}: the same once-only guard rejects the duplicate`)
+    const evidence = process.env.DIGEST_CRASH_EVIDENCE
+    if (evidence) {
+      const mentions = observed.filter((line) => line.conversation === apex && line.text.includes(QUESTION))
+      const entries = mentions.map((line) => {
+        const payload = line.text.replace(/^<mako-local-control>[\s\S]*?<\/mako-local-control>\n\n/, "")
+        return { kind: line.kind, payload, contextOnly: !payload.includes(QUESTION), reports: readFinReports(line.text).reports.map((report) => report.report) }
+      })
+      appendFileSync(evidence, `${JSON.stringify({ point, harness: told()[0]!.harness, report: question.id, rawQuestionEntries: mentions.length, payloadQuestionEntries: entries.filter((entry) => !entry.contextOnly).length, reportDeliveries: deliveries(observed).length, plantedDuplicateDeliveries: deliveries(planted).length, duplicateRejected: true, entries })}\n`)
+    }
     if (point.startsWith("digest-sent")) assert.ok(told()[0]!.text.includes(DIGEST_AGAIN), `${label}: framed as maybe repeated`)
   } finally {
     await world.close()
