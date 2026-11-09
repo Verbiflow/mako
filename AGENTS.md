@@ -396,7 +396,14 @@ Fin's turn ended, reads as idle waiting since the report (`ChildState`'s
 `idle.waitingOn`, `since`), in the crew row, the strip and the front door
 as "Waiting on acme/app#371 checks · 12m" (`waitingStateWords`); the
 orchestration text tells a Fin to report so and end its turn rather than
-poll checks. `PullWatch` (`conversations/pull-watch.ts`) reads only the pull
+poll checks. The report result's `subscriptions` distinguishes a registered
+PR watch, an outcome already claimed for delivery, an inactive old wait,
+unsupported prose, and a host with no reader. `person` and `other` only
+record intent; Actions runs and main-commit CI have no automatic watch here.
+An unsupported or unavailable receipt needs a verified external notification
+or an explicit outcome owner. Run/job/commit references stay as reported,
+including across restarts; no text or artifact is parsed into a watch.
+`PullWatch` (`conversations/pull-watch.ts`) reads only the pull
 requests open Fins' latest reports name, rebuilt from the stored reports on
 each tick and so on start, through `readPull` (the same `gh pr view` and
 check normalising `pull_request_status` uses), on the job `read the pull

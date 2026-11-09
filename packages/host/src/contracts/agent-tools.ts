@@ -261,7 +261,13 @@ export interface AgentsReportInput {
   /** A repeat with the same key is the same report. */
   clientKey: string
 }
-export type AgentsReportResult = { id: string; deduped?: true; delivered: "notice" | "none" } | AgentRefused
+/** An automatic subscription receipt, distinct from a report merely recording what it waits on. */
+export interface WaitSubscription {
+  wait: WaitingOn
+  state: "registered" | "claimed" | "unsupported" | "unavailable" | "inactive"
+  why?: string
+}
+export type AgentsReportResult = { id: string; deduped?: true; delivered: "notice" | "none"; subscriptions?: WaitSubscription[] } | AgentRefused
 
 export interface AgentsSendInput {
   /** The Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. */
@@ -687,7 +693,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         artifacts: "Branches, commits, pull requests, files, screenshots or test runs, each by reference.",
         question: "For blocked or needs-input: the decision you need. With done: the decision your finished work leaves (a merge, a pick between results), with its options.",
         decides: "With a done question: apex (default) or person, who decides it.",
-        waitingOn: "What you wait on outside your tree, with a question or on progress, each {kind: \"pull-request\", ref: \"owner/name#412\" or its URL, until: \"checks\" | \"review\" | \"merge\"}, {kind: \"person\", what: \"merge\"}, or {kind: \"other\", text} in a few words. Mako wakes you with a pull request's outcome.",
+        waitingOn: 'Automatic wakes: {kind:"pull-request", ref:"owner/repo#412" or its URL, until:"checks"|"review"|"merge"}. {kind:"person",what} and {kind:"other",text} record prose only: NO automatic subscription, including for Actions runs or main-commit CI. Inspect subscriptions in the result; an unsupported/unavailable wait needs a verified external notification or an explicit owner to verify its outcome.',
         options: "For a decision: the answers to pick from, each a label of a few words and what it does (detail). The person can pick one with a tap.",
         recommended: "The option you recommend, by its place in options, from 0.",
         action: "What whoever answers does, in one sentence: \"Pick the branch the release goes from.\"",

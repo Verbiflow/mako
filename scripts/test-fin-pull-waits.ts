@@ -12,7 +12,7 @@ import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-ide
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { PULL_WATCH_EVERY_MS, PULL_WATCH_MAX_MS, PullWatch, type PullWait } from "@mako/host/conversations/pull-watch"
 import { readPull } from "@mako/host/git/index"
-import { AgentsWorld, type Script } from "./lib/agents-world.ts"
+import { AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
 
 /*
  * A Fin woken by the pull request it waits on (`npm run test:fin-pull-waits`): the outcome a reading shows, matched to
@@ -187,6 +187,66 @@ console.log("readPull: one gh pr view by repository and number, parsed as the st
   assert.equal(reads.length, before, "no pull request is read that nothing waits on")
 }
 console.log("PullWatch: read at once, then a minute doubling to eight while unchanged; fired once; pruned when nothing waits")
+
+// Prose retains its exact source identities but is never an effective subscription, before or after restart.
+{
+  const dir = mkdtempSync(join(tmpdir(), "mako-unwatched-main-"))
+  let reads = 0
+  const options: WorldOptions = { root: dir, script: () => "ok", readPull: async () => { reads += 1; return null } }
+  const world = new AgentsWorld(options)
+  const wait = { kind: "other" as const, text: `Main CI run7 attempt1 job71 at ${"a".repeat(40)}` }
+  const artifacts = [{ kind: "test-run" as const, ref: "https://github.com/acme/app/actions/runs/7" }, { kind: "commit" as const, ref: "a".repeat(40) }]
+  try {
+    const apex = await world.apex("codex", "full")
+    const fin = await world.agents.start(apex.caller, { harness: "claude", brief: { objective: "Observe main CI" }, name: "ci", clientKey: "ci", cwd: dir })
+    assert.ok(!("refused" in fin) && fin.conversation)
+    await world.settle(100)
+    const input = { status: "progress" as const, summary: "Waiting for main CI.", waitingOn: [wait], artifacts, clientKey: "prose" }
+    const receipt = await world.agents.report(world.caller(fin.conversation!), input)
+    assert.ok(!("refused" in receipt))
+    assert.equal(receipt.subscriptions?.[0]?.state, "unsupported", "recorded prose must not masquerade as an automatic watch")
+    assert.match(receipt.subscriptions?.[0]?.why ?? "", /no automatic wake/)
+    assert.deepEqual(receipt.subscriptions?.[0]?.wait, wait, "the refusal preserves job/run/attempt/head identity")
+    assert.match(waitingStateWords([wait], 0, 0), /no automatic wake/, "the durable unsupported state is visible when read")
+    await world.agents.pulls.tick()
+    assert.deepEqual(world.agents.pulls.keys(), [])
+    assert.equal(reads, 0, "an artifact URL or prose is never parsed into a PR watch")
+    await world.restart()
+    await world.agents.pulls.tick()
+    const reread = await world.agents.report(world.caller(fin.conversation!), input)
+    assert.ok(!("refused" in reread) && reread.subscriptions?.[0]?.state === "unsupported", "an old durable report gets the same honest receipt after migration/restart")
+    const child = world.store.edges().all.find((edge) => edge.name === "ci")!.child
+    const kept = world.store.reportsOf(child).find((report) => report.id.endsWith(":prose"))!
+    assert.deepEqual(kept.waitingOn, [wait])
+    assert.deepEqual(kept.artifacts, artifacts)
+    assert.deepEqual(world.agents.pulls.keys(), [])
+    assert.equal(reads, 0, "restart doesn't invent a subscription")
+    const validInput = { status: "progress" as const, summary: "Waiting on an actual PR.", waitingOn: [{ kind: "pull-request" as const, ref: "acme/app#371", until: "checks" as const }], clientKey: "valid" }
+    const valid = await world.agents.report(world.caller(fin.conversation!), validInput)
+    assert.ok(!("refused" in valid) && valid.subscriptions?.[0]?.state === "registered", "a supported condition returns an actual registration receipt")
+    assert.deepEqual(world.agents.pulls.keys(), ["acme/app#371"])
+    const stale = await world.agents.report(world.caller(fin.conversation!), input)
+    assert.ok(!("refused" in stale) && stale.subscriptions?.[0]?.state === "unsupported")
+    assert.deepEqual(world.agents.pulls.keys(), ["acme/app#371"], "replaying the old prose report cannot replace a newer subscription")
+    const current = world.store.reportsOf(child).at(-1)!
+    world.store.claimPullWake({ wait: `pull-wake:${child}:${current.id}:acme/app#371`, child, report: current.id, pull: "acme/app#371", outcome: "settled", request: randomUUID(), text: "Mako: PR acme/app#371 checks settled: all 1 passed.", at: Date.now() })
+    const claimed = await world.agents.report(world.caller(fin.conversation!), validInput)
+    assert.ok(!("refused" in claimed) && claimed.subscriptions?.[0]?.state === "claimed", "a durable claim is distinct from a live watch or proven delivery")
+    assert.match(!("refused" in claimed) ? claimed.subscriptions?.[0]?.why ?? "" : "", /does not prove/)
+    await world.agents.report(world.caller(fin.conversation!), { status: "progress", summary: "Wait withdrawn.", clientKey: "withdraw" })
+    const inactive = await world.agents.report(world.caller(fin.conversation!), validInput)
+    assert.ok(!("refused" in inactive) && inactive.subscriptions?.[0]?.state === "inactive", "replaying an obsolete report cannot claim a live registration")
+    options.readPull = undefined
+    await world.restart()
+    const unavailable = await world.agents.report(world.caller(fin.conversation!), { ...validInput, clientKey: "without-reader" })
+    assert.ok(!("refused" in unavailable) && unavailable.subscriptions?.[0]?.state === "unavailable", "a host without the reader cannot promise an automatic wake")
+    assert.deepEqual(world.agents.pulls.keys(), [])
+  } finally {
+    await world.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+console.log("subscription receipts: unsupported prose, exact identity through restart, valid PR registration, no implicit monitoring")
 
 // Through the engine: a Fin's report names a pull request; its outcome wakes the Fin once, never its Apex, across restarts.
 const root = mkdtempSync(join(tmpdir(), "mako-pull-waits-"))

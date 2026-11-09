@@ -64,7 +64,7 @@ export type FinDecision = z.infer<typeof FinDecisionSchema>
 /**
  * One thing a Fin waits on outside its tree, as its report names it: a pull request until its checks, a review or a
  * merge, whose outcome Mako wakes it with (`contracts/pull-waits.ts`); the person, for what they do ("merge"); or
- * anything else in a few words (`other`).
+ * anything else in a few words (`other`). Person and other waits record intent only; they register no automatic wake.
  */
 export const WaitingOnSchema = z.union([
   z.object({

@@ -9,6 +9,7 @@ import { branchSince, checkoutSince } from "../base/checkout-since.js"
 import { cutAccount } from "./cut-account.js"
 import { personWaiting } from "./session-report.js"
 import { agentMessageOrder } from "./agent-message-order.js"
+import type { WaitSubscription } from "../contracts/agent-tools.js"
 import type { Waiting } from "../contracts/notifications.js"
 import { finMovedText, finResumedText } from "../contracts/resume-account.js"
 import { usageLimitWords } from "../contracts/provider-failure.js"
@@ -2013,7 +2014,22 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const kept = this.keepReport(edge, report)
     if ("refused" in kept) return kept
-    return { id: kept.report.id, ...(kept.deduped && { deduped: true as const }), delivered: kept.report.status === "progress" ? "none" : "notice" }
+    return { id: kept.report.id, ...(kept.deduped && { deduped: true as const }), delivered: kept.report.status === "progress" ? "none" : "notice", ...(kept.report.waitingOn?.length && { subscriptions: this.waitSubscriptions(edge, kept.report) }) }
+  }
+
+  /** What was actually registered, from the kept report, its current owner, configured reader and durable claims. */
+  private waitSubscriptions(edge: ThreadParent, report: Report): WaitSubscription[] {
+    this.pulls.refresh()
+    const claimed = this.store()!.pullWakesOf([edge.child])
+    return (report.waitingOn ?? []).map((wait): WaitSubscription => {
+      if (wait.kind !== "pull-request") return { wait, state: "unsupported", why: "Recorded only: no automatic wake. Actions runs and main-commit checks are not supported watch targets. Arrange a verified external notification or keep an explicit owner to verify the outcome; a merged PR cannot stand in for main CI." }
+      const pull = waitedPull(wait)
+      if (!pull) return { wait, state: "unsupported", why: "No valid PR target; use its URL or owner/repo#number. No automatic wake was registered." }
+      if (!this.deps.readPull) return { wait, state: "unavailable", why: "This host has no PR reader; no automatic wake was registered. Keep an explicit outcome owner or arrange a verified external notification." }
+      if (!this.pullWaitHolds(edge.child, report.id, pull.key)) return { wait, state: "inactive", why: "This is no longer the Fin's current open wait; no new wake was registered." }
+      if (claimed.has(`pull-wake:${edge.child}:${report.id}:${pull.key}`)) return { wait, state: "claimed", why: "The outcome has a durable delivery claim; this does not prove the Fin has heard it." }
+      return { wait, state: "registered" }
+    })
   }
 
   async send(caller: AgentCaller, input: AgentsSendInput): Promise<AgentsSendResult> {

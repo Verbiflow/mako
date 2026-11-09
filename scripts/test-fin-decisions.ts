@@ -166,7 +166,7 @@ console.log("digest, front door: \"done; decide: Merge #371? (Merge · Leave ope
 // waitingOn: typed items or a few words, carried on a blocked state and an open decision, said in every line.
 {
   const waitingOn = [{ kind: "pull-request" as const, ref: "https://git.example.com/acme/app/pull/412", until: "checks" as const }, { kind: "person" as const, what: "merge" }, { kind: "other" as const, text: "the staging deploy" }]
-  assert.equal(waitingWords(waitingOn), "waiting on #412 checks, the person to merge, the staging deploy")
+  assert.equal(waitingWords(waitingOn), "waiting on #412 checks, the person to merge, the staging deploy (no automatic wake)")
   assert.equal(waitingWords([{ kind: "pull-request", ref: "#7" }]), "waiting on #7")
   assert.equal(
     waitingWords([{ kind: "pull-request", ref: "https://git.example.com/acme/app/pull/7", until: "checks" }, { kind: "pull-request", ref: "https://git.example.com/acme/api/pull/7", until: "review" }]),
@@ -191,7 +191,7 @@ console.log("digest, front door: \"done; decide: Merge #371? (Merge · Leave ope
   assert.match(wake, /is asking: Merge #371\? · waiting on #412 checks\n/)
   assert.equal(readFinReports(wake).reports[0]?.waiting, "waiting on #412 checks", "its card carries the waiting words")
   const note = frontDoorNote([{ name: "merge", harness: "Codex", state: decided, topic: "Get the PR green" }], AT).join("\n")
-  assert.match(note, /- fin:merge · Codex · done; decide: Merge #371\? \(Merge · Leave open, recommends Merge\) · waiting on #412 checks, the person to merge, the staging deploy · asked:/)
+  assert.match(note, /- fin:merge · Codex · done; decide: Merge #371\? \(Merge · Leave open, recommends Merge\) · waiting on #412 checks, the person to merge, the staging deploy \(no automatic wake\) · asked:/)
 }
 console.log("waitingOn: typed or in words, on blocked and open decisions, \"waiting on #412 checks\" in the digest and front door")
 
