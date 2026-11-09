@@ -9,6 +9,7 @@ import { markedProcesses, processesHolding, processFolders, type MarkedProcess }
 import { processIdentityMatches, processStartedAt } from "../base/process-liveness.js"
 import { errorMessage } from "../base/error-message.js"
 import type { AgentRefused, ChildOrigin, ChildRole, ChildThread, FollowedRun, ThreadParent } from "../contracts/agents.js"
+import { internalDiscoveredRun } from "../contracts/agents.js"
 import { SESSION_VARIABLE } from "../contracts/agent-tools.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
@@ -82,7 +83,7 @@ export const PROCESS_READS: ProcessReads = {
 
 export interface AgentRunsDeps {
   store(): ThreadStore | undefined
-  catalog: Pick<ThreadCatalog, "nativePath" | "ref" | "page" | "activity" | "subscribe" | "announce">
+  catalog: Pick<ThreadCatalog, "nativePath" | "ref" | "page" | "activity" | "subscribe" | "announce"> & Partial<Pick<ThreadCatalog, "readRef">>
   jobs: HostJobs
   /** Whether `harness` has a CLI a conversation's shell can run, so a Session of it can be one started there. */
   runs(harness: string): boolean
@@ -159,12 +160,40 @@ export class AgentRuns {
   private discoveries: Promise<void> = Promise.resolve()
   private seen: unknown
   private stopped = false
+  private readonly originsRead = new Set<string>()
+  private readonly originRecovery: Promise<void>
 
   constructor(deps: AgentRunsDeps) {
     this.deps = deps
     this.demand = deps.jobs.demand("followed agent runs on this device")
     this.cancelJob = deps.jobs.every("follow agent runs", LIVENESS_MS, () => this.check(), { firstAfterMs: 0, needs: [this.demand] })
     this.unsubscribe = deps.catalog.subscribe((event) => this.catalogEvent(event))
+    this.sync()
+    this.originRecovery = this.recoverOrigins()
+  }
+
+  /** Before replaying old decisions, read native origin from historical discoveries, past catalog startup/cache timing. */
+  reconciled(): Promise<void> {
+    return this.originRecovery
+  }
+
+  private async recoverOrigins(): Promise<void> {
+    const store = this.deps.store()
+    const read = this.deps.catalog.readRef
+    if (!store || !read) return
+    for (const edge of store.edges().all) {
+      const run = edge.run
+      if (edge.origin !== "discovered" || !run || run.nativeAgent?.kind === "agent") continue
+      const path = run.nativeId && this.deps.catalog.nativePath({ harness: run.harness, nativeId: run.nativeId }) ||
+        store.thread(edge.child)?.sessions.flatMap((session) => store.sessionContents(session).natives).find((native) => native.harness === run.harness)?.path
+      const ref = path ? await read(path).catch(() => null) : undefined
+      if (this.stopped) return
+      const current = store.edges().of(edge.child)
+      if (current && ref?.harness === run.harness && ref.nativeId === run.nativeId) this.reconcile(current, ref)
+      this.originsRead.add(edge.child)
+    }
+    // The native origin can be unavailable. That is not evidence of an internal reviewer: real failures remain visible.
+    this.seen = undefined
     this.sync()
   }
 
@@ -219,7 +248,10 @@ export class AgentRuns {
   /** Takes in a run as a child: its Session's Thread gets an edge under the parent Session's Thread. */
   async adopt(input: RunAdoption): Promise<ThreadParent | AgentRefused> {
     const store = this.requireStore()
-    const { ref } = input
+    const latest = this.deps.catalog.ref(input.ref.path)
+    const ref = latest?.harness === input.ref.harness && latest.nativeId === input.ref.nativeId ? latest : input.ref
+    if (input.ref.nativeAgent?.kind === "internal-review" || ref.nativeAgent?.kind === "internal-review")
+      return { refused: "unsupported", why: "That native session is an internal approval review, not a delegated Fin." }
     const kept = store.edges().byRun(ref.harness, ref.nativeId)
     const parent = store.sessionPlacement(SessionIdSchema.parse(input.parentSession))
     if (!parent) return { refused: "no-parent", why: "This Thread isn't in the Thread store yet." }
@@ -250,10 +282,12 @@ export class AgentRuns {
         device: store.deviceId,
         ...(input.process && { process: input.process }),
         startedAt,
+        ...(ref.nativeAgent && { nativeAgent: ref.nativeAgent }),
       },
     })
     if (input.name) store.keepThreadTitle(edge.child, input.name)
     hostLog("agents", "edge written", { op: edge.op, child: edge.child, parent: edge.parent, origin: input.origin, harness: ref.harness })
+    this.originsRead.add(edge.child)
     this.sync()
     const followed = this.followed.get(edge.child) ?? this.follow(edge)
     this.byPath.set(ref.path, edge.child)
@@ -265,6 +299,8 @@ export class AgentRuns {
       followed.reading = { ...followed.reading, alive: true }
       void this.read(followed)
     } else await this.settle(followed)
+    if (store.edges().internalRuns.some((internal) => internal.child === edge.child))
+      return { refused: "unsupported", why: "That native session was identified as an internal approval review during adoption." }
     this.deps.changed(followed.edge, false)
     return followed.edge
   }
@@ -357,7 +393,7 @@ export class AgentRuns {
     while (!this.stopped) {
       const identity = await this.identity(process)
       // A host that shut down during that read leaves the stop to the next one, its store closed with it.
-      if (this.stopped) return
+      if (this.stopped || this.terminating.get(child) !== process) return
       // Another process's pid now: a pid isn't reused while its group lives, so the group under that id is the new one's.
       // Gone: only once nothing of its group is left either.
       if (identity === "other" && (signalable(process.pid) || !groupRuns(process.pid))) break
@@ -484,8 +520,13 @@ export class AgentRuns {
     if (edges === this.seen) return
     this.seen = edges
     const kept = new Set<string>()
-    for (const edge of edges.all) {
+    for (const original of edges.all) {
+      const run = original.run
+      const path = run?.nativeId ? this.deps.catalog.nativePath({ harness: run.harness, nativeId: run.nativeId }) : undefined
+      const edge = this.reconcile(original, path ? this.deps.catalog.ref(path) : undefined)
       if (!edge.run) continue
+      if (internalDiscoveredRun(edge)) continue
+      if (edge.origin === "discovered" && edge.run.nativeAgent?.kind !== "agent" && this.deps.catalog.readRef && !this.originsRead.has(edge.child)) continue
       kept.add(edge.child)
       const followed = this.followed.get(edge.child)
       if (!followed) this.follow(edge)
@@ -495,11 +536,25 @@ export class AgentRuns {
         this.deps.changed(edge, false)
       }
     }
-    for (const [child, followed] of this.followed) if (!kept.has(child)) {
-      clearTimeout(followed.timer)
-      this.followed.delete(child)
+    for (const followed of this.followed.values()) if (!kept.has(followed.edge.child)) {
+      this.unfollow(followed)
     }
     this.wantChecks()
+  }
+
+  /** Reconcile old discovered edges through provider facts, without stopping the native session or deleting history. */
+  private reconcile(edge: ThreadParent, ref: ThreadRef | undefined): ThreadParent {
+    if (!edge.run || !ref?.nativeAgent || edge.run.harness !== ref.harness || edge.run.nativeId !== ref.nativeId || JSON.stringify(edge.run.nativeAgent) === JSON.stringify(ref.nativeAgent)) return edge
+    return this.requireStore().keepEdge({ ...edge, run: { ...edge.run, nativeAgent: ref.nativeAgent } })
+  }
+
+  private unfollow(followed: Followed): void {
+    const child = followed.edge.child
+    clearTimeout(followed.timer)
+    this.followed.delete(child)
+    this.terminating.delete(child)
+    for (const [key, value] of this.byNative) if (value === child) this.byNative.delete(key)
+    for (const [key, value] of this.byPath) if (value === child) this.byPath.delete(key)
   }
 
   private follow(edge: ThreadParent): Followed {
@@ -534,7 +589,7 @@ export class AgentRuns {
   private end(followed: Followed, ended: RunEnd, more: Partial<FollowedRun> = {}): void {
     const store = this.deps.store()
     const run = followed.edge.run
-    if (!store || this.stopped || !run || run.ended) return
+    if (!store || this.stopped || !run || run.ended || store.edges().internalRuns.some((edge) => edge.child === followed.edge.child)) return
     try {
       followed.edge = store.keepEdge({ ...followed.edge, run: { ...run, ...more, ended } })
     } catch (error) {
@@ -673,9 +728,25 @@ export class AgentRuns {
   }
 
   private refChanged(ref: ThreadRef): void {
+    const original = this.deps.store()?.edges().byRun(ref.harness, ref.nativeId)
+    if (original && internalDiscoveredRun(this.reconcile(original, ref))) {
+      const followed = this.followed.get(original.child)
+      if (followed) this.unfollow(followed)
+      this.wantChecks()
+      this.deps.changed(original, false)
+      return
+    }
     const child = this.byNative.get(nativeKey(ref.harness, ref.nativeId)) ?? this.byPath.get(ref.path)
     const followed = child ? this.followed.get(child) : undefined
     if (followed) {
+      const edge = this.reconcile(followed.edge, ref)
+      if (internalDiscoveredRun(edge)) {
+        this.unfollow(followed)
+        this.wantChecks()
+        this.deps.changed(edge, false)
+        return
+      }
+      followed.edge = edge
       if (followed.reading.session?.path !== ref.path) {
         this.byPath.set(ref.path, followed.edge.child)
         followed.reading = { ...followed.reading, session: sessionOf(ref.path, ref) }
@@ -683,7 +754,7 @@ export class AgentRuns {
       this.schedule(followed)
       return
     }
-    if (ref.parent || ref.childOf || !this.deps.runs(ref.harness)) return
+    if (ref.nativeAgent?.kind === "internal-review" || ref.parent || ref.childOf || !this.deps.runs(ref.harness)) return
     const started = Date.parse(ref.startedAt ?? "")
     if (!Number.isFinite(started) || this.now() - started > DISCOVER_MS) return
     this.discover(ref, started)

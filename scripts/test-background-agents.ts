@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import "./test-internal-native-agents.ts"
 import { spawn } from "node:child_process"
 import { mock } from "node:test"
 import { randomUUID } from "node:crypto"

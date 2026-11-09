@@ -49,7 +49,7 @@ import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
-import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
+import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, internalDiscoveredRun, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
@@ -221,6 +221,8 @@ export interface ThreadRecord {
  */
 export interface ThreadEdges {
   all: readonly ThreadParent[]
+  /** Historical discoveries reclassified as internal native reviews; only reconciliation reads these. */
+  internalRuns: readonly ThreadParent[]
   of(child: string): ThreadParent | undefined
   children(parent: string): readonly ThreadParent[]
   byOp(op: string): ThreadParent | undefined
@@ -948,6 +950,7 @@ export class ThreadStore {
     const held = this.edgesSeen
     if (held && held.revision === this.revision && this.depth === 0) return held.edges
     const all: ThreadParent[] = []
+    const internalRuns: ThreadParent[] = []
     const byChild = new Map<string, ThreadParent>()
     const byParent = new Map<string, ThreadParent[]>()
     const byOp = new Map<string, ThreadParent>()
@@ -956,6 +959,8 @@ export class ThreadStore {
       const parsed = ThreadParentSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
       if (!parsed.success) continue
       const edge = parsed.data
+      // Keep the original edge and reports as history. A confirmed internal native reviewer was never delegated work.
+      if (internalDiscoveredRun(edge)) { internalRuns.push(edge); continue }
       all.push(edge)
       byChild.set(edge.child, edge)
       byOp.set(edge.op, edge)
@@ -975,6 +980,7 @@ export class ThreadStore {
       }
     const edges: ThreadEdges = {
       all,
+      internalRuns,
       of: (child) => byChild.get(child),
       children: (parent) => byParent.get(parent) ?? [],
       byOp: (op) => byOp.get(op),
