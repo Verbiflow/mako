@@ -16,6 +16,7 @@ export type AskRuns = { [Kind in AgentAskWant["kind"]]: Run<Kind> }
  */
 export class AgentAskGate {
   readonly #asks: Pick<LiveAsks, "open" | "raise" | "settle">
+  readonly #allowing = new Map<string, Promise<void>>()
   /** Told once composition has every tool. */
   runs: Partial<AskRuns> = {}
 
@@ -36,12 +37,29 @@ export class AgentAskGate {
     return ask
   }
 
-  /** The person's answer. A repeat finds nothing. */
+  /** A failed allow keeps the exact ask; matching answers share its result until it succeeds. */
   async answer(conversationId: string, id: string, allow: boolean): Promise<void> {
-    const ask = this.#asks.settle(conversationId, id)
+    const key = JSON.stringify([conversationId, id])
+    const running = this.#allowing.get(key)
+    if (running) {
+      if (!allow) throw new Error("An answer to this ask is already under way.")
+      return running
+    }
+    const ask = this.#asks.open(conversationId).find((ask) => ask.id === id)
     if (!ask) return
     hostLog("agent-asks", allow ? "the person allowed what an agent asked" : "the person refused what an agent asked", { conversation: conversationId, want: ask.want.kind })
-    if (allow) await this.#run(conversationId, ask.want)
+    if (!allow) {
+      this.#asks.settle(conversationId, id)
+      return
+    }
+    // Own this choice before its action starts; failure never removes and recreates a durable ask.
+    const outcome = Promise.resolve().then(() => this.#run(conversationId, ask.want)).then(() => { this.#asks.settle(conversationId, id) })
+    this.#allowing.set(key, outcome)
+    try {
+      await outcome
+    } finally {
+      this.#allowing.delete(key)
+    }
   }
 
   /** What was asked says nothing now: the person did it by hand, or the Thread left. */
@@ -52,7 +70,8 @@ export class AgentAskGate {
   #run<Kind extends AgentAskWant["kind"]>(conversationId: string, want: Extract<AgentAskWant, { kind: Kind }>): void | Promise<void> {
     // SAFETY: `runs` is keyed by the want's own kind, so the run found here takes this want.
     const run = this.runs[want.kind as Kind] as Run<Kind> | undefined
-    return run?.(conversationId, want)
+    if (!run) throw new Error("This host can't answer that agent ask yet.")
+    return run(conversationId, want)
   }
 }
 
