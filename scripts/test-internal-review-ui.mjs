@@ -81,6 +81,82 @@ async function check() {
     })()`)
     await frame()
     const only = process.env.MAKO_INTERNAL_UI_CASE
+    if (!only || only === "pagination") {
+      // Keep the mounted desk's automatic scroll paging out of these exact
+      // response sequences; exercise the same production state in a renderer.
+      await writeFile(join(root,'pagination.html'),'<!doctype html><title>Native page identity fixture</title>')
+      const reader = new BrowserWindow({show:false,webPreferences:{contextIsolation:true,nodeIntegration:false}})
+      await reader.loadURL(new URL('/@fs'+join(root,'pagination.html'),process.env.MAKO_INTERNAL_UI_URL).href)
+      let result
+      try {
+        result = await reader.webContents.executeJavaScript(`(async () => {
+        const {installMockBridge}=await import('/src/dev/mock-bridge.ts');installMockBridge();
+        const t=await import('/src/state/threads.ts'),v=await import('/src/state/thread-viewing.ts'),tabs=await import('/src/state/thread-tabs.ts');
+        const f={t,v,tabs,unknown:{harness:'codex',cwd:'/fixture/project',updatedAt:new Date().toISOString(),title:'Unknown source conversation'}};
+        const d=await import('/src/state/drafts.ts'),owners=await import('/src/state/thread-store.ts');
+        const before=window.mako.pageThread,results=[],races=[];
+        const setup=(kind,suffix,sessionId)=>{
+          const ref={...f.unknown,path:'/fixture/'+kind+'-'+suffix,nativeId:kind+'-'+suffix,identity:'store',bytes:40,revision:1,...(sessionId?{sessionId}:{})};
+          f.t.applyThreadRef(ref);
+          const entries=kind==='released'?Array.from({length:5},(_,i)=>({type:'text',id:'cached-'+i,text:'cached'})):[{type:'text',id:'tail',text:'tail'}];
+          const shown={...f.v.viewedThread({ref,entries}),pageStart:kind==='released'?0:4,totalEntries:5,hasEarlier:kind!=='released',
+            ...(kind==='released'?{releasedTurns:[{id:'released',label:'released',blocks:{start:0,end:0},base:{start:0,end:4}}]}:{})};
+          f.v.rememberThread(shown);f.t.threadsStore.set({viewing:shown,opening:null});f.tabs.openThreadTab(ref.path);d.rememberDraft(ref.path,'Paging draft');
+          return {ref,shown};
+        };
+        const read=kind=>kind==='released'?f.v.loadReleasedThreadTurn(f.t.threadsStore.get().viewing.ref.path,'released'):f.v.threadViewingActions.loadEarlier();
+        for(const kind of ['released','earlier']) for(const conflict of [false,true]) {
+          const {ref,shown}=setup(kind,'conflict-'+conflict);let calls=0;const publications=[];
+          const observe=()=>{const view=f.t.threadsStore.get().viewing;publications.push(view.entries.some(e=>e.id?.startsWith('page-'))?view.entries.filter(e=>e.id?.startsWith('page-')).map(e=>e.text):[])};
+          const off=f.t.threadsStore.subscribe(observe);
+          window.mako.pageThread=async(path,before)=>{calls++;const sessionId=conflict&&before===2?'session-B':'session-A';return {ref:{...ref,sessionId},entries:[{type:'text',id:'page-'+before+'a',text:sessionId},{type:'text',id:'page-'+before+'b',text:sessionId}],start:before-2,total:5,hasEarlier:before>2}};
+          await read(kind);off();const view=f.t.threadsStore.get().viewing,cache=f.v.rememberedThread(ref.path);
+          results.push({kind,conflict,calls,pageStart:view.pageStart,cachePageStart:cache.pageStart,sessionId:view.ref.sessionId??null,ownerSessionId:owners.nativeSessionRefs.version(ref.path)?.ref.sessionId??null,
+            shared:view===cache,restored:cache.releasedTurns?.length===0,unchanged:JSON.stringify(view.entries)===JSON.stringify(shown.entries),loading:Boolean(view.loadingEarlier),
+            publications:publications.filter(p=>p.length),sessions:[...new Set(view.entries.filter(e=>e.id?.startsWith('page-')).map(e=>e.text))],draft:d.draftText(ref.path)});
+        }
+        for(const kind of ['released','earlier']) for(const change of ['worker','aba','refresh','missing',...(kind==='earlier'?['error']:[])]) {
+          const {ref,shown}=setup(kind,'race-'+change,'session-A');let release,entered,calls=0;
+          const gate=new Promise(r=>release=r),started=new Promise(r=>entered=r);
+          window.mako.pageThread=async(path,before)=>{calls++;if(calls===2){entered();await gate;if(change==='missing')return null;if(change==='error')throw new Error('Overtaken page read')}return {ref:{...ref,sessionId:'session-A'},entries:[{type:'text',id:'page-'+before+'a',text:'old'},{type:'text',id:'page-'+before+'b',text:'old'}],start:before-2,total:5,hasEarlier:before>2}};
+          const pending=read(kind);await started;
+          const worker={...ref,sessionId:'session-B'};if(change!=='refresh')f.t.applyThreadRef(worker);
+          const current=change==='aba'||change==='refresh'?ref:worker;f.t.applyThreadRef(current);
+          const replacement={...shown,ref:current,entries:[...shown.entries.slice(0,-1),{type:'text',id:'replacement',text:'new incarnation'}]};
+          f.v.rememberThread(replacement);f.t.threadsStore.set({viewing:replacement});d.rememberDraft(ref.path,'New worker draft');
+          const version=owners.nativeSessionRefs.version(ref.path);release();await pending;
+          const view=f.t.threadsStore.get().viewing,cache=f.v.rememberedThread(ref.path);
+          races.push({kind,change,view:change==='refresh'?view===cache&&view.entries.at(-1)?.id==='replacement'&&view.entries.filter(e=>e.id?.startsWith('page-')).length===4:view===replacement,cache:change==='refresh'?cache!==replacement:cache===replacement,
+            owner:owners.nativeSessionRefs.version(ref.path)===version,tab:f.tabs.threadTabsStore.get().tabs.includes(ref.path),draft:d.draftText(ref.path)});
+        }
+        window.mako.pageThread=before;return {results,races};
+      })()`)
+      } finally { reader.destroy() }
+      await writeFile(join(root,'pagination-results.json'),JSON.stringify(result,null,2))
+      for (const item of result.results) {
+        assert.equal(item.calls,2,JSON.stringify(item))
+        assert.equal(item.shared,true,'view and cache publish the same accepted history: '+JSON.stringify(item))
+        assert.equal(item.loading,false,'refused reads release their loading state: '+JSON.stringify(item))
+        assert.equal(item.draft,'Paging draft')
+        if (item.conflict) {
+          assert.equal(item.unchanged,true,'conflicting placed identities cannot publish any fetched history: '+JSON.stringify(item))
+          assert.deepEqual(item.publications,[],'no partial publication before refusal')
+          assert.equal(item.sessionId,null)
+          assert.equal(item.ownerSessionId,null)
+          if (item.kind==='released') assert.equal(item.restored,false)
+          else assert.equal(item.pageStart,4)
+        } else {
+          assert.deepEqual(item.sessions,['session-A'])
+          assert.equal(item.sessionId,'session-A','complete placement retained in view')
+          assert.equal(item.ownerSessionId,'session-A','unchanged owner accepts complete placement')
+          assert.equal(item.pageStart,0)
+          assert.equal(item.cachePageStart,0)
+          if (item.kind==='released') assert.equal(item.restored,true)
+        }
+      }
+      for (const item of result.races) assert.deepEqual(item,{kind:item.kind,change:item.change,view:true,cache:true,owner:true,tab:true,draft:'New worker draft'},'superseded read cannot publish through path/identity reuse')
+      console.log('PASS accumulated page identity and coherent owner/view/cache publication; conflicting pages, ABA and new-worker refusal')
+    }
     if (!only || only === "arrival") {
       const arrival = await evaluate("import('/scripts/fixtures/session-tab-arrivals.tsx').then(f=>f.sessionTabArrivals())")
       await writeFile(join(root,'arrival-results.json'),JSON.stringify(arrival,null,2))
