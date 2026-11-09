@@ -8,6 +8,8 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { branchSince, checkoutSince } from "../base/checkout-since.js"
 import { cutAccount } from "./cut-account.js"
 import { personWaiting } from "./session-report.js"
+import { agentMessageOrder } from "./agent-message-order.js"
+import type { WaitSubscription } from "../contracts/agent-tools.js"
 import type { Waiting } from "../contracts/notifications.js"
 import { finMovedText, finResumedText } from "../contracts/resume-account.js"
 import { usageLimitWords } from "../contracts/provider-failure.js"
@@ -208,6 +210,7 @@ function referenceIndex(rows: readonly ThreadRef[]): Map<string, ThreadRef[]> {
 interface Attaching {
   refs?: readonly string[]
   passedOn?: string[]
+  notification?: true
 }
 
 /** A steer the harness took, as `inputDelivered` reads it. */
@@ -239,6 +242,7 @@ interface OtherApexRef {
 /** A message to another Apex whose reply goes back: to whom, from whom, as the sender's digest names it. */
 interface ApexAsk {
   sender: Apex
+  notification?: true
   /** Its conversation and the requests whose turn answers it: the message's own, or the turn it was steered into. */
   conversation: string
   requests: string[]
@@ -1032,8 +1036,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     return roleRuleLines(policy, { fin: edge !== undefined, apex: !edge || edge.role === APEX_ROLE || this.isApex(conversation), read })
   }
 
-  frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[] {
-    if (request.actor && request.actor.kind !== "person") return []
+  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>): string[] {
+    if (request.actor && request.actor.kind !== "person") return agentMessageOrder(this.deps.live.snapshot(conversation), request.id, (session) => this.store()?.sessionPlacement(session)?.thread ?? session)
     const store = this.store()
     const thread = store?.journalPlacement(conversation)?.thread
     if (!store || !thread) return []
@@ -1326,7 +1330,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const counts = this.treeCounts(tree)
     if (counts.started >= this.budget.started) {
       const queued = store.queuedSpawns().filter((spawn) => spawn.tree === tree && !store.edges().byOp(spawn.op)).length
-      return this.refuse(op, "budget", `This tree started ${counts.started - queued} of its ${this.budget.started} Threads${queued ? ` and ${queued} more wait to` : ""}. Stop or finish some before starting more.`)
+      return this.refuse(op, "budget", `This tree started ${counts.started - queued} of its ${this.budget.started} Threads${queued ? ` and ${queued} more wait to` : ""}. This lifetime limit is not freed by stopping or finishing a Fin; reuse an existing Fin with agents_send.`)
     }
     // It waits only as its Apex asked: for the Fins it starts after, or with `queue` for a place, behind every spawn that waits for one already.
     const where = placeOf(input.place)
@@ -1413,7 +1417,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
     const counts = this.treeCounts(tree)
     if (counts.started >= this.budget.started)
-      return this.refuse(op, "budget", `This tree started ${counts.started} of its ${this.budget.started} Threads. Stop or finish some before starting more.`)
+      return this.refuse(op, "budget", `This tree started ${counts.started} of its ${this.budget.started} Threads. This lifetime limit is not freed by stopping or finishing a Fin; reuse an existing Fin with agents_send.`)
     const full = this.full(where)
     const waiting = this.waitingForRoom(where)
     const why = after.length ? undefined : counts.running >= this.budget.running ? "tree-running" : full || waiting > 0 ? "place-full" : undefined
@@ -2010,7 +2014,24 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const kept = this.keepReport(edge, report)
     if ("refused" in kept) return kept
-    return { id: kept.report.id, ...(kept.deduped && { deduped: true as const }), delivered: kept.report.status === "progress" ? "none" : "notice" }
+    return { id: kept.report.id, ...(kept.deduped && { deduped: true as const }), delivered: kept.report.status === "progress" ? "none" : "notice", ...(kept.report.waitingOn?.length && { subscriptions: this.waitSubscriptions(edge, kept.report) }) }
+  }
+
+  /** What was actually registered, from the kept report, its current owner, configured reader and durable claims. */
+  private waitSubscriptions(edge: ThreadParent, report: Report): WaitSubscription[] {
+    this.pulls.refresh()
+    const claimed = this.store()!.pullWakesFor(edge.child).filter((wake) => wake.obsolete === undefined)
+    return (report.waitingOn ?? []).map((wait): WaitSubscription => {
+      if (wait.kind !== "pull-request") return { wait, state: "unsupported", why: "Recorded only: no automatic wake. Actions runs and main-commit checks are not supported watch targets. Arrange a verified external notification or keep an explicit owner to verify the outcome; a merged PR cannot stand in for main CI." }
+      const pull = waitedPull(wait)
+      if (!pull) return { wait, state: "unsupported", why: "No valid PR target; use its URL or owner/repo#number. No automatic wake was registered." }
+      if (!this.deps.readPull) return { wait, state: "unavailable", why: "This host has no PR reader; no automatic wake was registered. Keep an explicit outcome owner or arrange a verified external notification." }
+      if (!this.pullWaitHolds(edge.child, report.id, pull.key)) return { wait, state: "inactive", why: "This is no longer the Fin's current open wait; no new wake was registered." }
+      const retained = pullWaitReports(this.store()!.reportsOf(edge.child), pull.key)
+      const prefix = `pull-wake:${edge.child}:${retained[0]!.id}:${pull.key}:observation:`
+      if (claimed.some(({ wait: key }) => key.startsWith(prefix) || retained.some((entry) => key === `pull-wake:${edge.child}:${entry.id}:${pull.key}`))) return { wait, state: "claimed", why: "An observed outcome has a durable delivery claim; this does not prove the Fin has heard it. Equivalent narration retains the dependency. New observations have separate claims; legacy claims without a cursor require withdrawing and re-registering the wait to re-arm it." }
+      return { wait, state: "registered" }
+    })
   }
 
   async send(caller: AgentCaller, input: AgentsSendInput): Promise<AgentsSendResult> {
@@ -2019,7 +2040,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if ("refused" in apex) return apex
     if (input.to.startsWith(APEX_PREFIX)) return this.sendToApex(apex, input, began)
     const edge = this.resolve(apex, input.to, false)
-    if (!edge) return unknownFin(input.to)
+    if (!edge) return this.unsendableFin(apex, input.to)
     const op = `send:${apex.session}:${input.clientKey}`
     const request = namedUuid(op)
     const kept = this.sent.get(op)
@@ -2044,7 +2065,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const attached = this.threadRefs(apex, input.context)
     if ("refused" in attached) return this.refuse(op, attached.refused, attached.why)
     this.toldBy(apex, edge, true)
-    const sent = await this.deliver(edge, request, text, attachments, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, deliver, false, passedOnGrants ? { passedOn: passedOnGrants } : { refs: attached })
+    const sent = await this.deliver(edge, request, text, attachments, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, deliver, false, { ...(passedOnGrants ? { passedOn: passedOnGrants } : { refs: attached }), ...(input.reply === "none" && { notification: true }) })
     if ("refused" in sent) return this.refuse(op, sent.refused, sent.why)
     this.heardFrom(apex, edge)
     const answer: AgentsSent = { child: edge.child, name: edge.name, request, delivery: sent.delivery, hears: sent.hears, ...(sent.deduped && { deduped: true as const }) }
@@ -2124,7 +2145,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     let sent: Delivered
     if (this.deps.live.held(conversation)?.requests.some((asked) => asked.id === request)) sent = { delivery: "queued", hears: `${name} already has it.`, deduped: true }
     else {
-      this.deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, { kind: "agent", session: SessionIdSchema.parse(sender.session) })
+      this.deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, { kind: "agent", session: SessionIdSchema.parse(sender.session) }, input.reply === "none" ? { notification: true } : {})
       const queued: Delivered = ready === "idle"
         ? { delivery: "turn", hears: `${name} takes it now, as its next turn.` }
         : { delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message.` }
@@ -2141,7 +2162,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       recent.push(now)
       this.apexSends.set(pair, recent)
       const harness = this.deps.live.session(conversation)?.harness
-      const ask: ApexAsk = { sender, conversation, requests, thread: target.thread, label: `"${target.title ?? target.thread}" (${harness ? this.deps.harnessLabel(harness) : APEX_WORD})`, fin: { name: target.title ?? target.thread, ...(harness && { harness }) } }
+      const ask: ApexAsk = { sender, ...(input.reply === "none" && { notification: true }), conversation, requests, thread: target.thread, label: `"${target.title ?? target.thread}" (${harness ? this.deps.harnessLabel(harness) : APEX_WORD})`, fin: { name: target.title ?? target.thread, ...(harness && { harness }) } }
       for (const id of requests) this.apexAsks.set(`${conversation}:${id}`, ask)
     }
     const answer: AgentsSent = { child: target.thread, name, request, delivery: sent.delivery, hears: sent.hears, ...(sent.deduped && { deduped: true as const }) }
@@ -2449,8 +2470,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * What the pull request watch reads: each open Fin's latest report's pull requests (`waitingOn`), less the waits
-   * that woke it already. A failed report, a stopped Fin and an archived one wait on nothing.
+   * What the pull request watch reads: each open Fin's retained dependencies (`waitingOn`). Equivalent narration
+   * keeps their first registration; claims deduplicate head/check observations. Failed, stopped and archived Fins wait on nothing.
    */
   private pullWaits(): PullWait[] {
     const store = this.store()
@@ -2466,29 +2487,39 @@ export class Agents implements AgentOperations, ConversationChildren {
       return [{ edge, report, conversation }]
     })
     if (!open.length) return []
-    const fired = store.pullWakesOf(open.map(({ edge }) => edge.child))
-    return open.flatMap(({ edge, report, conversation }) => report.waitingOn!.flatMap((item): PullWait[] => {
-      const pull = waitedPull(item)
-      if (!pull) return []
-      const key = `pull-wake:${edge.child}:${report.id}:${pull.key}`
-      if (fired.has(key)) return []
-      const cwd = (conversation && this.deps.live.session(conversation)?.cwd) || homedir()
-      return [{
-        key,
-        child: edge.child,
-        report: report.id,
-        pullKey: pull.key,
-        since: report.at,
-        pull: pull.repository ? `${pull.repository}#${pull.number}` : `#${pull.number}`,
-        target: { key: pull.repository ? pull.key : `${pull.key}@${cwd}`, ...(pull.repository && { repository: pull.repository }), number: pull.number, cwd },
-        ...(pull.until && { until: pull.until }),
-      }]
-    }))
+    return open.flatMap(({ edge, report, conversation }) => {
+      const reports = store.reportsOf(edge.child)
+      const claimed = store.pullWakesFor(edge.child)
+      const stopped = new Set((conversation ? this.deps.live.held(conversation)?.requests ?? [] : []).filter((request) => request.pause === "stop").map((request) => request.id))
+      return report.waitingOn!.flatMap((item): PullWait[] => {
+        const pull = waitedPull(item)
+        if (!pull) return []
+        const retained = pullWaitReports(reports, pull.key)
+        const anchor = retained[0]
+        if (!anchor) return []
+        // A direct Stop can hold a journal note without closing the delegation. Its latch also pauses this watch.
+        if (claimed.some((wake) => stopped.has(wake.request) && wake.pull === pull.key && retained.some((entry) => entry.id === wake.report))) return []
+        // Older builds kept no observation cursor. Preserve their still-live claim rather than replaying an unknown outcome.
+        if (claimed.some((wake) => wake.obsolete === undefined && retained.some((entry) => wake.wait === `pull-wake:${edge.child}:${entry.id}:${pull.key}`))) return []
+        const key = `pull-wake:${edge.child}:${anchor.id}:${pull.key}`
+        const cwd = (conversation && this.deps.live.session(conversation)?.cwd) || homedir()
+        return [{
+          key,
+          child: edge.child,
+          report: anchor.id,
+          pullKey: pull.key,
+          since: anchor.at,
+          pull: pull.repository ? `${pull.repository}#${pull.number}` : `#${pull.number}`,
+          target: { key: pull.repository ? pull.key : `${pull.key}@${cwd}`, ...(pull.repository && { repository: pull.repository }), number: pull.number, cwd },
+          ...(pull.until && { until: pull.until }),
+        }]
+      })
+    })
   }
 
   /**
    * Whether a Fin still waits on a pull request as one report named it: its delegation open, its Thread not archived
-   * nor stopped, and that report still its newest, naming the pull request. Read again before a wake is claimed, before
+   * nor stopped, and every report since the original still names the same pull request and condition. Read before a claim, before
    * it's handed to delivery, and at its handoff (`admits`), since a report or a stop can come between any two.
    */
   private pullWaitHolds(child: string, report: string, pull: string): boolean {
@@ -2499,23 +2530,22 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (conversation && this.deps.archived?.(conversation)) return false
     const state = this.stateOf(edge)
     if (state.kind === "ended" && state.outcome === "stopped") return false
-    const latest = store.reportsOf(child).at(-1)
-    if (latest?.id !== report || latest.status === "failed") return false
-    return Boolean(latest.waitingOn?.some((item) => waitedPull(item)?.key === pull))
+    return pullWaitReports(store.reportsOf(child), pull).some((entry) => entry.id === report)
   }
 
-  /** A pull request's outcome for a Fin waiting on it: claimed once for its wait, then sent as Mako's note. */
+  /** A pull request's outcome: claimed once per retained dependency and observation, then sent as Mako's note. */
   private async pullOutcome(wait: PullWait, outcome: PullOutcome, note: string): Promise<void> {
     const store = this.store()
     const edge = store?.edges().of(wait.child)
     if (!store || !edge || !this.pullWaitHolds(wait.child, wait.report, wait.pullKey)) return
+    const key = wait.observation ? `${wait.key}:observation:${wait.observation}` : wait.key
     const { wake, claimed } = store.claimPullWake({
-      wait: wait.key,
+      wait: key,
       child: ThreadIdSchema.parse(wait.child),
       report: wait.report,
       pull: wait.pullKey,
       outcome: outcome.kind,
-      request: namedUuid(`${wait.key}:${outcome.kind}`),
+      request: namedUuid(`${key}:${outcome.kind}`),
       text: note,
       at: this.now(),
     })
@@ -3391,13 +3421,14 @@ export class Agents implements AgentOperations, ConversationChildren {
       return this.childMoved(edge, false)
     }
     this.awaiting.delete(edge.child)
-    const done = ended.status === "completed"
     const text = reply.text.trim()
+    if (ended.status === "completed" && ended.notification) return this.childMoved(edge, false)
+    const done = ended.status === "completed" && text.length > 0
     this.keepReport(edge, {
       id: `report:${edge.child}:${request}`,
       child: ThreadIdSchema.parse(edge.child),
       status: done ? "done" : "failed",
-      summary: (text || (done ? "It ended its turn without a reply." : ended.error ?? "Its turn ended before it finished.")).slice(0, 16_000),
+      summary: (ended.error || text || (ended.status === "completed" ? "Its turn ended without reporting a result." : "Its turn ended before it finished.")).slice(0, 16_000),
       implicit: true,
       ownerGeneration: this.generation,
       at: this.now(),
@@ -4473,6 +4504,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!latest) return `${this.latest.has(edge.child) ? "No current report" : "No report yet"}. It is ${state.kind}${state.kind === "working" && state.step ? `: ${state.step}` : ""}.`
     const lines = [`${latest.status}${latest.implicit ? " (its turn ended without a report; this is its last reply)" : ""}:`, latest.summary]
     if (latest.question) lines.push(`Question: ${latest.question}`)
+    const waiting = waitingWords(latest.waitingOn)
+    if (waiting) lines.push(waiting)
     for (const artifact of latest.artifacts ?? []) lines.push(`${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
     return lines.join("\n")
   }
@@ -4575,6 +4608,15 @@ export class Agents implements AgentOperations, ConversationChildren {
   private apexOfEdge(edge: ThreadParent): Apex {
     const conversation = this.conversationOfSession(edge.parentSession)
     return { session: edge.parentSession, thread: edge.parent, ...(conversation && { conversation }) }
+  }
+
+  /** A discovered sibling is readable crew, not an authorized send target. Name its existing parent relay. */
+  private unsendableFin(caller: Apex, ref: string): AgentRefused {
+    const edges = this.store()!.edges()
+    const own = edges.of(caller.thread)
+    const sibling = own && edges.children(own.parent).find((edge) => edge.child !== caller.thread && (edge.child === ref || edge.name === finName(ref)))
+    if (!sibling) return unknownFin(ref)
+    return { refused: "unknown-child", why: `${sibling.name} (${sibling.child}) is your sibling, owned by your ${APEX_WORD} (${sibling.parent}); crew discovery does not grant permission to send to it. No message was sent. Ask your ${APEX_WORD} to relay it with agents_report status done and the target name/Thread ID; progress does not wake it. The report's delivered: notice receipt confirms the parent handoff, not delivery to the sibling.` }
   }
 
   /** A Fin by its name, `fin:<name>` (`child:<name>` before the names) or its Thread: the Apex's own, or with `deep` a descendant's. */
@@ -5256,7 +5298,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     // What an agent writes is its words: only what `reachOf` passed goes as an item. A person's words are the window's.
     const written = actor?.kind === "agent" && !attaching.passedOn ? await this.withContext(words, attaching.refs ?? []) : { text: words, ...(attaching.passedOn?.length && { grants: attaching.passedOn }) }
     const message = written.text
-    const marks = { ...(written.grants && { grants: written.grants }) }
+    const marks = { ...(written.grants && { grants: written.grants }), ...(attaching.notification && { notification: attaching.notification }) }
     const conversation = this.conversationOf(edge.child)
     // A Fin reopening its session, as the next host relaunches one an exit cut, takes a message once that settles.
     if (conversation && !(await this.switchSettled(conversation)))
@@ -5288,7 +5330,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     if (ready === "idle") return queue()
     if (want === "interrupt") {
-      if (!this.deps.live.interrupt(conversation, request, message, attachments, actor, written.grants))
+      if (!this.deps.live.interrupt(conversation, request, message, attachments, actor, written.grants, attaching.notification))
         return queue(`it had no turn running to stop, and something was already queued ahead of this.`)
       this.resumeFin(conversation, request)
       return { delivery: "interrupt", hears: `Mako stopped ${name}'s turn; this message starts its next one, ahead of anything queued for it.` }
@@ -5567,8 +5609,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!ask) return
     for (const id of ask.requests) this.apexAsks.delete(`${conversation}:${id}`)
     const reply = this.deps.live.turnReply(conversation, request)
-    const done = reply?.request?.status === "completed"
-    const said = reply?.text.trim() || (done ? "It ended its turn without a reply." : reply?.request?.error ?? "Its turn ended before it answered.")
+    if (ask.notification && reply?.request?.status === "completed") return
+    const text = reply?.text.trim()
+    const done = reply?.request?.status === "completed" && Boolean(text)
+    const said = reply?.request?.error || text || "Its turn ended without reporting a result."
     const front = this.frontOf(ask.sender.thread, ask.sender.session) ?? ask.sender.conversation
     const from = this.store()?.journalPlacement(conversation)?.session
     if (!front || !from) return
@@ -5810,8 +5854,25 @@ function queuedLead(record: string): z.infer<typeof QueuedLeadSchema> | undefine
   }
 }
 
-/** One thing a report waits on, within the report's limits. */
-/** A pull request a report waits on, by repository and number (`pullKey`); undefined for anything else, or a ref with no number. */
+/** Consecutive reports retaining the same dependency and condition share its first registration, in durable store order. */
+function pullWaitReports(reports: Report[], key: string): Report[] {
+  const latest = reports.at(-1)
+  const current = latest?.status !== "failed" && latest?.waitingOn?.flatMap((item) => waitedPull(item) ?? []).find((pull) => pull.key === key)
+  if (!current) return []
+  let first = reports.length - 1
+  while (first >= 0) {
+    const report = reports[first]!
+    const retained = report.status !== "failed" && report.waitingOn?.some((item) => {
+      const pull = waitedPull(item)
+      return pull?.key === key && pull.until === current.until
+    })
+    if (!retained) break
+    first -= 1
+  }
+  return reports.slice(first + 1)
+}
+
+/** A pull request a report waits on, by repository and number; undefined for another kind or an invalid reference. */
 function waitedPull(item: WaitingOn): { key: string; repository?: string; number: number; until?: PullWaitUntil } | undefined {
   if (item.kind !== "pull-request") return undefined
   const ref = pullRef(item.ref)

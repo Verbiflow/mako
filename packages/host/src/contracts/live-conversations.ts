@@ -321,6 +321,10 @@ export interface LiveRequest {
   id: string
   /** When the host admitted it (epoch ms); absent in journals written before it was kept. */
   createdAt?: number
+  /** Admission order within this conversation, independent of queue priority and wall clocks. Absent in older journals. */
+  admissionOrder?: number
+  /** An agent's informational message, whose successful turn needs no synthetic completion report. */
+  notification?: true
   /** When it was sent to its harness, which is when its turn began: a message can wait long after it's admitted. */
   dispatchedAt?: number
   text: string

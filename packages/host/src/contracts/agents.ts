@@ -227,7 +227,7 @@ export function waitingWords(items: readonly WaitingOn[] | undefined): string | 
     return repository ? [repository] : []
   }))
   const words = items.map((item) => {
-    if (item.kind === "other") return item.text.trim()
+    if (item.kind === "other") return `${item.text.trim()} (no automatic wake)`
     if (item.kind === "person") return `the person to ${item.what.trim()}`
     const pull = pullRef(item.ref)
     const repository = item.repository ?? pull?.repository
@@ -244,7 +244,7 @@ export function waitingWords(items: readonly WaitingOn[] | undefined): string | 
  */
 export function waitingStateWords(items: readonly WaitingOn[], since: number | undefined, now: number | undefined): string {
   const words = items.map((item) => {
-    if (item.kind === "other") return item.text.trim()
+    if (item.kind === "other") return `${item.text.trim()} (no automatic wake)`
     if (item.kind === "person") return `the person to ${item.what.trim()}`
     const pull = pullRef(item.ref)
     const repository = item.repository ?? pull?.repository
