@@ -107,6 +107,10 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   await evaluate(`import('/src/state/workspace-moves.ts').then(({applyWorkspaceMoves}) => applyWorkspaceMoves({requests: [{id: 'navigation-move', conversationId: window.navigationFin.key, harness: 'codex', project: '/Users/you/mako', changed: 0, state: 'asking'}], alwaysAllowed: []}))`)
   await until(`[...document.querySelectorAll('[data-sonner-toast] button')].some((button) => button.textContent === 'Show')`, "workspace Show toast")
   await evaluate(`[...document.querySelectorAll('[data-sonner-toast] button')].find((button) => button.textContent === 'Show').setAttribute('data-navigation-show', '')`)
+  await until(`(() => {
+    const toast = document.querySelector('[data-navigation-show]')?.closest('[data-sonner-toast]')
+    return Boolean(toast && toast.dataset.mounted === 'true' && !toast.getAnimations().some((animation) => animation.playState === 'running'))
+  })()`, "workspace Show toast entered")
   await click('[data-navigation-show]')
   await until(`!document.querySelector('[data-inbox]') && window.navigationProbe.selection().key === window.navigationFin.key`, "workspace Show leaves Inbox")
   assert.deepEqual(await evaluate(`window.navigationProbe.activations`), [fin.key])

@@ -268,6 +268,14 @@ jobs:
       - run: npm run test:fin-resume
       # A host starting reads each Fin's journal in slices as it resumes them, never all of them at once.
       - run: npm run test:resume-holds
+        id: resume_holds
+      # Evidence only after that exact required step failed; its failure remains the job result.
+      - name: Diagnose failed resume hold (evidence only)
+        if: ${{ failure() && steps.resume_holds.outcome == 'failure' }}
+        timeout-minutes: 3
+        run: node --import tsx scripts/diagnose-resume-holds.mjs
+        env:
+          MAKO_RESUME_DIAGNOSTICS: "1"
       # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
       - run: npm run test:fin-states
 
