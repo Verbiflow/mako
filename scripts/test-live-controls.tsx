@@ -13,7 +13,8 @@ import { toExchanges, turnRequest } from "../src/lib/exchanges"
 import { FailedRequestsContext } from "../src/components/transcript/failed-requests"
 import { FailureRow } from "../src/components/transcript/failure-row"
 import { requestRecovery } from "../src/state/request-recovery"
-import { agentActivity, startLabel } from "../src/state/agent-activity"
+import { agentActivity, startLabel, switchLabel } from "../src/state/agent-activity"
+import { noteComposing } from "../src/state/prewarm"
 import { cn } from "../src/lib/utils"
 import { ActivityMark } from "../src/components/ui/activity-mark"
 import { FolderActivity } from "../src/components/rail/rail-activity"
@@ -913,4 +914,45 @@ conversation.session = { ...conversation.session, usage: readingUsage }
 conversation.requests = readingRequests
 threadsStore.set({ descriptors: meterDescriptors })
 publish()
+// Picking another harness's model in a conversation (GPT-6.1 in a Claude Code one) switches it there. While the switch
+// waits, the row names where it's going, never the harness it leaves, even while that one is still starting; and
+// writing the message wakes nothing on the harness it's leaving.
+{
+  const names = (harness: string) => ({ claude: "Claude Code", codex: "Codex" })[harness]
+  const toCodex = (kind: string) => ({ session: { harness: "claude" }, control: { transfers: [{ input: { provider: "codex" }, state: { kind } }] } })
+  assert.equal(switchLabel(toCodex("queued"), names), "Switching to Codex")
+  assert.equal(switchLabel(toCodex("preparing"), names), "Switching to Codex")
+  assert.equal(switchLabel(toCodex("accepted"), names), undefined, "a switch that went says nothing")
+  assert.equal(switchLabel({ session: { harness: "claude" }, control: { transfers: [{ input: { provider: "claude" }, state: { kind: "preparing" } }] } }, names), undefined, "another model or account of the same harness isn't a switch")
+  assert.deepEqual(agentActivity({ ...activityBase, blocks: [], connecting: true, starting: "Starting Claude Code", switching: "Switching to Codex" }), { kind: "connecting", label: "Switching to Codex" })
+  assert.deepEqual(agentActivity({ ...activityBase, blocks: [], preparing: true, switching: "Switching to Codex" }), { kind: "connecting", label: "Switching to Codex" })
+  assert.deepEqual(agentActivity({ ...activityBase, blocks: [], connecting: true, starting: "Starting Claude Code" }), { kind: "connecting", label: "Starting Claude Code" }, "a start of its own still names its harness")
+
+  const savedSession = conversation.session
+  const savedTransfers = control.transfers
+  conversation.session = { ...conversation.session, harness: "claude", status: "starting", connection: "starting" }
+  control.transfers = [{ input: { id: "44444444-4444-4444-8444-444444444444", provider: "codex", text: "Go on", attachments: [], tuning: { model: "gpt-6.1-sol" } }, createdAt: 1, state: { kind: "preparing" } }]
+  publish()
+  const switchingMarkup = renderToStaticMarkup(<AcpPanel />)
+  assert.match(switchingMarkup, /Switching to Codex/, "the panel says where the conversation is going")
+  assert.doesNotMatch(switchingMarkup, /Starting Claude Code/, "never the harness it leaves")
+  conversation.session = savedSession
+  control.transfers = savedTransfers
+  publish()
+
+  const prewarms: string[] = []
+  // The window the composer asks through, for this check only: its prewarm counts what it's asked to wake.
+  const before = Object.getOwnPropertyDescriptor(globalThis, "window")
+  Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: { mako: { livePrewarm: async (key: string) => { prewarms.push(key); return "waking" } } } })
+  const savedHarness = threadsStore.get().composerHarness
+  threadsStore.set({ composerHarness: "codex" })
+  noteComposing("Carry on with the migration", 10_000_000)
+  assert.deepEqual(prewarms, [], "writing a message for another harness wakes nothing on this one")
+  threadsStore.set({ composerHarness: "claude" })
+  noteComposing("Carry on with the migration", 10_000_000)
+  assert.deepEqual(prewarms, [id], "writing for its own harness wakes it, as before")
+  threadsStore.set({ composerHarness: savedHarness })
+  if (before) Object.defineProperty(globalThis, "window", before)
+  else Reflect.deleteProperty(globalThis, "window")
+}
 console.log("Activity feedback: contextual recovery, distinct main states, tuned inline project/thread orbs, idle cleanup, and explicit external-running labels verified")

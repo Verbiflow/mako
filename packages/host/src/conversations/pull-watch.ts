@@ -1,4 +1,5 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { createHash } from "node:crypto"
 import { errorMessage } from "../base/error-message.js"
 import { pullOutcome, pullWakeNote, type PullOutcome, type PullReading, type PullWaitUntil } from "../contracts/pull-waits.js"
 import type { PullTarget as ReadTarget } from "../git/index.js"
@@ -16,25 +17,27 @@ export interface PullTarget extends ReadTarget {
 
 /** One Fin's wait on one pull request, from the report that named it. */
 export interface PullWait {
-  /** The Fin, its report and the pull request: one wake at most for each (`ThreadStore.claimPullWake`). */
+  /** The Fin, its retained dependency's first report and the pull request; the observation cursor completes a claim's identity. */
   key: string
   child: string
-  /** The report that named it, and the pull request by `pullKey`. */
+  /** First report in the uninterrupted dependency registration, and the pull request by `pullKey`. */
   report: string
   pullKey: string
-  /** When the report was written: what happened before it, the Fin knew or could have. */
+  /** Report registration time: a cutoff for review events, never for the condition that current checks have settled. */
   since: number
   /** How its note names it: `acme/app#371`, or `#371`. */
   pull: string
   target: PullTarget
   until?: PullWaitUntil
+  /** The head/check completion observation, independent of report narration. Filled by the reader before firing. */
+  observation?: string
 }
 
 export interface PullWatchDeps {
-  /** What waits now: every open Fin's latest report's pull requests that haven't woken it yet. */
+  /** What waits now: every open Fin's latest report's retained pull request dependencies. */
   waits(): readonly PullWait[]
   read(target: PullTarget): Promise<PullReading | null>
-  /** Wakes the Fin with `note`, once per wait (`key`), across restarts. */
+  /** Wakes the Fin with `note`, once per retained wait and observation, across restarts. */
   fire(wait: PullWait, outcome: PullOutcome, note: string): Promise<void>
   /** Whether anything is watched, so the job that reads runs only then. */
   watching?(on: boolean): void
@@ -52,7 +55,7 @@ interface Watched {
 /**
  * The pull requests Fins said they wait on (`waitingOn`), and only those. Each is read on its own cadence, from a
  * minute after it's first watched, doubling while nothing on it changes up to `PULL_WATCH_MAX_MS`, back to a minute
- * once something does. A reading that shows an outcome a wait was for fires that wait once; a pull request nothing
+ * once something does. A reading that shows an outcome supplies its head/completion cursor to the durable claim; a pull request nothing
  * waits on any more is dropped. The set is never stored: it's what `waits` says, read from the reports on each tick,
  * so a restarted host watches what the last one did.
  */
@@ -115,10 +118,16 @@ export class PullWatch {
         if (wait.target.key !== key) continue
         const outcome = pullOutcome(reading, wait.until, wait.since)
         if (!outcome) continue
-        const note = pullWakeNote(wait.pull, reading.url, outcome)
+        const note = pullWakeNote(wait.pull, reading.url, outcome, reading.head)
         hostLog("agents", "pull request outcome", { wait: wait.key, child: wait.child, outcome: outcome.kind })
         try {
-          await this.deps.fire(wait, outcome, note)
+          const checks = reading.checks.filter((check) => outcome.kind !== "failed" || check.state === "failed")
+            .map((check) => JSON.stringify([check.name, check.state, check.at ?? null])).sort()
+          const observation = createHash("sha256").update(JSON.stringify([
+            reading.head ?? null, outcome.kind,
+            outcome.kind === "settled" || outcome.kind === "failed" ? checks : outcome,
+          ])).digest("hex")
+          await this.deps.fire({ ...wait, observation }, outcome, note)
         } catch (error) {
           hostWarn("agents", "a pull request's outcome didn't reach its Fin", { wait: wait.key, error: errorMessage({ error }) })
         }

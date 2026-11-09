@@ -91,9 +91,10 @@ async function fixture(name: string, options: {
       await options.asks(turn.world, turn.conversation, heard)
       return "Done."
     }
-    if (!turn.text.startsWith(FROM_AGENTS)) return options.apexTurn?.(turn) ?? "ok"
-    wakes.push(turn.text)
-    if (DECISION.test(turn.text)) await options.onDecision?.(turn.world, turn.caller, turn.text)
+    const spoken = turn.text.replace(/^<mako-local-control>[\s\S]*?<\/mako-local-control>\n\n/, "")
+    if (!spoken.startsWith(FROM_AGENTS)) return options.apexTurn?.(turn) ?? "ok"
+    wakes.push(spoken)
+    if (DECISION.test(spoken)) await options.onDecision?.(turn.world, turn.caller, spoken)
     return "ok"
   }
   const world = new AgentsWorld({ root: join(root, name), script, ...(options.apexAnswerMs !== undefined && { apexAnswerMs: options.apexAnswerMs }), ...(options.later && { later: options.later }), ...(options.heldPulls && { heldPulls: options.heldPulls }) })
@@ -883,3 +884,4 @@ try {
   rmSync(root, { recursive: true, force: true })
 }
 console.log("orch answer: ok")
+await import("./test-fin-obligations.ts")

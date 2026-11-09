@@ -386,8 +386,24 @@ question is open even in the same millisecond. A delivery that reached the
 Fin but couldn't be stamped stays pending, and the next start finds it under
 its request and stamps it. The answer is the Fin's next message, and
 until its next report its row says who answered (`working.answered`). `test:fin-decisions` holds the matrix,
-`test:fin-decision-ui` the surfaces (`?mock&app=apex&fins=decisions`). A
-report may name what it waits on outside its tree
+`test:fin-decision-ui` the surfaces (`?mock&app=apex&fins=decisions`).
+New explicit report questions carry `retainsQuestion`: later narration,
+notice delivery, and reads do not resolve them. `ThreadStore.openReportAsks`
+derives pending questions from report IDs, exact answer claims and explicit
+`supersedes` IDs. Legacy rows keep their prior latest-report semantics; never
+invent outstanding work from every old unclaimed question. `agents_read`
+returns eight pending IDs per page (`afterAsk`), `agents_list` gives counts,
+and every Apex dispatch, including autonomous continuations, gets a bounded
+pending view. `agents_answer` accepts `ask`, required when several remain;
+its receipt names that decision, not completion of the requested review.
+`personAsk` also keeps person-owned retained questions reachable after narration.
+A Fin may withdraw/replace its own question IDs with `supersedes` and a reason
+in summary; progress remains quiet. Existing escalation keeps the question's
+original due time across narration/restart and explicitly hands off ownership.
+Placed-Fin exact selection is refused until receiver capability is verified.
+Ordinary readiness prose still needs an explicit question/action handoff.
+`test-fin-obligations.ts`, run by `test:orch-answer`, covers the burst boundary.
+A report may name what it waits on outside its tree
 (`waitingOn`: a pull request until its checks, review or merge, the person,
 or `other` in a few words), carried on the blocked state and the open
 decision and said as "waiting on #412 checks" (`waitingWords`) in the digest,
@@ -396,7 +412,14 @@ Fin's turn ended, reads as idle waiting since the report (`ChildState`'s
 `idle.waitingOn`, `since`), in the crew row, the strip and the front door
 as "Waiting on acme/app#371 checks · 12m" (`waitingStateWords`); the
 orchestration text tells a Fin to report so and end its turn rather than
-poll checks. `PullWatch` (`conversations/pull-watch.ts`) reads only the pull
+poll checks. The report result's `subscriptions` distinguishes a registered
+PR watch, an outcome already claimed for delivery, an inactive old wait,
+unsupported prose, and a host with no reader. `person` and `other` only
+record intent; Actions runs and main-commit CI have no automatic watch here.
+An unsupported or unavailable receipt needs a verified external notification
+or an explicit outcome owner. Run/job/commit references stay as reported,
+including across restarts; no text or artifact is parsed into a watch.
+`PullWatch` (`conversations/pull-watch.ts`) reads only the pull
 requests open Fins' latest reports name, rebuilt from the stored reports on
 each tick and so on start, through `readPull` (the same `gh pr view` and
 check normalising `pull_request_status` uses), on the job `read the pull
@@ -404,19 +427,33 @@ requests Fins wait on`, which runs only while something is watched: each
 read a minute after it's first watched, doubling while unchanged up to
 `PULL_WATCH_MAX_MS` (8 min), a minute again once it changes. A reading's
 outcome (`pullOutcome`, `contracts/pull-waits.ts`) matched to `until`
-(checks settled, or one failed since the report while others run; a review
-submitted since, by anyone but the author; merged or closed, which end any
-wait) is claimed once per Fin, report and pull request
+(current-head checks settled, or one failed while others run, even before
+the report; a review submitted since, by anyone but the author; merged or
+closed, which end any wait) is claimed once per Fin, retained dependency and observation
 (`ThreadStore.claimPullWake`, `agent_pull_wakes`) and delivered to the Fin,
 never its Apex, through `deliver` under a named request as Mako's words
 (the `pull-watch` service actor): one line, "Mako: PR acme/app#371 checks
 settled: 2 failed (lint, e2e). <url>" (`pullWakeNote`), queued after a
-working Fin's turn, never steered. It never reopens, resumes or takes over
+working Fin's turn, never steered. The reader also preserves `headRefOid` as
+`PullReading.head`; the wake and transcript event name that observed head.
+The wait follows the PR's current head when read, rather than pinning a commit.
+A queued note remains an observation of that head; it grants no authority to
+merge a later head, which must be verified at the action gate. Consecutive
+reports retaining the same PR and condition share their first registration
+(`pullWaitReports`), separately from narration timestamps. A head/check
+completion cursor keys the existing durable outcome claim, so clarification
+reports neither cancel queued outcomes nor re-fire unchanged terminal results.
+A changed head or completion cursor can produce a new observation; withdrawal,
+a failed report or a changed condition ends the registration. Legacy claims
+without a cursor retain their original identity; the receipt explains that
+re-arming one requires withdrawing and re-registering. Already retired legacy
+claims can regenerate under the current registration. It never reopens, resumes or takes over
 a stopped Fin (`deliver`'s automatic send), and goes through the one
 admission point every prompt does, the handoff with its Stop latch
 (`LiveDispatch`, #391): there `Agents.admits` reads the wait again, the
-Fin's exact newest report still naming the pull request and its delegation
-open, and one that no longer holds is refused (`HandoffRefused`'s
+Fin's newest report still retaining the original dependency and condition,
+without an intervening withdrawal, and its delegation open. One that no longer
+holds is refused (`HandoffRefused`'s
 `withdrawn`, the request canceled) and its claim retired as obsolete
 (`retirePullWake`), never sent. The same reading runs before the claim and
 before delivery. A host that stopped first sends a claim once on start
@@ -725,7 +762,10 @@ its last step, what it was asked when it is a Fin too, and each other Fin as
 the front door's note names it (name, harness, state, what it was asked, its
 branch and last report). The person's direct words to a Fin stay out. It
 reads typed state, never a transcript, and its brief's first line says it's
-there. `npm run test:orch-comms` covers all three.
+there. Crew discovery grants no sibling-send authority. A refused sibling
+send names the target and parent, sends nothing, and points to an explicit
+`agents_report` parent relay; `delivered: notice` proves that handoff, not
+a send to the sibling. `npm run test:orch-comms` covers all three.
 An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
 (`AgentsApexes`): every tree's top Apex but its own whose conversation is
 open here, each with its title, harness, whether it works and its last step,
@@ -771,6 +811,20 @@ sender's: the driver's `SteerCapability.hears`, seen on a real run
 (`scripts/probe-steer-semantics.ts`). `test:orch-deliver` covers each choice
 across harnesses, and `eval:orch-tools`' `deliver` cases
 (`cases-deliver.ndjson`) whether an agent picks the right one.
+A request keeps its `admissionOrder` in the journal, independent of queue
+priority and wall clocks. If a queued agent message follows newer instructions
+already handed over (including accepted steers), its handoff note restates
+those instructions with request IDs, original admission times/orders and
+accepted steer receipts (`agent-message-order.ts`).
+Older journals use their saved admission times when available. This conveys
+instruction order; it does not enforce a hold on external operations. Prose
+in `agents_answer` does not invoke Stop; admission order and host ownership
+are not a permission generation. Only explicit newer instructions may release
+a newer prose restriction; queue delivery is no release.
+`agents_send` with `reply: "none"` marks an informational message durably. A
+successful notification synthesizes no result and preserves an existing wait;
+failures, questions and explicit reports still report. A completed task turn
+without a report or final response is failed, never a successful result.
 
 A turn a provider starts itself (`provider-turn`) carries what settled
 (`TurnCause`: name, outcome, exit code, duration, a monitor's output, a

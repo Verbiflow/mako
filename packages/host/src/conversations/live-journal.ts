@@ -137,6 +137,8 @@ export const LiveRequestSchema = z.object({
   id: z.string().uuid(),
   /** When the host admitted it (epoch milliseconds); unset in journals written before it was kept. */
   createdAt: z.number().nonnegative().optional(),
+  admissionOrder: z.number().int().positive().optional(),
+  notification: z.literal(true).optional(),
   dispatchedAt: z.number().optional(),
   text: z.string().max(1_000_000),
   attachments: z.array(PromptAttachmentSchema),
