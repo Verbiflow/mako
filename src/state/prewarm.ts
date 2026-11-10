@@ -38,6 +38,9 @@ export function noteComposing(text: string, now = Date.now()): void {
   const acpState = acpStore.get()
   const live = activeLiveAcp(acpState)
   if (live) {
+    // Written for another harness (one of its models chosen), the message switches there: waking this one only puts
+    // its start ahead of the switch, which waits for it.
+    if (threadsStore.get().composerHarness !== live.session.harness) return
     if (live.session.status === "closed" || !due(live.key, now)) return
     void getMako().livePrewarm(live.key).catch(() => signalled.delete(live.key))
     return

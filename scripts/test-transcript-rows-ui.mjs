@@ -27,10 +27,11 @@ if (process.versions.electron) {
 } else {
   const root = testScratch("mako-transcript-rows-")
   const { createServer } = await import("vite")
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
+  const port = Number(process.env.MAKO_UI_TEST_PORT ?? process.env.MAKO_THREAD_PORT ?? 0)
+  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: port !== 0, hmr: false, watch: { ignored: ["**"] } } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-transcript-rows", main: fileURLToPath(import.meta.url) }))
-  const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0] }
+  const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0], MAKO_RELEASED_TURN_ONLY: process.argv.includes("--released-turn-only") ? "1" : "" }
   delete env.ELECTRON_RUN_AS_NODE
   try {
     const child = spawn(resolve("node_modules/.bin/electron"), [root], { stdio: "inherit", env })
@@ -148,6 +149,98 @@ const TURNS = `Promise.all([import('/src/state/live-recovery.ts'), import('/src/
   return true
 })`
 
+/** Bounded input evidence only; instrumentation changes timing and does not classify the historical failure. */
+const READER_INPUT = `(() => {
+  const node = document.querySelector('[data-transcript-viewport]')
+  if (!(node instanceof HTMLElement)) throw new Error('No transcript for input diagnostics')
+  const limits = { events: 128, writes: 64, frames: 120, path: 8, field: 160, stack: 2048, errors: 8 }
+  const dropped = { events: 0, writes: 0, frames: 0, pathChains: 0, fieldCharacters: 0, stackCharacters: 0, errors: 0 }
+  const seen = window.__readerInput = {
+    limits, dropped, events: [], frames: [], writes: [], errors: [],
+    scope: {
+      timing: 'Diagnostic geometry/style reads force layout; prototype wrapping and stacks add work and may change timing. An instrumented pass does not classify or repair the original CI failure.',
+      prevention: 'defaultPreventedAtCapture is sampled in document capture, before later handlers; final prevention is not observed.',
+      writes: 'Setter-only: direct Element.scrollTop assignments. Native/compositor, CSS, scrollTo/scrollBy/scroll writes are not captured. No setter record does not prove no programmatic scrolling.',
+      truncation: 'dropped.pathChains counts paths exceeding the depth cap; character counts report discarded suffixes. Buffers keep the first events/writes/errors and the last frames.',
+    },
+  }
+  const text = (value, max = limits.field, key = 'fieldCharacters') => {
+    const full = String(value)
+    dropped[key] += Math.max(0, full.length - max)
+    return full.slice(0, max)
+  }
+  const diagnosticError = (stage, error) => {
+    if (seen.errors.length >= limits.errors) { dropped.errors += 1; return }
+    seen.errors.push({ stage, message: text(error) })
+  }
+  const path = target => {
+    const result = []
+    let element = target
+    while (element instanceof Element && result.length < limits.path) {
+      result.push({ tag: text(element.tagName), class: text(element.getAttribute('class') ?? ''), viewport: element === node,
+        top: element.scrollTop, height: element.scrollHeight, client: element.clientHeight, overflow: text(getComputedStyle(element).overflowY) })
+      element = element.parentElement
+    }
+    if (element instanceof Element) dropped.pathChains += 1
+    return result
+  }
+  const state = () => ({ at: performance.now(), top: node.scrollTop, height: node.scrollHeight, client: node.clientHeight,
+    overflow: text(getComputedStyle(node).overflowY), virtualized: node.hasAttribute('data-virtualized'),
+    reading: node.hasAttribute('data-reading-anchor'), preserving: node.hasAttribute('data-preserve-scroll') })
+  const types = ['wheel', 'scroll', 'scrollend']
+  const installed = []
+  const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop')
+  let frame, wrapped = false, stopped = false
+  const onEvent = event => {
+    if (seen.events.length >= limits.events) { dropped.events += 1; return }
+    try {
+      seen.events.push({ ...state(), type: event.type, trusted: event.isTrusted, deltaY: event.deltaY,
+        defaultPreventedAtCapture: event.defaultPrevented, path: path(event.target) })
+    } catch (error) { diagnosticError('event', error) }
+  }
+  const finish = window.__finishReaderInput = () => {
+    if (stopped) return
+    stopped = true
+    try { cancelAnimationFrame(frame) } catch (error) { diagnosticError('cancel frame', error) }
+    for (const type of installed)
+      try { document.removeEventListener(type, onEvent, true) } catch (error) { diagnosticError('remove listener', error) }
+    if (wrapped)
+      try { Object.defineProperty(Element.prototype, 'scrollTop', descriptor) } catch (error) { diagnosticError('restore setter', error) }
+    try { seen.final = state() } catch (error) { diagnosticError('final state', error) }
+  }
+  try {
+    seen.initial = state()
+    const rect = node.getBoundingClientRect()
+    seen.point = { x: rect.left + rect.width / 2, y: rect.top + 80 }
+    seen.hit = path(document.elementFromPoint(seen.point.x, seen.point.y))
+    seen.visibility = document.visibilityState
+    seen.focus = document.hasFocus()
+    for (const type of types) { document.addEventListener(type, onEvent, true); installed.push(type) }
+    Object.defineProperty(Element.prototype, 'scrollTop', { ...descriptor, set(value) {
+      if (this === node && !stopped) {
+        if (seen.writes.length >= limits.writes) dropped.writes += 1
+        else try {
+          seen.writes.push({ ...state(), value: typeof value === 'number' ? value : text(value),
+            stack: text(new Error('transcript scroll write').stack, limits.stack, 'stackCharacters') })
+        } catch (error) { diagnosticError('setter sample', error) }
+      }
+      descriptor.set.call(this, value)
+    } })
+    wrapped = true
+    const read = () => {
+      if (stopped) return
+      try {
+        if (seen.frames.length >= limits.frames) { seen.frames.shift(); dropped.frames += 1 }
+        seen.frames.push(state())
+      } catch (error) { diagnosticError('frame', error) }
+      frame = requestAnimationFrame(read)
+    }
+    frame = requestAnimationFrame(read)
+  } catch (error) { finish(); throw error }
+  return true
+})()
+`
+
 /** Each frame, once painted: the turns in view, how much of the view they fill, and for a reader up, the line they read. */
 const CROSSING = (up) => `(() => {
   const node = document.querySelector('[data-transcript-viewport]')
@@ -184,7 +277,7 @@ const FORMS = [
 ]
 
 async function check() {
-  const { app, BrowserWindow, contentTracing, nativeImage } = await import("electron")
+  const { app, BrowserWindow, contentTracing, nativeImage, screen } = await import("electron")
   const root = process.env.MAKO_UI_TEST_ROOT
   const evidence = process.env.MAKO_SEND_SHOTS ?? root
   const base = process.env.MAKO_UI_TEST_URL.replace(/\/$/, "")
@@ -208,11 +301,139 @@ async function check() {
       await wait(50)
     }
   }
-  const shot = async (name) => writeFile(join(root, `${name}.png`), (await page.capturePage()).toPNG())
+  const shot = async (name) => writeFile(join(evidence, `${name}.png`), (await page.capturePage()).toPNG())
   // A page first: a window that has drawn nothing answers no debugger command, and crashes on emulation.
   await window.loadURL("about:blank")
   await page.debugger.sendCommand("Page.enable")
   await page.debugger.sendCommand("Page.addScriptToEvaluateOnNewDocument", { source: OBSERVER })
+
+  // Released payloads change a measured row's height. Corrections and their scrollend must retain the intended
+  // paragraph, while even a half-pixel external scroll supplies a new anchor. The existing CI entry runs this first.
+  guard.at("released history: painted answer and reading anchor")
+  // CDP's emulated DPR does not set scrollTop quantization. Chromium rounds at the window's native scale × zoom.
+  // Keep this fixture's CSS viewport fixed while explicitly exercising both resolutions; restore the original zoom
+  // before the unrelated desk/phone matrix. Each profile proves its actual DOM readback before any app corrections.
+  const nativeScale = screen.getDisplayMatching(window.getBounds()).scaleFactor
+  const originalZoom = page.getZoomFactor()
+  const inputProfiles = []
+  const inputProfile = async (scale) => {
+    const zoom = scale / nativeScale
+    // Zoom belongs to the origin; applying it on about:blank would be lost on this navigation.
+    await window.loadURL(`${base}/scripts/released-turn-incident-browser.html`)
+    await until("Boolean(document.querySelector('iframe')?.contentWindow.incidentCheck)", "released history input profile")
+    page.setZoomFactor(zoom)
+    await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", {
+      width: Math.round(1600 * zoom), height: Math.round(1000 * zoom), deviceScaleFactor: nativeScale, mobile: false,
+    })
+    await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    const readback = await evaluate(`(() => {
+      const frame = document.querySelector('iframe').contentWindow
+      const node = frame.document.createElement('div')
+      node.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;overflow:auto'
+      const child = frame.document.createElement('div')
+      child.style.height = '1000px'
+      node.append(child); frame.document.body.append(node)
+      const writes = [0.5, 80].map(requested => {
+        node.scrollTop = 100
+        const before = node.scrollTop
+        node.scrollTop = before + requested
+        return { requested, before, after: node.scrollTop, movement: node.scrollTop - before }
+      })
+      node.remove()
+      return { dpr: frame.devicePixelRatio, width: frame.innerWidth, height: frame.innerHeight,
+        syntheticWheelIsTrusted: new frame.WheelEvent('wheel', { deltaY: 0.5 }).isTrusted, writes }
+    })()`)
+    const profile = { scale, nativeScale, zoom: page.getZoomFactor(), versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+      platform: process.platform, arch: process.arch, input: 'DOM scrollTop assignment and synthetic untrusted events; no native gesture claim', ...readback }
+    inputProfiles.push(profile)
+    await writeFile(join(evidence, "released-history-input-profiles.json"), JSON.stringify(inputProfiles, null, 2))
+    console.log(`Released history input profile: ${JSON.stringify(profile)}`)
+    assert.equal(profile.syntheticWheelIsTrusted, false)
+    assert.equal(profile.zoom, zoom)
+    assert.equal(profile.dpr, scale)
+    assert.equal(profile.width, 1600)
+    assert.equal(profile.height, 1000)
+    assert.equal(profile.writes[0].movement, scale === 1 ? 1 : 0.5, 'isolated DOM proves the profile scroll resolution')
+    assert.equal(profile.writes[1].movement, 80)
+    return profile
+  }
+  await mkdir(evidence, { recursive: true })
+  await inputProfile(2)
+  await window.loadURL(`${base}/scripts/released-turn-incident-browser.html`)
+  await until("Boolean(document.querySelector('iframe')?.contentWindow.incidentCheck)", "released history fixture")
+  await mkdir(evidence, { recursive: true })
+  const incident = (expression) => evaluate(`document.querySelector('iframe').contentWindow.incidentCheck.${expression}`)
+  const beforeRelease = await incident("prepare()")
+  assert.equal(beforeRelease.released, true, "default residency really released the measured target")
+  await shot("released history before restoration")
+  try {
+    const restored = await incident("reveal()")
+    assert.equal(restored.released, false)
+    await shot("released history restored")
+    // Compare the painted paragraph, away from the scroller and fixture controls, across writes below the reader.
+    const crop = { x: 40, y: 180, width: 900, height: 500 }
+    const pixels = async () => (await page.capturePage(crop)).toBitmap()
+    const before = await pixels()
+    const duplicate = await incident("duplicateScrollEnd()")
+    const streamed = await incident("stream()")
+    const after = await pixels()
+    assert.equal(before.length, after.length)
+    let changed = 0
+    for (let at = 0; at < before.length; at += 4)
+      if (Math.abs(before[at] - after[at]) + Math.abs(before[at + 1] - after[at + 1]) + Math.abs(before[at + 2] - after[at + 2]) > 48) changed += 1
+    const changedPercent = 100 * changed / (before.length / 4)
+    assert.ok(changedPercent <= 0.5, `restored paragraph's painted pixels moved (${changedPercent.toFixed(3)}%)`)
+    const fractional = await incident("fractionalScroll()")
+    assert.equal(fractional.movement, 0.5, "the test exercised a real half-pixel external movement")
+    const resized = await incident("resize(700, 720)")
+    await shot("released history resized")
+    const bounded = await incident("boundedRows()")
+    assert.equal(bounded.total, 82, "all streamed turns remain in the projection")
+    const result = { restored, duplicate, streamed, changedPercent, fractional, resized, bounded }
+    await writeFile(join(evidence, "released-history.json"), JSON.stringify(result, null, 2))
+    console.log(`Released history: complete 8000-character paragraph painted; ${changedPercent.toFixed(3)}% changed pixels; half-pixel scroll ${fractional.movement}; resize drift ${resized.drift}; ${bounded.mounted}/${bounded.total} mounted turns`)
+  } catch (error) {
+    await shot("released history failed")
+    throw error
+  }
+  const movementCases = []
+  for (const scale of [2, 1]) {
+    const profile = await inputProfile(scale)
+    await incident("prepare()")
+    const reference = await incident("reveal()")
+    for (const timing of ["settledScroll", "overlappingScroll"]) {
+      for (const amount of [0.5, 80]) {
+        guard.at(`released history: scale ${scale} ${timing} ${amount}px`)
+        await window.loadURL(`${base}/scripts/released-turn-incident-browser.html`)
+        await until("Boolean(document.querySelector('iframe')?.contentWindow.incidentCheck)", "fresh released history fixture")
+        await incident("prepare()")
+        const result = await incident(`${timing}(${amount})`)
+        const error = result.state.top - (reference.top - result.movement)
+        movementCases.push({ scale, timing, amount, expectedMovement: profile.writes.find(write => write.requested === amount).movement, ...result, error })
+        await shot(`released history scale ${scale} ${timing} ${amount}px`)
+      }
+    }
+  }
+  await writeFile(join(evidence, "released-history-movement.json"), JSON.stringify(movementCases, null, 2))
+  for (const result of movementCases) {
+    assert.equal(result.injected, true, `${result.timing}: a real correction write was exercised`)
+    assert.equal(result.movement, result.expectedMovement, `${result.timing}: actual movement matches the independently measured profile`)
+    assert.ok(result.state.text?.includes("Finding 2"), `${result.timing} ${result.amount}px: the intended answer stays painted`)
+    assert.ok(Math.abs(result.error) <= 0.1, `${result.timing} ${result.amount}px: reader displacement error ${result.error}px`)
+  }
+  page.setZoomFactor(originalZoom)
+  await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: 1600, height: 1000, deviceScaleFactor: 2, mobile: false })
+  guard.at("shared history: two reading panes, selection, drag and bookmarks")
+  await window.loadURL(`${base}/scripts/transcript-residency-browser.html`)
+  await until("Boolean(document.querySelector('button'))", "shared history fixture")
+  await evaluate("document.querySelector('button').click(); true")
+  await until("/All history residency checks passed|FAIL/.test(document.querySelector('pre')?.textContent ?? '')", "shared history reading checks")
+  const reading = await evaluate("document.querySelector('pre').textContent")
+  await writeFile(join(evidence, "shared-history-reading.txt"), reading)
+  assert.ok(!reading.includes("FAIL"), reading)
+  assert.ok(reading.includes("All history residency checks passed"), reading)
+  console.log("Shared history: 80/240 turns, both pane anchors, selection/drag holds, released answer and partial-answer bookmarks passed")
+  if (process.env.MAKO_RELEASED_TURN_ONLY === "1") { app.exit(0); return }
 
   for (const { form, path, width, height, mobile, open } of FORMS) {
     console.log(`=== ${form}`)
@@ -369,10 +590,28 @@ async function check() {
       const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + 80 } })()")
       const wheelBy = (deltaY) => page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY })
       if (reader !== "at the end") {
-        await wheelBy(-500)
-        await wait(400)
-        const away = await evaluate("(() => { const node = document.querySelector('[data-transcript-viewport]'); return node.scrollHeight - node.scrollTop - node.clientHeight })()")
-        assert.ok(away > 96, `${form}: the reader left the end (${away})`)
+        const diagnosticFailure = (stage, error) => {
+          try { console.warn(`Reader input diagnostic ${stage}: ${String(error).slice(0, 500)}`) } catch { /* Diagnostics cannot replace the input failure. */ }
+        }
+        let failed = false, away
+        try {
+          try { await evaluate(READER_INPUT) } catch (error) { diagnosticFailure("setup", error) }
+          await wheelBy(-500)
+          await wait(400)
+          away = await evaluate("(() => { const node = document.querySelector('[data-transcript-viewport]'); return node.scrollHeight - node.scrollTop - node.clientHeight })()")
+          assert.ok(away > 96, `${form}: the reader left the end (${away})`)
+        } catch (error) { failed = true; throw error } finally {
+          // Teardown returns no payload: a readback/serialization failure cannot skip restoration.
+          try { await evaluate("window.__finishReaderInput?.(); true") } catch (error) { diagnosticFailure("teardown", error) }
+          if (failed) {
+            let input
+            try { input = await evaluate("window.__readerInput") } catch (error) { diagnosticFailure("readback", error) }
+            const name = `${form} reader ${reader} leaving the end`
+            try { await mkdir(evidence, { recursive: true }) } catch (error) { diagnosticFailure("directory", error) }
+            try { await writeFile(join(evidence, `${name}.json`), JSON.stringify({ form, reader, away, input }, null, 2)) } catch (error) { diagnosticFailure("artifact", error) }
+            try { await writeFile(join(evidence, `${name}.png`), (await page.capturePage()).toPNG()) } catch (error) { diagnosticFailure("screenshot", error) }
+          }
+        }
       }
       await evaluate(CROSSING(reader === "up"))
       let moving = reader === "scrolling"

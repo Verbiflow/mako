@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { frontDoorNote } from "@mako/host/contracts/agent-tools"
-import { childState, ReportSchema, waitingStateWords, type ChildState, type Report, type ThreadParent } from "@mako/host/contracts/agents"
+import { childState, ReportSchema, waitingStateWords, type ChildState, type Report, type ThreadParent, type WaitingOn } from "@mako/host/contracts/agents"
 import { childLine, childWord } from "@mako/host/contracts/children"
 import { ChildStateSchema } from "@mako/host/contracts/native-agents"
 import { pullOutcome, pullWakeNote, pullWakeWords, type PullReading } from "@mako/host/contracts/pull-waits"
@@ -12,7 +12,7 @@ import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-ide
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { PULL_WATCH_EVERY_MS, PULL_WATCH_MAX_MS, PullWatch, type PullWait } from "@mako/host/conversations/pull-watch"
 import { readPull } from "@mako/host/git/index"
-import { AgentsWorld, type Script } from "./lib/agents-world.ts"
+import { AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
 
 /*
  * A Fin woken by the pull request it waits on (`npm run test:fin-pull-waits`): the outcome a reading shows, matched to
@@ -35,11 +35,11 @@ const check = (name: string, state: PullReading["checks"][number]["state"], at?:
   const green = reading({ checks: [check("lint", "passed", SINCE + 5), check("e2e", "passed", SINCE + 9)] })
   assert.deepEqual(pullOutcome(green, "checks", SINCE), { kind: "settled", passed: 2, failed: [] })
   const stale = reading({ checks: [check("lint", "passed", SINCE - 50), check("e2e", "failed", SINCE - 10)] })
-  assert.equal(pullOutcome(stale, "checks", SINCE), undefined, "checks that all finished before the wait began are an earlier push's")
+  assert.deepEqual(pullOutcome(stale, "checks", SINCE), { kind: "settled", passed: 1, failed: ["e2e"] }, "current-head checks already settled when the wait was registered still answer it")
   const first = reading({ checks: [check("lint", "failed", SINCE + 5), check("e2e", "running")] })
   assert.deepEqual(pullOutcome(first, "checks", SINCE), { kind: "failed", check: "lint", running: 1 }, "the first failure, while others run")
   const known = reading({ checks: [check("lint", "failed", SINCE - 5), check("e2e", "running")] })
-  assert.equal(pullOutcome(known, "checks", SINCE), undefined, "a failure from before the wait woke it already")
+  assert.deepEqual(pullOutcome(known, "checks", SINCE), { kind: "failed", check: "lint", running: 1 }, "a current-head failure already present when the wait was registered still answers it")
   assert.equal(pullOutcome(reading(), "checks", SINCE), undefined, "no checks yet: a push GitHub hasn't started on")
 
   const approved = reading({ reviews: [{ login: "ada", state: "approved", at: SINCE + 20 }] })
@@ -105,7 +105,7 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
 {
   const asked: { cwd: string; args: string[] }[] = []
   const printed = JSON.stringify({
-    state: "OPEN", url: URL, author: { login: "fin-bot" },
+    state: "OPEN", url: URL, headRefOid: "a".repeat(40), author: { login: "fin-bot" },
     statusCheckRollup: [
       { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "FAILURE", completedAt: "2026-11-04T10:00:00Z" },
       { __typename: "StatusContext", context: "deploy", state: "PENDING", startedAt: "2026-11-04T09:59:00Z" },
@@ -113,18 +113,40 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
     latestReviews: [{ author: { login: "ada" }, state: "APPROVED", submittedAt: "2026-11-04T10:05:00Z" }],
   })
   const read = await readPull({ repository: "acme/app", number: 371, cwd: "/work" }, async (cwd, args) => (asked.push({ cwd, args }), printed))
-  assert.deepEqual(asked, [{ cwd: "/work", args: ["pr", "view", "371", "--repo", "acme/app", "--json", "state,url,author,statusCheckRollup,latestReviews"] }])
+  assert.deepEqual(asked, [{ cwd: "/work", args: ["pr", "view", "371", "--repo", "acme/app", "--json", "state,url,headRefOid,author,statusCheckRollup,latestReviews"] }])
   assert.deepEqual(read, {
-    state: "open", url: URL, author: "fin-bot",
+    state: "open", url: URL, head: "a".repeat(40), author: "fin-bot",
     checks: [{ name: "lint", state: "failed", at: Date.parse("2026-11-04T10:00:00Z") }, { name: "deploy", state: "running", at: Date.parse("2026-11-04T09:59:00Z") }],
     reviews: [{ login: "ada", state: "approved", at: Date.parse("2026-11-04T10:05:00Z") }],
   })
   const bare = await readPull({ number: 12, cwd: "/work" }, async (_cwd, args) => (asked.push({ cwd: _cwd, args }), JSON.stringify({ state: "MERGED", url: URL })))
-  assert.deepEqual(asked.at(-1)?.args, ["pr", "view", "12", "--json", "state,url,author,statusCheckRollup,latestReviews"], "a bare number is read in the Fin's folder")
+  assert.deepEqual(asked.at(-1)?.args, ["pr", "view", "12", "--json", "state,url,headRefOid,author,statusCheckRollup,latestReviews"], "a bare number is read in the Fin's folder")
   assert.equal(bare?.state, "merged")
   assert.equal(await readPull({ number: 1, cwd: "/work" }, async () => { throw new Error("gh: not logged in") }), null, "a reader that can't answer says nothing")
 }
 console.log("readPull: one gh pr view by repository and number, parsed as the status tool parses it")
+
+// A PR condition follows the head in the current reading, with that observation preserved in its durable note.
+{
+  const oldHead = "a".repeat(40)
+  const currentHead = "b".repeat(40)
+  let now = 0
+  let pull = reading({ head: oldHead, checks: [check("lint", "running")] })
+  let waits: PullWait[] = [{ key: "head-wait", child: "fin", report: "r", pullKey: "acme/app#371", since: SINCE, pull: "acme/app#371", target: { key: "acme/app#371", repository: "acme/app", number: 371, cwd: "/work" }, until: "checks" }]
+  const notes: string[] = []
+  const watch = new PullWatch({ waits: () => waits, read: async () => pull, now: () => now, fire: async (_wait, _outcome, note) => { notes.push(note); waits = [] } })
+  await watch.tick()
+  assert.equal(notes.length, 0, "the earlier head is still running")
+  pull = reading({ head: currentHead, checks: [check("lint", "passed", SINCE - 50)] })
+  now = PULL_WATCH_EVERY_MS
+  await watch.tick()
+  assert.equal(notes.length, 1, "a new current head already complete at registration satisfies the condition")
+  assert.ok(notes[0]!.includes(`observed head ${currentHead}`))
+  assert.ok(!notes[0]!.includes(oldHead), "the previous reading's head cannot label the new check rollup")
+  const restored = pullWakeWords(notes[0]!)
+  assert.ok(restored?.line.includes(currentHead), "transcript readback preserves the observed head")
+  assert.equal(restored?.url, URL)
+}
 
 // The watched set on a fake clock: what waits is read, at once, then each minute doubling while nothing changes; dropped once nothing waits.
 {
@@ -188,6 +210,69 @@ console.log("readPull: one gh pr view by repository and number, parsed as the st
 }
 console.log("PullWatch: read at once, then a minute doubling to eight while unchanged; fired once; pruned when nothing waits")
 
+// Prose retains its exact source identities but is never an effective subscription, before or after restart.
+{
+  const dir = mkdtempSync(join(tmpdir(), "mako-unwatched-main-"))
+  let reads = 0
+  const options: WorldOptions = { root: dir, script: () => "ok", readPull: async () => { reads += 1; return null } }
+  const world = new AgentsWorld(options)
+  const wait = { kind: "other" as const, text: `Main CI run7 attempt1 job71 at ${"a".repeat(40)}` }
+  const artifacts = [{ kind: "test-run" as const, ref: "https://github.com/acme/app/actions/runs/7" }, { kind: "commit" as const, ref: "a".repeat(40) }]
+  try {
+    const apex = await world.apex("codex", "full")
+    const fin = await world.agents.start(apex.caller, { harness: "claude", brief: { objective: "Observe main CI" }, name: "ci", clientKey: "ci", cwd: dir })
+    assert.ok(!("refused" in fin) && fin.conversation)
+    await world.settle(100)
+    const input = { status: "done" as const, summary: "Waiting for main CI.", waitingOn: [wait], artifacts, clientKey: "prose" }
+    const receipt = await world.agents.report(world.caller(fin.conversation!), input)
+    assert.ok(!("refused" in receipt))
+    assert.equal(receipt.subscriptions?.[0]?.state, "unsupported", "recorded prose must not masquerade as an automatic watch")
+    assert.match(receipt.subscriptions?.[0]?.why ?? "", /no automatic wake/)
+    assert.deepEqual(receipt.subscriptions?.[0]?.wait, wait, "the refusal preserves job/run/attempt/head identity")
+    assert.match(waitingStateWords([wait], 0, 0), /no automatic wake/, "the durable unsupported state is visible when read")
+    await world.agents.pulls.tick()
+    assert.deepEqual(world.agents.pulls.keys(), [])
+    assert.equal(reads, 0, "an artifact URL or prose is never parsed into a PR watch")
+    await world.restart()
+    await world.agents.pulls.tick()
+    const reread = await world.agents.report(world.caller(fin.conversation!), input)
+    assert.ok(!("refused" in reread) && reread.subscriptions?.[0]?.state === "unsupported", "an old durable report gets the same honest receipt after migration/restart")
+    const child = world.store.edges().all.find((edge) => edge.name === "ci")!.child
+    const kept = world.store.reportsOf(child).find((report) => report.id.endsWith(":prose"))!
+    assert.deepEqual(kept.waitingOn, [wait])
+    assert.deepEqual(kept.artifacts, artifacts)
+    const readBack = await world.agents.read(apex.caller, { child: "ci" })
+    assert.ok(!("refused" in readBack))
+    assert.match(readBack.text, /run7 attempt1 job71 at a{40} \(no automatic wake\)/, "reading an old done report shows its unsupported wait explicitly")
+    assert.deepEqual(world.agents.pulls.keys(), [])
+    assert.equal(reads, 0, "restart doesn't invent a subscription")
+    const validInput = { status: "progress" as const, summary: "Waiting on an actual PR.", waitingOn: [{ kind: "pull-request" as const, ref: "acme/app#371", until: "checks" as const }], clientKey: "valid" }
+    const valid = await world.agents.report(world.caller(fin.conversation!), validInput)
+    assert.ok(!("refused" in valid) && valid.subscriptions?.[0]?.state === "registered", "a supported condition returns an actual registration receipt")
+    assert.deepEqual(world.agents.pulls.keys(), ["acme/app#371"])
+    const stale = await world.agents.report(world.caller(fin.conversation!), input)
+    assert.ok(!("refused" in stale) && stale.subscriptions?.[0]?.state === "unsupported")
+    assert.deepEqual(world.agents.pulls.keys(), ["acme/app#371"], "replaying the old prose report cannot replace a newer subscription")
+    const current = world.store.reportsOf(child).at(-1)!
+    world.store.claimPullWake({ wait: `pull-wake:${child}:${current.id}:acme/app#371`, child, report: current.id, pull: "acme/app#371", outcome: "settled", request: randomUUID(), text: "Mako: PR acme/app#371 checks settled: all 1 passed.", at: Date.now() })
+    const claimed = await world.agents.report(world.caller(fin.conversation!), validInput)
+    assert.ok(!("refused" in claimed) && claimed.subscriptions?.[0]?.state === "claimed", "a durable claim is distinct from a live watch or proven delivery")
+    assert.match(!("refused" in claimed) ? claimed.subscriptions?.[0]?.why ?? "" : "", /does not prove/)
+    await world.agents.report(world.caller(fin.conversation!), { status: "progress", summary: "Wait withdrawn.", clientKey: "withdraw" })
+    const inactive = await world.agents.report(world.caller(fin.conversation!), validInput)
+    assert.ok(!("refused" in inactive) && inactive.subscriptions?.[0]?.state === "inactive", "replaying an obsolete report cannot claim a live registration")
+    options.readPull = undefined
+    await world.restart()
+    const unavailable = await world.agents.report(world.caller(fin.conversation!), { ...validInput, clientKey: "without-reader" })
+    assert.ok(!("refused" in unavailable) && unavailable.subscriptions?.[0]?.state === "unavailable", "a host without the reader cannot promise an automatic wake")
+    assert.deepEqual(world.agents.pulls.keys(), [])
+  } finally {
+    await world.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+console.log("subscription receipts: unsupported prose, exact identity through restart, valid PR registration, no implicit monitoring")
+
 // Through the engine: a Fin's report names a pull request; its outcome wakes the Fin once, never its Apex, across restarts.
 const root = mkdtempSync(join(tmpdir(), "mako-pull-waits-"))
 try {
@@ -248,7 +333,7 @@ try {
   await world.restart()
   assert.deepEqual(world.agents.pulls.keys(), ["acme/app#371"], "a new host watches what the last one did")
 
-  const at = now() + 1_000
+  const at = now() - 10_000
   pull = reading({ checks: [check("lint", "failed", at), check("e2e", "failed", at + 10)] })
   await world.agents.pulls.tick()
   const note = `Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e). ${URL}`
@@ -270,6 +355,24 @@ try {
   await world.settle(300)
   assert.equal(finTexts.filter((text) => text === note).length, 1, "the outcome reached the Fin once, across a restart")
   assert.notEqual(stateOf("ci")?.kind, "idle", "its turn after the note is past the wait")
+  // A new report may renew an unchanged wait after all checks finished (#544 and #470). It is a new wait,
+  // answered from the current head's state, even after restart and even when every check predates that report.
+  const finishedAt = now() - 10_000
+  const observedHead = "c".repeat(40)
+  pull = reading({ head: observedHead, checks: [check("lint", "passed", finishedAt), check("e2e", "passed", finishedAt)] })
+  await world.agents.report(world.caller(ciConversation), {
+    status: "progress", summary: "Rerun accepted; waiting for checks.", clientKey: "renewed-after-completion",
+    waitingOn: [{ kind: "pull-request", ref: URL, until: "checks" }],
+  })
+  await world.restart()
+  await world.agents.pulls.tick()
+  await world.settle(300)
+  const greenNote = `Mako: PR acme/app#371 checks settled: all 2 passed; observed head ${observedHead}. ${URL}`
+  assert.equal(finTexts.filter((text) => text === greenNote).length, 1, "a renewed wait wakes on checks that finished before its report")
+  await world.restart()
+  await world.agents.pulls.tick()
+  await world.settle(300)
+  assert.equal(finTexts.filter((text) => text === greenNote).length, 1, "the renewed wait's receipt survives restart")
   await world.close()
 } finally {
   rmSync(root, { recursive: true, force: true })
@@ -288,18 +391,19 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
     }
   }
   /** An Apex and one Fin whose first turn reports it waits on acme/app#7's merge; `busy` holds a turn of the Fin's that says so. */
-  const waiting = async (name: string, read: () => Promise<PullReading | null> = async () => MERGED, now?: () => number) => {
+  const waiting = async (name: string, read: () => Promise<PullReading | null> = async () => MERGED, now?: () => number, retain = false) => {
     const fin = { conversation: "", ready: false }
     const world: AgentsWorld = new AgentsWorld({
       root: join(roots, name),
       ...(now && { now }),
-      readPull: () => read(),
+      readPull: (target) => target.number === 7 ? read() : Promise.resolve(null),
       script: async (turn) => {
         if (turn.text.includes("You're fin:")) {
           fin.conversation = turn.conversation
           await turn.world.agents.report(turn.caller, { status: "progress", summary: "Waiting on #7.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: "wait" })
           fin.ready = true
         } else if (turn.text.includes("busy")) await turn.world.hold(turn.conversation)
+        else if (retain && turn.text.startsWith("Mako: PR")) await turn.world.agents.report(turn.caller, { status: "progress", summary: "Outcome received; another dependency remains.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: `retained-${turn.world.prompts.length}` })
         return "ok"
       },
     })
@@ -327,6 +431,137 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
   }
 
   try {
+    // #463: equivalent narration must preserve the already queued outcome and its identity.
+    {
+      const { world, apex, fin, notes } = await waiting("retained-wait-at-handoff", undefined, undefined, true)
+      const sent = await world.agents.send(apex.caller, { to: "one", text: "busy: clarify another PR", clientKey: "busy" })
+      assert.ok(!("refused" in sent))
+      await until("the Fin to be busy", () => world.live.session(fin.conversation)?.status === "running")
+      await world.agents.pulls.tick()
+      const old = world.live.held(fin.conversation)!.requests.find((request) => request.actor?.kind === "service")!
+      assert.equal(old.status, "queued")
+      await world.agents.report(world.caller(fin.conversation), { status: "progress", summary: "Clarifying another PR; still waiting on #7.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: "clarification" })
+      world.release(fin.conversation)
+      await world.settle()
+      assert.equal(notes().length, 1, "retaining the dependency must not cancel its queued outcome")
+      assert.equal(world.live.held(fin.conversation)?.requests.find((request) => request.id === old.id)?.status, "completed", "the original request reaches native handoff")
+      await world.restart()
+      await world.agents.pulls.tick()
+      await world.settle()
+      assert.equal(notes().length, 1, "equivalent narration cannot create another wake after restart")
+      const child = world.store.edges().all.find((edge) => edge.name === "one")!.child
+      assert.equal(world.store.pullWakesOf([child]).size, 1, "the dependency keeps one durable outcome claim")
+      await world.agents.report(world.caller(fin.conversation), { status: "progress", summary: "Another PR finished; both dependencies still matter.", waitingOn: [{ kind: "pull-request", ref: "https://git.example.com/acme/app/pull/7", until: "merge" }, { kind: "pull-request", ref: "acme/app#8", until: "checks" }], clientKey: "multi-dependency" })
+      await world.restart()
+      await world.agents.pulls.tick()
+      await world.settle()
+      assert.equal(notes().length, 1, "reporting another dependency cannot re-fire the finished one")
+      await world.close()
+    }
+
+    // Multiple unconsumed dependencies survive narration; observation changes, not narration, re-arm their outcomes.
+    {
+      let offset = 0
+      let seq = 0
+      let readable = false
+      const target = (number: number): WaitingOn => ({ kind: "pull-request", ref: `acme/app#${number}`, until: "checks" })
+      let waits = [target(7), target(8)]
+      const pulls = new Map([[7, reading({ head: "a".repeat(40), checks: [check("lint", "failed", 10)] })], [8, reading({ head: "b".repeat(40), checks: [check("unit", "passed", 10)] })]])
+      const world = new AgentsWorld({ root: join(roots, "observation-cursors"), now: () => Date.now() + offset, readPull: async (target) => readable ? pulls.get(target.number) ?? null : null, script: async (turn) => {
+        if (turn.text.includes("busy")) await turn.world.hold(turn.conversation)
+        else if (turn.text.includes("You're fin:") || turn.text.startsWith("Mako: PR")) await turn.world.agents.report(turn.caller, { status: "progress", summary: "Retain the dependencies while coordinating other work.", waitingOn: waits, clientKey: `keep-${seq++}` })
+        return "ok"
+      } })
+      try {
+        const apex = await world.apex("claude", "full")
+        const fin = await world.agents.start(apex.caller, { harness: "codex", brief: { objective: "Coordinate dependencies" }, name: "one", clientKey: "one", cwd: world.root })
+        assert.ok(!("refused" in fin) && fin.conversation)
+        const conversation = fin.conversation!
+        const child = world.store.edges().all.find((edge) => edge.name === "one")!.child
+        const notes = () => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.startsWith("Mako: PR"))
+        const report = () => world.agents.report(world.caller(conversation), { status: "progress", summary: "Other work finished; same dependencies remain.", waitingOn: waits, clientKey: `narration-${seq++}` })
+        const tick = async () => { offset += PULL_WATCH_MAX_MS; await world.agents.pulls.tick(); await world.settle(100) }
+        await world.settle(100)
+        await world.agents.send(apex.caller, { to: "one", text: "busy", clientKey: "busy" })
+        await until("both outcomes to queue behind busy work", () => world.live.session(conversation)?.status === "running")
+        readable = true
+        offset += PULL_WATCH_MAX_MS
+        await world.agents.pulls.tick()
+        const queued = world.live.held(conversation)!.requests.filter((request) => request.actor?.kind === "service" && request.status === "queued")
+        assert.equal(queued.length, 2)
+        await report()
+        world.release(conversation)
+        await world.settle(100)
+        assert.equal(notes().length, 2, "both already-finished dependencies survive another dependency's narration")
+        assert.ok(queued.every((request) => world.live.held(conversation)!.requests.find((row) => row.id === request.id)?.status === "completed"), "the original unconsumed requests are retained")
+        await world.restart()
+        await report()
+        await tick()
+        assert.equal(notes().length, 2, "same-head terminal observations do not form a green wake loop across reports/restart")
+        assert.equal(world.store.pullWakesOf([child]).size, 2)
+        pulls.set(7, reading({ head: "c".repeat(40), checks: [check("lint", "passed", 10)] }))
+        await tick()
+        assert.equal(notes().length, 3, "a different head is a new observation even with the same completion time")
+        pulls.set(7, reading({ head: "c".repeat(40), checks: [check("lint", "passed", 20)] }))
+        await tick()
+        assert.equal(notes().length, 4, "a same-head rerun with a different completion cursor is a new observation")
+        await report()
+        await tick()
+        assert.equal(notes().length, 4)
+        pulls.set(7, { ...pulls.get(7)!, reviews: [{ login: "reviewer", state: "commented", at: Date.now() + offset + 1 }] })
+        await tick()
+        assert.equal(notes().length, 4, "irrelevant review metadata does not re-fire a checks observation")
+        waits = [target(8)]
+        await report()
+        waits = [target(7), target(8)]
+        await report()
+        await tick()
+        assert.equal(notes().length, 5, "explicit withdrawal and re-registration deliberately starts a new dependency wait")
+      } finally { await world.close() }
+    }
+
+    // Existing durable claims keep their original identity after upgrade, including the old outbox boundary.
+    for (const retired of [false, true]) {
+      const { world, fin, notes } = await waiting(`legacy-equivalent-${retired}`, undefined, undefined, true)
+      const child = claimed(world)
+      const original = world.store.pullWakesFor(child)[0]!
+      if (retired) world.store.retirePullWake(original.wait, Date.now())
+      await world.agents.report(world.caller(fin.conversation), { status: "progress", summary: "Same dependency; updated narration.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: "clarification" })
+      await world.restart()
+      await world.agents.pulls.tick()
+      await world.settle(100)
+      assert.equal(notes().length, 1, "legacy outbox claims are preserved, or regenerated only if already retired by the old host")
+      if (!retired) assert.equal(world.live.held(fin.conversation)?.requests.find((request) => request.id === original.request)?.status, "completed", "upgrade retains the original unconsumed legacy request")
+      await world.restart()
+      await world.agents.pulls.tick()
+      await world.settle(100)
+      assert.equal(notes().length, 1, "legacy reconciliation does not replay an unchanged terminal result")
+      await world.close()
+    }
+
+    for (const boundary of ["archive", "condition", "withdraw-readd"] as const) {
+      const { world, apex, fin, notes } = await waiting(`retained-guard-${boundary}`)
+      await world.agents.send(apex.caller, { to: "one", text: "busy", clientKey: "busy" })
+      await until("the guard's busy turn", () => world.live.session(fin.conversation)?.status === "running")
+      await world.agents.pulls.tick()
+      const original = world.live.held(fin.conversation)!.requests.find((request) => request.actor?.kind === "service")!
+      const report = (waitingOn?: WaitingOn[]) => world.agents.report(world.caller(fin.conversation), { status: "progress", summary: "Changed dependency control.", ...(waitingOn && { waitingOn }), clientKey: `guard-${waitingOn ? "keep" : "withdraw"}` })
+      if (boundary === "archive") world.archived.add(fin.conversation)
+      else {
+        if (boundary === "withdraw-readd") await report()
+        await report([{ kind: "pull-request", ref: "acme/app#7", until: boundary === "condition" ? "checks" : "merge" }])
+      }
+      world.release(fin.conversation)
+      await world.settle(100)
+      assert.equal(notes().length, 0, `${boundary} still rejects the old queued claim`)
+      assert.equal(world.live.held(fin.conversation)?.requests.find((request) => request.id === original.id)?.status, "canceled")
+      await world.restart()
+      await world.agents.pulls.tick()
+      await world.settle(100)
+      assert.equal(notes().length, boundary === "archive" ? 0 : 1, "only the deliberately new dependency may produce a replacement outcome")
+      await world.close()
+    }
+
     // A stop after the claim, before delivery: a restart's replay finds the Fin stopped, sends nothing, reopens nothing.
     {
       const { world, apex, notes } = await waiting("stop-after-claim")

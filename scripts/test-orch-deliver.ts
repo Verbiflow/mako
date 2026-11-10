@@ -6,6 +6,8 @@ import { join } from "node:path"
 import type { AgentsSendResult, AgentsSent } from "@mako/host/contracts/agent-tools"
 import { agentWords } from "@mako/host/contracts/children"
 import { actionNotice } from "@mako/host/contracts/operation-recovery"
+import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
+import { agentMessageOrder } from "@mako/host/conversations/agent-message-order"
 import { AgentsWorld, type WorldOptions } from "./lib/agents-world.ts"
 import { ranOut } from "./lib/ran-out.ts"
 
@@ -265,8 +267,152 @@ async function aRowCountsItsTurn(): Promise<void> {
   }
 }
 
+/** Notifications are not tasks; a task with no result is not successful completion. */
+async function notificationDoesNotReportCompletion(): Promise<void> {
+  let fin = ""
+  let holdNotice = true
+  const world = new AgentsWorld({ root: join(root, "notifications"), script: async (turn) => {
+    if (turn.text.includes("You're fin:")) {
+      await turn.world.agents.report(turn.caller, { status: "progress", summary: "Waiting for integration.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: "wait" })
+      return "Waiting."
+    }
+    if (turn.text.includes("Question notification."))
+      await turn.world.agents.report(turn.caller, { status: "needs-input", summary: "A decision is needed.", question: "Which branch?", clientKey: "notification-question" })
+    if (holdNotice && turn.text.includes("Notify during restart.")) await turn.world.hold(turn.conversation)
+    return turn.conversation === fin ? "" : "ok"
+  } })
+  try {
+    const apex = await world.apex("codex", "full")
+    const started = await world.agents.start(apex.caller, { harness: "claude", brief: { objective: "Finish integration" }, name: "worker", clientKey: "worker", cwd: world.root })
+    assert.ok(!("refused" in started) && started.conversation)
+    fin = started.conversation!
+    await world.settle()
+    const edge = world.store.edges().all.find((edge) => edge.name === "worker")!
+    const reports = () => world.store.reportsOf(edge.child)
+    const count = reports().length
+    const notice = sent(await world.agents.send(apex.caller, { to: "worker", text: "Keep the hold; no acknowledgement needed.", reply: "none", clientKey: "notice" }))
+    await world.settle()
+    assert.equal(reports().length, count, "a completed notification creates no synthetic result or Apex wake")
+    assert.ok(reports().at(-1)?.waitingOn?.length, "a notification does not discard the task's existing wait")
+    assert.equal(world.agents.roster(apex.conversation).find((entry) => entry.child?.name === "worker")?.child?.state?.kind, "idle", "notification completion does not complete the waiting task")
+    await world.restart()
+    assert.equal(world.live.snapshot(fin)?.requests.find((request) => request.id === notice.request)?.notification, true, "notification intent survives restart")
+    sent(await world.agents.send(apex.caller, { to: "worker", text: "Notify during restart.", reply: "none", clientKey: "restart-notice" }))
+    await until("the notification's turn", () => world.live.session(fin)?.status === "running")
+    holdNotice = false
+    await world.restart()
+    await world.settle(1_000)
+    assert.equal(reports().length, count, "a notification's continued turn remains a notification after restart")
+    const task = sent(await world.agents.send(apex.caller, { to: "worker", text: "Report the integration result.", clientKey: "task" }))
+    await world.settle()
+    const result = reports().find((report) => report.id.endsWith(task.request))
+    assert.equal(result?.status, "failed", "an empty task response cannot claim successful completion")
+    world.endWith(fin, { fail: "provider failed" })
+    const failed = sent(await world.agents.send(apex.caller, { to: "worker", text: "Another notification.", reply: "none", clientKey: "failed-notice" }))
+    await world.settle()
+    assert.equal(reports().find((report) => report.id.endsWith(failed.request))?.status, "failed", "notification failures still reach the Apex")
+    sent(await world.agents.send(apex.caller, { to: "worker", text: "Question notification.", reply: "none", clientKey: "question-notice" }))
+    await world.settle()
+    assert.equal(reports().at(-1)?.question, "Which branch?", "an explicit question from a notification remains actionable")
+  } finally {
+    await world.close()
+  }
+}
+
+/** One-way messages to another Apex suppress success replies but retain delivery failures. */
+async function notificationsAcrossApexes(): Promise<void> {
+  const { world, apex } = await team("apex-notifications", "codex", ["claude"])
+  try {
+    const other = await world.apex("cursor", "full")
+    const child = await world.agents.start(other.caller, { harness: "codex", brief: { objective: "Work for the other Apex" }, name: "peer-worker", clientKey: "peer", cwd: world.root })
+    assert.ok(!("refused" in child))
+    await world.settle()
+    const to = `apex:${world.store.journalPlacement(other.conversation)!.thread}`
+    const replies = () => world.prompts.filter((turn) => turn.conversation === apex.conversation)
+    const count = replies().length
+    sent(await world.agents.send(apex.caller, { to, text: "The owner is handling it; no reply needed.", reply: "none", clientKey: "peer-notice" }))
+    await world.settle()
+    assert.equal(replies().length, count, "successful notification replies do not wake their sender")
+    world.endWith(other.conversation, { fail: "peer provider failed" })
+    sent(await world.agents.send(apex.caller, { to, text: "The follow-up notification.", reply: "none", clientKey: "peer-failure" }))
+    await until("the peer's failure to reach its sender", () => replies().some((turn) => turn.text.includes("peer provider failed")))
+  } finally {
+    await world.close()
+  }
+}
+
+/** A queued dispatch issued before a steered HOLD cannot present itself as fresh authorization (#539). */
+async function oldQueuedKeepsNewerInstructions(): Promise<void> {
+  for (const restart of [false, true]) {
+    const { world, apex, fin, work, release } = await team(`order-${restart}`, "codex", ["claude"])
+    try {
+      await work()
+      const old = sent(await world.agents.send(apex.caller, { to: "claude", text: "Land the approved change.", clientKey: "old-dispatch" }))
+      sent(await world.agents.send(apex.caller, { to: "claude", text: "HOLD all landing until I explicitly RESUME.", deliver: "steer", clientKey: "hold" }))
+      const snapshot = world.live.snapshot(fin.claude!)!
+      // Admission order survives equal or backwards clocks, and queue priority is not admission order.
+      const sameClock = { ...snapshot, requests: snapshot.requests.map((request) => ({ ...request, createdAt: 100 })) }
+      assert.match(agentMessageOrder(sameClock, old.request).join("\n"), /HOLD all landing/, "same-millisecond instructions keep their admission order")
+      const backwards = { ...snapshot, requests: snapshot.requests.map((request) => ({ ...request, createdAt: 1_000 - (request.admissionOrder ?? 0) })) }
+      assert.match(agentMessageOrder(backwards, old.request).join("\n"), /HOLD all landing/, "a clock correction cannot make an old dispatch newer")
+      const legacy = { ...snapshot, requests: snapshot.requests.map((request) => ({ ...request, createdAt: request.admissionOrder, admissionOrder: undefined })) }
+      assert.match(agentMessageOrder(legacy, old.request).join("\n"), /HOLD all landing/, "older journals use their known admission times")
+      const refused = { ...snapshot, control: { ...snapshot.control!, actions: snapshot.control!.actions?.map((action) => ({ ...action, state: { kind: "not-accepted" as const, reason: "refused" } })) } }
+      assert.deepEqual(agentMessageOrder(refused, old.request), [], "a refused steer is not a newer instruction already received")
+      const peer = SessionIdSchema.parse(randomUUID())
+      const anotherSender = { ...snapshot, requests: snapshot.requests.map((request) => request.id !== old.request && request.actor?.kind === "agent" ? { ...request, actor: { kind: "agent" as const, session: peer } } : request) }
+      assert.deepEqual(agentMessageOrder(anotherSender, old.request), [], "a peer's message does not supersede the sender's instructions")
+      assert.match(agentMessageOrder(anotherSender, old.request, () => "same-thread").join("\n"), /HOLD all landing/, "a sender changing Sessions retains its instruction precedence")
+      if (restart) await world.restart()
+      await release()
+      const prompt = world.prompts.find((turn) => turn.conversation === fin.claude && turn.text.endsWith("Land the approved change."))?.text ?? ""
+      assert.match(prompt, /queued before newer instructions/, "an overtaken dispatch identifies itself as older")
+      assert.match(prompt, /HOLD all landing until I explicitly RESUME/, "the current instruction accompanies the old dispatch")
+      assert.match(prompt, /cannot revoke/, "later delivery cannot revoke a newer instruction")
+      assert.ok(prompt.includes(`request ${old.request}`), "the delayed dispatch names its original request")
+      assert.ok(prompt.includes(`admitted at ${snapshot.requests.find((request) => request.id === old.request)!.createdAt}`), "the original admission time survives delayed handoff and restart")
+      const kept = world.live.held(fin.claude!)?.requests.find((request) => request.id === old.request)
+      assert.ok(kept, "the old work is preserved")
+      assert.equal(kept.text.endsWith("Land the approved change."), true)
+    } finally {
+      await world.close()
+    }
+  }
+}
+
+/** Crew discovery gives no peer-send authority; a refusal names the relation and the existing parent relay. */
+async function siblingRefusalNamesRelay(): Promise<void> {
+  const { world, apex, fin } = await team("sibling-relay", "codex", ["claude", "cursor"])
+  try {
+    const caller = world.caller(fin.claude!)
+    const sibling = world.store.edges().all.find((edge) => edge.name === "cursor")!
+    const crew = await world.agents.list(caller, { scope: "crew" })
+    assert.ok("crew" in crew && crew.crew.some((mate) => mate.name === "cursor"))
+    const before = world.live.snapshot(fin.cursor!)!.requests.length
+    for (const to of ["cursor", "fin:cursor", sibling.child]) {
+      const receipt = await world.agents.send(caller, { to, text: "Coordinate this change.", clientKey: to })
+      assert.ok("refused" in receipt && receipt.refused === "unknown-child")
+      assert.match(receipt.why, /sibling/)
+      assert.ok(receipt.why.includes(sibling.child), "the refused target is identified")
+      assert.ok(receipt.why.includes(sibling.parent), "the relay owner is identified")
+      assert.match(receipt.why, /agents_report.*done/)
+      assert.match(receipt.why, /No message was sent/)
+    }
+    assert.equal(world.live.snapshot(fin.cursor!)!.requests.length, before, "refusal does not deliver to the sibling")
+    const relay = await world.agents.report(caller, { status: "done", summary: `Please relay this change to cursor (${sibling.child}).`, clientKey: "relay" })
+    assert.ok(!("refused" in relay) && relay.delivered === "notice", "an explicit parent relay uses the existing wake receipt")
+    await world.settle()
+    assert.ok(world.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes("Please relay this change")), "the parent actually receives the relay request")
+    assert.equal(world.live.snapshot(fin.cursor!)!.requests.length, before, "reporting asks the parent; it never silently forwards to the sibling")
+    const unknown = await world.agents.send(caller, { to: "missing", text: "No target", clientKey: "missing" })
+    assert.ok("refused" in unknown && !unknown.why.includes("sibling"), "unknown targets are not guessed to be siblings")
+  } finally {
+    await world.close()
+  }
+}
+
 try {
-  for (const test of [aRowCountsItsTurn, idleTakesATurn, queueByDefault, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice]) {
+  for (const test of [siblingRefusalNamesRelay, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice]) {
     await test()
     console.log(`ok ${test.name}`)
   }

@@ -27,6 +27,7 @@ export const TransferInputSchema = z.object({
   account: z.string().optional(),
   /** What its message may attach (`LiveRequest.grants`), kept with the words it carries. */
   grants: z.array(z.string().max(1024)).max(100).optional(),
+  notification: z.literal(true).optional(),
 })
 export type TransferInput = z.infer<typeof TransferInputSchema>
 /** A harness's running totals for one native session, as `NativeTotals`. */

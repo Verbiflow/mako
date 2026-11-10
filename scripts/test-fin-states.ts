@@ -53,7 +53,8 @@ function stateOf(world: AgentsWorld, apex: string, name: string): ChildState | u
 }
 
 function promptsOf(world: AgentsWorld, conversation: string): string[] {
-  return world.prompts.filter((prompt) => prompt.conversation === conversation).map((prompt) => prompt.text)
+  // Classify the delivered user payload; Mako's note can repeat instructions that overtook it.
+  return world.prompts.filter((prompt) => prompt.conversation === conversation).map((prompt) => prompt.text.replace(/^<mako-local-control>[\s\S]*?<\/mako-local-control>\n\n/, ""))
 }
 
 function requestOf(world: AgentsWorld, conversation: string, words: string) {
@@ -89,6 +90,8 @@ try {
       assert.equal(resumed.delivery, "turn", "a stopped Fin with a paused message takes a new one now")
       await until(`${harness}: the message after the stop, then the one the stop paused, to reach its harness`, () => promptsOf(world, fin).some((text) => text.includes("Also do the README.")))
       assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => text.includes("Carry on.") ? "carry on" : text.includes("Also do the README.") ? "readme" : text.slice(0, 60)), ["carry on", "readme"], "the message that resumed it goes first")
+      const deliveredReadme = world.prompts.find((prompt) => prompt.conversation === fin && prompt.text.endsWith("Also do the README."))?.text ?? ""
+      assert.match(deliveredReadme, /queued before newer instructions/, "the old work still carries the newer resume instruction as provenance")
       await until("its turns to end", () => { const state = stateOf(world, apex.conversation, "labels"); return state?.kind === "ended" && state.outcome === "done" })
       const second = await world.agents.start(apex.caller, { brief: { objective: "Work as second" }, harness, name: "second", clientKey: "second", cwd: world.root })
       assert.ok(!("refused" in second) && second.state !== "queued", `${harness}: a Fin done with a paused message holds no room: ${JSON.stringify(second)}`)

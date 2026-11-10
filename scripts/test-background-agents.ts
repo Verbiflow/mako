@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import "./test-internal-native-agents.ts"
 import { spawn } from "node:child_process"
 import { mock } from "node:test"
 import { randomUUID } from "node:crypto"
@@ -1007,6 +1008,7 @@ async function refusals(): Promise<void> {
     const five = await w.agents.start(apex.caller, { brief, name: "five", clientKey: "5", cwd: w.root })
     assert.ok("refused" in five && five.refused === "budget")
     assert.match(five.why, /started 3 of its 3/)
+    assert.match(five.why, /lifetime.*agents_send/, "finishing a Fin cannot free a lifetime start; reuse one")
     const childCaller = w.caller(two.conversation!)
     const wider = await w.agents.start(childCaller, { brief, access: "full", clientKey: "w", cwd: w.root })
     assert.ok("refused" in wider && wider.refused === "access", "a child runs at most at its Apex's access")
