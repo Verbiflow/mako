@@ -37,8 +37,45 @@ to keep the Mac awake remain available from the notice's detail button.
 An unconfirmed move keeps the original operation and disables starting a
 different move from its chip. The chip stops spinning and says “Move not
 confirmed.” Check status rejoins the original request. Only the owner's
-existing `moved` event changes the location to Cloud; acceptance, release,
+`moved` event or authoritative `moved` RPC answer changes the location to Cloud; acceptance, release,
 packing, and hand-over remain preparation or unresolved ownership states.
+
+## Recovery after independent review
+
+Review of `881851110d56988d2a6535826ad7845a618c98b1` found three gaps in
+the first repair. Replaying the reviewer's unchanged controls reproduced all
+three: a late refusal for A erased a pending explicit retry B and permitted C;
+a same-ID status answer of `moved` left the UI unsettled; and a lost RPC answer
+after an own-branch fork left the fork without its status action. The original
+late-RPC identity control passed. The initial screenshots and source CI evidence
+remain evidence of that revision, not proof that these gaps were covered.
+
+The correction retains each observed move's original RPC conversation and
+current event target, including its terminal identity after dismissal. Events
+must match the move still held at that target before they can retarget, update
+progress, settle, or refresh its location. A first host-originated move can
+still be adopted in another window, without replacing an unresolved move.
+A fork checks the same original operation from its current tab. Transport
+loss and returned refusal update that tab. A stored, started host plan can
+answer `moved` without replaying its event; that answer now settles and refreshes
+the known target once, using the contract's optional fork conversation when
+present. A complete moved event still refreshes the conversations it lists.
+No readiness is inferred from `released`.
+
+The existing UI suite now first executes the complete production cloud-moves
+and store modules with deferred bridge replies and observable location effects.
+Its controls assert event ownership across retries, same-ID terminal status,
+forked loss/refusal, dismissal, stale RPC replies, first host adoption, target
+collisions, disposed state, and an active check retargeting. These are offline
+state controls; the bridge, toasts and location adapters are synthetic. They
+do not exercise a real host or cloud service. The in-window identity history
+and failure notices remain lost on reload or restart.
+
+With the final assertions unchanged, the first repair failed seven of eleven
+controls; the correction passed all eleven. The full existing move UI suite,
+recipe typecheck and lint also passed. The UI run retained the existing
+ResizeObserver warning. These local results do not replace review or source
+CI of the correction.
 
 ## The first journey and its remaining gates
 

@@ -32,6 +32,8 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
+  await checkMoveState()
+  if (process.argv.includes("--state-only")) process.exit(0)
   const { createServer } = await import("vite")
   const args = process.argv.slice(2)
   const portAt = args.indexOf("--port")
@@ -58,6 +60,239 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
+}
+
+/** The complete production move/store modules, with deferred bridge replies and observable location effects. */
+async function checkMoveState() {
+  const { readFile } = await import("node:fs/promises")
+  const { createContext, runInContext } = await import("node:vm")
+  const { webcrypto } = await import("node:crypto")
+  const ts = await import("typescript")
+  const code = await readFile(new URL("../src/state/cloud-moves.ts", import.meta.url), "utf8")
+  const storeCode = await readFile(new URL("../src/state/store.ts", import.meta.url), "utf8")
+  const world = (handler) => {
+    const calls = [], effects = []
+    const context = createContext({ crypto: webcrypto, console })
+    const load = (source, dependencies) => {
+      const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
+      const exports = {}
+      const module = runInContext(`(function(require,exports,module){${compiled}\n})`, context)
+      module((id) => {
+        assert.ok(id in dependencies, `unexpected dependency: ${id}`)
+        return dependencies[id]
+      }, exports, { exports })
+      return exports
+    }
+    const store = load(storeCode, { react: {} })
+    const bridge = { threadMove: async (...args) => { calls.push(args); return handler(...args) } }
+    const api = load(code, {
+      sonner: { toast: { success: (...args) => effects.push(["success", args]), message: (...args) => effects.push(["message", args]) } },
+      "@/state/providers": { providers: {} },
+      "@/lib/bridge": { hasBridge: () => true, getMako: () => bridge },
+      "@/state/acp-state": { updateAcpConversation: (id) => effects.push(["location", id]) },
+      "@/state/live-door": { receiveLive: (_id, _source, apply) => apply() },
+      "@/state/live-recovery": { hydrateLive: async (id) => effects.push(["hydrate", id]) },
+      "@/state/store": store,
+    })
+    return { api, calls, effects, state: () => api.cloudMovesStore.get() }
+  }
+  const deferred = () => {
+    let resolve, reject
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no })
+    return { promise, resolve, reject }
+  }
+  const pending = () => new Promise(() => {})
+  const results = []
+  const check = async (name, run) => {
+    let held
+    try {
+      await run((handler) => (held = world(handler)))
+      results.push({ name, passed: true, calls: held.calls, effects: held.effects, state: held.state() })
+    } catch (error) {
+      results.push({ name, passed: false, error: String(error), calls: held?.calls, effects: held?.effects, state: held?.state() })
+    }
+  }
+  await check("late A events cannot replace pending B or permit C", async (make) => {
+    let count = 0
+    const w = make(() => ++count === 1 ? { kind: "kept-here", reason: "A refused" } : pending())
+    await w.api.moveToCloud("c", true)
+    const A = w.calls[0][1]
+    void w.api.retryFailedMove("c", A)
+    const B = w.calls[1][1]
+    assert.notEqual(A, B)
+    const before = JSON.stringify(w.state())
+    const effects = JSON.stringify(w.effects)
+    for (const step of [{ kind: "kept-here", reason: "late A" }, { kind: "packing" }, { kind: "pausing" }, { kind: "handing-over" }, { kind: "resuming" }, { kind: "unsettled", reason: "late A" }, { kind: "own-branch", to: "other" }, { kind: "moved", conversations: ["c"] }]) {
+      w.api.threadMoveStepped("c", A, step)
+      assert.equal(JSON.stringify(w.state()), before, `${step.kind}: B owns the state`)
+      assert.equal(JSON.stringify(w.effects), effects, `${step.kind}: no stale effects`)
+    }
+    await w.api.retryFailedMove("c", A)
+    await w.api.moveToCloud("c")
+    assert.equal(w.calls.length, 2, "no C while B is unresolved")
+    w.api.threadMoveStepped("c", B, { kind: "kept-here", reason: "B refused" })
+    void w.api.retryFailedMove("c", B)
+    const C = w.calls[2][1]
+    assert.notEqual(C, B)
+    for (const old of [A, B, A]) w.api.threadMoveStepped("c", old, { kind: "kept-here", reason: "ABA replay" })
+    assert.equal(w.state().moving.c.move, C)
+    assert.equal(w.calls.length, 3)
+  })
+  await check("known-started status reply settles once without another event", async (make) => {
+    let count = 0
+    const w = make(() => ++count === 1 ? Promise.reject(new Error("lost reply")) : { kind: "moved", cloudThread: "fixture-cloud" })
+    await w.api.moveToCloud("c")
+    const move = w.calls[0][1]
+    assert.equal(w.state().moving.c.step.kind, "unsettled")
+    await w.api.checkMoveAgain("c")
+    assert.equal(w.calls[1][1], move)
+    assert.equal(w.state().moving.c, undefined)
+    assert.deepEqual(w.effects.filter(([kind]) => kind === "location" || kind === "hydrate"), [["location", "c"], ["hydrate", "c"]])
+    const effects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("c", move, { kind: "moved", conversations: ["c"] })
+    w.api.threadMoveStepped("c", move, { kind: "kept-here", reason: "late" })
+    await w.api.checkMoveAgain("c")
+    assert.equal(JSON.stringify(w.effects), effects)
+    assert.equal(w.state().failedMoves.c, undefined)
+    assert.equal(w.calls.length, 2)
+  })
+  await check("fork loss checks same source operation from the current tab", async (make) => {
+    const first = deferred(), second = deferred()
+    let count = 0
+    const w = make(() => ++count === 1 ? first.promise : second.promise)
+    const request = w.api.moveToCloud("source")
+    const move = w.calls[0][1]
+    w.api.threadMoveStepped("source", move, { kind: "own-branch", to: "fork" })
+    first.reject(new Error("lost after fork"))
+    await request
+    assert.equal(w.state().moving.source, undefined)
+    assert.equal(w.state().moving.fork.step.kind, "unsettled")
+    await w.api.moveToCloud("source")
+    await w.api.moveToCloud("fork")
+    const checking = w.api.checkMoveAgain("fork")
+    await w.api.checkMoveAgain("fork")
+    await w.api.checkMoveAgain("source")
+    assert.equal(w.calls.length, 2)
+    assert.equal(w.calls[1][0], "source")
+    assert.equal(w.calls[1][1], move)
+    const before = JSON.stringify(w.state())
+    for (const [id, step] of [["source", { kind: "kept-here", reason: "stale origin" }], ["source", { kind: "own-branch", to: "alien" }], ["other-thread", { kind: "packing" }]]) w.api.threadMoveStepped(id, move, step)
+    assert.equal(JSON.stringify(w.state()), before, "only the current target may report steps")
+    second.resolve({ kind: "moved", cloudThread: "fixture-cloud", conversation: "fork" })
+    await checking
+    assert.equal(w.state().moving.fork, undefined)
+    assert.deepEqual(w.effects.filter(([kind]) => kind === "location" || kind === "hydrate"), [["location", "fork"], ["hydrate", "fork"]])
+  })
+  await check("fork returned refusal without event stays recoverable at fork", async (make) => {
+    const first = deferred()
+    const w = make(() => first.promise)
+    const request = w.api.moveToCloud("source")
+    const move = w.calls[0][1]
+    w.api.threadMoveStepped("source", move, { kind: "own-branch", to: "fork" })
+    first.resolve({ kind: "kept-here", reason: "fork has not started" })
+    await request
+    assert.equal(w.state().moving.fork, undefined)
+    assert.equal(w.state().failedMoves.fork.move, move)
+    assert.equal(w.state().failedMoves.source, undefined)
+    w.api.dismissFailedMove("fork", move)
+    const before = JSON.stringify(w.state())
+    for (const id of ["source", "fork"]) for (const step of [{ kind: "packing" }, { kind: "kept-here", reason: "dismissed" }, { kind: "own-branch", to: "source" }]) w.api.threadMoveStepped(id, move, step)
+    assert.equal(JSON.stringify(w.state()), before, "dismissed terminal identity cannot return")
+  })
+  await check("late RPC refusal or loss cannot replace newer attempt", async (make) => {
+    const first = deferred(), second = deferred()
+    let count = 0
+    const w = make(() => ++count === 1 ? first.promise : second.promise)
+    const request = w.api.moveToCloud("c")
+    const A = w.calls[0][1]
+    w.api.threadMoveStepped("c", A, { kind: "kept-here", reason: "A refused" })
+    const retry = w.api.retryFailedMove("c", A)
+    const B = w.calls[1][1]
+    first.resolve({ kind: "kept-here", reason: "late A RPC" })
+    await request
+    assert.equal(w.state().moving.c.move, B)
+    second.reject(new Error("lost B"))
+    await retry
+    assert.equal(w.state().moving.c.step.kind, "unsettled")
+    assert.equal(w.state().moving.c.move, B)
+  })
+  for (const kind of ["moved", "unsettled", "lost"]) await check(`late A RPC ${kind} cannot settle pending B`, async (make) => {
+    const first = deferred()
+    let count = 0
+    const w = make(() => ++count === 1 ? first.promise : pending())
+    const request = w.api.moveToCloud("c")
+    const A = w.calls[0][1]
+    w.api.threadMoveStepped("c", A, { kind: "kept-here", reason: "A refused" })
+    void w.api.retryFailedMove("c", A)
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    if (kind === "lost") first.reject(new Error("late A transport loss"))
+    else first.resolve(kind === "moved" ? { kind, cloudThread: "fixture-cloud" } : { kind, reason: "late A" })
+    await request
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects)
+    assert.equal(w.calls.length, 2)
+  })
+  await check("retarget during a status check retains the check lock and origin", async (make) => {
+    const second = deferred()
+    let count = 0
+    const w = make(() => ++count === 1 ? Promise.reject(new Error("lost first reply")) : second.promise)
+    await w.api.moveToCloud("source", true)
+    const move = w.calls[0][1]
+    const checking = w.api.checkMoveAgain("source")
+    w.api.threadMoveStepped("source", move, { kind: "own-branch", to: "fork" })
+    w.api.threadMoveStepped("fork", move, { kind: "unsettled", reason: "still checking" })
+    assert.equal(w.state().moving.fork.checking, true)
+    await w.api.checkMoveAgain("fork")
+    assert.equal(w.calls.length, 2)
+    assert.equal(w.calls[1][0], "source")
+    assert.equal(w.calls[1][1], move)
+    assert.equal(w.calls[1][2].why, "asked")
+    second.reject(new Error("lost check reply"))
+    await checking
+    assert.equal(w.state().moving.fork.step.kind, "unsettled")
+    assert.equal(w.state().moving.fork.checking, false)
+    assert.equal(w.state().moving.fork.handOff, true)
+  })
+  await check("first host move adoption, target collision and disposed reply", async (make) => {
+    const reply = deferred()
+    const w = make(() => reply.promise)
+    w.api.threadMoveStepped("other", "external", { kind: "pausing" })
+    assert.equal(w.state().moving.other.handOff, true, "another window's first event is adopted")
+    const request = w.api.moveToCloud("source")
+    const move = w.calls[0][1]
+    w.api.threadMoveStepped("source", move, { kind: "own-branch", to: "other" })
+    assert.equal(w.state().moving.other.move, "external", "retarget cannot seize another operation")
+    assert.equal(w.state().moving.source.move, move)
+    w.api.threadMoveStepped("other", "external", { kind: "moved", conversations: ["other"] })
+    assert.equal(w.effects.filter(([kind]) => kind === "location").length, 1)
+    w.api.cloudMovesStore.set({ moving: {}, failedMoves: {} })
+    reply.resolve({ kind: "kept-here", reason: "disposed" })
+    await request
+    const before = JSON.stringify(w.state())
+    w.api.threadMoveStepped("source", move, { kind: "packing" })
+    assert.equal(JSON.stringify(w.state()), before, "disposed state cannot be resurrected by an old event")
+    w.api.threadMoveStepped("fresh", "new-host-move", { kind: "packing" })
+    assert.equal(w.state().moving.fresh.move, "new-host-move")
+  })
+  await check("released is not ready; missed fork event uses authoritative conversation", async (make) => {
+    let count = 0
+    const w = make(() => ++count === 1 ? Promise.reject(new Error("lost")) : count === 2 ? { kind: "released", cloudThread: "fixture-cloud" } : { kind: "moved", cloudThread: "fixture-cloud", conversation: "fork" })
+    await w.api.moveToCloud("source")
+    await w.api.checkMoveAgain("source")
+    assert.equal(w.state().moving.source.step.kind, "unsettled")
+    assert.equal(w.effects.length, 0)
+    await w.api.checkMoveAgain("source")
+    assert.equal(new Set(w.calls.map((call) => call[1])).size, 1)
+    assert.equal(w.state().moving.source, undefined)
+    assert.equal(w.state().moving.fork, undefined)
+    assert.deepEqual(w.effects.filter(([kind]) => kind === "location" || kind === "hydrate"), [["location", "fork"], ["hydrate", "fork"]])
+  })
+  if (process.env.MAKO_TEST_EVIDENCE) {
+    await mkdir(process.env.MAKO_TEST_EVIDENCE, { recursive: true })
+    await writeFile(join(process.env.MAKO_TEST_EVIDENCE, "move-state-controls.json"), JSON.stringify(results, null, 2))
+  }
+  for (const result of results) console.log(`Move state: ${result.passed ? "PASS" : "FAIL"} ${result.name}${result.error ? `: ${result.error}` : ""}`)
+  assert.ok(results.every((result) => result.passed), "production move state controls must all pass")
 }
 
 async function checkWindow() {

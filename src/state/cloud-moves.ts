@@ -16,6 +16,8 @@ import { createHook, createStore } from "@/state/store"
  * read again from its machine, its folder there.
  */
 interface CloudMovesState {
+  /** Original RPC address and current event address, retained after settlement to fence delayed events in this window. */
+  moves: Record<string, { origin: string; target: string; settled?: true }>
   /**
    * `handOff`: a move that pauses the Thread's running turn and continues it in the cloud (asked so, or seen pausing).
    * `ownBranch`: a Thread in the main checkout that went onto its own branch first, so its steps begin with that one.
@@ -56,7 +58,7 @@ interface CloudMovesState {
  */
 export type HarnessUpdating = { after: "move" | "back"; handOff?: boolean; harnesses: string[]; at: number; failed?: { harness: string; reason: string } }
 
-export const cloudMovesStore = createStore<CloudMovesState>({ moving: {}, failedMoves: {}, returning: {}, outdated: {}, missing: {}, harnesses: {}, updating: {}, followStopped: {} })
+export const cloudMovesStore = createStore<CloudMovesState>({ moves: {}, moving: {}, failedMoves: {}, returning: {}, outdated: {}, missing: {}, harnesses: {}, updating: {}, followStopped: {} })
 export const useCloudMoves = createHook(cloudMovesStore)
 
 /** Where a moved conversation's folder is, as the cloud router names a cloud Thread's (`CLOUD_FOLDER_WHERE`). */
@@ -67,11 +69,14 @@ export const CLOUD_WHERE = "a cloud machine"
  * are working, so their turns are paused and go along, continuing in the cloud.
  */
 export async function moveToCloud(conversationId: string, handOff = false): Promise<ThreadMoveOutcome | undefined> {
-  if (!hasBridge() || cloudMovesStore.get().moving[conversationId]) return undefined
+  if (!hasBridge() || moveInFlight(cloudMovesStore.get(), conversationId)) return undefined
   const move = crypto.randomUUID()
-  if (handOff) cloudMovesStore.set((state) => ({ ...state, moving: { ...state.moving, [conversationId]: { move, step: { kind: "packing" }, handOff: true } } }))
-  else threadMoveStepped(conversationId, move, { kind: "packing" })
-  cloudMovesStore.set((state) => ({ ...state, failedMoves: without(state.failedMoves, conversationId) }))
+  cloudMovesStore.set((state) => ({
+    ...state,
+    moves: { ...state.moves, [move]: { origin: conversationId, target: conversationId } },
+    moving: { ...state.moving, [conversationId]: { move, step: { kind: "packing" }, ...handOff && { handOff: true } } },
+    failedMoves: without(state.failedMoves, conversationId),
+  }))
   return askMove(conversationId, move, handOff)
 }
 
@@ -90,14 +95,16 @@ export function dismissFailedMove(conversationId: string, move: string): void {
 /** A lost answer is checked under the same move ID; it never starts a second move. */
 export async function checkMoveAgain(conversationId: string): Promise<ThreadMoveOutcome | undefined> {
   const held = cloudMovesStore.get().moving[conversationId]
-  if (!hasBridge() || held?.step.kind !== "unsettled" || held.checking) return undefined
+  const owner = held && currentMove(held.move)
+  if (!hasBridge() || held?.step.kind !== "unsettled" || held.checking || owner?.target !== conversationId) return undefined
   cloudMovesStore.set((state) => ({ ...state, moving: { ...state.moving, [conversationId]: { ...held, checking: true } } }))
   try {
-    return await askMove(conversationId, held.move, held.handOff === true)
+    return await askMove(owner.origin, held.move, held.handOff === true)
   } finally {
     cloudMovesStore.set((state) => {
-      const current = state.moving[conversationId]
-      return current?.move === held.move ? { ...state, moving: { ...state.moving, [conversationId]: { ...current, checking: false } } } : state
+      const target = state.moves[held.move]?.target
+      const current = target && state.moving[target]
+      return current && current.move === held.move ? { ...state, moving: { ...state.moving, [target]: { ...current, checking: false } } } : state
     })
   }
 }
@@ -107,28 +114,66 @@ async function askMove(conversationId: string, move: string, handOff: boolean): 
   try {
     const outcome = await getMako().threadMove(conversationId, move, handOff ? { why: "asked" } : undefined)
     // Early refusals need not have emitted a step. A late reply must not replace a newer attempt.
-    if (cloudMovesStore.get().moving[conversationId]?.move === move && (outcome.kind === "kept-here" || outcome.kind === "unsettled"))
-      threadMoveStepped(conversationId, move, outcome)
+    let owner = currentMove(move)
+    if (owner?.origin === conversationId) {
+      if (outcome.kind === "moved") {
+        // A stored started plan answers without another event. Its optional conversation names a missed fork.
+        if (outcome.conversation && outcome.conversation !== owner.target) {
+          threadMoveStepped(owner.target, move, { kind: "own-branch", to: outcome.conversation })
+          owner = currentMove(move)
+        }
+        if (owner && (!outcome.conversation || outcome.conversation === owner.target))
+          threadMoveStepped(owner.target, move, { kind: "moved", conversations: [owner.target] })
+      } else if (outcome.kind === "kept-here" || outcome.kind === "unsettled") threadMoveStepped(owner.target, move, outcome)
+    }
     return outcome
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
-    if (cloudMovesStore.get().moving[conversationId]?.move === move)
-      threadMoveStepped(conversationId, move, { kind: "unsettled", reason })
+    const owner = currentMove(move)
+    if (owner?.origin === conversationId) threadMoveStepped(owner.target, move, { kind: "unsettled", reason })
     return { kind: "unsettled", reason }
   }
 }
 
+/** Both addresses of an unresolved move are occupied; a fork cannot create another operation via its old tab. */
+function moveInFlight(state: CloudMovesState, conversationId: string): boolean {
+  return Boolean(state.moving[conversationId]) || Object.values(state.moves).some((owner) => !owner.settled && (owner.origin === conversationId || owner.target === conversationId))
+}
+
+/** A reply can update only the operation still displayed at its current target, never a disposed or settled one. */
+function currentMove(move: string): CloudMovesState["moves"][string] | undefined {
+  const state = cloudMovesStore.get()
+  const owner = state.moves[move]
+  return owner && !owner.settled && state.moving[owner.target]?.move === move ? owner : undefined
+}
+
 /** A step from the host. A confirmed failure keeps its reason and recovery action above the composer. */
 export function threadMoveStepped(conversationId: string, move: string, step: ThreadMoveStep): void {
+  const state = cloudMovesStore.get()
+  if (step.kind === "own-branch" && step.to && step.to !== conversationId && moveInFlight(state, step.to)) return
+  const known = state.moves[move]
+  if (known) {
+    if (currentMove(move)?.target !== conversationId) return
+  } else {
+    // A move begun in another window first arrives as an event. It cannot displace one already owned here.
+    if (moveInFlight(state, conversationId)) return
+    cloudMovesStore.set({ moves: { ...state.moves, [move]: { origin: conversationId, target: conversationId } } })
+  }
   if (step.kind === "own-branch" && step.to) {
     // Its harness forked onto its own branch: the move's steps are the fork's from here, as the window follows it there.
     const to = step.to
-    cloudMovesStore.set((state) => ({ ...state, failedMoves: without(state.failedMoves, conversationId), moving: { ...without(state.moving, conversationId), [to]: { ...state.moving[conversationId], move, step, ownBranch: true } } }))
+    cloudMovesStore.set((state) => ({
+      ...state,
+      moves: { ...state.moves, [move]: { origin: state.moves[move]?.origin ?? conversationId, target: to } },
+      failedMoves: without(without(state.failedMoves, conversationId), to),
+      moving: { ...without(state.moving, conversationId), [to]: { ...state.moving[conversationId], move, step, ownBranch: true } },
+    }))
     return
   }
   if (step.kind === "moved" || step.kind === "kept-here") {
     cloudMovesStore.set((state) => ({
       ...state,
+      moves: { ...state.moves, [move]: { origin: state.moves[move]?.origin ?? conversationId, target: conversationId, settled: true } },
       failedMoves: step.kind === "kept-here"
         ? { ...state.failedMoves, [conversationId]: {
           move,
@@ -154,7 +199,7 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
   cloudMovesStore.set((state) => {
     const handOff = step.kind === "pausing" || state.moving[conversationId]?.handOff
     const ownBranch = step.kind === "own-branch" || state.moving[conversationId]?.ownBranch
-    return { ...state, failedMoves: without(state.failedMoves, conversationId), moving: { ...state.moving, [conversationId]: { move, step, ...handOff && { handOff: true }, ...ownBranch && { ownBranch: true } } } }
+    return { ...state, failedMoves: without(state.failedMoves, conversationId), moving: { ...state.moving, [conversationId]: { ...state.moving[conversationId], move, step, ...handOff && { handOff: true }, ...ownBranch && { ownBranch: true } } } }
   })
 }
 
