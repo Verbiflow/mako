@@ -181,7 +181,8 @@ try {
   assert.ok("children" in fullFacts)
   const originalPulls = fullFacts.children.find(child => child.child === first.child)!.openPRs
   assert.equal(originalPulls?.length, 4)
-  const summarized = z.object({ children: z.array(z.looseObject({ child: z.string(), pulls: z.object({ reported: z.number(), read: z.object({ child: z.string(), view: z.literal("pulls"), snapshot: z.string() }) }) })) }).parse(await call(thread, "agents_list", {}))
+  assert.deepEqual(await call(thread, "agents_list", {}), await call(thread, "agents_list", { presentation: "full" }), "the model door defaults to complete PR facts")
+  const summarized = z.object({ children: z.array(z.looseObject({ child: z.string(), pulls: z.object({ reported: z.number(), read: z.object({ child: z.string(), view: z.literal("pulls"), snapshot: z.string() }) }) })) }).parse(await call(thread, "agents_list", { presentation: "summary" }))
   const reference = summarized.children.find(child => child.child === first.child)!.pulls.read
   assert.equal(summarized.children[0].pulls.reported, 4, "historical references stay explicitly unknown")
   const recovered: unknown[] = []

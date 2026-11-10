@@ -19,7 +19,7 @@ interface Snapshot {
   children: ReadonlyMap<string, readonly FinPullRequest[]>
 }
 
-/** The list/read tool's PR details, held by its host's method declarations, never the UI or agent state. */
+/** Explicit summary's volatile PR details. Default output stays full; this is no durable payload store. */
 export class AgentListResults {
   private readonly snapshots = new Map<string, Snapshot>()
   private readonly now: () => number
@@ -88,7 +88,7 @@ export class AgentListResults {
       return { refused: "conflict", why: "offset must be a nonnegative integer; limit must be an integer from 1 to 20." }
     this.expire()
     const snapshot = this.snapshots.get(input.snapshot)
-    if (!snapshot || snapshot.owner !== ownerKey(caller)) return { refused: "conflict", why: "This PR snapshot is unavailable to this caller, expired, or its host restarted. Read agents_list again, or use presentation full." }
+    if (!snapshot || snapshot.owner !== ownerKey(caller)) return { refused: "conflict", why: "This PR snapshot is unavailable to this caller, expired, or its host restarted. Its original facts cannot be recovered here. A new agents_list gives current facts; full (the default) keeps them inline." }
     const pulls = snapshot.children.get(input.child)
     if (!pulls) return { refused: "conflict", why: "This snapshot contains no omitted PR details for that Fin." }
     if (offset > pulls.length) return { refused: "conflict", why: "offset is past the end of this Fin's PR details." }

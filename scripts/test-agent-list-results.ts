@@ -60,8 +60,12 @@ const operations: AgentOperations & PlacementOperations = {
     return child ? { child: child.child, name: child.name, state: child.state, text: "Original report read, unchanged." } : { refused: "unknown-child", why: "Unknown fixture Fin." }
   },
 }
-const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: value => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
-declareAgentMethods(methods, () => operations)
+function freshMethods(): HostMethods {
+  const table = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: value => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
+  declareAgentMethods(table, () => operations)
+  return table
+}
+const methods = freshMethods()
 const invoke = async (channel: "mako:agents-list" | "mako:agents-read", input: AgentsListInput | AgentsReadInput, caller = owner) => decodeRuntimeValue(await methods.invoke(channel, [caller, input]))
 const toolResult = z.object({ content: z.array(z.object({ type: z.literal("text"), text: z.string() })), isError: z.boolean().optional() })
 const summarySchema = z.looseObject({
@@ -82,8 +86,12 @@ try {
   assert.ok(listed.tools.find(tool => tool.name === "agents_list")?.inputSchema.properties?.presentation)
   const baseline = await call("agents_list", { presentation: "full" })
   assert.deepEqual(JSON.parse(baseline.content[0].text), JSON.parse(JSON.stringify(full)))
+  const defaultOutput = await call("agents_list", {})
+  assert.deepEqual(defaultOutput, baseline, "MCP default preserves every original PR fact inline")
+  assert.match(listed.tools.find(tool => tool.name === "agents_list")!.description!, /Every PR fact stays inline by default/)
+  assert.match(listed.tools.find(tool => tool.name === "agents_list")!.description!, /original facts cannot be recovered/)
   assert.deepEqual(await invoke("mako:agents-list", {}), JSON.parse(JSON.stringify(full)), "non-model host callers retain full facts")
-  const compact = await call("agents_list", {})
+  const compact = await call("agents_list", { presentation: "summary" })
   assert.equal(compact.isError, undefined)
   const parsed = summarySchema.parse(JSON.parse(compact.content[0].text))
   assert.deepEqual(parsed.extraOutcome, full.extraOutcome, "top-level failure and unknown-outcome facts remain")
@@ -95,7 +103,7 @@ try {
     assert.deepEqual([pulls.open, pulls.draft, pulls.reported], [1, 0, 5])
   }
   assert.deepEqual(full, original, "projection never mutates the engine/UI result")
-  const repeated = summarySchema.parse(JSON.parse((await call("agents_list", {})).content[0].text))
+  const repeated = summarySchema.parse(JSON.parse((await call("agents_list", { presentation: "summary" })).content[0].text))
   assert.equal(repeated.children[0].pulls.read.snapshot, parsed.children[0].pulls.read.snapshot, "unchanged facts reuse a stable reference")
   let followupBytes = 0
   let firstDetailBytes = 0
@@ -219,12 +227,41 @@ try {
   const kept = tooLong.children[0]
   assert.ok("openPRs" in kept)
   assert.deepEqual(kept.openPRs, unicode.children[0].openPRs, "an individually unpageable fact stays inline")
+  clock = 29 * 60_000
+  const reused = summarySchema.parse(snapshots.summarize(owner, full)).children[0]
+  assert.equal(reused.pulls.read.snapshot, snapshot.snapshot)
+  assert.equal(reused.pulls.expiresAt, 30 * 60_000, "explicit summary reuse does not promise a new 30 minutes")
   clock = 30 * 60_000
   assert.ok("refused" in snapshots.read(owner, authorized, snapshot), "expiration is explicit")
   assert.ok("refused" in new AgentListResults().read(owner, authorized, snapshot), "host restart does not fabricate a payload")
   assert.deepEqual(snapshots.summarize(owner, { refused: "conflict", why: "unknown outcome" }), { refused: "conflict", why: "unknown outcome" })
+  // A default response carries its evidence already. Neither a relist nor a volatile handle is its recovery route.
+  full.children[0].openPRs[0].state = "draft"
+  full.children[0].openPRs.splice(1, 1)
+  full.children[0].openPRs.reverse()
+  assert.notDeepEqual(full.children[0].openPRs, original.children[0].openPRs)
+  const restartedMethods = freshMethods()
+  const restartedServer = new McpServer({ name: "fresh-host-methods", version: "1" })
+  registerAgentTools(restartedServer, { caller: () => owner, filled: () => ({}), invoke: async (channel, args) => AgentAnswerSchema.parse(decodeRuntimeValue(await restartedMethods.invoke(channel, args))) })
+  const [restartServerSide, restartClientSide] = InMemoryTransport.createLinkedPair()
+  const restartedClient = new Client({ name: "fresh-host-client", version: "1" })
+  try {
+    await restartedServer.connect(restartServerSide)
+    await restartedClient.connect(restartClientSide)
+    const current = toolResult.parse(await restartedClient.callTool({ name: "agents_list", arguments: {} }))
+    assert.deepEqual(JSON.parse(current.content[0].text), JSON.parse(JSON.stringify(full)), "fresh method instance also defaults to full, including changed facts")
+    assert.deepEqual(JSON.parse(defaultOutput.content[0].text), JSON.parse(JSON.stringify(original)), "after 30 minutes and a fresh host's changed facts, the original default response still contains every ordered fact")
+    const lost = toolResult.parse(await restartedClient.callTool({ name: "agents_read", arguments: ref }))
+    assert.equal(lost.isError, true, "explicit opt-in pages remain honestly unavailable after host restart")
+    assert.match(lost.content[0].text, /original facts cannot be recovered here/)
+  } finally {
+    await restartedClient.close()
+    await restartedServer.close()
+    full.children[0] = structuredClone(original.children[0])
+  }
   const output = {
     fins: 57, fullTextBytes: Buffer.byteLength(baseline.content[0].text), summaryTextBytes: Buffer.byteLength(compact.content[0].text),
+    defaultTextBytes: Buffer.byteLength(defaultOutput.content[0].text), defaultEnvelopeBytes: size(defaultOutput),
     fullEnvelopeBytes: size(baseline), summaryEnvelopeBytes: size(compact),
     summaryPlusOneFinDetailBytes: size(compact) + firstDetailBytes,
     summaryPlusAllFinDetailBytes: size(compact) + followupBytes,

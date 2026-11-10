@@ -107,9 +107,7 @@ export function registerAgentTools(server: McpServer, door: AgentToolDoor): void
         try {
           const known = door.filled()
           const filled = Object.fromEntries(tool.filled.map((field) => [field, known[field]]))
-          const arguments_ = ToolArgumentsSchema.parse(input)
-          const presentation = tool.verb === "list" && arguments_.presentation === undefined ? { presentation: "summary" } : {}
-          const answer = await door.invoke(tool.channel, [door.caller(), { ...filled, ...presentation, ...arguments_ }])
+          const answer = await door.invoke(tool.channel, [door.caller(), { ...filled, ...ToolArgumentsSchema.parse(input) }])
           return { ...(answer.refused !== undefined && { isError: true }), content: [{ type: "text" as const, text: agentToolText(answer) }] }
         } catch (error) {
           return { isError: true, content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }] }
