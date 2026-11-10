@@ -20,7 +20,7 @@ let failures = 0
 const cases: Array<{ name: string; passed: boolean }> = []
 const conversation = "58424503-2966-4d99-b32a-dc85e6ddf3dd"
 const originalReason = "This folder holds no repository, so there's no branch to make."
-const sensitive = "ghp_SYNTHETIC_TOKEN_12345678901234567890 https://user:password@example.invalid/repo?token=PRIVATE_QUERY /Users/private/PRIVATE_PATH 'PRIVATE_PROMPT' UNQUOTED_USER_CONTENT"
+const sensitive = "ghp_SYNTHETIC_TOKEN_12345678901234567890 https://user:password@example.invalid/repo?token=PRIVATE_QUERY /Users/fixture-privacy/PRIVATE_PATH 'PRIVATE_PROMPT' UNQUOTED_USER_CONTENT"
 
 async function check(name: string, run: () => Promise<void>): Promise<void> {
   try { await run(); cases.push({ name, passed: true }) }
