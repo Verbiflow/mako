@@ -732,8 +732,45 @@ const inputs = {
       ]),
     ]),
   "mako:appshot-windows": () => z.tuple([]),
-  "mako:automation-enabled": () => z.tuple([z.string(), z.boolean()]),
+  "mako:automation-context": () => z.tuple([]),
+  "mako:automation-enabled": () =>
+    z.tuple([z.string(), z.boolean(), z.string().optional()]),
   "mako:automations": () => z.tuple([]),
+  "mako:automations-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        action: z.union([
+          z.literal("run"),
+          z.literal("off"),
+          z.literal("on"),
+          z.literal("list"),
+        ]),
+        id: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:boot": () => z.tuple([]),
   "mako:browser-control-connect": () => z.tuple([z.string()]),
   "mako:browser-control-disconnect": () => z.tuple([z.string()]),
@@ -1043,6 +1080,40 @@ const inputs = {
     z.tuple([z.string(), z.string().optional(), z.boolean().optional()]),
   "mako:harness-update": () => z.tuple([z.string()]),
   "mako:harness-updates": () => z.tuple([z.boolean().optional()]),
+  "mako:harnesses-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        action: z.union([
+          z.literal("install"),
+          z.literal("read"),
+          z.literal("update"),
+        ]),
+        harness: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:host-log-path": () => z.tuple([]),
   "mako:install-update": () => z.tuple([]),
   "mako:installation-state": () => z.tuple([]),
@@ -2292,7 +2363,8 @@ const inputs = {
   "mako:restore-version": () => z.tuple([z.string(), z.number()]),
   "mako:reveal": () => z.tuple([z.string()]),
   "mako:reveal-plugins": () => z.tuple([]),
-  "mako:run-automation": () => z.tuple([z.string()]),
+  "mako:run-automation": () =>
+    z.tuple([z.string(), z.string().optional(), z.string().optional()]),
   "mako:run-command": () => z.tuple([z.string(), z.string().optional()]),
   "mako:save-automations": () =>
     z.tuple([
@@ -2375,6 +2447,39 @@ const inputs = {
         z.literal("max"),
       ]),
     ]),
+  "mako:settings-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        action: z.union([z.literal("set"), z.literal("read")]),
+        setting: z.string().optional(),
+        value: z
+          .union([z.boolean(), z.string(), z.array(z.string())])
+          .optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:setup": () => z.tuple([z.string()]),
   "mako:setup-act": () =>
     z.tuple([
@@ -2384,10 +2489,10 @@ const inputs = {
           act: z.literal("answer"),
           ask: z.string(),
           answer: z.union([
-            z.literal("allow-thread"),
-            z.literal("allow-project"),
-            z.literal("decline"),
             z.literal("add-to-setup"),
+            z.literal("allow-project"),
+            z.literal("allow-thread"),
+            z.literal("decline"),
           ]),
         }),
         z.object({
@@ -2396,10 +2501,10 @@ const inputs = {
           row: z.string(),
           action: z.union([
             z.literal("stop"),
-            z.literal("send"),
             z.literal("add"),
-            z.literal("retry"),
             z.literal("keep"),
+            z.literal("retry"),
+            z.literal("send"),
           ]),
         }),
         z.object({ act: z.literal("rebuild") }),
@@ -2929,6 +3034,41 @@ const inputs = {
         .object({ cwd: z.string().optional(), harness: z.string().optional() })
         .optional(),
     ]),
+  "mako:threads-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        action: z.union([
+          z.literal("rename"),
+          z.literal("archive"),
+          z.literal("restore"),
+        ]),
+        title: z.string().optional(),
+        conversation: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:threads-move": () =>
     z.tuple([
       z.union([
@@ -3131,8 +3271,10 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:appshot-capture", "control"],
   ["mako:appshot-front", "control"],
   ["mako:appshot-windows", "control"],
+  ["mako:automation-context", "workspaces"],
   ["mako:automation-enabled", "workspaces"],
   ["mako:automations", "workspaces"],
+  ["mako:automations-act", "conversations"],
   ["mako:boot", "workspaces"],
   ["mako:browser-control-connect", "control"],
   ["mako:browser-control-disconnect", "control"],
@@ -3253,6 +3395,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:harness-tuning", "harnesses"],
   ["mako:harness-update", "harnesses"],
   ["mako:harness-updates", "harnesses"],
+  ["mako:harnesses-act", "conversations"],
   ["mako:host-log-path", "application"],
   ["mako:install-update", "application"],
   ["mako:installation-state", "application"],
@@ -3387,6 +3530,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:set-model", "workspaces"],
   ["mako:set-name", "workspaces"],
   ["mako:set-thinking", "workspaces"],
+  ["mako:settings-act", "conversations"],
   ["mako:setup", "workspaces"],
   ["mako:setup-act", "workspaces"],
   ["mako:shutdown-ack", "application"],
@@ -3471,6 +3615,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-titles-import", "threads"],
   ["mako:thread-unfollow", "threads"],
   ["mako:threads", "threads"],
+  ["mako:threads-act", "conversations"],
   ["mako:threads-move", "conversations"],
   ["mako:transcript-document", "conversations"],
   ["mako:unread-records", "threads"],
