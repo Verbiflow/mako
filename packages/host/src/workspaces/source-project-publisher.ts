@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import { SourceProjectSelectionSchema, SourceProjectReceiptSchema, SourceProjectPublishSchema, type SourceProjectCommand, type SourceProjectSelection, type SourceProjectReceipt } from "@mako/protocol/source-project"
 import { ThreadIdSchema } from "../contracts/thread-identity.js"
-import type { ThreadStore } from "../threads/store.js"
+import type { ThreadStore } from "../threads/index.js"
 import { worktreeCheckout } from "../contracts/thread-worktrees.js"
 import { githubRepositoryUrl } from "../contracts/cloud-threads.js"
 
