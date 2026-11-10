@@ -97,6 +97,7 @@ async function checkWindow() {
     await writeFile(join(evidence, `${name}.png`), (await page.capturePage()).toPNG())
     await writeFile(join(evidence, `${name}.json`), JSON.stringify(await evaluate(`({
       trace: window.moveTrace,
+      calls: window.moveCalls,
       move: document.querySelector('[data-thread-move]')?.dataset.threadMove,
       returning: document.querySelector('[data-thread-return]')?.dataset.threadReturn,
       place: document.querySelector('[data-run-place]')?.dataset.runPlace
@@ -182,6 +183,26 @@ async function checkWindow() {
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 300 })
   }
 
+  /** Record fixture calls, optionally refusing or losing the first reply without emitting an outcome event. */
+  const recordMoves = async (first = "events") => evaluate(`(() => {
+    const original = window.mako.threadMove
+    window.moveCalls = []
+    window.mako.threadMove = async (conversationId, move, options) => {
+      window.moveCalls.push({ conversationId, move, options })
+      if (window.moveCalls.length === 1 && ${JSON.stringify(first)} === 'refusal')
+        return { kind: 'kept-here', reason: "The cloud couldn't clone example/private-service: GitHub access is missing for this repository." }
+      if (window.moveCalls.length === 1 && ${JSON.stringify(first)} === 'lost')
+        throw new Error('Fixture connection lost before the move reply arrived.')
+      return original(conversationId, move, options)
+    }
+    return true
+  })()`)
+  const pressMove = async () => {
+    await click('[data-run-place="local"]')
+    await until(`document.querySelector('[data-thread-move-offer]') !== null`, "the move offer")
+    await click('[data-thread-move-offer]')
+  }
+
   // 1. A Thread on this Mac in its own worktree: its Local chip offers the move.
   await startThread("")
   await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
@@ -228,13 +249,64 @@ async function checkWindow() {
   await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-return]')`, "back")
   await both("back", ['[data-run-place]', '[data-composer]'])
 
-  // 4. A busy Thread stays here: nothing moves, and the toast says why.
+  // 4. A confirmed refusal stays above the composer after its toast ends; only an explicit retry starts a new move.
   await startThread("&move=busy")
   await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
-  await click('[data-run-place="local"]')
-  await until(`document.querySelector('[data-thread-move-offer]') !== null`, "the move offer")
-  await click('[data-thread-move-offer]')
-  await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-move]')`, "kept here")
+  await recordMoves()
+  await pressMove()
+  await until(`document.querySelector('[data-run-place="local"]') !== null && document.querySelector('[data-thread-move-failed]') !== null`, "confirmed local refusal")
+  assert.match(await evaluate(`document.querySelector('[data-thread-move-failed]').innerText`), /Still on this Mac[\s\S]*Moves happen between turns[\s\S]*Retry move/)
+  await until(`![...document.querySelectorAll('[data-sonner-toast]')].some(node => node.innerText.includes('It stayed on this Mac'))`, "transient receipt ended")
+  assert.equal(await evaluate(`window.moveCalls.length`), 1, "a refused move is not retried automatically")
+  await both("move-kept-here", ['[data-run-place]', '[data-composer]'])
+  await evaluate(`(() => { const url = new URL(location.href); url.searchParams.delete('move'); history.replaceState(null, '', url); return true })()`)
+  await phases("hold")
+  await clickText('[data-thread-move-failed]', "Retry move")
+  await until(`document.querySelector('[data-thread-move="packing"]') !== null`, "explicit retry started")
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-thread-move-failed]'))`), false)
+  assert.equal(await evaluate(`window.moveCalls.length`), 2)
+  assert.equal(await evaluate(`window.moveCalls[0].move === window.moveCalls[1].move`), false, "a deliberate retry has a new operation ID")
+  await phases("run")
+  await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "retry confirmed by moved event")
+
+  // 4b. An early refusal returned without an event retains the actual reason, and can be dismissed without another call.
+  await startThread("")
+  await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+  await recordMoves("refusal")
+  await pressMove()
+  await until(`document.querySelector('[data-thread-move-failed]') !== null`, "early returned refusal")
+  assert.match(await evaluate(`document.querySelector('[data-thread-move-failed]').innerText`), /example\/private-service[\s\S]*GitHub access/)
+  assert.equal(await evaluate(`document.querySelector('[data-run-place="cloud"]')`), null)
+  await both("move-private-repository-refused", ['[data-thread-move-failed]', '[data-composer]'])
+  await click('[data-thread-move-failed] button[aria-label="More about this"]')
+  await until(`document.body.innerText.includes('Keep this Mac awake while its agents are running.')`, "full reason and local readiness guidance")
+  await both("move-refusal-details", ['[role="dialog"]', '[data-thread-move-failed]'])
+  await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+  await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+  await click('[data-thread-move-failed] button[aria-label="Dismiss move failure"]')
+  await until(`!document.querySelector('[data-thread-move-failed]')`, "refusal dismissed")
+  assert.equal(await evaluate(`window.moveCalls.length`), 1, "dismiss never starts or cancels a cloud operation")
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-run-place="local"]'))`), true)
+
+  // 4c. A lost reply cannot establish that the Thread stayed local. Check status rejoins the same operation.
+  await startThread("")
+  await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+  await recordMoves("lost")
+  await pressMove()
+  await until(`document.querySelector('[data-thread-move="unsettled"]') !== null`, "lost answer is unconfirmed")
+  assert.match(await evaluate(`document.querySelector('[data-thread-move="unsettled"]').innerText`), /Move not confirmed[\s\S]*Check status/)
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-thread-move-failed]'))`), false, "transport loss is not a confirmed refusal")
+  assert.equal(await evaluate(`document.querySelector('[data-run-place="cloud"]')`), null)
+  assert.match(await evaluate(`document.querySelector('[data-run-place]').getAttribute('aria-label')`), /Move not confirmed/)
+  assert.equal(await evaluate(`document.querySelector('[data-run-place]').disabled`), true, "an unconfirmed move cannot start another move from its location chip")
+  await both("move-unconfirmed", ['[data-thread-move]', '[data-composer]'])
+  await phases("hold")
+  await clickText('[data-thread-move="unsettled"]', "Check status")
+  await until(`document.querySelector('[data-thread-move="packing"]') !== null`, "owner's phase after status check")
+  assert.equal(await evaluate(`window.moveCalls.length`), 2)
+  assert.equal(await evaluate(`window.moveCalls[0].move === window.moveCalls[1].move`), true, "status check keeps the original operation ID")
+  await phases("run")
+  await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "owner confirms the move after lost reply")
 
   // 5. A Thread at work is handed off: its chip offers it, the strip says its turn pauses, and it goes on in the cloud.
   await startThread("")
@@ -247,9 +319,20 @@ async function checkWindow() {
   await until(`document.querySelector('[data-thread-move-offer][data-thread-handoff]') !== null`, "the handoff offer")
   assert.match(await evaluate(`document.querySelector('[data-thread-move-offer]').innerText`), /Hand off to the cloud[\s\S]*turn pauses[\s\S]*goes on there/)
   await both("handoff-offer", ['[data-thread-move-offer]', '[data-run-place]'])
+  await recordMoves("refusal")
   await phases("hold")
   await click('[data-thread-move-offer]')
+  await until(`document.querySelector('[data-thread-move-failed]') !== null`, "handoff refused before pausing")
+  await evaluate(`import('/src/state/cloud-moves.ts').then(({threadMoveStepped}) => {
+    const call = window.moveCalls[0]
+    threadMoveStepped(call.conversationId, call.move, {kind: 'kept-here', reason: 'Fixture repeated refusal before pausing.'})
+  })`)
+  await both("handoff-refused", ['[data-thread-move-failed]', '[data-composer]'])
+  await clickText('[data-thread-move-failed]', "Retry move")
+  await until(`window.moveCalls.length === 2`, "handoff retry requested")
   await until(`document.querySelector('[data-thread-move="packing"]') !== null`, "packing its turn")
+  assert.equal(await evaluate(`window.moveCalls[0].options.why`), "asked")
+  assert.equal(await evaluate(`window.moveCalls[1].options.why`), "asked", "manual retry preserves handoff intent")
   await phases("next")
   await until(`document.querySelector('[data-thread-move="pausing"][data-thread-handoff]') !== null`, "pausing its turn")
   assert.match(await evaluate(`document.querySelector('[data-thread-move]').innerText`), /Handing off to the cloud/)
@@ -484,7 +567,7 @@ async function checkWindow() {
   await clickText('[data-handoff-settings]', "Hand off")
   await until(`document.querySelector('[data-handoff-settings] [aria-pressed="true"]')?.innerText.includes('Hand off')`, "quitting hands off")
   await both("handoff-settings-changed", ['[data-handoff-settings]'])
-  console.log("Thread move UI: offered from a worktree Thread's Local chip, three steps above the composer, Cloud once moved; brought back from its Cloud chip in two steps, Local once back; a busy Thread kept here; a Thread at work handed off with its turn paused, and one with only background work; an outdated way back updated and brought back in one choice; a way back whose project isn't here refused before the cloud is asked and brought into the folder the project moved to; an unsettled way back saying who it waits on and settled by asking again; a Thread in the project folder moved in one step onto its own branch first, saying what came and what stayed, its worktree changed here stopping the follow, and its way back merged, saying what conflicts, what couldn't be written back, and opening the cloud's copy of what the person changed outside it; harnesses here older than the cloud's said before the move with the update that settles them, its progress and its failure, a Session the cloud can't resume refused before anything moves, and a way back waiting on Devin.app ready once it's updated; and the handoff settings")
+  console.log("Thread move UI: offered from a worktree Thread's Local chip, three steps above the composer, Cloud once moved; brought back from its Cloud chip in two steps, Local once back; a confirmed refusal retained after its toast, explicitly retried under a new operation; an early returned private-repository refusal retained and dismissed; a lost reply kept unconfirmed and checked under the same operation; a failed handoff retried with its intent intact; a Thread at work handed off with its turn paused, and one with only background work; an outdated way back updated and brought back in one choice; a way back whose project isn't here refused before the cloud is asked and brought into the folder the project moved to; an unsettled way back saying who it waits on and settled by asking again; a Thread in the project folder moved in one step onto its own branch first, saying what came and what stayed, its worktree changed here stopping the follow, and its way back merged, saying what conflicts, what couldn't be written back, and opening the cloud's copy of what the person changed outside it; harnesses here older than the cloud's said before the move with the update that settles them, its progress and its failure, a Session the cloud can't resume refused before anything moves, and a way back waiting on Devin.app ready once it's updated; and the handoff settings")
   clearTimeout(watchdog)
   app.exit(0)
 }
