@@ -23,6 +23,7 @@ import type { ReadyPlan, TakenReady } from "./cloud-readiness.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 import type { CheckedSession } from "./harness-check.js"
 import { MoveNotQuietError } from "./live-moves.js"
+import { logMoveDiagnostic, moveDiagnosticReason } from "./move-diagnostics.js"
 
 /**
  * A Thread of this Mac's moving to the cloud, natively: its checkout carried to a machine that clones the repository
@@ -560,12 +561,14 @@ export class CloudMoves {
     if (known) return known.phase === "started" ? { kind: "moved", cloudThread: known.cloudThread, ...known.from && { conversation: known.asked } } : known.phase === "kept-here" ? { kind: "kept-here", reason: known.reason ?? "It stayed here." } : this.#resume(known)
     let plan: Plan
     const from = conversationId
+    let stage = "plan"
     try {
       // A Thread in the main checkout goes onto its own branch first, taking only its own changes, once nothing else
       // would keep it here: the rest of the move goes from there, and the main checkout is never the cloud's.
       if (!handOff && this.#options.ownBranch && !this.#options.checkout(conversationId)) {
         await this.#plan(conversationId, move, handOff, true, "later")
         this.#options.step(conversationId, move, { kind: "own-branch" })
+        stage = "own-branch"
         const going = await this.#options.ownBranch(conversationId)
         if (going !== conversationId) this.#options.step(conversationId, move, { kind: "own-branch", to: going })
         conversationId = going
@@ -573,10 +576,12 @@ export class CloudMoves {
         if (conversationId !== from && !this.#options.snapshot(conversationId)?.session.nativeId)
           throw new Error("It's on its own branch now, as a conversation forked from this one, which starts with its next message. Send it one, then move it to the cloud.")
       }
+      stage = conversationId === from ? "plan" : "plan-on-branch"
       plan = await this.#plan(conversationId, move, handOff)
       if (conversationId !== from) plan.from = from
       this.#leaving.set(move, plan.thread)
       // Kept ready while it worked: its records and checkout are there already, and only the last seconds go.
+      stage = "standby"
       const ready = await this.#options.ready?.take(plan.thread, plan.folder, plan.repository).catch(() => undefined)
       if (ready) {
         plan.cloudThread = ready.cloudThread
@@ -585,6 +590,7 @@ export class CloudMoves {
       }
     } catch (error) {
       const reason = errorMessage({ error })
+      logMoveDiagnostic(() => hostWarn("moves", "a move stayed here before its plan was saved", { move, conversation: from, ...conversationId !== from && { currentConversation: conversationId }, stage, ...moveDiagnosticReason({ error }) }))
       this.#options.step(conversationId, move, { kind: "kept-here", reason })
       return { kind: "kept-here", reason }
     }

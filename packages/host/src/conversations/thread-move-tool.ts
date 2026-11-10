@@ -10,6 +10,7 @@ import type { AgentAskWant } from "../contracts/agent-asks.js"
 import { AFTER_MOVE, THREAD_TOOLS, type ThreadMoveRefused, type ThreadToolDefinition, type ThreadsMoveInput, type ThreadsMoveResult } from "../contracts/thread-tools.js"
 import { namedUuid } from "./cloud-moves.js"
 import type { AgentAskGate } from "./agent-ask-gate.js"
+import { logMoveDiagnostic, moveDiagnosticReason } from "./move-diagnostics.js"
 
 /** Where a conversation's Thread runs, as its row says it: here, in the cloud, or on another device. */
 export type ThreadPlace = "here" | "cloud" | "device"
@@ -138,11 +139,11 @@ export class ThreadMoveTool {
 
   #start(conversationId: string, move: string, handOff?: ThreadHandOff): void {
     const moves = this.#deps.moves()
-    if (!moves) return hostWarn("thread-moves", "an agent's move found this Mac signed out of the cloud", { conversation: conversationId })
+    if (!moves) return logMoveDiagnostic(() => hostWarn("thread-moves", "an agent's move found this Mac signed out of the cloud", { conversation: conversationId, move, stage: "dispatch", ...moveDiagnosticReason({ error: "Moving to the cloud needs this Mac signed in to Mako Cloud." }) }))
     // Its steps reach the window as the app's own move's do (`thread-move-step`).
-    void moves.move(conversationId, move, handOff).then(
-      (outcome) => hostLog("thread-moves", "an agent's move ended", { conversation: conversationId, move, outcome: outcome.kind }),
-      (error: Error) => hostWarn("thread-moves", "an agent's move failed", { conversation: conversationId, move, error: error.message }),
+    void Promise.resolve().then(() => moves.move(conversationId, move, handOff)).then(
+      (outcome) => logMoveDiagnostic(() => hostLog("thread-moves", "an agent's move ended", { conversation: conversationId, move, outcome: outcome.kind, ...outcome.kind === "kept-here" && { stage: "move-result", ...moveDiagnosticReason({ error: outcome.reason }) } })),
+      (error) => logMoveDiagnostic(() => hostWarn("thread-moves", "an agent's move failed", { conversation: conversationId, move, stage: "move-call", ...moveDiagnosticReason({ error }) })),
     )
   }
 
