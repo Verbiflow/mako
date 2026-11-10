@@ -70,8 +70,8 @@ async function checkMoveState() {
   const ts = await import("typescript")
   const code = await readFile(new URL("../src/state/cloud-moves.ts", import.meta.url), "utf8")
   const storeCode = await readFile(new URL("../src/state/store.ts", import.meta.url), "utf8")
-  const world = (handler, conversations = {}) => {
-    const calls = [], effects = []
+  const world = (handler, conversations = {}, returnHandler = () => new Promise(() => {})) => {
+    const calls = [], returns = [], effects = []
     const context = createContext({ crypto: webcrypto, console })
     const load = (source, dependencies) => {
       const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
@@ -84,17 +84,23 @@ async function checkMoveState() {
       return exports
     }
     const store = load(storeCode, { react: {} })
-    const bridge = { threadMove: async (...args) => { calls.push(args); return handler(...args) } }
+    const bridge = {
+      threadMove: async (...args) => { calls.push(args); return handler(...args) },
+      threadReturn: async (...args) => { returns.push(args); return returnHandler(...args) },
+    }
     const api = load(code, {
-      sonner: { toast: { success: (...args) => effects.push(["success", args]), message: (...args) => effects.push(["message", args]) } },
+      sonner: { toast: { success: (...args) => effects.push(["success", args]), message: (...args) => effects.push(["message", args]), warning: (...args) => effects.push(["warning", args]) } },
       "@/state/providers": { providers: {} },
       "@/lib/bridge": { hasBridge: () => true, getMako: () => bridge },
-      "@/state/acp-state": { acpStore: { get: () => ({ conversations }) }, updateAcpConversation: (id) => effects.push(["location", id]) },
+      "@/state/acp-state": { acpStore: { get: () => ({ conversations }) }, updateAcpConversation: (id, apply) => {
+        if (conversations[id]) conversations[id] = apply(conversations[id])
+        effects.push(["location", id])
+      } },
       "@/state/live-door": { receiveLive: (_id, _source, apply) => apply() },
       "@/state/live-recovery": { hydrateLive: async (id) => effects.push(["hydrate", id]) },
       "@/state/store": store,
     })
-    return { api, calls, effects, state: () => api.cloudMovesStore.get() }
+    return { api, calls, returns, effects, conversations, state: () => api.cloudMovesStore.get() }
   }
   const deferred = () => {
     let resolve, reject
@@ -106,10 +112,10 @@ async function checkMoveState() {
   const check = async (name, run) => {
     let held
     try {
-      await run((handler, conversations) => (held = world(handler, conversations)))
-      results.push({ name, passed: true, calls: held.calls, effects: held.effects, state: held.state() })
+      await run((handler, conversations, returnHandler) => (held = world(handler, conversations, returnHandler)))
+      results.push({ name, passed: true, calls: held.calls, returns: held.returns, effects: held.effects, conversations: held.conversations, state: held.state() })
     } catch (error) {
-      results.push({ name, passed: false, error: String(error), calls: held?.calls, effects: held?.effects, state: held?.state() })
+      results.push({ name, passed: false, error: String(error), calls: held?.calls, returns: held?.returns, effects: held?.effects, conversations: held?.conversations, state: held?.state() })
     }
   }
   await check("late A events cannot replace pending B or permit C", async (make) => {
@@ -391,6 +397,189 @@ async function checkMoveState() {
     const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
     w.api.threadMoveStepped("source", w.calls[0][1], { kind: "moved", conversations: ["source", "oldSibling"] })
     assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects)
+  })
+  const members = () => ({
+    c: { key: "c", kind: "live", threadId: "thread" },
+    sibling: { key: "sibling", kind: "live", threadId: "thread", elsewhere: "a cloud machine" },
+  })
+  await check("confirmed return fences the earlier RPC-first full outbound event", async (make) => {
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), members())
+    await w.api.moveToCloud("c")
+    const A = w.calls[0][1]
+    w.api.threadReturnStepped("c", "return-B", { kind: "back", conversations: ["c", "sibling"] })
+    assert.equal(w.conversations.c.elsewhere, undefined)
+    assert.equal(w.conversations.sibling.elsewhere, undefined)
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("c", A, { kind: "moved", conversations: ["c", "sibling"], continued: true })
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects, "no cloud toast, location or readback after confirmed return")
+    assert.equal(w.conversations.sibling.elsewhere, undefined)
+    w.api.threadReturnStepped("c", "return-B", { kind: "back", conversations: ["c", "sibling"] })
+    assert.equal(JSON.stringify(w.effects), effects, "duplicate return has no effects")
+  })
+  await check("new outbound after return supersedes that return's late completion", async (make) => {
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), members())
+    await w.api.moveToCloud("c")
+    w.api.threadReturnStepped("c", "return-B", { kind: "back", conversations: ["c", "sibling"] })
+    await w.api.moveToCloud("c")
+    const C = w.calls[1][1]
+    assert.notEqual(C, w.calls[0][1])
+    w.api.threadMoveStepped("c", C, { kind: "moved", conversations: ["c", "sibling"] })
+    assert.equal(w.conversations.c.elsewhere, "a cloud machine")
+    assert.equal(w.conversations.sibling.elsewhere, "a cloud machine")
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    w.api.threadReturnStepped("c", "return-B", { kind: "back", conversations: ["c", "sibling"] })
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects)
+  })
+  await check("partial confirmed return accepts full participants once without old outbound enrichment", async (make) => {
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), members())
+    await w.api.moveToCloud("c")
+    const A = w.calls[0][1]
+    w.api.threadReturnStepped("c", "return-B", { kind: "back", conversations: ["c"] })
+    assert.equal(w.conversations.c.elsewhere, undefined)
+    assert.equal(w.conversations.sibling.elsewhere, "a cloud machine", "partial membership does not declare other sessions local")
+    const effects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("c", A, { kind: "moved", conversations: ["c", "sibling"], continued: true })
+    assert.equal(JSON.stringify(w.effects), effects)
+    w.api.threadReturnStepped("c", "return-B", { kind: "back", conversations: ["c", "sibling", "sibling"] })
+    assert.equal(w.conversations.sibling.elsewhere, undefined)
+    const full = JSON.stringify(w.effects)
+    w.api.threadReturnStepped("c", "return-B", { kind: "back", conversations: ["c"] })
+    assert.equal(JSON.stringify(w.effects), full)
+    assert.equal(w.effects.filter(([kind, id]) => kind === "location" && id === "c").length, 2, "one outbound and one return location")
+  })
+  await check("confirmed sibling return fences a fork's origin and unresolved RPC", async (make) => {
+    const reply = deferred()
+    let count = 0
+    const w = make(() => ++count === 1 ? reply.promise : { kind: "moved", cloudThread: "fixture-cloud" }, {
+      source: { key: "source", kind: "live", threadId: "old-thread" },
+      fork: { key: "fork", kind: "live", threadId: "thread", elsewhere: "a cloud machine" },
+      sibling: { key: "sibling", kind: "live", threadId: "thread", elsewhere: "a cloud machine" },
+    })
+    const request = w.api.moveToCloud("source")
+    const A = w.calls[0][1]
+    w.api.threadMoveStepped("source", A, { kind: "own-branch", to: "fork" })
+    w.api.threadReturnStepped("sibling", "return-B", { kind: "back", conversations: ["fork", "sibling"] })
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    reply.resolve({ kind: "moved", cloudThread: "fixture-cloud", conversation: "fork" })
+    await request
+    w.api.threadMoveStepped("fork", A, { kind: "moved", conversations: ["fork", "sibling"] })
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects)
+    assert.equal(w.state().moving.fork, undefined)
+    await w.api.moveToCloud("fork")
+    assert.equal(w.calls.length, 2, "a confirmed return does not leave an obsolete outbound lock")
+  })
+  await check("mismatched return ID or address cannot acquire local ownership", async (make) => {
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), members())
+    await w.api.moveToCloud("c")
+    const A = w.calls[0][1]
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    w.api.threadReturnStepped("c", A, { kind: "back", conversations: ["c", "sibling"] })
+    assert.equal(JSON.stringify(w.state()), before, "an outbound ID cannot become a return")
+    assert.equal(JSON.stringify(w.effects), effects)
+    w.api.threadReturnStepped("c", "return-B", { kind: "packing" })
+    const pendingState = JSON.stringify(w.state().returning), pendingEffects = JSON.stringify(w.effects)
+    w.api.threadReturnStepped("wrong-target", "return-B", { kind: "back", conversations: ["c", "sibling"] })
+    w.api.threadReturnStepped("c", "wrong-ID", { kind: "back", conversations: ["c", "sibling"] })
+    assert.equal(JSON.stringify(w.state().returning), pendingState)
+    assert.equal(w.state().moves["wrong-ID"]?.ignored, true, "an incompatible ID is remembered without granting it authority")
+    assert.equal(JSON.stringify(w.effects), pendingEffects)
+    w.api.threadReturnStepped("c", "return-B", { kind: "stayed", reason: "refused" })
+    const stayed = JSON.stringify(w.effects)
+    w.api.threadReturnStepped("c", "return-B", { kind: "back", conversations: ["c", "sibling"] })
+    assert.equal(JSON.stringify(w.effects), stayed, "a refused return cannot later acquire authority")
+    w.api.threadMoveStepped("c", A, { kind: "moved", conversations: ["c", "sibling"] })
+    assert.equal(w.conversations.sibling.elsewhere, "a cloud machine")
+    const final = JSON.stringify(w.state()), finalEffects = JSON.stringify(w.effects)
+    w.api.threadReturnStepped("c", "wrong-ID", { kind: "back", conversations: ["c", "sibling"] })
+    assert.equal(JSON.stringify(w.state()), final)
+    assert.equal(JSON.stringify(w.effects), finalEffects, "a rejected ID cannot gain authority after the current operation ends")
+  })
+  await check("unsettled return has no local authority; confirmed back then fences outbound", async (make) => {
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), members())
+    await w.api.moveToCloud("c")
+    const A = w.calls[0][1]
+    w.api.threadReturnStepped("c", "return-B", { kind: "packing" })
+    w.api.threadReturnStepped("c", "return-B", { kind: "unsettled", reason: "unknown", waitsOn: "cloud" })
+    w.api.threadMoveStepped("c", A, { kind: "moved", conversations: ["c", "sibling"] })
+    assert.equal(w.conversations.c.elsewhere, "a cloud machine")
+    assert.equal(w.conversations.sibling.elsewhere, "a cloud machine")
+    w.api.threadReturnStepped("c", "return-B", { kind: "back", conversations: ["c", "sibling"] })
+    const effects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("c", A, { kind: "moved", conversations: ["c", "sibling"], continued: true })
+    assert.equal(JSON.stringify(w.effects), effects)
+    assert.equal(w.calls.length, 1)
+  })
+  await check("same-ID return status back uses readbacks then full host membership", async (make) => {
+    let count = 0
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), members(), () => ++count === 1 ? { kind: "unsettled", reason: "unknown", waitsOn: "cloud" } : { kind: "back" })
+    await w.api.moveToCloud("c")
+    await w.api.bringBack("c")
+    assert.equal(w.state().returning.c.step.kind, "unsettled")
+    await w.api.askReturnAgain("c")
+    const B = w.returns[0][1]
+    assert.equal(w.returns.length, 2)
+    assert.equal(w.returns[1][1], B)
+    assert.equal(w.conversations.c.elsewhere, undefined)
+    assert.equal(w.conversations.sibling.elsewhere, "a cloud machine", "RPC readback is not synthetic local membership")
+    const effects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("c", w.calls[0][1], { kind: "moved", conversations: ["c", "sibling"], continued: true })
+    assert.equal(JSON.stringify(w.effects), effects)
+    const reads = w.effects.filter(([kind, id]) => kind === "hydrate" && id === "sibling").length
+    w.api.threadReturnStepped("c", B, { kind: "back", conversations: ["c", "sibling"] })
+    assert.equal(w.conversations.sibling.elsewhere, undefined)
+    assert.equal(w.effects.filter(([kind, id]) => kind === "hydrate" && id === "sibling").length, reads)
+    assert.equal(w.calls.length, 1)
+  })
+  for (const outcome of ["back", "lost"]) await check(`late return RPC ${outcome} cannot replace newer outbound`, async (make) => {
+    const reply = deferred()
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), members(), () => reply.promise)
+    await w.api.moveToCloud("c")
+    const returning = w.api.bringBack("c")
+    const B = w.returns[0][1]
+    w.api.threadReturnStepped("c", B, { kind: "back", conversations: ["c", "sibling"] })
+    await w.api.moveToCloud("c")
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    if (outcome === "back") reply.resolve({ kind: "back" })
+    else reply.reject(new Error("late return transport loss"))
+    await returning
+    w.api.threadReturnStepped("c", B, { kind: "back", conversations: ["c", "sibling"] })
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects)
+  })
+  await check("return transport loss stays uncertain and checks the same operation", async (make) => {
+    let count = 0
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), members(), () => ++count === 1 ? Promise.reject(new Error("lost return reply")) : { kind: "back" })
+    await w.api.moveToCloud("c")
+    await w.api.bringBack("c")
+    assert.equal(w.state().returning.c.step.kind, "unsettled")
+    assert.equal(w.conversations.c.elsewhere, "a cloud machine")
+    await w.api.moveToCloud("c")
+    assert.equal(w.calls.length, 1, "an unresolved return cannot start another outbound")
+    await w.api.askReturnAgain("c")
+    assert.equal(w.returns.length, 2)
+    assert.equal(w.returns[0][1], w.returns[1][1])
+    assert.equal(w.conversations.c.elsewhere, undefined)
+  })
+  await check("an existing host return ID does not replace the pending request without its reply", async (make) => {
+    const reply = deferred()
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), members(), () => reply.promise)
+    await w.api.moveToCloud("c")
+    const returning = w.api.bringBack("c")
+    const requested = w.returns[0][1]
+    w.api.threadReturnStepped("c", "host-open-plan", { kind: "back", conversations: ["c", "sibling"] })
+    assert.equal(w.state().returning.c.move, requested)
+    assert.equal(w.conversations.c.elsewhere, "a cloud machine", "a mismatched ID cannot settle this request")
+    reply.resolve({ kind: "back" })
+    await returning
+    assert.equal(w.conversations.c.elsewhere, undefined, "the actual host RPC back outcome establishes return authority")
+    assert.equal(w.state().returning.c, undefined)
+    await w.api.moveToCloud("c")
+    const effects = JSON.stringify(w.effects)
+    w.api.threadReturnStepped("c", "host-open-plan", { kind: "back", conversations: ["c", "sibling"] })
     assert.equal(JSON.stringify(w.effects), effects)
   })
   if (process.env.MAKO_TEST_EVIDENCE) {

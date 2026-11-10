@@ -108,6 +108,39 @@ Blindly evicting old IDs would let delayed events be adopted as new operations,
 reopening the stale-event failure. This repair does not add history eviction or
 durable restart recovery.
 
+A further private review of `fda22ecdc17185df2e4f0f9046e0c287d86771dc`
+found that completion ownership covered only outbound moves. The unchanged
+reviewer fixture reproduced a late outbound completion setting a sibling back
+to Cloud after a confirmed return had made both sessions local.
+
+The same operation history now covers both directions. Only an authoritative
+`back` return event or RPC reply establishes local ownership. Its origin,
+target and affected participants fence prior outbound completion effects;
+later outbound ownership also fences that return's old replies and events.
+Partial/full return membership converges with separately deduplicated location
+and readback effects. Return events must match their operation ID and address;
+conflicting unseen IDs at occupied addresses are remembered without authority,
+so they cannot become new operations on replay. A return that stays or remains
+unsettled establishes no local membership. Transport loss remains uncertain
+and the status action keeps the same return ID.
+
+The host return event names its actual plan sessions. Its RPC `back` outcome
+has no member list, so it confirms the known target and reads back other known
+Thread members without inventing local membership. If a host joins an existing
+return under another ID, that event cannot replace the pending window request;
+the actual RPC outcome and readbacks can still settle that request. No new
+host flag or contract is introduced.
+
+The original eighteen state controls remain green. Eleven added controls cover
+confirmed return ordering, partial participants, sibling/fork addresses, stale
+return replies, mismatched IDs/addresses, uncertainty and subsequent outbound
+moves. With final assertions unchanged, the third private revision fails these
+eleven controls and the correction passes all twenty-nine. The fixture now also
+applies the real conversation update callback, so it records actual local/cloud
+state changes as well as calls and effects. This remains offline evidence.
+Both directions and ignored conflicting IDs share the same window-lifetime
+history with no count/TTL cap; no restart durability is added.
+
 ## The first journey and its remaining gates
 
 | Journey point | Evidence in this repair | Remaining acceptance |
