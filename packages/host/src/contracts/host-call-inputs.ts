@@ -167,6 +167,9 @@ const inputs = {
         }),
       ]),
       z.object({
+        presentation: z
+          .union([z.literal("full"), z.literal("summary")])
+          .optional(),
         scope: z
           .union([
             z.literal("children"),
@@ -392,8 +395,15 @@ const inputs = {
       z.object({
         child: z.string(),
         view: z
-          .union([z.literal("report"), z.literal("transcript")])
+          .union([
+            z.literal("report"),
+            z.literal("transcript"),
+            z.literal("pulls"),
+          ])
           .optional(),
+        snapshot: z.string().optional(),
+        offset: z.number().optional(),
+        limit: z.number().optional(),
         maxChars: z.number().optional(),
         report: z.string().optional(),
         afterAsk: z.string().optional(),
