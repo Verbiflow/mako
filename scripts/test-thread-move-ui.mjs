@@ -582,6 +582,111 @@ async function checkMoveState() {
     w.api.threadReturnStepped("c", "host-open-plan", { kind: "back", conversations: ["c", "sibling"] })
     assert.equal(JSON.stringify(w.effects), effects)
   })
+  for (const outcome of ["back", "lost"]) await check(`new member completion retires pending return before its late ${outcome} reply`, async (make) => {
+    const reply = deferred()
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), members(), () => reply.promise)
+    await w.api.moveToCloud("c")
+    const returning = w.api.bringBack("c")
+    const B = w.returns[0][1]
+    await w.api.moveToCloud("sibling")
+    const C = w.calls[1][1]
+    w.api.threadMoveStepped("sibling", C, { kind: "moved", conversations: ["c", "sibling"] })
+    assert.equal(w.state().returning.c, undefined, "confirmed newer ownership releases the obsolete spinner immediately")
+    assert.equal(w.state().moves[B].superseded, true)
+    assert.equal(w.state().moves[B].settled, undefined, "retirement does not invent a local return")
+    assert.equal(w.conversations.c.elsewhere, "a cloud machine")
+    assert.equal(w.conversations.sibling.elsewhere, "a cloud machine")
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    if (outcome === "back") reply.resolve({ kind: "back" })
+    else reply.reject(new Error("obsolete return reply lost"))
+    await returning
+    for (const step of [{ kind: "packing" }, { kind: "unsettled", reason: "late", waitsOn: "cloud" }, { kind: "stayed", reason: "late" }, { kind: "back", conversations: ["c", "sibling"] }]) w.api.threadReturnStepped("c", B, step)
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects, "retired replies/events have no location, readback or toast effects")
+    assert.equal(w.calls.length, 2, "cleanup starts no move")
+    await w.api.moveToCloud("c")
+    assert.equal(w.calls.length, 3, "an explicit new move is no longer blocked by B")
+  })
+  await check("obsolete return cleanup cannot remove a newer return at the same address", async (make) => {
+    const first = deferred(), newer = deferred()
+    let count = 0
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), members(), () => ++count === 1 ? first.promise : newer.promise)
+    await w.api.moveToCloud("c")
+    const oldReturn = w.api.bringBack("c")
+    const B = w.returns[0][1]
+    await w.api.moveToCloud("sibling")
+    w.api.threadMoveStepped("sibling", w.calls[1][1], { kind: "moved", conversations: ["c", "sibling"] })
+    assert.equal(w.state().returning.c, undefined)
+    const pending = w.api.bringBack("c")
+    const D = w.returns[1][1]
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    first.resolve({ kind: "back" })
+    await oldReturn
+    w.api.threadReturnStepped("c", B, { kind: "back", conversations: ["c", "sibling"] })
+    assert.equal(w.state().returning.c.move, D)
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects)
+    newer.resolve({ kind: "back" })
+    await pending
+    assert.equal(w.conversations.c.elsewhere, undefined, "the current return still settles normally")
+  })
+  await check("supersession preserves an unrelated older pending return", async (make) => {
+    const old = deferred(), neighbor = deferred()
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), { ...members(), other: { key: "other", kind: "live", threadId: "other-thread", elsewhere: "a cloud machine" } }, (id) => id === "other" ? neighbor.promise : old.promise)
+    await w.api.moveToCloud("c")
+    const pending = w.api.bringBack("c")
+    const unaffected = w.api.bringBack("other")
+    const U = w.returns[1][1]
+    await w.api.moveToCloud("sibling")
+    w.api.threadMoveStepped("sibling", w.calls[1][1], { kind: "moved", conversations: ["c", "sibling"] })
+    assert.equal(w.state().returning.c, undefined)
+    assert.equal(w.state().returning.other.move, U)
+    assert.equal(w.state().moves[U].superseded, undefined)
+    old.resolve({ kind: "back" })
+    await pending
+    assert.equal(w.state().returning.other.move, U)
+    neighbor.resolve({ kind: "back" })
+    await unaffected
+    assert.equal(w.conversations.other.elsewhere, undefined)
+  })
+  await check("late full membership retires an older return only once its address is confirmed", async (make) => {
+    const reply = deferred()
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), { c: { key: "c", kind: "live" }, sibling: { key: "sibling", kind: "live" } }, () => reply.promise)
+    await w.api.moveToCloud("c")
+    const pending = w.api.bringBack("c")
+    const B = w.returns[0][1]
+    await w.api.moveToCloud("sibling")
+    const C = w.calls[1][1]
+    assert.equal(w.state().returning.c.move, B, "singleton completion cannot claim another unknown member")
+    w.api.threadMoveStepped("sibling", C, { kind: "moved", conversations: ["sibling", "c"] })
+    assert.equal(w.state().returning.c, undefined)
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("sibling", C, { kind: "moved", conversations: ["sibling", "c"] })
+    reply.resolve({ kind: "back" })
+    await pending
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects)
+  })
+  await check("late full completion cannot retire a return registered after that outbound operation", async (make) => {
+    const old = deferred(), newer = deferred()
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), { c: { key: "c", kind: "live" }, sibling: { key: "sibling", kind: "live" }, alias: { key: "alias", kind: "live" } }, (id) => id === "alias" ? newer.promise : old.promise)
+    await w.api.moveToCloud("c")
+    const pending = w.api.bringBack("c")
+    await w.api.moveToCloud("sibling")
+    const C = w.calls[1][1]
+    const current = w.api.bringBack("alias")
+    const D = w.returns[1][1]
+    w.api.threadMoveStepped("sibling", C, { kind: "moved", conversations: ["sibling", "c", "alias"] })
+    assert.equal(w.state().returning.c, undefined)
+    assert.equal(w.state().returning.alias.move, D)
+    assert.equal(w.state().moves[D].superseded, undefined)
+    old.resolve({ kind: "back" })
+    await pending
+    assert.equal(w.state().returning.alias.move, D)
+    newer.resolve({ kind: "back" })
+    await current
+    assert.equal(w.conversations.alias.elsewhere, undefined)
+  })
   if (process.env.MAKO_TEST_EVIDENCE) {
     await mkdir(process.env.MAKO_TEST_EVIDENCE, { recursive: true })
     await writeFile(join(process.env.MAKO_TEST_EVIDENCE, "move-state-controls.json"), JSON.stringify(results, null, 2))

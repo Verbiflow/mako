@@ -141,6 +141,25 @@ state changes as well as calls and effects. This remains offline evidence.
 Both directions and ignored conflicting IDs share the same window-lifetime
 history with no count/TTL cap; no restart durability is added.
 
+Private review of `8cb2f9f6de251d0be0c4e4921b6c4f6e114dc69a` found a
+liveness gap: a pending return correctly lost location authority to a newer
+cross-member outbound completion, but its packing display and busy lock stayed.
+The unchanged reviewer control reproduced the blocked subsequent action.
+
+Confirmed completion now also retires older pending operations whose origin or
+target it owns. Cleanup matches display/lock entries by operation ID, preserves
+the retired identity as superseded, and establishes no location or return result.
+It leaves newer and unrelated returns intact. A stale return completion also
+retires only its own pending state. Late replies/events cannot restore that work.
+There is no automatic retry or transfer.
+
+The same final assertions fail six added controls on the fourth revision and
+pass all thirty-five on this correction, with the original twenty-nine unchanged
+and green. They cover success/loss replies, newer and unrelated return owners,
+membership learned later, retained current locations and the unblocked explicit
+next action. These remain isolated module/store controls; no extra GUI or real
+cloud execution was performed.
+
 ## The first journey and its remaining gates
 
 | Journey point | Evidence in this repair | Remaining acceptance |

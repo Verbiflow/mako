@@ -10,7 +10,7 @@ import { hydrateLive } from "@/state/live-recovery"
 import { createHook, createStore } from "@/state/store"
 
 /** Both directions share observation order and effect ownership; only a confirmed return establishes local authority. */
-type CloudOperation = { origin: string; target: string; ignored?: true; located?: string[]; refreshed?: string[] } & (
+type CloudOperation = { origin: string; target: string; ignored?: true; superseded?: true; located?: string[]; refreshed?: string[] } & (
   | { direction: "outbound"; settled?: "moved" | "kept-here"; completed?: Extract<ThreadMoveStep, { kind: "moved" }> }
   | { direction: "return"; settled?: "back" | "stayed"; returned?: Extract<ThreadReturnStep, { kind: "back" }> }
 )
@@ -143,19 +143,40 @@ async function askMove(conversationId: string, move: string, handOff: boolean): 
 
 /** Both addresses of an unresolved move are occupied; a fork cannot create another operation via its old tab. */
 function moveInFlight(state: CloudMovesState, conversationId: string): boolean {
-  return Boolean(state.moving[conversationId] || state.returning[conversationId]) || Object.entries(state.moves).some(([move, owner]) => !owner.ignored && !owner.settled && (owner.origin === conversationId || owner.target === conversationId) && (owner.direction === "return" || (latestOperation(state, owner.origin) === move && latestOperation(state, owner.target) === move)))
+  return Boolean(state.moving[conversationId] || state.returning[conversationId]) || Object.entries(state.moves).some(([move, owner]) => !owner.ignored && !owner.superseded && !owner.settled && (owner.origin === conversationId || owner.target === conversationId) && (owner.direction === "return" || (latestOperation(state, owner.origin) === move && latestOperation(state, owner.target) === move)))
 }
 
 /** A reply can update only the operation still displayed at its current target, never a disposed or settled one. */
 function currentMove(move: string): Extract<CloudOperation, { direction: "outbound" }> | undefined {
   const state = cloudMovesStore.get()
   const owner = state.moves[move]
-  return owner?.direction === "outbound" && !owner.ignored && !owner.settled && state.moving[owner.target]?.move === move && latestOperation(state, owner.origin) === move && latestOperation(state, owner.target) === move ? owner : undefined
+  return owner?.direction === "outbound" && !owner.ignored && !owner.superseded && !owner.settled && state.moving[owner.target]?.move === move && latestOperation(state, owner.origin) === move && latestOperation(state, owner.target) === move ? owner : undefined
 }
 
 /** The latest observed operation to own or refresh an address. Move IDs are UUIDs, so record order is arrival order. */
 function latestOperation(state: CloudMovesState, conversationId: string): string | undefined {
-  return Object.entries(state.moves).findLast(([, owner]) => !owner.ignored && (owner.direction === "outbound" || owner.settled === "back") && (owner.origin === conversationId || owner.target === conversationId || (owner.direction === "outbound" ? owner.completed : owner.returned)?.conversations.includes(conversationId) || owner.refreshed?.includes(conversationId)))?.[0]
+  return Object.entries(state.moves).findLast(([, owner]) => !owner.ignored && !owner.superseded && (owner.direction === "outbound" || owner.settled === "back") && (owner.origin === conversationId || owner.target === conversationId || (owner.direction === "outbound" ? owner.completed : owner.returned)?.conversations.includes(conversationId) || owner.refreshed?.includes(conversationId)))?.[0]
+}
+
+/** Retirement removes only these operations' displays/locks, retaining their IDs without claiming any location. */
+function retireOperations(state: CloudMovesState, moves: string[]): CloudMovesState {
+  const retired = new Set(moves)
+  return {
+    ...state,
+    moves: Object.fromEntries(Object.entries(state.moves).map(([id, owner]) => [id, retired.has(id) ? { ...owner, superseded: true as const } : owner])),
+    moving: Object.fromEntries(Object.entries(state.moving).filter(([, held]) => !retired.has(held.move))),
+    returning: Object.fromEntries(Object.entries(state.returning).filter(([, held]) => !retired.has(held.move))),
+  }
+}
+
+/** Confirmed newer ownership also ends obsolete pending UI work, in either direction, including newly learned members. */
+function retireSuperseded(state: CloudMovesState, confirmed: string): CloudMovesState {
+  const ids = Object.keys(state.moves)
+  const older = ids.slice(0, ids.indexOf(confirmed))
+  return retireOperations(state, older.filter((id) => {
+    const owner = state.moves[id]
+    return owner && !owner.ignored && !owner.superseded && !owner.settled && (latestOperation(state, owner.origin) === confirmed || latestOperation(state, owner.target) === confirmed)
+  }))
 }
 
 /** An incompatible unseen ID has no authority, but remembering its rejection prevents later replay from adopting it. */
@@ -179,7 +200,7 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
   }
   const known = state.moves[move]
   if (known) {
-    if (known.ignored || known.direction !== "outbound" || (currentMove(move)?.target !== conversationId && !(step.kind === "moved" && known.settled === "moved" && known.target === conversationId && latestOperation(state, known.origin) === move && latestOperation(state, conversationId) === move))) return
+    if (known.ignored || known.superseded || known.direction !== "outbound" || (currentMove(move)?.target !== conversationId && !(step.kind === "moved" && known.settled === "moved" && known.target === conversationId && latestOperation(state, known.origin) === move && latestOperation(state, conversationId) === move))) return
   } else {
     // A move begun in another window first arrives as an event. It cannot displace one already owned here.
     if (moveInFlight(state, conversationId)) {
@@ -236,11 +257,12 @@ function completeMove(conversationId: string, move: string, step: Extract<Thread
   const next = { ...state, moves: { ...state.moves, [move]: { ...owner, settled: "moved" as const, completed, refreshed: reads } } }
   const locations = completed.conversations.filter((id) => !owner.located?.includes(id) && latestOperation(next, id) === move)
   const refreshes = reads.filter((id) => !owner.refreshed?.includes(id) && latestOperation(next, id) === move)
-  cloudMovesStore.set({
+  cloudMovesStore.set(retireSuperseded({
+    ...next,
     moves: { ...next.moves, [move]: { ...next.moves[move], located: [...owner.located ?? [], ...locations], refreshed: [...owner.refreshed ?? [], ...refreshes] } },
     failedMoves: without(state.failedMoves, conversationId),
     moving: without(state.moving, conversationId),
-  })
+  }, move))
   // Richer host metadata updates the existing toast under its same ID; identical/partial completions repeat nothing.
   if (!previous || JSON.stringify([previous.continued, previous.carried, previous.whileAway]) !== JSON.stringify([completed.continued, completed.carried, completed.whileAway])) {
     const carried = carriedSentence(completed.carried)
@@ -352,7 +374,7 @@ async function askReturn(conversationId: string, move: string, options?: ThreadR
 function currentReturn(move: string): Extract<CloudOperation, { direction: "return" }> | undefined {
   const state = cloudMovesStore.get()
   const owner = state.moves[move]
-  return owner?.direction === "return" && !owner.ignored && !owner.settled && state.returning[owner.target]?.move === move ? owner : undefined
+  return owner?.direction === "return" && !owner.ignored && !owner.superseded && !owner.settled && state.returning[owner.target]?.move === move ? owner : undefined
 }
 
 /**
@@ -387,7 +409,7 @@ export function threadReturnStepped(conversationId: string, move: string, step: 
   const state = cloudMovesStore.get()
   const known = state.moves[move]
   if (known) {
-    if (known.ignored || known.direction !== "return" || known.target !== conversationId || (currentReturn(move)?.target !== conversationId && !(step.kind === "back" && known.settled === "back" && latestOperation(state, known.origin) === move && latestOperation(state, conversationId) === move))) return
+    if (known.ignored || known.superseded || known.direction !== "return" || known.target !== conversationId || (currentReturn(move)?.target !== conversationId && !(step.kind === "back" && known.settled === "back" && latestOperation(state, known.origin) === move && latestOperation(state, conversationId) === move))) return
   } else {
     if (state.returning[conversationId]) {
       ignoreOperation(state, move, conversationId, "return")
@@ -425,17 +447,21 @@ function completeReturn(conversationId: string, move: string, step: Extract<Thre
   const returned = { ...previous, ...step, conversations: [...new Set([...previous?.conversations ?? [], ...step.conversations])] }
   const reads = [...new Set([...owner.refreshed ?? [], ...returned.conversations, ...readBack])]
   const next = { ...state, moves: { ...state.moves, [move]: { ...owner, settled: "back" as const, returned, refreshed: reads } } }
-  if (latestOperation(next, owner.origin) !== move || latestOperation(next, owner.target) !== move) return
+  if (latestOperation(next, owner.origin) !== move || latestOperation(next, owner.target) !== move) {
+    cloudMovesStore.set(retireOperations(state, [move]))
+    return
+  }
   const locations = returned.conversations.filter((id) => !owner.located?.includes(id) && latestOperation(next, id) === move)
   const refreshes = reads.filter((id) => !owner.refreshed?.includes(id) && latestOperation(next, id) === move)
-  cloudMovesStore.set({
+  cloudMovesStore.set(retireSuperseded({
+    ...next,
     moves: { ...next.moves, [move]: { ...next.moves[move], located: [...owner.located ?? [], ...locations], refreshed: [...owner.refreshed ?? [], ...refreshes] } },
     returning: without(state.returning, conversationId),
     // A confirmed local owner also releases an obsolete outbound lock, including an old fork's source alias.
     moving: Object.fromEntries(Object.entries(state.moving).filter(([id, held]) => latestOperation(next, id) === held.move && latestOperation(next, state.moves[held.move]?.origin ?? id) === held.move)),
     failedMoves: Object.fromEntries(Object.entries(state.failedMoves).filter(([id]) => latestOperation(next, id) !== move)),
     followStopped: Object.fromEntries(Object.entries(state.followStopped).filter(([id]) => !locations.includes(id))),
-  })
+  }, move))
   if (!previous || JSON.stringify(previous.landed) !== JSON.stringify(returned.landed)) {
     const landed = landedSentence(returned.landed)
     const conflicted = Boolean(returned.landed?.conflicts.length || returned.landed?.outside.failed?.length)
