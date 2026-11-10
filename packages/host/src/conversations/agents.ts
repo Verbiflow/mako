@@ -141,7 +141,7 @@ import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../c
 import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTART_CHAIN, STRANDED_AFTER_MS, strandedTurn } from "../contracts/turn-continuation.js"
 import { uniqueName, type KeptAnswer, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
-import { holdOf } from "../contracts/request-hold.js"
+import { holdOf, keepsLine } from "../contracts/request-hold.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
 import { carriedDigest } from "../contracts/delivery-retry.js"
@@ -2174,9 +2174,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.deps.live.held(conversation)?.requests.some((asked) => asked.id === request)) sent = { delivery: "queued", hears: `${name} already has it.`, deduped: true }
     else {
       this.deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, { kind: "agent", session: SessionIdSchema.parse(sender.session) }, input.reply === "none" ? { notification: true } : {})
-      const queued: Delivered = ready === "idle"
-        ? { delivery: "turn", hears: `${name} takes it now, as its next turn.` }
-        : { delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message.` }
+      const queued = this.queuedDelivery(conversation, name, ready)
       sent = queued
       if (ready !== "idle" && input.deliver === "steer") {
         const running = this.deps.live.held(conversation)?.requests.find((asked) => asked.status === "dispatching")?.id
@@ -4214,9 +4212,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     const session = live.session(conversation)
     if (!session) return { source: "live" }
     const held = live.held(conversation)
-    const waiting = this.personWaiting(conversation)
     // A request sent and not yet answered is work, before its harness says it runs; one nothing will send isn't.
     const busy = live.atWork(conversation)
+    const messageHold = !busy && this.messageHold(conversation)
+    const waiting = this.personWaiting(conversation) ?? (messageHold ? { for: "needs-you" as const, line: messageHold } : undefined)
     const last = held?.requests.filter((request) => request.status !== "queued" && request.status !== "held").at(-1)
     // A turn that ended on its own Fins' work or its move is still at work, on that.
     const waits = !busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined
@@ -5359,7 +5358,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const before = this.conversationOf(stopped.child)
     const repeat = before ? this.deps.live.held(before)?.requests.find((asked) => asked.id === request) : undefined
     if (repeat) return repeat.status === "queued" || repeat.status === "held"
-      ? { delivery: "queued", hears: `${stopped.name} hears it when its current turn ends, as its next message.`, deduped: true }
+      ? { ...this.queuedDelivery(before!, stopped.name, this.ready(before!)), deduped: true }
       : { delivery: "turn", hears: `${stopped.name} already has it.`, deduped: true }
     if (before && this.deps.archived?.(before))
       return { refused: "conflict", why: `${stopped.name} was archived, which ends its work for good: start a new ${FIN_WORD} with agents_start, or the person can restore it, after which a message resumes it.` }
@@ -5385,15 +5384,13 @@ export class Agents implements AgentOperations, ConversationChildren {
     const held = this.deps.live.held(conversation)?.requests.find((asked) => asked.id === request)
     if (held)
       return held.status === "queued" || held.status === "held"
-        ? { delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message.`, deduped: true }
+        ? { ...this.queuedDelivery(conversation, name, this.ready(conversation)), deduped: true }
         : { delivery: "turn", hears: `${name} already has it.`, deduped: true }
     const queue = (why?: string): Delivered => {
       this.deps.live.submit(conversation, request, message, attachments, undefined, undefined, undefined, actor, marks)
       // A Stop's pause is the person's or the Apex's to lift, never Mako's own message's.
       if (!automatic) this.resumeFin(conversation, request)
-      return ready === "idle"
-        ? { delivery: "turn", hears: `${name} takes it now, as its next turn.` }
-        : { delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message${why ? `: ${why}` : "."}` }
+      return this.queuedDelivery(conversation, name, ready, why)
     }
     // A Stop that came while this was on its way, before there was a queue to reach, holds it as it holds any message.
     if (crossing.stopped) {
@@ -5401,7 +5398,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       return { delivery: "queued", hears: `${name} was stopped as this reached it: it waits, held, and goes when ${name} is resumed.` }
     }
     if (taken) {
-      queue()
+      const queued = queue()
+      if (this.messageHold(conversation) || !this.deps.live.atWork(conversation)) return queued
       return { delivery: "turn", hears: `${taken.cut ? `Mako stopped ${name}'s run and resumed` : "Mako resumed"} its session here; ${name} takes it as its next turn.` }
     }
     if (ready === "idle") return queue()
@@ -5810,6 +5808,31 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** What a conversation waits on the person for, by the rule its row says it with (`personWaiting`). */
   private personWaiting(conversation: string): Waiting | undefined {
     return personWaiting(this.deps.live.waitingOn(conversation), this.deps.live.workOf(conversation)?.status)
+  }
+
+  /** Saving a request confirms its place in the queue; only the live owner says whether a turn can go. */
+  private queuedDelivery(conversation: string, name: string, ready: ParentReady, why?: string): Delivered {
+    const held = this.messageHold(conversation)
+    if (held) return { delivery: "queued", hears: `${name}'s message is saved, but ${held}` }
+    if (!this.deps.live.atWork(conversation))
+      return { delivery: "queued", hears: `${name}'s message is saved; its session hasn't started the next turn.${why ? ` ${why}` : ""}` }
+    return ready === "idle"
+      ? { delivery: "turn", hears: `${name} takes it now, as its next turn.` }
+      : { delivery: "queued", hears: `${name} hears it when its current turn ends, as its next message${why ? `: ${why}` : "."}` }
+  }
+
+  /** A person's hold ahead of unsent work: a saved message is not a turn, nor the Fin's old completed task. */
+  private messageHold(conversation: string): string | undefined {
+    for (const request of this.deps.live.held(conversation)?.requests ?? []) {
+      if (request.status === "queued") return undefined
+      const hold = holdOf(request)
+      if (!hold || !keepsLine(hold)) continue
+      if (hold.kind === "edit") return "a message is paused for editing. Resume it in its Thread."
+      if (hold.kind === "sign-in") return "its account is signed out. Sign in and Resume in its Thread."
+      if (hold.kind === "paused") return "a message is paused. Resume it in its Thread."
+      return undefined
+    }
+    return undefined
   }
 
   /**
