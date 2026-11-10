@@ -16,7 +16,7 @@ import { testScratch } from "./lib/test-scratch.mjs"
  *   turn shows; back at the end, it follows again. A finger resting at the end lets it wait, and lifting catches up.
  * - The keyboard opening leaves what's read where it was, and the end in view when it was followed.
  * - Turned sideways at the end and back, the newest turn stays where the end shows it.
- * - An earlier page arriving under a dragging finger moves the line under it no more than the finger does.
+ * - An earlier page arriving under a resting finger leaves the line under it where it is.
  * - A flick makes no long tasks.
  * - On a laptop, the wheel leaves the end of a streaming answer in a short transcript and a windowed one, and the
  *   windowed one's rows aren't scrolled under it.
@@ -311,33 +311,47 @@ async function checkScroll() {
     await evaluate("window.scrollCheck.stop(), true")
 
     // 7. An earlier page arriving under a resting finger: the line under it stays.
-    await window.loadURL(`${new URL("scripts/transcript-scroll-browser.html", process.env.MAKO_SCROLL_URL).href}?turns=90&paged=12`)
+    await window.loadURL(`${new URL("scripts/transcript-scroll-browser.html", process.env.MAKO_SCROLL_URL).href}?turns=90&paged=12&answer=4000`)
     await until(`document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length >= 2`, "the paged transcript")
     await rest()
-    // Drags up until a page lands during one (the source answers 300 ms after it's asked, and its turns are placed as
-    // the reader scrolls). Past the touch slop the transcript follows the finger 1:1, so whatever the line under it
-    // moved beyond the finger's own travel, the page moved; it lifts as a cancel, so no glide.
+    // Flicked up to the top until its source is asked for a page ("Loading earlier turns…"; the turns it already holds
+    // come in first, each placed at once). The source answers 4 s later, so the glide ends and the finger lands and
+    // rests before the page does. Measured from the rest, every frame until the page is in and a second on: an
+    // emulated finger's drag isn't followed 1:1 (as much as 10 px either way over 140 px, with no write of the
+    // transcript's own), which would hide a page's move or fake one.
     const height = () => evaluate(`${scroller}.scrollHeight`)
     const first = await height()
-    let paged
-    for (let pull = 0; pull < 60 && paged === undefined; pull += 1) {
-      await touch("touchStart", centre)
-      await touch("touchMove", { x: centre.x, y: centre.y + 20 })
-      await wait(32)
-      const was = await height()
-      await markAnchor()
-      for (let step = 1; step <= 14; step += 1) {
-        await touch("touchMove", { x: centre.x, y: centre.y + 20 + step * 10 })
-        await wait(16)
-      }
-      await wait(50)
-      if ((await height()) > was) paged = (await anchorMoved()) - 140
-      await touch("touchCancel")
-      await rest()
+    const loading = () => evaluate(`Boolean(document.querySelector('[data-earlier="loading"]'))`)
+    let asking = false
+    for (let flicks = 0; flicks < 40 && !asking; flicks += 1) {
+      await flick(1_500, 6_000)
+      asking = await loading()
     }
-    assert.notEqual(paged, undefined, "an earlier page arrived under the finger")
-    assert.ok(Math.abs(paged) <= 1, `an earlier page moved the line under the finger ${Math.round(paged)} px`)
-    console.log(`Paging under a finger: the transcript grew ${first} → ${await height()} px above it, the line under it moved ${Math.abs(paged).toFixed(1)} px beyond the finger`)
+    assert.ok(asking, "the transcript asked its source for an earlier page")
+    await rest()
+    await touch("touchStart", centre)
+    await rest()
+    assert.ok(await loading(), "the page is still on its way once the finger rests")
+    const was = await height()
+    await markAnchor()
+    const paged = await evaluate(`new Promise(resolve => {
+      const node = ${scroller}
+      const until = performance.now() + 20000
+      let worst = 0, inAt
+      const step = () => {
+        const moved = window.__anchor.turn.isConnected ? window.__anchor.turn.getBoundingClientRect().top - window.__anchor.top : Infinity
+        if (Math.abs(moved) > Math.abs(worst)) worst = moved
+        if (!document.querySelector('[data-earlier="loading"]') && !node.hasAttribute('data-preserve-scroll')) inAt ??= performance.now()
+        if (inAt !== undefined && performance.now() - inAt >= 1000) return resolve(node.scrollHeight > ${was} ? worst : undefined)
+        performance.now() > until ? resolve(undefined) : requestAnimationFrame(step)
+      }
+      requestAnimationFrame(step)
+    })`)
+    await touch("touchCancel")
+    await rest()
+    assert.notEqual(paged, undefined, "an earlier page arrived under the resting finger")
+    assert.ok(Math.abs(paged) <= 1, `an earlier page moved the line under the resting finger ${Math.round(paged)} px`)
+    console.log(`Paging under a resting finger: the transcript grew ${first} → ${await height()} px above it, the line under it moved ${Math.abs(paged).toFixed(1)} px at most`)
 
     // 8. A laptop's wheel leaves the end of a streaming answer, in a short transcript and a windowed one.
     await send("Emulation.setTouchEmulationEnabled", { enabled: false })
