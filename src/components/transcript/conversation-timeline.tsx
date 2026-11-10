@@ -366,12 +366,8 @@ function wheelTakenInside(target: EventTarget, viewport: HTMLElement, deltaY: nu
   return false
 }
 
-/**
- * Moves the scroller so the captured content is where it was, and says whether
- * it had to. Content already within a pixel of its place is left alone: a
- * shift under a pixel is the layout's rounding, not the content moving.
- */
-function preserveScrollAnchor(node: HTMLDivElement, snapshot: ScrollAnchor): boolean {
+/** The offset needed to put the captured content back at its recorded place. */
+function scrollAnchorShift(node: HTMLDivElement, snapshot: ScrollAnchor): number {
   const block = snapshot.block
   const anchor = snapshot.exchangeId
     ? node.querySelector(`[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`)
@@ -389,6 +385,16 @@ function preserveScrollAnchor(node: HTMLDivElement, snapshot: ScrollAnchor): boo
   } else {
     shift = snapshot.scrollTop + (node.scrollHeight - snapshot.scrollHeight) - node.scrollTop
   }
+  return shift
+}
+
+/**
+ * Moves the scroller so the captured content is where it was, and says whether
+ * it had to. Content already within a pixel of its place is left alone: a
+ * shift under a pixel is the layout's rounding, not the content moving.
+ */
+function preserveScrollAnchor(node: HTMLDivElement, snapshot: ScrollAnchor): boolean {
+  const shift = scrollAnchorShift(node, snapshot)
   if (Math.abs(shift) < 1) return false
   node.scrollTop += shift
   return true
@@ -580,13 +586,84 @@ export function ConversationTimeline({
    * reading position, which must follow it.
    */
   const ownScrollTop = useRef<number | null>(null)
+  const correction = useRef<{ node: HTMLDivElement; anchor: ScrollAnchor; top: number; frame: number; revision: number } | null>(null)
+  const restore = useRef<ScrollAnchor | null>(null)
+  const readingAnchor = useRef<ScrollAnchor | null>(null)
+  // A correction owns the logical point until a complete layout frame agrees with it. Scroll callbacks in that
+  // interval can carry real input, but the DOM they see may still contain a remounted turn's estimated height.
+  const displaceCorrection = useCallback((node: HTMLDivElement) => {
+    const owner = correction.current
+    if (!owner) return false
+    if (owner.node !== node || owner.anchor !== (restore.current ?? readingAnchor.current)) {
+      cancelAnimationFrame(owner.frame)
+      correction.current = null
+      return false
+    }
+    // Every internal write records its actual readback in owned(). A browser clamp at a newly shorter end is also
+    // layout movement. Any other displacement belongs to the reader, even after the correction's own scrollend.
+    const end = Math.max(0, node.scrollHeight - node.clientHeight)
+    const clamped = owner.top > end && node.scrollTop === end
+    const movement = clamped ? 0 : node.scrollTop - owner.top
+    if (movement !== 0) {
+      const anchor = owner.anchor
+      const moved = { ...anchor,
+        exchangeOffset: anchor.exchangeOffset === undefined ? undefined : anchor.exchangeOffset - movement,
+        block: anchor.block ? { ...anchor.block, offset: anchor.block.offset - movement } : undefined }
+      if (restore.current === anchor) restore.current = moved
+      if (readingAnchor.current === anchor) readingAnchor.current = moved
+      owner.anchor = moved
+    }
+    owner.top = node.scrollTop
+    return true
+  }, [])
+  const settleCorrection = useCallback(function settleCorrection(): void {
+    const owner = correction.current
+    if (!owner) return
+    cancelAnimationFrame(owner.frame)
+    const revision = ++owner.revision
+    // The first frame allows the resize observers to reconcile estimates. Publication waits for the next frame,
+    // the same owner/revision, its actual scroll readback and matching anchor geometry; another write restarts it.
+    owner.frame = requestAnimationFrame(() => {
+      owner.frame = requestAnimationFrame(() => {
+        if (correction.current !== owner || owner.revision !== revision || viewport.current !== owner.node) return
+        const pendingMovement = owner.node.scrollTop !== owner.top
+        if (!displaceCorrection(owner.node)) return
+        if (pendingMovement) {
+          settleCorrection()
+          return
+        }
+        const retired = owner.anchor.exchangeId && !owner.node.querySelector(`[data-exchange="${CSS.escape(owner.anchor.exchangeId)}"]`)
+        const shift = retired ? 0 : scrollAnchorShift(owner.node, owner.anchor)
+        const end = Math.max(0, owner.node.scrollHeight - owner.node.clientHeight)
+        // A shortened document can make the old offset unattainable. Accept the browser's bound rather than
+        // repeatedly scheduling a correction it cannot apply.
+        const limited = Math.max(0, Math.min(end, owner.node.scrollTop + shift)) === owner.node.scrollTop
+        if (retired || Math.abs(shift) < 1 || limited) {
+          correction.current = null
+          // Once coherent, a long gesture may have reached another turn. Hand off to the point actually painted
+          // there; retaining an off-screen or virtualized-away anchor would pin the wrong turn through later changes.
+          if (readingAnchor.current === owner.anchor && !restore.current) {
+            readingAnchor.current = captureAnchor(owner.node, [], false)
+            reportReading.current()
+          }
+        } else followEnd.current()
+      })
+    })
+  }, [displaceCorrection])
+  useLayoutEffect(() => () => {
+    if (correction.current) cancelAnimationFrame(correction.current.frame)
+    correction.current = null
+  }, [identity])
   const owned = useCallback((node: HTMLDivElement) => {
     lastScrollTop.current = node.scrollTop
     ownScrollTop.current = node.scrollTop
+    if (correction.current?.node === node) {
+      correction.current.top = node.scrollTop
+      settleCorrection()
+    }
     if (touching.current) node.dispatchEvent(new Event(SCROLL_WRITE_EVENT, { bubbles: true }))
-  }, [])
-  const restore = useRef<ScrollAnchor | null>(null)
-  const readingAnchor = useRef<ScrollAnchor | null>(null)
+  }, [settleCorrection])
+
   const restoringReader = useRef<ScrollAnchor | null>(null)
   const pendingJump = useRef<string | null>(null)
   const readerPane = useRef(Symbol("transcript pane"))
@@ -812,6 +889,7 @@ export function ConversationTimeline({
   /** One owner preserves the captured content through every layout change. */
   const holdReader = useCallback(
     (node: HTMLDivElement) => {
+      const displaced = displaceCorrection(node)
       const snapshot = restore.current ?? readingAnchor.current
       if (
         !snapshot?.exchangeId ||
@@ -822,22 +900,30 @@ export function ConversationTimeline({
         return
       // A resize can arrive before the scroll event for this frame. Preserve
       // the reader's unreported movement as well as their place in the media.
-      const movement = userScrolling.current || scrollMotion.current || touching.current
+      const movement = !displaced && (userScrolling.current || scrollMotion.current || touching.current)
         ? node.scrollTop - lastScrollTop.current : 0
       const moved = movement === 0 ? snapshot : { ...snapshot,
         exchangeOffset: snapshot.exchangeOffset === undefined ? undefined : snapshot.exchangeOffset - movement,
         block: snapshot.block ? { ...snapshot.block, offset: snapshot.block.offset - movement } : undefined }
       // Nothing above the reader changed: the scroller is theirs, and the
       // snapshot stays measured from the last position they reported.
-      if (!preserveScrollAnchor(node, moved)) return
+      if (!preserveScrollAnchor(node, moved)) {
+        if (displaced) settleCorrection()
+        return
+      }
       if (restore.current === snapshot) restore.current = moved
       if (readingAnchor.current === snapshot) readingAnchor.current = moved
       // Replace the virtualizer's outstanding target so it cannot undo the
       // offset just restored inside the answer.
       endSeek(node)
       owned(node)
+      const owner = correction.current ?? { node, anchor: moved, top: node.scrollTop, frame: 0, revision: 0 }
+      owner.anchor = moved
+      owner.top = node.scrollTop
+      correction.current = owner
+      settleCorrection()
     },
-    [owned, endSeek]
+    [owned, endSeek, displaceCorrection, settleCorrection]
   )
   useLayoutEffect(() => {
     const before = named.current
@@ -987,15 +1073,18 @@ export function ConversationTimeline({
     if (!node) return
     topFade.current?.toggleAttribute("data-scrolled", node.scrollTop > 0.5)
     const movingUp = leftEnd(node, lastScrollTop.current)
+    const positionChanged = node.scrollTop !== lastScrollTop.current
     const movingDown = node.scrollTop > lastScrollTop.current + 0.5
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight
     const atBottom = distance < NEAR_BOTTOM
     // Layout/virtualizer adjustments are not reader intent. Keyboard input
     // participates through the same explicit input handlers below.
+    const corrected = displaceCorrection(node)
+    if (corrected && positionChanged) settleCorrection()
     lastScrollTop.current = node.scrollTop
     const ours =
       ownScrollTop.current !== null &&
-      Math.abs(node.scrollTop - ownScrollTop.current) < 1
+      node.scrollTop === ownScrollTop.current
     // A wheel that outran the scroller inside has chained on down to the transcript, and is the reader's here again.
     if (innerWheel.current && movingDown && !ours) {
       innerWheel.current = false
@@ -1012,17 +1101,20 @@ export function ConversationTimeline({
     }
     // A reader who keeps scrolling while a page is on its way moves the
     // position that page must be placed around.
-    if (awaitingEarlier.current && restore.current && !pinned.current) {
+    if (!corrected && awaitingEarlier.current && restore.current && !pinned.current) {
       const { shown, hasEarlier, head } = restore.current
       restore.current = { ...captureAnchor(node, [], hasEarlier), shown, head }
     }
+    // During correction, displace the intended point instead of adopting transient DOM geometry.
+    // A duplicate scrollend with no movement cannot supply a new reading position.
     if (
+      !corrected &&
       !pinned.current &&
       !awaitingEarlier.current &&
       !pendingJump.current &&
       !bookmarkRestore.current &&
       !restoringReader.current &&
-      (userScrolling.current || !ours || !readingAnchor.current)
+      ((!ours && positionChanged) || !readingAnchor.current)
     )
       readingAnchor.current = captureAnchor(node, [], false)
     else if (pinned.current) readingAnchor.current = null
@@ -1033,7 +1125,7 @@ export function ConversationTimeline({
     // edge observer alone stays silent while the edge never left view.
     if (userScrolling.current) wake.current()
     reportReading.current()
-  }, [settleInput])
+  }, [settleInput, displaceCorrection, settleCorrection])
 
   useEffect(() => {
     inputSettled.current = () => {
@@ -1057,7 +1149,8 @@ export function ConversationTimeline({
       if (!awaitingEarlier.current) viewport.current?.removeAttribute("data-preserve-scroll")
       pendingJump.current = null
       restoringReader.current = null
-      readingAnchor.current = viewport.current ? captureAnchor(viewport.current, [], false) : null
+      if (viewport.current && displaceCorrection(viewport.current)) settleCorrection()
+      else readingAnchor.current = viewport.current ? captureAnchor(viewport.current, [], false) : null
       userScrolling.current = true
       direction.current = event.deltaY < 0 ? "up" : "down"
       stalled.current = false
@@ -1079,7 +1172,7 @@ export function ConversationTimeline({
       if (event.deltaY < 0) wake.current()
       reportReading.current()
     },
-    [endSeek, settleInput]
+    [endSeek, settleInput, displaceCorrection, settleCorrection]
   )
 
   /** The last finger lifts: a glide may go on, and the end, if followed, is caught up with. */
@@ -1116,7 +1209,8 @@ export function ConversationTimeline({
     const node = viewport.current
     const selected = event.target instanceof Element ? readingBlockAt(event.target) : undefined
     const turn = selected?.closest("[data-exchange]")
-    readingAnchor.current = node ? selected && turn && node.contains(turn)
+    if (node && displaceCorrection(node)) settleCorrection()
+    else readingAnchor.current = node ? selected && turn && node.contains(turn)
       ? { ...captureAnchor(node, [], false, turn), block: {
           element: selected, offset: selected.getBoundingClientRect().top - node.getBoundingClientRect().top,
           preview: previewIdentity(selected),
@@ -1128,7 +1222,7 @@ export function ConversationTimeline({
     stalled.current = false
     if (!awaitingEarlier.current) restore.current = null
     reportReading.current()
-  }, [endSeek])
+  }, [endSeek, displaceCorrection, settleCorrection])
 
   useEffect(() => {
     const node = viewport.current

@@ -209,6 +209,7 @@ const reads = [
   "mako:skills-discover",
   "mako:skills-resolve",
   "mako:automations",
+  "mako:automation-context",
   "mako:external-editors",
   "mako:default-commit-prompt",
   "mako:native-requests",
@@ -300,7 +301,13 @@ const replays = [
   "mako:thread-return",
   /** `ThreadMoveTool.move`: the move is named by the caller's key, so a repeat joins it or answers how it went. */
   "mako:threads-move",
-  /** `ThreadMoveTool.answer`: the ask's id; an answered ask ignores a repeat. */
+  /** `ThreadActTool.act`: named by the caller's key, as Rename and Archive are by their operation. */
+  "mako:threads-act",
+  /** `SettingsTool.call`: a read, or a setting set to a value; asked twice, the same end state. */
+  "mako:settings-act",
+  /** `HarnessTool.act`: a repeat under its key gets the first outcome (`OnceByKey`), and after a restart an install under way refuses a second and one done is the same end state. */
+  "mako:harnesses-act",
+  /** `AgentAskGate.answer`: the ask's id; an answered ask ignores a repeat. */
   "mako:agent-ask-answer",
   /** Whether a machine has its folder for a move only reads. */
   "mako:move-ready",
