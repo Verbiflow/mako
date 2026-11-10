@@ -44,6 +44,7 @@
     "test:fin-pips-ui": "node scripts/test-fin-pips-ui.mjs",
     "test:placed-fin-ui": "node scripts/test-placed-fin-ui.mjs",
     "test:follow-ui": "node scripts/test-follow-ui.mjs",
+    "test:phone-scroll-ui": "node scripts/test-phone-scroll-ui.mjs",
     "test:side-rail-ui": "node scripts/test-side-rail-ui.mjs",
     "test:fin-transitions-ui": "node scripts/test-fin-transitions-ui.mjs",
     "test:rail-list": "tsx --no-maglev scripts/test-rail-list.ts && tsx --no-maglev scripts/test-thread-archive-targets.ts",
