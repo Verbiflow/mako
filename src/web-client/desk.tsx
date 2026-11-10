@@ -1,5 +1,6 @@
 import { useLimitContinueNotice } from "@/components/composer/account-notice"
-import { useAgentAskNotice } from "@/components/composer/agent-ask-card"
+import { useAskNotice } from "@/components/composer/agent-ask-card"
+import { askBringBack } from "./moves"
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
@@ -73,6 +74,11 @@ const RAIL_MAX = 420
  */
 const NEW_THREAD_KEYS = "mod+shift+o"
 
+/** A browser reaches a Mac through the sheet that picks it, where the desk's own window brings a Thread back itself. */
+function useWebAskNotice() {
+  return useAskNotice(askBringBack)
+}
+
 /**
  * Mako in a laptop's browser: the desktop app, drawn by the desktop's own pieces. Its title strip (the rail's header on
  * the left, without a window's traffic lights), its rail (`AgentThreads`: every Thread on the account by project, its
@@ -142,7 +148,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   // what an agent asked is answered here as on the desk.
   useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
   useEffect(() => registerNotice("limit-continue", useLimitContinueNotice, -4), [])
-  useEffect(() => registerNotice("agent-ask", useAgentAskNotice), [])
+  useEffect(() => registerNotice("agent-ask", useWebAskNotice), [])
 
   return (
     <TooltipProvider delayDuration={350}>

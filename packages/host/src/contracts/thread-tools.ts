@@ -139,10 +139,10 @@ export const THREAD_MOVE_TOOL: ThreadToolDefinition = {
       "Move this Thread to the cloud, as Move to the cloud does in the app: its worktree, branch, files and every Session in it. Call it when the person asks to continue, move or hand off this work to the cloud, or to keep it going while their Mac is closed or off. Not agents_start: a Fin is new work beside this Thread, which stays on this Mac.",
       "On full access it goes now; on other access Mako asks the person first.",
       "A Thread in its own worktree hands off: keep working, and your turn pauses here and goes on in the cloud. One in the main checkout moves onto its own branch first, once your turn ends.",
-      "A cloud Thread is brought back from its Mac (Bring it back to this Mac).",
+      "In a cloud Thread, to: back asks the person to bring it back.",
     ].join(" "),
     fields: {
-      to: "cloud. (back is Bring it back to this Mac, from a shell on that Mac.)",
+      to: "cloud, or back from a cloud Thread.",
       clientKey: "Your own key for this move: a repeat with it is the same move.",
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -228,5 +228,6 @@ export const AFTER_ACT = {
 export const AFTER_MOVE = {
   handingOff: "Mako hands this Thread to the cloud now. Keep working as you were: in a few seconds this turn pauses here, and it goes on in the cloud from where it paused, in the same worktree and branch. If your work is done, end your turn; the Thread still moves.",
   afterTurn: "This Thread is in the main checkout, so it moves onto its own branch and then to the cloud once this turn ends. Finish now: make no further edits here, tell the person it continues in the cloud, and end your turn. Its next message runs there.",
+  askedBack: "Asked the person: their answer is in a card above the composer. If they allow it, this Thread goes back to its Mac and this machine ends, so push or commit what you need kept. Until then, keep working here.",
   asked: (handsOff: boolean) => `Asked the person: their answer is in a card above the composer. If they allow it, the Thread moves to the cloud${handsOff ? "; if your turn is still running then, it pauses here and goes on there" : ", onto its own branch first, once this turn ends"}. Until then, keep working here.`,
 } as const

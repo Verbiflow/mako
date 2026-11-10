@@ -1,4 +1,5 @@
 import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
+import type { AgentAskAnswer } from "./agent-asks.js"
 import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, FileReadPurpose, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
 import type { TurnFileHunks, TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "./turn-review.js"
 import type { AuthoringApplied, AuthoringCatalog, AuthoringChange, AuthoringPlan, AuthoringTarget, AuthoringView } from "./native-authoring.js"
@@ -473,7 +474,7 @@ export function createMakoBridge(transport: BridgeTransport) {
      */
     threadMove: (conversationId: string, move: string, handOff?: ThreadHandOff) => invokeTrustedHost<ThreadMoveOutcome>("mako:thread-move", conversationId, move, handOff),
     /** What the agent of a conversation asked the person (`AgentAsk`) is answered on the host running it. */
-    answerAgentAsk: (conversationId: string, id: string, allow: boolean) => invokeTrustedHost<void>("mako:agent-ask-answer", conversationId, id, allow),
+    answerAgentAsk: (conversationId: string, id: string, allow: boolean) => invokeTrustedHost<AgentAskAnswer>("mako:agent-ask-answer", conversationId, id, allow),
     /** What the Thread of a conversation's harnesses here and in the cloud mean for moving it either way, before it moves. */
     threadHarnessCheck: (conversationId: string) => invokeTrustedHost<ThreadHarnessCheck>("mako:thread-harness-check", conversationId),
     /** This Mac's Threads whose agents are working, each with why it couldn't go to the cloud now, if it couldn't. */

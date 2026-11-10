@@ -26,6 +26,7 @@ import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
 import { agentAskCard } from "@/state/agent-asks"
 import { runChoice, wantLine, type AskChoice } from "@/lib/ask-card"
+import { askBringBack } from "./moves"
 import { shallowEqual } from "@/state/store"
 import { record, type AnsweredRecord } from "./answered"
 import { Composer, type EditingQueued, type Outgoing, type Steering } from "./composer"
@@ -355,7 +356,8 @@ function primaryOption(options: LivePermissionRequest["options"]): string | unde
 
 /** What the agent asked through Mako's tools, in the desk's words; the answer goes to the conversation's owner. */
 function AgentAskCard({ ask, conversation, harness }: { ask: AgentAsk; conversation: string; harness: string }) {
-  const card = agentAskCard(conversation, ask, harness)
+  // Its machine can't reach the Mac: allowing it to come back is the person's Bring it back, on the sheet that picks the Mac.
+  const card = agentAskCard(conversation, ask, harness, askBringBack)
   const [chosen, setChosen] = useState<string | undefined>(undefined)
   const choose = (choice: AskChoice) => {
     if (chosen !== undefined) return

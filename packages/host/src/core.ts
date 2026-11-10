@@ -1094,7 +1094,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   late.agentAsks = new AgentAskGate(live.asks)
   // The same three moves for an agent's `thread_move` and `mako thread move`: its own Thread, or the person's named one.
   // An agent's ask is answered on the path a harness's approval is, by whoever answers: one answer for each.
-  live.asks.answering = async (conversation, ask, allow) => late.agentAsks?.answer(conversation, ask, allow)
+  live.asks.answering = async (conversation, ask, allow) => { await late.agentAsks?.answer(conversation, ask, allow) }
   late.threadMoves = new ThreadMoveTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
     place: (id) => {
@@ -1150,6 +1150,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     harness: async (_id, want) => late.harnessTool?.allowed(want.action, want.harness),
     setting: async (_id, want) => void (await late.settingsTool?.run(want.setting)),
     move: (id, want) => late.threadMoves?.allowed(id, want),
+    back: (id) => late.threadMoves?.allowedBack(id),
     rename: async (id, want) => void (await late.threadActs?.run(id, want)),
     archive: async (id, want) => void (await late.threadActs?.run(id, want)),
     restore: async (id, want) => void (await late.threadActs?.run(id, want)),

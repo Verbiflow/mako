@@ -98,7 +98,10 @@ const CHILDREN: ChildFixture[] = ([
  * `&fins=limit`: the tree on 2026-11-05, as the host says it. Cursor ran out: three of its Fins moved to Claude Code,
  * one had nowhere to go and stopped with its work unfinished, and the first moved carries the tree's one notice.
  */
-/** `&ask=move`: the Apex's own agent asks, below full access, to move its Thread; `&ask=fin`: its Fin "Dictation fallback" does, which goes to the Apex first (`test-agent-ask-ui.mjs`). */
+/**
+ * `&ask=move` or `&ask=back`: the Apex's own agent asks, below full access, to move its Thread or bring it back;
+ * `&ask=fin`: its Fin "Dictation fallback" does, which goes to the Apex first (`test-agent-ask-ui.mjs`).
+ */
 const ASK_SCENE = new URLSearchParams(globalThis.location?.search).get("ask")
 const LIMIT_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "limit"
 const LIMIT_UNTIL = "Sun 12:00 AM PST"
@@ -464,7 +467,7 @@ export function apexSnapshot(): LiveSnapshot {
       merges: [],
       transfers: [],
       actions: [],
-      ...(ASK_SCENE === "move" && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a5", at: STARTED, want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a6", handsOff: true } }] }),
+      ...((ASK_SCENE === "move" || ASK_SCENE === "back") && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a5", at: STARTED, want: ASK_SCENE === "back" ? { kind: "back" as const } : { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a6", handsOff: true } }] }),
     },
     nativeAgents: { agents: apexFins(), limited: false },
   }
