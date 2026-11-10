@@ -457,12 +457,16 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
   const covers = windowStart(acpStore.get().conversations[id])
   // The current host's word, asked for because a reply couldn't be placed: taken, whatever its start.
   const fresh = freshReads.delete(id)
+  const since = readsSince()
   const read = readGoesOut(id)
   const fetch = readLiveSnapshot(id, true)
     .then((snapshot) => {
       restored = true
+      // Its canonical answer may name another conversation. Weigh that conversation's retirement before settling
+      // the requested read: settling the last read clears the record of what was unlisted while it was out.
+      const unlisted = snapshot && !("kind" in snapshot) && unlistedSince(snapshot.session.id, since)
       // Taken newer meanwhile, held still or not (let go of, or no longer listed): that's newer than what it says.
-      if (readAnswered(id, read, snapshot && !("kind" in snapshot) ? snapshot : null, fresh)) {
+      if (readAnswered(id, read, snapshot && !("kind" in snapshot) ? snapshot : null, fresh) || unlisted) {
         if (!acpStore.get().conversations[id]) pending.delete(id)
         restoredLive(id)
         if (acpStore.get().activeKey === id && !acpStore.get().conversations[id]?.hydrated) rereadLive(id)
