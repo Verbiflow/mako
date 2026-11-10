@@ -5,6 +5,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
 import { atSize, withMotion } from "./lib/test-window.mjs"
+import { crewEvidencePlugin, CREW_EVIDENCE_PRELOAD, withCrewFailureEvidence, saveCrewInteraction } from "./lib/crew-card-evidence.mjs"
 
 // The crew card (`crew-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
 // its own turn settles and its Fins still work, on the mock bridge's Apex scene (`?mock&app=apex`): every Fin
@@ -34,6 +35,7 @@ if (process.versions.electron) {
     const { createServer } = await import("vite")
     server = await createServer({
       cacheDir: join(root, "cache"),
+      plugins: [crewEvidencePlugin()],
       server: {
         host: "127.0.0.1",
         port: 0,
@@ -103,7 +105,7 @@ window.__benchReset = () => (tally = { commits: 0, components: {} })
 async function check() {
   const { app, BrowserWindow } = await import("electron")
   const root = process.env.MAKO_CREW_UI_ROOT
-  const shots = process.env.MAKO_CREW_UI_SHOTS ?? join(root, "shots")
+  const shots = process.env.MAKO_CREW_UI_SHOTS ?? (process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "crew-card") : join(root, "shots"))
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
@@ -111,7 +113,7 @@ async function check() {
   await app.whenReady()
   const base = process.env.MAKO_CREW_UI_URL
   const preload = join(root, "commit-counter.cjs")
-  await writeFile(preload, COMMIT_COUNTER)
+  await writeFile(preload, COMMIT_COUNTER + CREW_EVIDENCE_PRELOAD)
 
   const window = new BrowserWindow({
     width: 1440,
@@ -126,6 +128,11 @@ async function check() {
   })
   atSize(window, 1440, 900)
   const page = window.webContents
+  await withCrewFailureEvidence({ page, shots }, () => checkPage({ window, page, shots, base }))
+  app.exit(0)
+}
+
+async function checkPage({ window, page, shots, base }) {
   const errors = []
   page.on("console-message", (event) => {
     if (event.level === "error") errors.push(event.message)
@@ -163,9 +170,9 @@ async function check() {
     await capture(`${name}-light`)
     await theme(false)
   }
-  const click = (selector) =>
+  const click = (selector, evidence = false) =>
     evaluate(
-      `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true })()`
+      `(() => { const probe = ${evidence} ? window.__crewEvidence : undefined; probe?.begin(); try { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true } finally { probe?.post() } })()`
     )
   // The card virtualizes past its own height, so a row off screen isn't in the DOM yet: scroll its own scroller
   // top to bottom, a screenful at a time, collecting every row once, in the order it comes into view (the order
@@ -348,11 +355,12 @@ async function check() {
     "[...document.querySelectorAll('[data-sonner-toast]')].forEach((toast) => toast.remove()); true"
   )
   await both("away")
-  await click("[data-crew-away]")
+  assert.equal(await click("[data-crew-away]", true), true, "the crew-away click target exists at dispatch")
   await until(
     "!document.querySelector('[data-crew-away]')",
     "the line leaves once Needs you is back in view"
   )
+  await saveCrewInteraction({ page, shots })
 
   // Working: the current step, time run; the Fin asking its own Apex says so with a turned-back arrow.
   const working = rows12.filter((row) => row.group === "working")
@@ -718,5 +726,4 @@ async function check() {
   console.log(
     "Crew card UI: header, order, needs/working/done rows, answers moving everywhere, forty Fins, re-render discipline, and the phone passed"
   )
-  app.exit(0)
 }
