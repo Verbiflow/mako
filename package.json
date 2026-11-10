@@ -297,7 +297,7 @@
     "test:agents-doors": "npm run -s build --workspace @mako/client && tsx scripts/test-agents-doors.ts",
     "test:agents-migrate": "tsx scripts/test-agents-migrate.ts",
     "test:agents-cli": "npm run -s build --workspace @mako/client && tsx scripts/test-agents-cli.ts",
-    "test:thread-move-tool": "npm run -s build --workspace @mako/client && tsx scripts/test-thread-move-tool.ts && tsx --tsconfig tsconfig.app.json scripts/test-back-ask.ts",
+    "test:thread-move-tool": "npm run -s build --workspace @mako/client && tsx scripts/test-thread-move-tool.ts && tsx --tsconfig tsconfig.app.json scripts/test-back-ask.ts && tsx scripts/test-move-diagnostics.ts",
     "test:thread-act-tool": "tsx scripts/test-thread-act-tool.ts && tsx scripts/test-automation-approval.ts && tsx scripts/test-automation-workspace.ts",
     "test:orch-update": "tsx scripts/test-orch-update.ts",
     "test:orch-crash": "tsx scripts/test-orch-crash.ts",
