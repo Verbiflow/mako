@@ -304,8 +304,8 @@ export class LiveMoves {
     return residents
   }
 
-  /** What keeps this Session's provider from pausing now, as a predicate after its name; undefined when nothing does. */
-  busy(resident: Resident): string | undefined {
+  /** What holds a Thread's departure, or just its provider's pause for a local relocation. */
+  busy(resident: Resident, scope: "thread" | "provider" = "thread"): string | undefined {
     const { snapshot } = resident
     const control = this.access.control(resident)
     if (resident.opening || resident.waking) return "is starting"
@@ -321,7 +321,7 @@ export class LiveMoves {
     if (snapshot.session.backgroundTasks) return "has background tasks running"
     const busy = (snapshot.nativeAgents?.agents ?? []).filter(isBusyNativeAgent)
     if (busy.some(isProviderWork)) return "has subagents running"
-    if (busy.length) return "has background agents running on this device"
+    if (scope === "thread" && busy.length) return "has background agents running on this device"
     if (resident.driver && !resident.hibernating && !this.access.canHibernate(resident)) {
       // A session opens again from its record: one that never finished a turn (its first failed) has none yet.
       const binding = snapshot.control?.bindings.find((each) => each.id === snapshot.control?.activeBindingId)
