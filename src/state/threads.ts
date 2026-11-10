@@ -1,7 +1,7 @@
 import type { HarnessDescriptor } from "@/lib/types"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
-import { listedAsThread, threadList } from "@mako/host/contracts/thread-list"
+import { internalReviewSession, listedAsThread, sameNativeSession, threadList } from "@mako/host/contracts/thread-list"
 import { toast } from "sonner"
 import type { ExternalThreadActivity, ThreadRef } from "@/lib/types"
 import {
@@ -30,9 +30,10 @@ import { setComposerHarness } from "@/state/thread-tuning"
 import {
   applyThreadEntries,
   rememberThread,
+  retireInternalReview,
   threadViewingActions,
 } from "@/state/thread-viewing"
-import { threadsStore, useThreads } from "@/state/thread-store"
+import { nativeSessionRefs, threadsStore, useThreads } from "@/state/thread-store"
 import { followThreadMoves } from "@/state/thread-moves"
 import { noteOutcome, noticeId, retireNotice, retireSubject } from "@/state/notifications"
 import { offerWindowRenames } from "@/state/thread-titles"
@@ -88,6 +89,14 @@ function noteHelpers(list: readonly ThreadRef[]): void {
 }
 
 export function applyThreadRef(ref: ThreadRef) {
+  ref = nativeSessionRefs.observe(ref)
+  if (retireInternalReview(ref)) {
+    if (nativeSessionRefs.owns(ref)) noteHelpers([ref])
+    const current = threadsStore.get().threads
+    if (current.some(candidate => sameNativeSession(nativeSessionRefs.classify(candidate), ref)))
+      applyThreads(current.filter(candidate => !sameNativeSession(nativeSessionRefs.classify(candidate), ref)))
+    return
+  }
   noteHelpers([ref])
   if (helpers.has(ref.path)) {
     clearObserved(ref.path)
@@ -124,8 +133,8 @@ export function applyThreadRef(ref: ThreadRef) {
 /** A Session still opening, or whose last read failed, is described by its newest row too: the composer reads where it works from this ref. */
 function followViewedRef(ref: ThreadRef): void {
   const { viewing, opening } = threadsStore.get()
-  if (opening?.ref.path === ref.path) threadsStore.set({ opening: { ...opening, ref } })
-  if (viewing?.ref.path === ref.path) {
+  if (opening?.ref.path === ref.path && sameNativeSession(opening.ref, ref)) threadsStore.set({ opening: { ...opening, ref } })
+  if (viewing?.ref.path === ref.path && sameNativeSession(viewing.ref, ref)) {
     const updated = { ...viewing, ref }
     threadsStore.set({ viewing: updated })
     rememberThread(updated)
@@ -208,8 +217,15 @@ export function applyThreadRemoved(path: string) {
 export function applyThreads(list: ThreadRef[], loaded = true) {
   const { threads: previous, loaded: wasLoaded } = threadsStore.get()
   const initialHydration = loaded && !wasLoaded
-  noteHelpers(list)
-  const unique = threadList(list)
+  const observed = list.map(ref => nativeSessionRefs.observe(ref))
+  for (const ref of observed) retireInternalReview(ref)
+  const previousByPath = new Map(previous.map(ref => [ref.path, ref]))
+  const candidates = observed.map(ref => {
+    const held = nativeSessionRefs.version(ref.path)?.ref ?? previousByPath.get(ref.path)
+    return internalReviewSession(ref) && held && !sameNativeSession(held, ref) ? held : ref
+  })
+  noteHelpers(candidates)
+  const unique = threadList(candidates)
   threadsStore.set({ threads: unique, loaded })
   followThreadMoves(previous, unique)
   offerWindowRenames(unique)
