@@ -84,6 +84,8 @@ const WORDS: readonly { tool: string; args: ToolArguments; answer?: string; labe
   { tool: "port_holder", args: { port: 5173 }, label: "Check port 5173", running: "Checking port 5173", done: "Checked port 5173" },
   { tool: "thread_move", args: { to: "cloud" }, label: "Move this Thread to the cloud", running: "Moving this Thread to the cloud", done: "Moved this Thread to the cloud" },
   { tool: "thread", args: { action: "rename", title: "Ship the importer" }, label: "Rename this Thread to Ship the importer", running: "Renaming this Thread to Ship the importer", done: "Renamed this Thread to Ship the importer" },
+  { tool: "automation", args: { action: "list" }, label: "List the automations", running: "Listing the automations", done: "Listed the automations" },
+  { tool: "automation", args: { action: "run", id: "nightly" }, label: "Run the automation nightly", running: "Running the automation nightly", done: "Ran the automation nightly" },
   { tool: "harness", args: { action: "install", harness: "codex" }, label: "Install codex", running: "Installing codex", done: "Installed codex" },
   { tool: "harness", args: { action: "read" }, label: "Read the harnesses' versions", running: "Reading the harnesses' versions", done: "Read the harnesses' versions" },
   { tool: "settings", args: { action: "read" }, label: "Read Settings", running: "Reading Settings", done: "Read Settings" },

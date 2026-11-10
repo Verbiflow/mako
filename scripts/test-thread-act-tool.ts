@@ -6,10 +6,10 @@ import type { AgentAsk } from "@mako/host/contracts/agent-asks"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { agentAskLine, agentAskWords } from "@mako/host/contracts/agent-asks"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
-import { HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
-import { AgentAskGate, HarnessTool, registerThreadTools, SettingsTool, ThreadActTool, ThreadMoveAnswerSchema } from "@mako/host/conversations"
+import { AUTOMATION_TOOL, HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
+import { AgentAskGate, AutomationTool, HarnessTool, registerThreadTools, SettingsTool, ThreadActTool, ThreadMoveAnswerSchema } from "@mako/host/conversations"
 import { z } from "zod"
-import { harnessInput, settingsInput, threadActInput } from "../packages/client/src/thread"
+import { automationInput, harnessInput, settingsInput, threadActInput } from "../packages/client/src/thread"
 
 /** `thread`: Rename, Archive and Restore through the host calls the app's menu makes, asking below full access. */
 const agent = (session: string) => ({ kind: "agent" as const, session })
@@ -393,6 +393,84 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
   assert.ok(HARNESS_TOOL.mcp.description.length < 700, "its description stays short")
 }
 
+{
+  // `automation`: a list at any access; Run now and the switch through Settings' calls, asked below full access.
+  const calls: unknown[][] = []
+  const kept = new Map<string, AgentAsk[]>()
+  const gate = new AgentAskGate({
+    open: (id) => kept.get(id) ?? [],
+    raise: (id, ask) => void kept.set(id, [...(kept.get(id) ?? []), ask]),
+    settle: (id, ask) => {
+      const found = kept.get(id)?.find((each) => each.id === ask)
+      if (found) kept.set(id, (kept.get(id) ?? []).filter((each) => each !== found))
+      return found
+    },
+  })
+  let tier: "full" | "auto" = "auto"
+  let runAnswer: JsonValue = { status: "completed" }
+  // Whether the switch can turn on: a trigger Mako can't run here stays off.
+  let switches = true
+  const tool = new AutomationTool({
+    conversationOf: (session) => (session === "s-mine" ? "mine" : undefined),
+    tier: () => tier,
+    invoke: async (channel, args) => {
+      calls.push([channel, ...args])
+      if (channel === "mako:automation-context") return { cwd: "/fixture/workspace", automations: [{ id: "nightly" }] }
+      if (channel === "mako:run-automation") return runAnswer
+      if (channel === "mako:automation-enabled") return [{ id: "nightly", enabled: args[1] === true && switches }]
+      return channel === "mako:automations" ? [{ id: "nightly" }] : []
+    },
+    gate,
+  })
+  gate.runs = { automation: (id, want, ask) => tool.allowed(id, want, ask) }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "list", clientKey: "a1" }), { outcome: "listed", automations: [{ id: "nightly" }] })
+  const asked = await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "a2" })
+  assert.equal("outcome" in asked && asked.outcome, "asked")
+  assert.ok(calls.every(([channel]) => channel === "mako:automations" || channel === "mako:automation-context"), "nothing ran on the agent's word alone")
+  await gate.answer("mine", "ask" in asked ? asked.ask : "", true)
+  assert.deepEqual(calls.at(-1), ["mako:run-automation", "nightly", JSON.stringify(["mine", "ask" in asked ? asked.ask : ""]), "/fixture/workspace"])
+  tier = "full"
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "off", id: "nightly", clientKey: "a3" }), { outcome: "done", action: "off", id: "nightly" })
+  assert.deepEqual(calls.at(-1), ["mako:automation-enabled", "nightly", false, "/fixture/workspace"])
+  // A launch that failed, or a run that never began, is said: Run now answers with how it went.
+  runAnswer = { status: "failed", error: "No harness can run it" }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "a4" }), { refused: "failed", why: "No harness can run it" })
+  runAnswer = { status: "not-run", why: "It's running already." }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "a5" }), { refused: "failed", why: "It's running already." })
+  runAnswer = { status: "completed" }
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "a6" }), { outcome: "done", action: "run", id: "nightly" })
+  assert.equal(await tool.act(agent("s-mine"), { action: "on", clientKey: "a7" }).then((answer) => "refused" in answer && answer.refused), "no-automation")
+  assert.equal(await tool.act(agent("s-mine"), { action: "run", id: "gone", clientKey: "a8" }).then((answer) => "refused" in answer && answer.refused), "no-automation", "a run of nothing never says done")
+  // A replay under one key gets the first outcome and launches nothing, however long ago it finished.
+  const runs = () => calls.filter(([channel]) => channel === "mako:run-automation").length
+  const launched = runs()
+  const once = await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "again" })
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "again" }), once)
+  assert.equal(runs(), launched + 1, "the same key runs it once")
+  // The switch says what it did: a trigger Mako can't run here stays off.
+  switches = false
+  assert.deepEqual(await tool.act(agent("s-mine"), { action: "on", id: "nightly", clientKey: "slack" }), { refused: "failed", why: "This automation's trigger can't run here, so it stays off." })
+  switches = true
+  // Allowed below full access, a failure reaches the person's answer instead of passing as done.
+  tier = "auto"
+  runAnswer = { status: "failed", error: "No harness can run it" }
+  const failing = await tool.act(agent("s-mine"), { action: "run", id: "nightly", clientKey: "allowed" })
+  const original = structuredClone(gate.open("mine"))
+  await assert.rejects(gate.answer("mine", "ask" in failing ? failing.ask : "", true), /No harness/)
+  assert.deepEqual(gate.open("mine"), original, "a returned automation failure keeps its exact ask")
+  runAnswer = { status: "completed" }
+  const attempts = runs()
+  await Promise.all([gate.answer("mine", "ask" in failing ? failing.ask : "", true), gate.answer("mine", "ask" in failing ? failing.ask : "", true)])
+  assert.equal(runs(), attempts + 1, "matching explicit retries launch once")
+  await gate.answer("mine", "ask" in failing ? failing.ask : "", true)
+  assert.equal(runs(), attempts + 1, "a successful duplicate launches nothing")
+  assert.deepEqual(gate.open("mine"), [])
+  tier = "full"
+  assert.equal(hostCallReplay(AUTOMATION_TOOL.channel), AUTOMATION_TOOL.replay)
+  assert.ok(AUTOMATION_TOOL.mcp.description.length < 700, "its description stays short")
+}
+
+assert.deepEqual({ ...automationInput(["automation", "on", "nightly", "--key", "k"]) }, { action: "on", clientKey: "k", id: "nightly" })
 assert.deepEqual({ ...harnessInput(["harness", "update", "codex", "--key", "k"]) }, { action: "update", harness: "codex", clientKey: "k" })
 assert.deepEqual({ ...harnessInput(["harness", "read", "--key", "k"]) }, { action: "read", clientKey: "k" })
 

@@ -33,6 +33,8 @@ export const AgentAskWantSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("setting"), setting: SettingSchema }),
   /** Install or Update in Settings › Harnesses: software on the person's machine. */
   z.object({ kind: z.literal("harness"), action: z.enum(["install", "update"]), harness: z.string() }),
+  /** Run now, or the switch, on an automation. */
+  z.object({ kind: z.literal("automation"), action: z.enum(["run", "on", "off"]), id: z.string(), cwd: z.string().min(1).optional() }),
 ])
 export type AgentAskWant = z.infer<typeof AgentAskWantSchema>
 
@@ -58,6 +60,8 @@ export function agentAskLine(want: AgentAskWant): string {
       return settingLine(want.setting)
     case "harness":
       return `Wants to ${want.action} ${want.harness}`
+    case "automation":
+      return want.action === "run" ? `Wants to run the automation ${want.id}` : `Wants to turn ${want.action} the automation ${want.id}`
   }
 }
 
@@ -106,6 +110,14 @@ export function agentAskWords(want: AgentAskWant, name: string): AgentAskWords {
       return { title, description: "out of the list", detail: "It leaves the list, and a turn still running stops. Restore brings it back.", allow: "Archive", keep: "Keep it" }
     case "setting":
       return { title, description: "in Settings", detail: "It changes this setting for every Thread on this Mac. You can change it back in Settings.", allow: "Change it", keep: "Leave it" }
+    case "automation":
+      return {
+        title,
+        description: "in Automations",
+        detail: want.action === "run" ? "It starts the automation's agent now, as Run now does." : "It changes whether this automation runs by itself.",
+        allow: want.action === "run" ? "Run now" : want.action === "on" ? "Turn on" : "Turn off",
+        keep: "Not now",
+      }
     case "harness":
       return {
         title,

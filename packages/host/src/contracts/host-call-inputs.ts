@@ -732,8 +732,45 @@ const inputs = {
       ]),
     ]),
   "mako:appshot-windows": () => z.tuple([]),
-  "mako:automation-enabled": () => z.tuple([z.string(), z.boolean()]),
+  "mako:automation-context": () => z.tuple([]),
+  "mako:automation-enabled": () =>
+    z.tuple([z.string(), z.boolean(), z.string().optional()]),
   "mako:automations": () => z.tuple([]),
+  "mako:automations-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        action: z.union([
+          z.literal("run"),
+          z.literal("off"),
+          z.literal("on"),
+          z.literal("list"),
+        ]),
+        id: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:boot": () => z.tuple([]),
   "mako:browser-control-connect": () => z.tuple([z.string()]),
   "mako:browser-control-disconnect": () => z.tuple([z.string()]),
@@ -2326,7 +2363,8 @@ const inputs = {
   "mako:restore-version": () => z.tuple([z.string(), z.number()]),
   "mako:reveal": () => z.tuple([z.string()]),
   "mako:reveal-plugins": () => z.tuple([]),
-  "mako:run-automation": () => z.tuple([z.string()]),
+  "mako:run-automation": () =>
+    z.tuple([z.string(), z.string().optional(), z.string().optional()]),
   "mako:run-command": () => z.tuple([z.string(), z.string().optional()]),
   "mako:save-automations": () =>
     z.tuple([
@@ -3233,8 +3271,10 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:appshot-capture", "control"],
   ["mako:appshot-front", "control"],
   ["mako:appshot-windows", "control"],
+  ["mako:automation-context", "workspaces"],
   ["mako:automation-enabled", "workspaces"],
   ["mako:automations", "workspaces"],
+  ["mako:automations-act", "conversations"],
   ["mako:boot", "workspaces"],
   ["mako:browser-control-connect", "control"],
   ["mako:browser-control-disconnect", "control"],
