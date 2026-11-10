@@ -48,6 +48,7 @@ const SUITES = [
   "test:composer-edges-ui",
   "test:agent-ask-ui",
   "test:ci-downloads",
+  "test:internal-review-ui",
 ]
 /** Past this a suite has hung: the slowest here takes about 4 minutes on a Mac at load 15. */
 const SUITE_MS = 20 * 60_000

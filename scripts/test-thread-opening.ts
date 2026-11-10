@@ -182,11 +182,11 @@ for (const harness of registeredHarnessIds()) {
 // or an endless recovery loop. Keep the old readable history and expose retry.
 const changingRef = threadsStore.get().viewing!.ref
 const retained = threadsStore.get().viewing!
-threadsStore.set({ viewing: { ...retained, loadingEarlier: true } })
+threadsStore.set({ viewing: { ...retained, loadingEarlier: Symbol("earlier history fixture") } })
 pending.delete(changingRef.path)
 const changing = recoverThreadReader(changingRef.path)
 const followsBeforeChanging = follows.length
-assert.equal(threadsStore.get().viewing?.loadingEarlier, false)
+assert.equal(Boolean(threadsStore.get().viewing?.loadingEarlier), false)
 for (let attempt = 0; attempt < 3; attempt++) {
   await waitFor(changingRef.path)
   const tail = pending.get(changingRef.path)!
