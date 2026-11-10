@@ -9,6 +9,11 @@ The shared AST predicate accepts only its single raw `input` parameter and
 its direct lexical, recursive `const copy(value, depth)` arrow's raw `value`
 parameter. That helper must return the same named contract. Only its existing
 strict primitive, container, array-length and own-key classifications qualify.
+Operands must resolve to the exact raw parameter or the helper's one approved
+const length / direct for-of key declaration. Block, catch, destructuring and
+nested-loop shadows get no permission from their spelling. Multiple candidate
+classifier declarations fail closed. This identifies lexical declaration roles;
+it is not a dataflow or decoder-safety proof.
 Nested callbacks, sibling/moved helpers, method signatures and unknown returns
 receive no inherited exception. The literal `cause` parameter and optional
 type-guard policy retain their previous behavior.

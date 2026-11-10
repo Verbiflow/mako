@@ -31,7 +31,33 @@ const typeofCode = "anti-slop(no-runtime-typeof)"
 const unknownReturn = "anti-slop(no-unknown-returns)"
 const counts = (inputs = 0, classifications = 0, returns = 0) => ({ [unknown]: inputs, [typeofCode]: classifications, [unknownReturn]: returns })
 const addInside = source => decoder.replace('    if (depth > 0)', `${source}\n    if (depth > 0)`)
+const canonical = await readFile(join(root, module), "utf8")
+const addCanonical = source => canonical.replace('    return output\n  }', `${source}\n    return output\n  }`)
 const cases = [
+  { name: "canonical block length shadow", source: addCanonical('    { const length = 1; if (typeof length === "number") return null }'), expected: counts(0, 1) },
+  { name: "canonical nested loop key shadow", source: addCanonical('    { for (const key of []) if (typeof key === "string") return null }'), expected: counts(0, 1) },
+  { name: "canonical catch value shadow", source: addCanonical('    try { throw null } catch (value) { if (typeof value === "object") return null }'), expected: counts(0, 1) },
+  { name: "canonical destructured length shadow", source: addCanonical('    { const [length] = [1]; if (typeof length === "number") return null }'), expected: counts(0, 1) },
+  { name: "canonical ambiguous length roles fail closed", source: addCanonical('    const length = 1; if (typeof length === "number") return null'), expected: counts(0, 2) },
+
+  // These three controls are unchanged from the independent review fixture.
+  { name: "block shadow of raw value", source: addInside('    { const value = {}; if (typeof value === "object") return null }'), expected: counts(0, 1) },
+  { name: "catch shadow of raw value", source: addInside('    try { throw null } catch (value) { if (typeof value === "object") return null }'), expected: counts(0, 1) },
+  { name: "nested shadow of own key", source: addInside('    { const key = "unrelated"; if (typeof key === "string") return null }'), expected: counts(0, 1) },
+  { name: "block shadow of length", source: addInside('    { const length = 1; if (typeof length === "number") return null }'), expected: counts(0, 1) },
+  { name: "nested for-of key", source: addInside('    { for (const key of []) if (typeof key === "string") return null }'), expected: counts(0, 1) },
+  { name: "nested key loop inside approved loop", source: decoder.replace('if (typeof key !== "string") throw new Error("bad-input")', '{ if (typeof key !== "string") throw new Error("bad-input"); for (const key of []) if (typeof key === "string") return null }'), expected: counts(0, 1) },
+  { name: "catch shadow of length", source: addInside('    try { throw 1 } catch (length) { if (typeof length === "number") return null }'), expected: counts(0, 1) },
+  { name: "catch shadow of key", source: addInside('    try { throw "x" } catch (key) { if (typeof key === "string") return null }'), expected: counts(0, 1) },
+  { name: "destructured value binding", source: addInside('    { const { value } = { value: "x" }; if (typeof value === "string") return null }'), expected: counts(0, 1) },
+  { name: "destructured key binding", source: addInside('    { const { key } = { key: "x" }; if (typeof key === "string") return null }'), expected: counts(0, 1) },
+  { name: "destructured catch value", source: addInside('    try { throw { value: "x" } } catch ({ value }) { if (typeof value === "string") return null }'), expected: counts(0, 1) },
+  { name: "for-of raw parameter shadow", source: addInside('    for (const value of []) if (typeof value === "object") return null'), expected: counts(0, 1) },
+  { name: "nested length loop", source: addInside('    for (const length of []) if (typeof length === "number") return null'), expected: counts(0, 1) },
+  { name: "unresolved length", source: decoder.replace("const length = 0", "const otherLength = 0"), expected: counts(0, 1) },
+  { name: "unresolved key", source: decoder.replace("const key of []", "const otherKey of []"), expected: counts(0, 1) },
+  { name: "ambiguous key roles fail closed", source: addInside('    for (const key of []) if (typeof key === "string") return null'), expected: counts(0, 2) },
+
   { name: "exact exported decoder and recursive helper", source: decoder, expected: counts() },
   { name: "actual canonical source", source: await readFile(join(root, module), "utf8"), expected: counts() },
   { name: "same names elsewhere", file: "packages/protocol/src/other.ts", source: decoder, expected: counts(2, 6) },
