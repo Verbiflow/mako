@@ -3,10 +3,10 @@ import { test } from "node:test"
 import { randomUUID } from "node:crypto"
 import { ProjectManifestSchema, SlotRequestSchema, ReadyReceiptSchema, plainProtocolValue, readCapableRole } from "../dist/handoff-project.js"
 function manifest() {
-  return { version: 2, move: randomUUID(), sourceThread: randomUUID(), destination: "t-test", project: "/Users/offline/project",
+  return { version: 2, move: randomUUID(), sourceThread: randomUUID(), destination: "t-test", project: "/Users/fixture/project",
     sessions: [{ session: randomUUID(), ownershipGeneration: 7 }], slots: [
-      { slot: "primary", kind: "primary", url: "https://github.com/Owner/Primary", repositoryId: "R1", path: "/Users/offline/project/primary", checkpoint: "a".repeat(64) },
-      { slot: "secondary", kind: "secondary", url: "https://github.com/Owner/Secondary", repositoryId: "R2", path: "/Users/offline/project/secondary", checkpoint: "b".repeat(64) }] }
+      { slot: "primary", kind: "primary", url: "https://github.com/Owner/Primary", repositoryId: "R1", path: "/Users/fixture/project/primary", checkpoint: "a".repeat(64) },
+      { slot: "secondary", kind: "secondary", url: "https://github.com/Owner/Secondary", repositoryId: "REPO_SECONDARY", path: "/Users/fixture/project/secondary", checkpoint: "b".repeat(64) }] }
 }
 test("schema canonicalizes registry order and GitHub case", () => { const m = manifest(); m.slots.reverse(); const parsed = ProjectManifestSchema.parse(m); assert.equal(parsed.slots[0].slot, "primary"); assert.equal(parsed.slots[0].url, "https://github.com/owner/primary") })
 for (const url of ["https://github.com:443/O/R", "https://github.com/O/R?x", "https://github.com/O/%52", "https://other.invalid/O/R", "https://github.com/O/R.git"]) test("repository aliases/redirect targets refused: " + url, () => { const m = manifest(); m.slots[1].url = url; assert.equal(ProjectManifestSchema.safeParse(m).success, false) })

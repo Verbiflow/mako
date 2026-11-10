@@ -14,7 +14,7 @@ for (const scenario of ["source-read-failure", "unknown-publish", "unknown-cance
   const threads = new ThreadStore(join(root, "host.sqlite"), { self: { kind: "device", device }, realPath: path => path })
   try {
     const conversationId = randomUUID(), placed = threads.registerJournal({ conversationId, harness: "codex", createdAt: Date.now(), bindings: [] }, { kind: "service", name: "workspace" })
-    const project = "/Users/offline/selected", source = "/Users/offline/source", move = randomUUID()
+    const project = "/Users/fixture/selected", source = "/Users/fixture/source", move = randomUUID()
     threads.attachWorktree({ path: project, thread: placed.thread, repoRoot: source, project: source, branch: "mako/test", base: "a".repeat(40) }, [{ path: project + "/primary", repoRoot: source + "/primary", base: "a".repeat(40) }, { path: project + "/secondary", repoRoot: source + "/secondary", base: "a".repeat(40) }])
     const plan = { move, thread: placed.thread, asked: conversationId, cloudThread: "t-selected", phase: "preparing", project, folder: project + "/primary", repository: { url: "https://github.com/owner/primary" }, checkpoint: { sha256: "a".repeat(64) }, others: [{ path: project + "/secondary", url: "https://github.com/owner/secondary", checkpoint: { sha256: "b".repeat(64) } }], sessions: threads.threadSessions(placed.thread).map(row => ({ session: row.session })) }
     mkdirSync(join(root, "cloud", "moves"), { recursive: true }); writeFileSync(join(root, "cloud", "moves", move + ".json"), JSON.stringify(plan))
