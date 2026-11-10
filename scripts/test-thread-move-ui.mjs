@@ -70,7 +70,7 @@ async function checkMoveState() {
   const ts = await import("typescript")
   const code = await readFile(new URL("../src/state/cloud-moves.ts", import.meta.url), "utf8")
   const storeCode = await readFile(new URL("../src/state/store.ts", import.meta.url), "utf8")
-  const world = (handler) => {
+  const world = (handler, conversations = {}) => {
     const calls = [], effects = []
     const context = createContext({ crypto: webcrypto, console })
     const load = (source, dependencies) => {
@@ -89,7 +89,7 @@ async function checkMoveState() {
       sonner: { toast: { success: (...args) => effects.push(["success", args]), message: (...args) => effects.push(["message", args]) } },
       "@/state/providers": { providers: {} },
       "@/lib/bridge": { hasBridge: () => true, getMako: () => bridge },
-      "@/state/acp-state": { updateAcpConversation: (id) => effects.push(["location", id]) },
+      "@/state/acp-state": { acpStore: { get: () => ({ conversations }) }, updateAcpConversation: (id) => effects.push(["location", id]) },
       "@/state/live-door": { receiveLive: (_id, _source, apply) => apply() },
       "@/state/live-recovery": { hydrateLive: async (id) => effects.push(["hydrate", id]) },
       "@/state/store": store,
@@ -106,7 +106,7 @@ async function checkMoveState() {
   const check = async (name, run) => {
     let held
     try {
-      await run((handler) => (held = world(handler)))
+      await run((handler, conversations) => (held = world(handler, conversations)))
       results.push({ name, passed: true, calls: held.calls, effects: held.effects, state: held.state() })
     } catch (error) {
       results.push({ name, passed: false, error: String(error), calls: held?.calls, effects: held?.effects, state: held?.state() })
@@ -286,6 +286,112 @@ async function checkMoveState() {
     assert.equal(w.state().moving.source, undefined)
     assert.equal(w.state().moving.fork, undefined)
     assert.deepEqual(w.effects.filter(([kind]) => kind === "location" || kind === "hydrate"), [["location", "fork"], ["hydrate", "fork"]])
+  })
+  const locations = (w) => w.effects.filter(([kind]) => kind === "location" || kind === "hydrate")
+  // The real moved event names every plan.sessions conversation; the RPC contract has no membership list.
+  for (const order of ["rpc-first", "event-first"]) await check(`${order} full membership converges without repeating effects`, async (make) => {
+    const reply = deferred()
+    const w = make(() => reply.promise)
+    const request = w.api.moveToCloud("c", true)
+    const move = w.calls[0][1]
+    const full = { kind: "moved", conversations: ["c", "sibling"], continued: true }
+    if (order === "event-first") w.api.threadMoveStepped("c", move, full)
+    reply.resolve({ kind: "moved", cloudThread: "fixture-cloud" })
+    await request
+    if (order === "rpc-first") w.api.threadMoveStepped("c", move, full)
+    assert.deepEqual(locations(w), [["location", "c"], ["hydrate", "c"], ["location", "sibling"], ["hydrate", "sibling"]])
+    assert.equal(new Set(w.effects.filter(([kind]) => kind === "success").map(([, args]) => args[1].id)).size, 1, "richer metadata updates the existing toast ID")
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("c", move, structuredClone(full))
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects, "identical completion has no repeated effects")
+    assert.equal(w.calls.length, 1)
+  })
+  await check("partial then full completion enriches only its own target and ID", async (make) => {
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }))
+    await w.api.moveToCloud("c")
+    const move = w.calls[0][1]
+    w.api.threadMoveStepped("foreign", "refused-foreign", { kind: "kept-here", reason: "not moving" })
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("c", "refused-foreign", { kind: "moved", conversations: ["c", "wrong-id-member"] })
+    w.api.threadMoveStepped("wrong-target", move, { kind: "moved", conversations: ["wrong-target", "wrong-target-member"] })
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects)
+    w.api.threadMoveStepped("c", move, { kind: "moved", conversations: ["c"] })
+    const carried = { repositories: 2, outside: 0, left: [] }
+    const full = { kind: "moved", conversations: ["c", "sibling", "sibling"], continued: true, carried, whileAway: { behind: true } }
+    w.api.threadMoveStepped("c", move, full)
+    assert.deepEqual(locations(w), [["location", "c"], ["hydrate", "c"], ["location", "sibling"], ["hydrate", "sibling"]])
+    assert.equal(w.state().moves[move].completed.continued, true)
+    assert.equal(w.state().moves[move].completed.carried.repositories, 2)
+    assert.equal(w.state().moves[move].completed.whileAway.behind, true)
+    const enriched = JSON.stringify(w.state()), enrichedEffects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("c", move, structuredClone(full))
+    w.api.threadMoveStepped("c", move, { kind: "moved", conversations: ["c"] })
+    assert.equal(JSON.stringify(w.state()), enriched)
+    assert.equal(JSON.stringify(w.effects), enrichedEffects)
+    assert.equal(w.calls.length, 1)
+  })
+  await check("A membership cannot reclaim its target after new B or B dismissal", async (make) => {
+    let count = 0
+    const w = make(() => ++count === 1 ? { kind: "moved", cloudThread: "fixture-cloud" } : pending())
+    await w.api.moveToCloud("c")
+    const A = w.calls[0][1]
+    void w.api.moveToCloud("c")
+    const B = w.calls[1][1]
+    const full = { kind: "moved", conversations: ["c", "sibling"] }
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("c", A, full)
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects)
+    assert.equal(w.state().moving.c.move, B)
+    w.api.threadMoveStepped("c", B, { kind: "kept-here", reason: "B refused" })
+    w.api.dismissFailedMove("c", B)
+    const dismissed = JSON.stringify(w.state()), dismissedEffects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("c", A, full)
+    assert.equal(JSON.stringify(w.state()), dismissed)
+    assert.equal(JSON.stringify(w.effects), dismissedEffects)
+    assert.equal(w.calls.length, 2)
+  })
+  await check("late A membership cannot refresh a sibling owned by newer B", async (make) => {
+    let count = 0
+    const w = make(() => ++count === 1 ? { kind: "moved", cloudThread: "fixture-cloud" } : pending())
+    await w.api.moveToCloud("c")
+    const A = w.calls[0][1]
+    void w.api.moveToCloud("sibling")
+    const B = w.calls[1][1]
+    w.api.threadMoveStepped("c", A, { kind: "moved", conversations: ["c", "sibling"] })
+    assert.equal(w.state().moving.sibling.move, B)
+    assert.deepEqual(locations(w), [["location", "c"], ["hydrate", "c"]])
+    w.api.threadMoveStepped("sibling", B, { kind: "kept-here", reason: "B refused" })
+    w.api.threadMoveStepped("c", A, { kind: "moved", conversations: ["c", "sibling"] })
+    assert.deepEqual(locations(w), [["location", "c"], ["hydrate", "c"]])
+  })
+  await check("RPC-only completion refreshes all host-derived known Thread members", async (make) => {
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud" }), {
+      c: { key: "c", kind: "live", threadId: "thread", sessionId: "main" },
+      sibling: { key: "sibling", kind: "live", threadId: "thread", sessionId: "side" },
+      unrelated: { key: "unrelated", kind: "live", threadId: "other-thread", sessionId: "other" },
+    })
+    await w.api.moveToCloud("c")
+    assert.deepEqual(locations(w), [["location", "c"], ["hydrate", "c"], ["hydrate", "sibling"]], "known Thread membership selects an authoritative readback, not a synthetic location")
+    w.api.threadMoveStepped("c", w.calls[0][1], { kind: "moved", conversations: ["c", "sibling"] })
+    assert.deepEqual(locations(w), [["location", "c"], ["hydrate", "c"], ["hydrate", "sibling"], ["location", "sibling"]], "full host membership sets location without hydrating twice")
+    assert.equal(w.calls.length, 1)
+  })
+  await check("RPC fork membership uses the current Thread rather than its old source", async (make) => {
+    const w = make(() => ({ kind: "moved", cloudThread: "fixture-cloud", conversation: "fork" }), {
+      source: { key: "source", kind: "live", threadId: "old-thread" },
+      oldSibling: { key: "oldSibling", kind: "live", threadId: "old-thread" },
+      fork: { key: "fork", kind: "live", threadId: "fork-thread" },
+      forkSibling: { key: "forkSibling", kind: "live", threadId: "fork-thread" },
+    })
+    await w.api.moveToCloud("source")
+    assert.deepEqual(locations(w), [["location", "fork"], ["hydrate", "fork"], ["hydrate", "forkSibling"]])
+    const before = JSON.stringify(w.state()), effects = JSON.stringify(w.effects)
+    w.api.threadMoveStepped("source", w.calls[0][1], { kind: "moved", conversations: ["source", "oldSibling"] })
+    assert.equal(JSON.stringify(w.state()), before)
+    assert.equal(JSON.stringify(w.effects), effects)
   })
   if (process.env.MAKO_TEST_EVIDENCE) {
     await mkdir(process.env.MAKO_TEST_EVIDENCE, { recursive: true })

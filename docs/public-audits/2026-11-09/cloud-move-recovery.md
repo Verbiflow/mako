@@ -77,6 +77,37 @@ recipe typecheck and lint also passed. The UI run retained the existing
 ResizeObserver warning. These local results do not replace review or source
 CI of the correction.
 
+The next private review, of `92b966b3c92486ad59bbb1a11ea8d2d1af41fc07`,
+found a completion-order regression. A moved RPC answer settled the target;
+the fence then rejected the same operation's later full moved event, leaving
+other sessions unreconciled. The unchanged reviewer control reproduced this
+only for RPC-first delivery; event-first delivery refreshed both sessions.
+
+Completion now retains its member list and separately tracks location updates
+and readbacks already applied. A matching successful operation can enrich its
+membership while it remains the latest owner of its origin and target. New
+operations, wrong targets, refused/dismissed identities and stale replies remain
+fenced. The host's full event names actual moved sessions. An RPC-only result
+instead reads back other live conversations whose host-derived Thread ID matches
+the target; it does not synthesize their moved membership or location. A later
+full event sets any missing member locations without repeating readbacks.
+Richer completion metadata updates the existing toast ID. Repeated or partial
+completion does not erase metadata or repeat location/readback effects.
+
+The original eleven state controls remain. Seven added controls cover delivery
+order, repetition, partial/full membership, wrong ID/target, a newer operation
+at the target or sibling, RPC-only known-member readbacks and fork membership.
+The identical final assertions fail four controls on the private second revision
+and pass all eighteen on this correction. These remain isolated state evidence,
+not runtime cloud or installed-app proof.
+
+Operation identity, completion metadata and effect history are retained for the
+window store's lifetime, with no finite count or TTL cap. Ownership lookup scans
+that history; it is released with the store on reload or window disposal.
+Blindly evicting old IDs would let delayed events be adopted as new operations,
+reopening the stale-event failure. This repair does not add history eviction or
+durable restart recovery.
+
 ## The first journey and its remaining gates
 
 | Journey point | Evidence in this repair | Remaining acceptance |

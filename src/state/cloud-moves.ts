@@ -4,7 +4,7 @@ import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
 import type { ThreadHarnessCheck } from "@mako/host/contracts/cloud-harnesses"
 import { providers } from "@/state/providers"
 import { getMako, hasBridge } from "@/lib/bridge"
-import { updateAcpConversation } from "@/state/acp-state"
+import { acpStore, updateAcpConversation } from "@/state/acp-state"
 import { receiveLive } from "@/state/live-door"
 import { hydrateLive } from "@/state/live-recovery"
 import { createHook, createStore } from "@/state/store"
@@ -16,8 +16,8 @@ import { createHook, createStore } from "@/state/store"
  * read again from its machine, its folder there.
  */
 interface CloudMovesState {
-  /** Original RPC address and current event address, retained after settlement to fence delayed events in this window. */
-  moves: Record<string, { origin: string; target: string; settled?: true }>
+  /** In arrival order, retained for this window's lifetime without a count/TTL cap: evicting old IDs would reopen stale-event adoption. */
+  moves: Record<string, { origin: string; target: string; settled?: "moved" | "kept-here"; completed?: Extract<ThreadMoveStep, { kind: "moved" }>; located?: string[]; refreshed?: string[] }>
   /**
    * `handOff`: a move that pauses the Thread's running turn and continues it in the cloud (asked so, or seen pausing).
    * `ownBranch`: a Thread in the main checkout that went onto its own branch first, so its steps begin with that one.
@@ -123,7 +123,7 @@ async function askMove(conversationId: string, move: string, handOff: boolean): 
           owner = currentMove(move)
         }
         if (owner && (!outcome.conversation || outcome.conversation === owner.target))
-          threadMoveStepped(owner.target, move, { kind: "moved", conversations: [owner.target] })
+          completeMove(owner.target, move, { kind: "moved", conversations: [owner.target] }, knownMoveMembers(owner.target))
       } else if (outcome.kind === "kept-here" || outcome.kind === "unsettled") threadMoveStepped(owner.target, move, outcome)
     }
     return outcome
@@ -147,13 +147,25 @@ function currentMove(move: string): CloudMovesState["moves"][string] | undefined
   return owner && !owner.settled && state.moving[owner.target]?.move === move ? owner : undefined
 }
 
+/** The latest observed operation to own or refresh an address. Move IDs are UUIDs, so record order is arrival order. */
+function latestMove(state: CloudMovesState, conversationId: string): string | undefined {
+  return Object.entries(state.moves).findLast(([, owner]) => owner.origin === conversationId || owner.target === conversationId || owner.completed?.conversations.includes(conversationId) || owner.refreshed?.includes(conversationId))?.[0]
+}
+
+/** The RPC has no member list. These host-derived Thread IDs select readbacks, not synthetic moved membership. */
+function knownMoveMembers(target: string): string[] {
+  const { conversations } = acpStore.get()
+  const thread = conversations[target]?.threadId
+  return [...new Set([target, ...thread ? Object.values(conversations).filter((conversation) => conversation.kind === "live" && conversation.threadId === thread).map((conversation) => conversation.key) : []])]
+}
+
 /** A step from the host. A confirmed failure keeps its reason and recovery action above the composer. */
 export function threadMoveStepped(conversationId: string, move: string, step: ThreadMoveStep): void {
   const state = cloudMovesStore.get()
   if (step.kind === "own-branch" && step.to && step.to !== conversationId && moveInFlight(state, step.to)) return
   const known = state.moves[move]
   if (known) {
-    if (currentMove(move)?.target !== conversationId) return
+    if (currentMove(move)?.target !== conversationId && !(step.kind === "moved" && known.settled === "moved" && known.target === conversationId && latestMove(state, known.origin) === move && latestMove(state, conversationId) === move)) return
   } else {
     // A move begun in another window first arrives as an event. It cannot displace one already owned here.
     if (moveInFlight(state, conversationId)) return
@@ -170,30 +182,23 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
     }))
     return
   }
-  if (step.kind === "moved" || step.kind === "kept-here") {
+  if (step.kind === "moved") {
+    completeMove(conversationId, move, step)
+    return
+  }
+  if (step.kind === "kept-here") {
     cloudMovesStore.set((state) => ({
       ...state,
-      moves: { ...state.moves, [move]: { origin: state.moves[move]?.origin ?? conversationId, target: conversationId, settled: true } },
-      failedMoves: step.kind === "kept-here"
-        ? { ...state.failedMoves, [conversationId]: {
-          move,
-          reason: step.reason,
-          handOff: state.moving[conversationId]?.handOff === true || step.continued === true || (state.failedMoves[conversationId]?.move === move && state.failedMoves[conversationId]?.handOff === true),
-          continued: step.continued === true || (state.failedMoves[conversationId]?.move === move && state.failedMoves[conversationId]?.continued === true),
-        } }
-        : without(state.failedMoves, conversationId),
+      moves: { ...state.moves, [move]: { origin: state.moves[move]?.origin ?? conversationId, target: conversationId, settled: "kept-here" } },
+      failedMoves: { ...state.failedMoves, [conversationId]: {
+        move,
+        reason: step.reason,
+        handOff: state.moving[conversationId]?.handOff === true || step.continued === true,
+        continued: step.continued === true,
+      } },
       moving: without(state.moving, conversationId),
     }))
-    if (step.kind === "moved") {
-      const carried = carriedSentence(step.carried)
-      if (step.whileAway) toast.success("Continued in the cloud", { id: `move:${move}`, duration: step.whileAway.behind ? Infinity : undefined, description: whileAwaySentence(step.whileAway.behind) })
-      else if (step.continued) toast.success("Handed off to the cloud", { id: `move:${move}`, description: ["Its turn goes on in a cloud machine, at the same folder, where it left off.", carried].filter(Boolean).join(" ") })
-      else toast.success("Moved to the cloud", { id: `move:${move}`, description: ["It goes on in a cloud machine, at the same folder. Its worktree here follows each turn there.", carried].filter(Boolean).join(" ") })
-      for (const id of step.conversations) {
-        receiveLive(id, { from: "said" }, () => updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: CLOUD_WHERE } : conversation)))
-        void hydrateLive(id, true)
-      }
-    } else toast.message("It stayed on this Mac", { id: `move:${move}`, description: step.continued ? `${step.reason} Its turn goes on here.` : step.reason })
+    toast.message("It stayed on this Mac", { id: `move:${move}`, description: step.continued ? `${step.reason} Its turn goes on here.` : step.reason })
     return
   }
   cloudMovesStore.set((state) => {
@@ -201,6 +206,35 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
     const ownBranch = step.kind === "own-branch" || state.moving[conversationId]?.ownBranch
     return { ...state, failedMoves: without(state.failedMoves, conversationId), moving: { ...state.moving, [conversationId]: { ...state.moving[conversationId], move, step, ...handOff && { handOff: true }, ...ownBranch && { ownBranch: true } } } }
   })
+}
+
+/** Settlement and location/readback effects are deduplicated separately: later same-operation membership may add to them. */
+function completeMove(conversationId: string, move: string, step: Extract<ThreadMoveStep, { kind: "moved" }>, readBack: string[] = []): void {
+  const state = cloudMovesStore.get()
+  const owner = state.moves[move]
+  if (!owner) return
+  const previous = owner.completed
+  const completed = { ...previous, ...step, conversations: [...new Set([...previous?.conversations ?? [], ...step.conversations])] }
+  const reads = [...new Set([...owner.refreshed ?? [], ...completed.conversations, ...readBack])]
+  const next = { ...state, moves: { ...state.moves, [move]: { ...owner, settled: "moved" as const, completed, refreshed: reads } } }
+  const locations = completed.conversations.filter((id) => !owner.located?.includes(id) && latestMove(next, id) === move)
+  const refreshes = reads.filter((id) => !owner.refreshed?.includes(id) && latestMove(next, id) === move)
+  cloudMovesStore.set({
+    moves: { ...next.moves, [move]: { ...next.moves[move], located: [...owner.located ?? [], ...locations], refreshed: [...owner.refreshed ?? [], ...refreshes] } },
+    failedMoves: without(state.failedMoves, conversationId),
+    moving: without(state.moving, conversationId),
+  })
+  // Richer host metadata updates the existing toast under its same ID; identical/partial completions repeat nothing.
+  if (!previous || JSON.stringify([previous.continued, previous.carried, previous.whileAway]) !== JSON.stringify([completed.continued, completed.carried, completed.whileAway])) {
+    const carried = carriedSentence(completed.carried)
+    if (completed.whileAway) toast.success("Continued in the cloud", { id: `move:${move}`, duration: completed.whileAway.behind ? Infinity : undefined, description: whileAwaySentence(completed.whileAway.behind) })
+    else if (completed.continued) toast.success("Handed off to the cloud", { id: `move:${move}`, description: ["Its turn goes on in a cloud machine, at the same folder, where it left off.", carried].filter(Boolean).join(" ") })
+    else toast.success("Moved to the cloud", { id: `move:${move}`, description: ["It goes on in a cloud machine, at the same folder. Its worktree here follows each turn there.", carried].filter(Boolean).join(" ") })
+  }
+  for (const id of new Set([...locations, ...refreshes])) {
+    if (locations.includes(id)) receiveLive(id, { from: "said" }, () => updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: CLOUD_WHERE } : conversation)))
+    if (refreshes.includes(id)) void hydrateLive(id, true)
+  }
 }
 
 /** A Thread another device continued in the cloud while this Mac was off, as this Mac says it once it let go. */
