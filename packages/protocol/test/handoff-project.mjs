@@ -50,3 +50,28 @@ test("proxy ownKeys failure propagates; parser does not promise synchronous pree
   const error = new Error("synthetic-ownKeys-failure"), proxy = new Proxy({}, { ownKeys() { throw error } })
   assert.throws(() => plainProtocolValue(proxy), (value) => value === error)
 })
+
+test("read-role boundary never reads hostile caller properties", () => {
+  let reads = 0
+  const role = new Proxy({}, { get() { reads++; throw new Error("unexpected-role-read") } })
+  assert.equal(readCapableRole(role), false)
+  const revoked = Proxy.revocable({}, {}); revoked.revoke()
+  assert.equal(readCapableRole(revoked.proxy), false)
+  assert.equal(reads, 0)
+})
+test("node and depth caps remain separate from the byte cap", () => {
+  assert.equal(plainProtocolValue(Array(4095).fill(null)).length, 4095)
+  assert.throws(() => plainProtocolValue(Array(4096).fill(null)), /bad-input/)
+  const nested = count => { let value = null; for (let i = 0; i < count; i++) value = { child: value }; return value }
+  assert.ok(plainProtocolValue(nested(16)))
+  assert.throws(() => plainProtocolValue(nested(17)), /bad-input/)
+})
+test("bounded copier rejects a type-tag accessor without using object formatting", () => {
+  let reads = 0
+  const value = Object.defineProperty({}, Symbol.toStringTag, { get() { reads++; return "Object" } })
+  assert.throws(() => plainProtocolValue(value), /bad-input/)
+  assert.equal(reads, 0)
+  // Existing toString-based classifiers cannot replace these checks at this hostile boundary.
+  assert.equal(Object.prototype.toString.call(value), "[object Object]")
+  assert.equal(reads, 1)
+})

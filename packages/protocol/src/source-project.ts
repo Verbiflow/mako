@@ -1,13 +1,14 @@
 import { z } from "zod"
-import { ProjectSlotSchema, RuntimeCapabilitySchema, plainProtocolValue } from "./handoff-project.js"
+import { ThreadIdSchema } from "./ids.js"
+import { ProjectSlotSchema, ProjectPathSchema, plainProtocolValue } from "./handoff-project.js"
 
 /** HTTP control only. No new link target, version allocation, clone authority or Machine assertion. */
 export const SOURCE_PROJECT_PATH = "/v1/source-project"
 export const SOURCE_PROJECT_INTERNAL_PATH = "/internal/source-project"
 const Revision = z.number().int().positive().safe()
 export const SourceProjectSelectionSchema = z.object({
-  move: z.uuid(), destination: RuntimeCapabilitySchema.shape.destination, sourceThread: z.uuid(),
-  project: ProjectSlotSchema.shape.path,
+  move: z.uuid(), destination: ThreadIdSchema, sourceThread: z.uuid(),
+  project: ProjectPathSchema,
   locators: z.array(ProjectSlotSchema.omit({ repositoryId: true }).strict()).min(1).max(32),
   sessions: z.array(z.object({ session: z.uuid(), generation: Revision }).strict()).min(1).max(32),
 }).strict().superRefine((value, ctx) => {
@@ -30,7 +31,7 @@ export const SourceProjectReceiptSchema = z.object({
   phase: z.enum(["invalidated", "ready"]), expiresAt: Revision, historical: z.boolean(), secondaryAdmission: z.literal(false),
 }).strict()
 export type SourceProjectReceipt = z.infer<typeof SourceProjectReceiptSchema>
-export function sourceProjectCommand(value: unknown): SourceProjectCommand { return SourceProjectCommandSchema.parse(plainProtocolValue(value)) }
+export const sourceProjectCommand = z.preprocess(plainProtocolValue, SourceProjectCommandSchema).parse
 
 /** Bound each read/cancel and aggregate bytes before copying. No body or rejection text escapes. */
 export async function readSourceProjectBody(request: Request): Promise<Uint8Array> {

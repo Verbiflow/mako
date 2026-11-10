@@ -4,7 +4,7 @@ import { ThreadIdSchema } from "./ids.js"
 const Label = z.string().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/)
 const Digest = z.string().regex(/^[a-f0-9]{64}$/)
 const OwnershipGeneration = z.number().int().positive().max(Number.MAX_SAFE_INTEGER).brand<"SessionOwnershipGeneration">()
-const Path = z.string().min(1).max(1024).refine((value) =>
+export const ProjectPathSchema = z.string().min(1).max(1024).refine((value) =>
   /^\/(Users|home)\//.test(value) && !value.endsWith("/") && !value.includes("\\") &&
   !value.includes("\0") && !value.includes("//") && !value.split("/").some((part) => part === "." || part === ".."))
 const Repository = z.string().max(256).regex(/^https:\/\/github\.com\/[A-Za-z0-9_-][A-Za-z0-9_.-]*\/[A-Za-z0-9_-][A-Za-z0-9_.-]*$/)
@@ -15,13 +15,13 @@ export const SourceSessionFenceSchema = z.object({ session: z.uuid(), ownershipG
 export type SourceSessionFence = z.infer<typeof SourceSessionFenceSchema>
 export const ProjectSlotSchema = z.object({
   slot: SlotId, kind: z.enum(["primary", "secondary"]), url: Repository,
-  repositoryId: Label, path: Path, checkpoint: Digest,
+  repositoryId: Label, path: ProjectPathSchema, checkpoint: Digest,
   branch: z.string().max(200).regex(/^(?![-/.])(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9_./-]+(?<![./])$/).optional(),
 }).strict()
 export type ProjectSlot = z.infer<typeof ProjectSlotSchema>
 const order = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0
 export const ProjectManifestSchema = z.object({
-  version: z.literal(2), move: z.uuid(), sourceThread: z.uuid(), destination: ThreadIdSchema, project: Path,
+  version: z.literal(2), move: z.uuid(), sourceThread: z.uuid(), destination: ThreadIdSchema, project: ProjectPathSchema,
   sessions: z.array(SourceSessionFenceSchema).min(1).max(32), slots: z.array(ProjectSlotSchema).min(1).max(32),
 }).strict().superRefine((manifest, context) => {
   const paths: string[] = []
@@ -55,7 +55,7 @@ export const RuntimeCapabilitySchema = z.object({
 }).strict()
 export type RuntimeCapability = z.infer<typeof RuntimeCapabilitySchema>
 export const PreparationBindingSchema = ProjectRequestSchema.extend({ runtime: RuntimeCapabilitySchema }).strict()
-const CompletedSlot = z.object({ slot: SlotId, repositoryId: Label, path: Path }).strict()
+const CompletedSlot = z.object({ slot: SlotId, repositoryId: Label, path: ProjectPathSchema }).strict()
 const ReadySlot = z.discriminatedUnion("state", [
   CompletedSlot.extend({ state: z.literal("clone-ready") }).strict(),
   CompletedSlot.extend({ state: z.literal("preview-checkpoint-applied"), checkpoint: Digest }).strict(),
@@ -74,12 +74,15 @@ export const BindHandoverSchema = ProjectRequestSchema.extend({ release: z.uuid(
 export const ClaimRequestSchema = ProjectRequestSchema.extend({ arrivalHandle: Digest, operation: z.uuid() }).strict()
 export type ClaimRequest = z.infer<typeof ClaimRequestSchema>
 export const KnownGitHubRoleSchema = z.enum(["none", "read", "triage", "write", "maintain", "admin"])
-export function readCapableRole(role: unknown): boolean {
-  return role === "read" || role === "triage" || role === "write" || role === "maintain" || role === "admin"
-}
+const ReadCapabilitySchema = z.unknown().transform(role =>
+  role === "read" || role === "triage" || role === "write" || role === "maintain" || role === "admin")
+export const readCapableRole = ReadCapabilitySchema.parse
+
+/** Data decoded by the bounded descriptor copier; no functions, undefined values or accessor properties. */
+export type PlainProtocolValue = string | number | boolean | null | PlainProtocolValue[] | { [key: string]: PlainProtocolValue }
 
 /** Runtime schemas do not authenticate caller objects. Reject/charge data before copying, never serialize a graph to measure it. */
-export function plainProtocolValue(input: unknown): unknown {
+export function plainProtocolValue(input: unknown): PlainProtocolValue {
   let remaining = 4096, bytes = 32768
   const visited = new WeakSet<object>()
   const charge = (count: number): void => { bytes -= count; if (bytes < 0) throw new Error("bad-input") }
@@ -95,7 +98,7 @@ export function plainProtocolValue(input: unknown): unknown {
       else charge(code >= 0xd800 && code <= 0xdfff ? 6 : 3)
     }
   }
-  const copy = (value: unknown, depth: number): unknown => {
+  const copy = (value: unknown, depth: number): PlainProtocolValue => {
     if (--remaining < 0 || depth > 16) throw new Error("bad-input")
     if (typeof value === "string") { string(value); return value }
     if (value === null) { charge(4); return null }
@@ -112,7 +115,7 @@ export function plainProtocolValue(input: unknown): unknown {
     if (array) {
       const descriptor = Object.getOwnPropertyDescriptor(value, "length"), length: unknown = descriptor?.value
       if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0 || length > 4096 || keys.length !== length + 1) throw new Error("bad-input")
-      const output: unknown[] = []
+      const output: PlainProtocolValue[] = []
       for (let index = 0; index < length; index++) {
         if (index) charge(1)
         const entry = Object.getOwnPropertyDescriptor(value, String(index))
@@ -121,7 +124,7 @@ export function plainProtocolValue(input: unknown): unknown {
       }
       return output
     }
-    const output: Record<string, unknown> = Object.create(null) // locally constructed data-only properties
+    const output: Record<string, PlainProtocolValue> = Object.create(null) // locally constructed data-only properties
     let first = true
     for (const key of keys) {
       if (typeof key !== "string" || key === "__proto__" || key === "constructor" || key === "prototype") throw new Error("bad-input")

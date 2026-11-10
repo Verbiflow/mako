@@ -9,7 +9,7 @@ import { DeviceIdSchema } from "../packages/host/src/contracts/thread-execution.
 import type { SourceProjectReceipt } from "@mako/protocol/source-project"
 
 // Mandatory actual host publisher/ThreadStore regression; Git and remote transport are stand-ins.
-for (const scenario of ["source-read-failure", "unknown-publish", "unknown-cancel-after", "unknown-cancel-before", "newer-revision", "foreign-journal", "busy-during-withdraw"]) {
+for (const scenario of ["source-read-failure", "unknown-publish", "unknown-cancel-after", "unknown-cancel-before", "newer-revision", "foreign-journal", "busy-during-withdraw", "source-undefined", "source-null", "source-string", "unknown-cancel-before-undefined"]) {
   const root = mkdtempSync(join(process.env.MAKO_THREAD_DATA_DIR ?? tmpdir(), "source-project-host-")), device = DeviceIdSchema.parse(randomUUID())
   const threads = new ThreadStore(join(root, "host.sqlite"), { self: { kind: "device", device }, realPath: path => path })
   try {
@@ -18,7 +18,7 @@ for (const scenario of ["source-read-failure", "unknown-publish", "unknown-cance
     threads.attachWorktree({ path: project, thread: placed.thread, repoRoot: source, project: source, branch: "mako/test", base: "a".repeat(40) }, [{ path: project + "/primary", repoRoot: source + "/primary", base: "a".repeat(40) }, { path: project + "/secondary", repoRoot: source + "/secondary", base: "a".repeat(40) }])
     const plan = { move, thread: placed.thread, asked: conversationId, cloudThread: "t-selected", phase: "preparing", project, folder: project + "/primary", repository: { url: "https://github.com/owner/primary" }, checkpoint: { sha256: "a".repeat(64) }, others: [{ path: project + "/secondary", url: "https://github.com/owner/secondary", checkpoint: { sha256: "b".repeat(64) } }], sessions: threads.threadSessions(placed.thread).map(row => ({ session: row.session })) }
     mkdirSync(join(root, "cloud", "moves"), { recursive: true }); writeFileSync(join(root, "cloud", "moves", move + ".json"), JSON.stringify(plan))
-    const journalPath = join(root, "source-project", move + ".json"), sourceFailure = { kind: "SOURCE" }, unknown = { kind: "DELIVERY" }, actions: string[] = []
+    const journalPath = join(root, "source-project", move + ".json"), sourceFailure = scenario.endsWith("undefined") ? undefined : scenario === "source-null" ? null : scenario === "source-string" ? "SYNTHETIC_SOURCE_FAILURE" : { kind: "SOURCE" }, unknown = { kind: "DELIVERY" }, actions: string[] = []
     let signalCancel: (() => void) | undefined, finishCancel: (() => void) | undefined
     const reachedCancel = new Promise<void>(resolve => { signalCancel = resolve }), cancellationReply = new Promise<void>(resolve => { finishCancel = resolve })
     let broken = false, held: SourceProjectReceipt | undefined
@@ -35,7 +35,7 @@ for (const scenario of ["source-read-failure", "unknown-publish", "unknown-cance
         if (!held || input.move !== held.move || input.revision !== held.revision || input.digest !== held.digest) throw new Error("not-owned")
         if (input.action === "invalidate") {
           if (scenario === "busy-during-withdraw") { signalCancel?.(); await cancellationReply }
-          if (scenario === "unknown-cancel-before") throw unknown
+          if (scenario.startsWith("unknown-cancel-before")) throw unknown
           held = { ...held, phase: "invalidated", historical: true }
           if (scenario === "unknown-cancel-after") throw unknown
         }
@@ -68,7 +68,7 @@ for (const scenario of ["source-read-failure", "unknown-publish", "unknown-cance
     const uncertain = scenario.startsWith("unknown-cancel-") || scenario === "newer-revision"
     assert.equal(phase, uncertain ? "withdrawing" : "invalidated")
     if (scenario === "newer-revision") { assert.equal(held?.revision, 2); assert.equal(held?.phase, "ready") }
-    else assert.equal(held?.phase, scenario === "unknown-cancel-before" ? "ready" : "invalidated")
+    else assert.equal(held?.phase, scenario.startsWith("unknown-cancel-before") ? "ready" : "invalidated")
     broken = false
     const calls = actions.length; await assert.rejects(publisher().publish(move))
     assert.equal(actions.length, calls + (uncertain ? 1 : 0)); if (uncertain) assert.equal(actions.at(-1), "read")
