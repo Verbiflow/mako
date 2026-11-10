@@ -130,7 +130,8 @@ export class LiveRelocations {
       if (driver?.resume.kind !== "native" || !driver.resume.elsewhere)
         return { kind: "never", reason: `runs on ${binding.provider}, which doesn't resume a session in another folder` }
     }
-    const busy = this.access.moves.busy(resident)
+    // A Fin owns another Thread and provider; pausing this one leaves it running in its own checkout.
+    const busy = this.access.moves.busy(resident, "provider")
     if (busy) return { kind: "wait", reason: busy }
     if (!resident.driver && !["hibernated", "disconnected"].includes(session.connection))
       return { kind: "never", reason: `is ${session.connection}` }
