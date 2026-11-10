@@ -20,11 +20,13 @@ import {
   type PlacementOperations,
 } from "../contracts/agent-tools.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
+import { AgentListResults } from "./agent-list-results.js"
 
 const UNAVAILABLE: AgentRefused = { refused: "unavailable", why: "Children need the Thread store, which didn't open on this host." }
 
 /** `mako:agents-<verb>`: every door's one way in, each the engine's operation of the same name. */
 export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOperations & PlacementOperations) | undefined): void {
+  const listResults = new AgentListResults()
   // Between hosts, for Fins placed across the person's devices: no door shows these to an agent.
   methods.handle("mako:agents-capabilities", () => agents()?.capabilities() ?? UNAVAILABLE)
   methods.handle("mako:agents-place", (input: AgentsPlaceInput) => agents()?.place(input) ?? UNAVAILABLE)
@@ -33,8 +35,18 @@ export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOp
   methods.handle("mako:agents-start", (caller: AgentCaller, input: AgentsStartInput) => agents()?.start(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-move", (caller: AgentCaller, input: AgentsMoveInput) => agents()?.move(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-link", (caller: AgentCaller, input: AgentsLinkInput) => agents()?.link(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-list", (caller: AgentCaller, input: AgentsListInput) => agents()?.list(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-read", (caller: AgentCaller, input: AgentsReadInput) => agents()?.read(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-list", async (caller: AgentCaller, input: AgentsListInput) => {
+    const result = await agents()?.list(caller, input) ?? UNAVAILABLE
+    return input.presentation === "summary" ? listResults.summarize(caller, result) : result
+  })
+  methods.handle("mako:agents-read", async (caller: AgentCaller, input: AgentsReadInput) => {
+    const service = agents()
+    if (!service) return UNAVAILABLE
+    if (input.view === "pulls") return listResults.read(caller, await service.read(caller, { child: input.child, view: "report", maxChars: 200 }), input)
+    if (input.snapshot !== undefined || input.offset !== undefined || input.limit !== undefined)
+      return { refused: "conflict", why: "snapshot, offset and limit apply only to view pulls." } satisfies AgentRefused
+    return service.read(caller, input)
+  })
   methods.handle("mako:agents-report", (caller: AgentCaller, input: AgentsReportInput) => agents()?.report(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-send", (caller: AgentCaller, input: AgentsSendInput) => agents()?.send(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-answer", (caller: AgentCaller, input: AgentsAnswerInput) => agents()?.answer(caller, input) ?? UNAVAILABLE)
@@ -95,7 +107,9 @@ export function registerAgentTools(server: McpServer, door: AgentToolDoor): void
         try {
           const known = door.filled()
           const filled = Object.fromEntries(tool.filled.map((field) => [field, known[field]]))
-          const answer = await door.invoke(tool.channel, [door.caller(), { ...filled, ...ToolArgumentsSchema.parse(input) }])
+          const arguments_ = ToolArgumentsSchema.parse(input)
+          const presentation = tool.verb === "list" && arguments_.presentation === undefined ? { presentation: "summary" } : {}
+          const answer = await door.invoke(tool.channel, [door.caller(), { ...filled, ...presentation, ...arguments_ }])
           return { ...(answer.refused !== undefined && { isError: true }), content: [{ type: "text" as const, text: agentToolText(answer) }] }
         } catch (error) {
           return { isError: true, content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }] }

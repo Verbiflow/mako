@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import "./test-agent-list-results.ts"
 import { execFile } from "node:child_process"
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -173,6 +174,27 @@ try {
   const unknown = [await call(thread, "agents_stop", { child: "nobody" }), await command("stop", "nobody")]
   assert.equal(unknown[0]!.refused, "unknown-child")
   assert.deepEqual(unknown[1], unknown[0], "mako agents exits 1 with the same refusal")
+  for (let number = 1; number <= 4; number++) {
+    await world.agents.report(world.caller(first.conversation), { status: "progress", summary: `PR reference ${number}.`, artifacts: [{ kind: "pull-request", ref: `https://github.com/example/list-details/pull/${number}` }], clientKey: `pr-reference-${number}` })
+  }
+  const fullFacts = await world.agents.list(apex.caller, {})
+  assert.ok("children" in fullFacts)
+  const originalPulls = fullFacts.children.find(child => child.child === first.child)!.openPRs
+  assert.equal(originalPulls?.length, 4)
+  const summarized = z.object({ children: z.array(z.looseObject({ child: z.string(), pulls: z.object({ reported: z.number(), read: z.object({ child: z.string(), view: z.literal("pulls"), snapshot: z.string() }) }) })) }).parse(await call(thread, "agents_list", {}))
+  const reference = summarized.children.find(child => child.child === first.child)!.pulls.read
+  assert.equal(summarized.children[0].pulls.reported, 4, "historical references stay explicitly unknown")
+  const recovered: unknown[] = []
+  let offset: number | undefined = 0
+  while (offset !== undefined) {
+    const page = ReadSchema.extend({ pulls: z.object({ next: z.number().optional() }) }).parse(await call(stdio, "agents_read", { ...reference, offset, limit: 2 }))
+    recovered.push(...z.array(z.json()).parse(JSON.parse(page.text)))
+    offset = page.pulls.next
+  }
+  assert.deepEqual(recovered, originalPulls, "a summary from one door recovers every fact through the real engine/read authorization at another door")
+  const unchanged = await world.agents.list(apex.caller, {})
+  assert.ok("children" in unchanged)
+  assert.deepEqual(unchanged.children.find(child => child.child === first.child)!.openPRs, originalPulls, "the UI/engine still has full facts")
   console.log("agents doors: ok")
 } finally {
   for (const client of clients) await client.close().catch(() => undefined)
