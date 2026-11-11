@@ -264,6 +264,7 @@ const replays = [
   "mako:agents-report",
   "mako:agents-send",
   "mako:agents-answer",
+  "mako:agents-settle",
   "mako:agents-stop",
   /** A start for an Apex on another device is settled by its op: a repeat answers the same Fin. */
   "mako:agents-place",

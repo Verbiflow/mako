@@ -1,3 +1,5 @@
+import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "./report-actions.js"
+import type { ReportAction, ReportActionTarget, ReportActionsPage, ReportDisposition } from "./report-actions.js"
 import type { AccessTier } from "./access.js"
 import { type AgentsCancelInput, type AgentsCancelled, type AgentsCapabilities, type AgentsNoticed, type AgentsNoticeInput, type AgentsPlaced, type AgentsPlaceInput, APEX_WORD, decisionWords, FIN_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { Rollup } from "./children.js"
@@ -164,6 +166,8 @@ export interface AgentStrip {
   report?: { status: ReportStatus; line: string; at: number }
   /** Outstanding explicit report questions, independently of its latest activity. */
   pendingQuestions?: number
+  pendingActions?: number
+  custodyActions?: number
   /** What it waits on outside its tree, in words (`waitingWords`): "waiting on #412 checks". */
   waiting?: string
   /** Seconds since its last activity, while it isn't working (`idleFor`). */
@@ -247,7 +251,7 @@ export type AgentsListModelResult = AgentsListResult | {
 export interface AgentsReadInput {
   /** The Fin's name or Thread ID. */
   child: string
-  view?: "report" | "transcript" | "pulls"
+  view?: "report" | "transcript" | "pulls" | "actions"
   /** With pulls: the exact snapshot returned by agents_list, held for 30 minutes or until this host restarts. */
   snapshot?: string
   /** With pulls: the next record offset returned by the preceding page; zero by default. */
@@ -257,6 +261,8 @@ export interface AgentsReadInput {
   maxChars?: number
   /** Exact stored report ID to inspect instead of the latest narration; reading never resolves it. */
   report?: string
+  /** Page pending action-only reports after this exact report ID; reading never resolves them. */
+  afterAction?: string
   /** Page outstanding report questions after this exact report ID; reading never resolves them. */
   afterAsk?: string
 }
@@ -281,6 +287,9 @@ export type AgentsReadResult = {
   state: ChildState
   text: string
   pending?: { asks: PendingReportQuestion[]; more?: number; next?: string }
+  actions?: ReportActionsPage
+  /** Exact selected report follow-up, including a terminal disposition; inspection changes nothing. */
+  followUp?: ReportAction
   truncated?: true
   /** A transcript's end is a tail: where the whole is. */
   whole?: string
@@ -300,6 +309,8 @@ export interface AgentsReportInput {
   recommended?: number
   /** What whoever answers does, in one sentence. */
   action?: string
+  /** Pair action with an immutable target/version for ordinary action-only follow-through. */
+  followUp?: ReportActionTarget
   /** Who decides a done report's question: `apex` (absent) or `person`. */
   decides?: "apex" | "person"
   /** What it waits on outside its tree, with a question it asks. */
@@ -313,7 +324,19 @@ export interface WaitSubscription {
   state: "registered" | "claimed" | "unsupported" | "unavailable" | "inactive"
   why?: string
 }
-export type AgentsReportResult = { id: string; deduped?: true; delivered: "notice" | "none"; subscriptions?: WaitSubscription[]; superseded?: string[] } | AgentRefused
+export type AgentsReportResult = { id: string; deduped?: true; delivered: "notice" | "none"; followUp?: ReportAction; subscriptions?: WaitSubscription[]; superseded?: string[] } | AgentRefused
+
+/** Silent exact disposition; this never sends a reply, wakes a Fin, or grants approval. */
+export interface AgentsSettleInput {
+  to: string
+  report: string
+  version: number
+  target: ReportActionTarget
+  disposition: ReportDisposition
+  /** Stable across harness continuation/restart; reusing it with different inputs is a conflict. */
+  clientKey: string
+}
+export type AgentsSettleResult = { action: ReportAction; deduped?: true } | AgentRefused
 
 export interface AgentsSendInput {
   /** Your own Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. Crew siblings need a parent relay through agents_report; discovery grants no send authority. */
@@ -445,6 +468,7 @@ export interface AgentOperations {
   report(caller: AgentCaller, input: AgentsReportInput): Promise<AgentsReportResult>
   send(caller: AgentCaller, input: AgentsSendInput): Promise<AgentsSendResult>
   answer(caller: AgentCaller, input: AgentsAnswerInput): Promise<AgentsAnswerResult>
+  settle(caller: AgentCaller, input: AgentsSettleInput): Promise<AgentsSettleResult>
   stop(caller: AgentCaller, input: AgentsStopInput): Promise<AgentsStopResult>
   wait(caller: AgentCaller, input: AgentsWaitInput): Promise<AgentsWaitResult>
 }
@@ -538,6 +562,7 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
   `A ${FIN_WORD}'s question or approval that wakes you is yours to answer with \`agents_answer\`, within your own access (approvals only on full access); leave it to the person with \`person: true\` when it's theirs to decide. One you leave unanswered for a minute goes to the person too.`,
   `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision (with its options and the one you recommend); ending your turn without one reports how it ended. Finished but leaving a decision (a merge, a choice between results)? Report done with the question and options, and \`decides\` saying who decides: \`apex\` or \`person\`.`,
+  REPORT_FOLLOW_UP_INSTRUCTIONS,
   `To wait on a pull request, report progress with \`waitingOn\` naming it and what you wait for (checks, review or merge), then end your turn instead of polling its checks, because Mako wakes you with its outcome.`,
   `Other ${APEX_WORD}es of the person: read them with \`agents_list\` \`scope: apexes\` before touching shared files or branches; reading never wakes them.`,
   `Message another ${APEX_WORD} (\`agents_send\` \`to: apex:<title>\`) only when the person asked you to, or when you need something only it can give or decide (it owns the files or branch you'd change, or its work blocks yours).`,
@@ -730,7 +755,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     mcp: {
       name: "agents_read",
       description: `One ${FIN_WORD}'s last report in full, or the end of its transcript: a quick, bounded tail, for when its digest line isn't enough. thread_history with its Thread ID reads it whole. For PR details omitted by agents_list, pass its read object: view pulls and snapshot. text is a JSON array of original PR facts; follow pulls.next as offset until absent. Every page rechecks access to the Fin; reading never changes state.`,
-      fields: { child: "Its name or Thread ID; PR details require the exact ID in the list's read object.", view: "report (default), transcript, or pulls with the list's snapshot.", snapshot: "With view pulls: explicit summary's same-Session snapshot, lost at expiresAt or host restart. Unavailable snapshots refuse; relisting gives current facts, not the original array.", offset: "With pulls: the preceding page's pulls.next; zero by default.", limit: "With pulls: integer from 1 to 20, 20 by default; each page also fits 16000 UTF-8 bytes of JSON. Records are never cut; an array with an oversized fact stays inline in the list.", maxChars: "Report/transcript only: at most this many characters (default 8000).", report: "Exact stored report ID to inspect instead of latest narration. Reading never resolves its question.", afterAsk: "Page pending report questions after this exact report ID. Reading does not answer them." },
+      fields: { child: "Its name or Thread ID; with view actions, your own exact Thread ID only, to page delegated custody without accessing source transcripts. PR details require the exact ID in the list's read object.", view: "report (default), transcript, pulls with the list's snapshot, or actions for your own delegated custody.", snapshot: "With view pulls: explicit summary's same-Session snapshot, lost at expiresAt or host restart. Unavailable snapshots refuse; relisting gives current facts, not the original array.", offset: "With pulls: the preceding page's pulls.next; zero by default.", limit: "With pulls: integer from 1 to 20, 20 by default; each page also fits 16000 UTF-8 bytes of JSON. Records are never cut; an array with an oversized fact stays inline in the list.", maxChars: "Report/transcript only: at most this many characters (default 8000).", report: "Exact stored report ID to inspect instead of latest narration. Reading never resolves its question.", afterAction: "Page pending action-only follow-ups after this exact report ID, including an already resolved cursor. Reads never resolve them.", afterAsk: "Page pending report questions after this exact report ID. Reading does not answer them." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
@@ -741,7 +766,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_report",
-      description: `Tell this Thread's ${APEX_WORD}, the Thread that started it, how its work stands: done, failed, blocked or needs-input (which wake it), or progress (which doesn't). Its first sentence is the line it reads.`,
+      description: `Tell this Thread's ${APEX_WORD}, the Thread that started it, how its work stands: done, failed, blocked or needs-input (which wake it), or progress (which doesn't). Its first sentence is the line it reads. ${REPORT_FOLLOW_UP_INSTRUCTIONS}`,
       fields: {
         status: "done, failed, blocked, needs-input or progress.",
         summary: "What happened, first sentence first; where to read more.",
@@ -751,10 +776,23 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         waitingOn: 'Automatic wakes: {kind:"pull-request", ref:"owner/repo#412" or its URL, until:"checks"|"review"|"merge"}. {kind:"person",what} and {kind:"other",text} record prose only: NO automatic subscription, including for Actions runs or main-commit CI. Inspect subscriptions in the result; an unsupported/unavailable wait needs a verified external notification or an explicit owner to verify its outcome.',
         options: "For a decision: the answers to pick from, each a label of a few words and what it does (detail). The person can pick one with a tap.",
         recommended: "The option you recommend, by its place in options, from 0.",
-        action: "What whoever answers does, in one sentence: \"Pick the branch the release goes from.\"",
+        followUp: "For a local done/failed action-only result, pair action with {ref,version} of its exact immutable target. It stays pending independently of delivery/read/later reports. Questions use their existing ask contract; progress cannot register follow-up.",
+        action: "The exact next action. Local done/failed action-only results also include followUp with a stable target/version; questions keep their existing ask.",
         clientKey: "Your own key for this report: a repeat with it is the same report.",
         supersedes: "Exact IDs of your own report questions to withdraw or replace; summary gives the reason. An unrelated update settles nothing. Progress remains quiet.",
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+  },
+  {
+    verb: "settle",
+    channel: "mako:agents-settle",
+    replay: "replay",
+    filled: [],
+    mcp: {
+      name: "agents_settle",
+      description: "Record an exact disposition of an ordinary report follow-up. Delivery/read never resolves it. This is silent: no Fin reply or new wake. Resolve with explicit outcome evidence; dismiss/supersede only this exact action. Defer stays pending. Dispatch/handoff names an admitted request to your own Fin and stays pending under that custodian. Source Apex retains final disposition, even after receiver failure/Stop/archive. Reclaim returns custody to Apex. No success/report auto-resolves it. Questions/approvals still use agents_answer and their existing access rules.",
+      fields: { to: "Your Fin's name or Thread ID.", report: "Exact follow-up report ID from agents_read.actions.", version: "The action's current version (not the target's version). Stale versions refuse.", target: "Exact {ref,version} returned for this action; cannot be retargeted.", disposition: "resolve with caller-verified evidence; dismiss with reason; reclaim with reason (pending under source Apex); defer with reason/resume (still pending); supersede with exact newer report/reason; dispatch or handoff with to and actual request receipt. No permission or merge authority is inferred.", clientKey: "Stable operation key; exact retries return the first result, changed inputs refuse." },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },

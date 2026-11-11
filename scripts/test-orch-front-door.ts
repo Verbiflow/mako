@@ -523,3 +523,5 @@ try {
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
+
+await import("./test-orch-action-cadence.ts")
