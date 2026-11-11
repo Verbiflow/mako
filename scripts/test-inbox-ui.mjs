@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
@@ -29,6 +29,13 @@ if (process.versions.electron) {
   const portAt = process.argv.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(process.argv[portAt + 1])
   const root = testScratch("mako-inbox-ui-")
+  // Normal CI uploads this configured root; testScratch intentionally retains media only, not metadata JSON.
+  let boundaryEvidence = root
+  if (process.env.MAKO_TEST_EVIDENCE) {
+    const parent = resolve(process.env.MAKO_TEST_EVIDENCE)
+    await mkdir(parent, { recursive: true })
+    boundaryEvidence = await mkdtemp(join(parent, "inbox-boundary-"))
+  }
   const server = await createServer({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
@@ -37,7 +44,7 @@ if (process.versions.electron) {
   })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-inbox-check", main: fileURLToPath(import.meta.url) }))
-  const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0] }
+  const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0], MAKO_INBOX_BOUNDARY_EVIDENCE: boundaryEvidence }
   delete env.ELECTRON_RUN_AS_NODE
   try {
     const child = spawn(resolve("node_modules/.bin/electron"), [root], { stdio: "inherit", env })
@@ -74,6 +81,7 @@ async function checkWindow() {
   atSize(window, 1440, 900)
   const page = window.webContents
   page.debugger.attach("1.3")
+  const boundaryDeadline = Date.now() + 120_000
   const guard = guardElectronCheck({ app, page, name: "The Inbox UI check", ms: 120_000 })
   const errors = []
   page.on("console-message", (details) => {
@@ -99,9 +107,10 @@ async function checkWindow() {
     }
   }
   const move = (x, y) => page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x, y })
-  const click = async (selector) => {
-    const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target ' + ${JSON.stringify(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
+  const click = async (selector, boundary = false) => {
+    const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target ' + ${JSON.stringify(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); const point = {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)}; if (${boundary}) window.inboxBoundaryProbe.target(node, r, point); return point })()`)
     await move(point.x, point.y)
+    if (boundary) await evaluate(`window.inboxBoundaryProbe.point(${JSON.stringify(point)})`)
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
   }
@@ -244,7 +253,18 @@ async function checkWindow() {
   console.log(`PASS: answering ${answer === "allow" ? "Allow once" : "the first option"} in the Inbox moves the Fin to working everywhere (${await rollup()})`)
   await capture("desktop-inbox-answered.png")
 
-  await checkInboxNavigation({ window, page, base, evaluate, until, frames, click, capture })
+  let boundaryRecords = 0
+  const recordBoundary = async (evidence, { signal, deadline }) => {
+    signal.throwIfAborted()
+    if (Date.now() >= deadline) throw new Error("Inbox evidence write not started: diagnostic deadline exhausted")
+    const text = JSON.stringify(evidence, null, 2)
+    const bytes = Buffer.byteLength(text) + 1, attemptedRecord = ++boundaryRecords
+    if (bytes > 1024 * 1024 || attemptedRecord > 16) throw new Error(`Inbox boundary evidence incomplete: bytes=${bytes}/1048576, record=${attemptedRecord}/16; nothing written`)
+    const file = join(process.env.MAKO_INBOX_BOUNDARY_EVIDENCE ?? root, `open-boundary-${boundaryRecords}.json`)
+    await writeFile(file, text + "\n", { flag: "wx", mode: 0o600, signal })
+    console.log(`Inbox boundary metadata: ${file}`)
+  }
+  await checkInboxNavigation({ window, page, base, evaluate, until, frames, click, capture, recordBoundary, boundaryDeadline })
 
   // 5. The phone: the Inbox chip with its count, Needs you / Working / Recent, the asking Fins as rows of their own.
   window.setContentSize(390, 844)

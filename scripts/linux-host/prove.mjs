@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { z } from "zod"
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
@@ -48,6 +49,7 @@ const failed = (failure) => {
 // isolated in a scratch root (`HostEnvironment.isolated`), and serves its catalog through the shared reader.
 const dataRoot = join(homedir(), ".mako")
 let host
+let primary = { kind: "returned" }
 try {
   // No Electron to find, from the host's install or from the host package itself.
   const program = createRequire(import.meta.url).resolve("@mako/host/mako-host")
@@ -180,29 +182,88 @@ try {
     }
   }
 } catch (error) {
-  failed(error instanceof Error ? error.stack ?? error.message : String(error))
+  primary = { kind: "threw", value: error }
+  const detail = proofError(error)
+  failed(detail.stack ?? detail.message)
 } finally {
+  const steps = []
+  let stopped = false, inspected = false, removed = false
   if (host) {
-    report.stop = await host.stop()
-    if (report.stop.code === 0) passed("SIGTERM", { note: `exited 0 in ${Math.round(report.stop.stopMs)} ms` })
-    else failed(`the host exited ${report.stop.code ?? report.stop.signal} on SIGTERM`)
-    const log = await readFile(host.log, "utf8").catch(() => "")
-    await writeFile(join(evidence, "host.log"), log)
-    report.warnings = log.split("\n").filter((line) => / (warn|error) /.test(line))
-    for (const line of report.warnings) console.log(`log  ${line}`)
-    await delay(500)
-    const stayed = await othersRunning()
-    const unexpected = stayed.filter(({ args }) => !sharedDaemon(args))
-    for (const { args } of unexpected) failed(`still running after the host stopped: ${args}`)
-    if (!unexpected.length) passed("only Mako's shared daemons outlive the host", { note: stayed.map(({ args }) => args).join(", ") || "none" })
-    await rm(dataRoot, { recursive: true, force: true })
-    const began = performance.now()
-    while ((report.leftovers = await othersRunning()).length && performance.now() - began < 20_000) await delay(250)
-    for (const { args } of report.leftovers) failed(`still running 20 s after its data was deleted: ${args}`)
-    if (!report.leftovers.length) passed("each leaves on its own once idle and its data is gone", { note: `in ${Math.round(performance.now() - began)} ms` })
+    steps.push(["host stop", async () => {
+      report.stop = await host.stop()
+      stopped = z.union([z.object({ code: z.number().int() }), z.object({ signal: z.string().min(1) })]).safeParse(report.stop).success
+      if (!stopped) throw new Error("The host's exit is unobserved; its data must be retained")
+      if (report.stop.code === 0) passed("SIGTERM", { note: `exited 0 in ${Math.round(report.stop.stopMs)} ms` })
+      else failed(`the host exited ${report.stop.code ?? report.stop.signal} on SIGTERM`)
+    }])
+    steps.push(["host log", async () => {
+      const log = await readFile(host.log, "utf8")
+      await writeFile(join(evidence, "host.log"), log)
+      report.warnings = log.split("\n").filter((line) => / (warn|error) /.test(line))
+      for (const line of report.warnings) console.log(`log  ${line}`)
+    }])
+    steps.push(["remaining processes", async () => {
+      await delay(500)
+      const stayed = await othersRunning()
+      const unexpected = stayed.filter(({ args }) => !sharedDaemon(args))
+      for (const { args } of unexpected) failed(`still running after the host stopped: ${args}`)
+      inspected = unexpected.length === 0
+      if (inspected) passed("only Mako's shared daemons outlive the host", { note: stayed.map(({ args }) => args).join(", ") || "none" })
+    }])
+    steps.push(["data removal", async () => {
+      if (!stopped || !inspected) throw new Error("Data removal not attempted: host exit or the original survivor check is unconfirmed")
+      await rm(dataRoot, { recursive: true, force: true })
+      removed = true
+    }])
+    steps.push(["daemon retirement", async () => {
+      if (!removed) throw new Error("Daemon retirement after data removal is unverified: removal did not finish")
+      const began = performance.now()
+      while ((report.leftovers = await othersRunning()).length && performance.now() - began < 20_000) await delay(250)
+      for (const { args } of report.leftovers) failed(`still running 20 s after its data was deleted: ${args}`)
+      if (!report.leftovers.length) passed("each leaves on its own once idle and its data is gone", { note: `in ${Math.round(performance.now() - began)} ms` })
+    }])
   }
-  report.status = report.failures.length ? "failed" : "passed"
-  await writeFile(join(evidence, "result.json"), `${JSON.stringify(report, null, 2)}\n`)
+  // A failed cleanup must not suppress its result or replace the proof's original thrown value.
+  process.exitCode = 1
+  await finalizeProof(report, primary, steps, () => writeFile(join(evidence, "result.json"), `${JSON.stringify(report, null, 2)}\n`))
   console.log(`Linux proof ${report.status}`)
   process.exitCode = report.failures.length ? 1 : 0
+}
+
+/** Only this proof's result boundary: every cleanup is attempted and result publication is independent. */
+async function finalizeProof(report, primary, steps, publish) {
+  const errors = primary.kind === "threw" ? [{ stage: "proof", value: primary.value }] : []
+  report.cleanup = []
+  const record = (stage, value) => {
+    errors.push({ stage, value })
+    report.failures.push(`${stage}: ${proofError(value).message}`)
+  }
+  for (const [stage, run] of steps) {
+    try { await run(); report.cleanup.push({ stage, outcome: "completed" }) }
+    catch (error) { record(stage, error); report.cleanup.push({ stage, outcome: "failed" }) }
+  }
+  report.errors = errors.map(({ stage, value }) => ({ stage, ...proofError(value) }))
+  report.status = report.failures.length || errors.length ? "failed" : "passed"
+  try { await publish() }
+  catch (error) {
+    record("result publication", error)
+    report.errors = errors.map(({ stage, value }) => ({ stage, ...proofError(value) }))
+    report.status = "failed"
+  }
+  if (errors.length === 1) throw errors[0].value
+  if (errors.length > 1) throw new AggregateError(errors.map(({ value }) => value), "Linux proof and finalization failed", { cause: errors[0].value })
+}
+
+function proofError(value) {
+  try {
+    if (value instanceof Error) return { kind: "error", name: value.name, message: value.message, stack: value.stack }
+    const scalar = z.union([
+      z.undefined().transform(() => ({ kind: "undefined", message: "undefined" })),
+      z.null().transform(() => ({ kind: "null", message: "null" })),
+      z.string().transform(message => ({ kind: "string", message })),
+      z.number().transform(value => ({ kind: "number", message: String(value) })),
+      z.boolean().transform(value => ({ kind: "boolean", message: String(value) })),
+    ]).safeParse(value)
+    return scalar.success ? scalar.data : { kind: "opaque", message: "Non-Error thrown value (retained in the thrown outcome)" }
+  } catch { return { kind: "unreadable", message: "Unreadable thrown value (retained in the thrown outcome)" } }
 }
