@@ -558,7 +558,9 @@ try {
     assert.deepEqual(s.work.paused, [], "nothing paused")
   }
 
-  // A sleeping Mac's deadline already gone: nothing is paused or released, and the turn runs on here when it wakes.
+  // A sleeping Mac's deadline already gone: nothing is released, and the turn is paused and parked, so the Thread reads
+  // idle while the Mac is off, for Continue in the cloud from another device. It goes on here once the Mac hears its
+  // account again; a quit's, which has no deadline to miss, isn't parked.
   {
     const s = setup("too-late")
     const turn = randomUUID()
@@ -567,8 +569,77 @@ try {
     const outcome = await s.moves.move(s.conversation, move(), { why: "sleep", releaseBy: Date.now() })
     assert.equal(outcome.kind, "kept-here")
     assert.match(outcome.kind === "kept-here" ? outcome.reason : "", /There wasn't time/)
-    assert.deepEqual([s.work.paused, s.work.running], [[], turn], "the turn never paused")
+    assert.deepEqual([s.work.paused, s.work.running, s.work.continuedHere], [[turn], undefined, []], "paused, and not going on while the Mac is off")
     assert.equal(state(s)?.state, "here")
+    assert.equal(s.gateway.made.length, 0, "nothing made in the cloud")
+    await s.fresh().unpark()
+    assert.deepEqual(s.work.continuedHere.map(({ continues, stayed }) => ({ continues, stayed })), [{ continues: turn, stayed: true }], "back, it goes on here, as Mako's")
+    await s.fresh().unpark()
+    assert.equal(s.work.continuedHere.length, 1, "once")
+  }
+
+  // A shutdown's handoff out of time while its cloud machine is still getting ready: the turn is paused and parked all
+  // the same, and the cloud Thread made for the move is refused, so the cloud ends its machine.
+  {
+    let ready: () => void = () => undefined
+    const s = setup("shutdown-late", { make: (base) => ({ ...base, cloud: { ...base.cloud, callThread: async (...args) => {
+      if (args[1] === "mako:move-ready") await new Promise<void>((resolve) => { ready = resolve })
+      return base.cloud.callThread(...args)
+    } } }) })
+    const turn = randomUUID()
+    s.work.running = turn
+    s.busy.reasons.push("a tab is running a turn")
+    const id = move()
+    const outcome = await s.moves.move(s.conversation, id, { why: "shutdown", releaseBy: Date.now() + 4_300 })
+    assert.equal(outcome.kind, "kept-here", JSON.stringify(outcome))
+    assert.deepEqual([s.work.paused, s.work.continuedHere], [[turn], []], "paused and parked")
+    ready()
+    for (let tries = 0; !s.gateway.answers.has(id) && tries < 200; tries++) await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(s.gateway.answers.get(id)?.kind, "refused", "the cloud Thread made ahead is refused once it's there")
+    assert.equal(state(s)?.state, "here")
+  }
+
+  // A Thread in the main checkout at work, handed off as the Mac sleeps: its turn paused first, then onto its own branch
+  // as the same session (a fork would leave the paused turn behind), then to the cloud, where the turn goes on.
+  {
+    let onBranch = false
+    const order: string[] = []
+    const s: Setup = setup("own-branch-handoff", { make: (base) => ({
+      ...base,
+      checkout: (id) => (onBranch ? base.checkout(id) : undefined),
+      ownBranch: async (id, options) => {
+        order.push(`own-branch${options?.asItself ? " as itself" : ""}${s.work.running ? " while running" : ""}`)
+        onBranch = true
+        return id
+      },
+      live: { ...base.live, handOff: async (id) => (order.push("pause"), base.live.handOff(id)) },
+    }) })
+    const turn = randomUUID()
+    s.work.running = turn
+    s.busy.reasons.push("a tab is running a turn")
+    const outcome = await s.moves.move(s.conversation, move(), { why: "sleep", releaseBy: Date.now() + 60_000 }, { answer: "handed" })
+    assert.equal(outcome.kind, "released", JSON.stringify(outcome))
+    assert.deepEqual(order.slice(0, 2), ["pause", "own-branch as itself"], "paused, then onto its own branch as itself")
+    assert.deepEqual(s.work.paused, [turn])
+    assert.equal(s.gateway.made[0]?.folder, s.checkout, "the cloud Thread is made at its worktree")
+    for (let tries = 0; !s.steps.some((step) => step.kind === "moved") && tries < 200; tries++) await new Promise((resolve) => setTimeout(resolve, 10))
+    const continued = s.gateway.calls.find((call) => call.channel === "mako:live-continue-turn")
+    assert.deepEqual(ArgsSchema.parse(continued?.args)[2], { reason: "handed-off", continues: turn }, "the paused turn goes on in the cloud")
+    assert.deepEqual(s.steps.map((step) => step.kind), ["pausing", "own-branch", "packing", "pausing", "handing-over", "resuming", "moved"])
+  }
+
+  // Handed off, a Thread in the main checkout that can't go onto its own branch as itself stays, its turn parked as the
+  // Mac goes off; on a quit, its turn goes on here at once.
+  for (const why of ["sleep", "quit"] as const) {
+    const s = setup(`own-branch-refused-${why}`, { make: (base) => ({ ...base, checkout: () => undefined, ownBranch: async () => { throw new Error("It couldn't go onto its own branch as the same session.") } }) })
+    const turn = randomUUID()
+    s.work.running = turn
+    s.busy.reasons.push("a tab is running a turn")
+    const outcome = await s.moves.move(s.conversation, move(), { why, ...why === "sleep" && { releaseBy: Date.now() + 60_000 } })
+    assert.equal(outcome.kind, "kept-here")
+    assert.deepEqual(s.work.paused, [turn])
+    assert.deepEqual(s.work.continuedHere.map((each) => each.continues), why === "sleep" ? [] : [turn], why)
+    assert.equal(s.steps.at(-1)?.kind, "kept-here")
   }
 
   // Paused, then the cloud refuses (its machine couldn't take the Thread): taken back, and the turn goes on here as Mako's.

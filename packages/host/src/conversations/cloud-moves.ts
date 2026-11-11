@@ -10,7 +10,7 @@ import { RecordHoldingsSchema, describeSync, withFreshLink, type RecordsLink, ty
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { CloudRepositorySchema, type CloudRepository, type MoveCarried, type MoveSent, type ThreadHandOff, type ThreadMoveOutcome, type ThreadMoveStep } from "../contracts/cloud-threads.js"
+import { CloudRepositorySchema, goesOff, type CloudRepository, type MoveCarried, type MoveSent, type ThreadHandOff, type ThreadMoveOutcome, type ThreadMoveStep } from "../contracts/cloud-threads.js"
 import { hostCallInput, toHostOperation } from "../contracts/host-operations.js"
 import { decodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import type { LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
@@ -75,6 +75,8 @@ const ReadyAnswerSchema = z.object({ folder: z.string(), carry: z.boolean().opti
 
 /** What a sleeping Mac's handoff must leave for the release and the hand-over after the pause. */
 const RELEASE_TAKES_MS = 4_000
+/** Why a Mac going off kept a Thread it couldn't release in time. */
+const TOO_LATE = "There wasn't time to hand it off before this Mac went off. It waits, paused: Continue in the cloud from another device takes it, or it goes on here when this Mac is back."
 /**
  * How long this host waits for the cloud's answer to a move it carries through: its arrival refuses the move within
  * two minutes if its machine can't take the Thread, and a claim follows a machine's arrival at once.
@@ -168,7 +170,7 @@ export const MovePlanSchema = z.object({
   handoff: HandoffSchema.optional(),
   /** A move that pauses running turns to take them along (`ThreadHandOff`), and what it paused. */
   handingOff: z.object({
-    why: z.enum(["asked", "quit", "sleep"]),
+    why: z.enum(["asked", "quit", "sleep", "shutdown"]),
     releaseBy: z.number().optional(),
     /** Each turn to continue where the Thread lands, with the background work its agent had left running, stopped. */
     paused: z.array(z.object({ conversationId: z.string(), requestId: z.string(), stopped: z.array(z.string()).default([]) })).default([]),
@@ -190,6 +192,20 @@ export const MovePlanSchema = z.object({
 })
 const PlanSchema = MovePlanSchema
 type Plan = z.infer<typeof PlanSchema>
+/** A turn a handoff paused: what to continue where the Thread lands, with the background work it stopped. */
+type Paused = NonNullable<Plan["handingOff"]>["paused"][number]
+
+/**
+ * Turns a handoff paused as this Mac went off, for a Thread that didn't move (`goesOff`): none goes on here until this
+ * Mac hears its account again, so the Thread reads idle for Continue in the cloud from another device meanwhile.
+ */
+const ParkedSchema = z.object({
+  version: z.literal(1),
+  turns: z.array(z.object({ move: z.string(), thread: z.string(), conversationId: z.string(), requestId: z.string(), stopped: z.array(z.string()).default([]), at: z.number() })),
+})
+type Parked = z.infer<typeof ParkedSchema>["turns"][number]
+/** A parked turn nothing took up for this long is forgotten. */
+const PARKED_KEPT_MS = 7 * 24 * 60 * 60_000
 
 /**
  * A checkpoint of the machine's checkout, as this Mac lays it in the Thread's worktree: on this Mac's own branch while
@@ -230,9 +246,10 @@ export type CloudMovesOptions = {
   checkout(conversationId: string): { path: string; worktrees: Array<{ path: string }> } | undefined
   /**
    * Moves the Thread of a conversation in the main checkout onto its own branch, as "Move to its own branch" does,
-   * taking only its own changes; answers the conversation that goes on there (itself, or its fork).
+   * taking only its own changes; answers the conversation that goes on there (itself, or its fork). `asItself`: the
+   * same session or nothing, never a fork, as a handoff's paused turn needs.
    */
-  ownBranch?(conversationId: string): Promise<string>
+  ownBranch?(conversationId: string, options?: { asItself?: boolean }): Promise<string>
   /** The Thread's paths outside its folder that its journal ties to it (`Attribution.changes`' footprint, with evidence). */
   outside?(thread: ThreadId): OutsideCandidate[]
   /** The Thread's file history (`Attribution.threadHistory`), carried so the side it lands on resolves its files alike. */
@@ -350,6 +367,8 @@ export class CloudMoves {
   readonly #joinedContinues = new Set<string>()
   /** By continue this host is joining now, the Sessions the account said it carries: none of them runs here meanwhile. */
   readonly #joining = new Map<string, Set<string>>()
+  /** Writes of the parked turns, one at a time. */
+  #parking: Promise<void> = Promise.resolve()
 
   constructor(options: CloudMovesOptions) {
     this.#options = options
@@ -562,14 +581,24 @@ export class CloudMoves {
     let plan: Plan
     const from = conversationId
     let stage = "plan"
+    /** Turns paused before the Thread went onto its own branch: they go along, or on here if it stays. */
+    const paused: Paused[] = []
     try {
-      // A Thread in the main checkout goes onto its own branch first, taking only its own changes, once nothing else
-      // would keep it here: the rest of the move goes from there, and the main checkout is never the cloud's.
-      if (!handOff && this.#options.ownBranch && !this.#options.checkout(conversationId)) {
+      // A Thread in the main checkout goes onto its own branch first, taking only its own changes: the rest of the move
+      // goes from there, and the main checkout is never the cloud's. Asked by the person, once nothing else would keep
+      // it here. Handed off (a sleep, a shutdown, a quit), its turns are paused first and it goes as itself, never as a
+      // fork: a handoff waits for no turn to end, and a fork would leave the paused turn behind.
+      if (this.#options.ownBranch && !this.#options.checkout(conversationId)) {
         await this.#plan(conversationId, move, handOff, true, "later")
+        const thread = this.#options.threads()?.journalPlacement(conversationId)?.thread
+        if (handOff && thread) {
+          stage = "pause"
+          this.#options.step(conversationId, move, { kind: "pausing" })
+          await this.#pauseTurns(this.#conversationsOf(thread, conversationId), thread, handOff, paused)
+        }
         this.#options.step(conversationId, move, { kind: "own-branch" })
         stage = "own-branch"
-        const going = await this.#options.ownBranch(conversationId)
+        const going = await this.#options.ownBranch(conversationId, { asItself: handOff !== undefined })
         if (going !== conversationId) this.#options.step(conversationId, move, { kind: "own-branch", to: going })
         conversationId = going
         // A fork has no session of its harness's until its first turn, so there's nothing of it to carry yet.
@@ -579,6 +608,7 @@ export class CloudMoves {
       stage = conversationId === from ? "plan" : "plan-on-branch"
       plan = await this.#plan(conversationId, move, handOff)
       if (conversationId !== from) plan.from = from
+      if (plan.handingOff) plan.handingOff.paused.push(...paused)
       this.#leaving.set(move, plan.thread)
       // Kept ready while it worked: its records and checkout are there already, and only the last seconds go.
       stage = "standby"
@@ -591,7 +621,9 @@ export class CloudMoves {
     } catch (error) {
       const reason = errorMessage({ error })
       logMoveDiagnostic(() => hostWarn("moves", "a move stayed here before its plan was saved", { move, conversation: from, ...conversationId !== from && { currentConversation: conversationId }, stage, ...moveDiagnosticReason({ error }) }))
-      this.#options.step(conversationId, move, { kind: "kept-here", reason })
+      const placed = this.#options.threads()?.journalPlacement(conversationId)
+      await this.#stayed(move, placed?.thread, handOff, paused, [conversationId])
+      this.#options.step(conversationId, move, { kind: "kept-here", reason, ...paused.length && { continued: true } })
       return { kind: "kept-here", reason }
     }
     await this.#write(plan)
@@ -677,7 +709,7 @@ export class CloudMoves {
     if (plan.phase === "preparing") {
       step({ kind: "packing" })
       try {
-        await this.#ahead(plan)
+        await this.#inTime(plan, () => this.#ahead(plan))
         if (plan.handingOff) {
           step({ kind: "pausing" })
           await this.#pause(plan)
@@ -744,8 +776,12 @@ export class CloudMoves {
       // The cloud starts each conversation and carries each paused turn on; this Mac follows them there.
       for (const session of plan.sessions)
         await this.#options.cloud.adopt({ conversationId: session.conversationId, threadId: plan.cloudThread, harness: session.harness, repository: plan.repository })
-      // A continue was handed over by the account, before anything waited here: what waits now goes after it.
-      if (plan.continued) await named("The messages typed here couldn't be sent to the cloud", this.#sendWaiting(plan))
+      // A continue was handed over by the account, before anything waited here: the turns this Mac paused as it went
+      // off go on there, then what waits here now goes after them.
+      if (plan.continued) {
+        await named("The turns paused as this Mac went off couldn't be continued in the cloud", this.#sendParked(plan))
+        await named("The messages typed here couldn't be sent to the cloud", this.#sendWaiting(plan))
+      }
       plan.phase = "started"
       plan.timings.started = Date.now() - plan.began
       await this.#write(plan)
@@ -804,22 +840,60 @@ export class CloudMoves {
     const handingOff = plan.handingOff
     if (!handingOff) return
     const late = () => handingOff.releaseBy !== undefined && Date.now() > handingOff.releaseBy - RELEASE_TAKES_MS
-    if (late()) throw new Error("There wasn't time to hand it off before this Mac slept; it goes on here when the Mac wakes.")
-    for (const { conversationId } of plan.sessions) {
-      const paused = await this.#options.live.handOff(conversationId)
-      if (paused && !handingOff.paused.some((each) => each.requestId === paused.requestId)) handingOff.paused.push({ conversationId, ...paused })
+    // Late, a Mac going off still pauses its turns, so nothing runs on it as it goes; the Thread stays (`#keep`).
+    if (late() && !goesOff(handingOff)) throw new Error(TOO_LATE)
+    await this.#pauseTurns(plan.sessions.map((session) => session.conversationId), plan.thread, handingOff, handingOff.paused, () => this.#write(plan))
+    // Released only with time left for the hand-over; otherwise it stays, as `#keep` says.
+    if (late()) throw new Error(TOO_LATE)
+    plan.timings.paused = Date.now() - plan.began
+  }
+
+  /**
+   * Each running turn of `conversations` paused, its waiting messages held, into `paused`; then the Thread waits to be
+   * quiet, `PAUSE_SETTLES_MS` and to the handoff's deadline at most.
+   */
+  async #pauseTurns(conversations: readonly string[], thread: ThreadId, handOff: ThreadHandOff, paused: Paused[], saved?: () => Promise<void>): Promise<void> {
+    for (const conversationId of conversations) {
+      const each = await this.#options.live.handOff(conversationId)
+      if (each && !paused.some((known) => known.requestId === each.requestId)) paused.push({ conversationId, ...each })
     }
-    await this.#write(plan)
-    const until = Math.min(Date.now() + PAUSE_SETTLES_MS, handingOff.releaseBy ?? Number.POSITIVE_INFINITY)
+    await saved?.()
+    const until = Math.min(Date.now() + PAUSE_SETTLES_MS, handOff.releaseBy ?? Number.POSITIVE_INFINITY)
     for (;;) {
-      const busy = await this.#options.moves.settledBlockers(plan.thread, 0)
-      if (!busy.length) break
+      const busy = await this.#options.moves.settledBlockers(thread, 0)
+      if (!busy.length) return
       if (Date.now() >= until) throw new Error(`Its agents didn't pause in time: ${busy.join("; ")}.`)
       await new Promise((resolve) => setTimeout(resolve, PAUSE_LOOK_MS))
     }
-    // Released only with time left for the hand-over; otherwise it goes on here, as if it had never paused.
-    if (late()) throw new Error("There wasn't time to hand it off before this Mac slept; it goes on here when the Mac wakes.")
-    plan.timings.paused = Date.now() - plan.began
+  }
+
+  /** The Thread's conversations a move takes: `asked` for its own Session, each other Session's newest, archived ones left. */
+  #conversationsOf(thread: ThreadId, asked: string): string[] {
+    return (this.#options.threads()?.threadSessions(thread) ?? []).flatMap((moving) => {
+      const conversation = moving.journals.includes(asked) ? asked : moving.journals.at(-1)
+      return conversation && (conversation === asked || !this.#options.archived?.(conversation)) ? [conversation] : []
+    })
+  }
+
+  /**
+   * `start`'s work, unless a Mac going off reaches its deadline first: then the move stays, and nothing starts once
+   * it's past. What went ahead goes on by itself, and a cloud Thread it makes, this move's alone, is refused once it's
+   * there, so the cloud ends its machine.
+   */
+  async #inTime(plan: Plan, start: () => Promise<void>): Promise<void> {
+    const releaseBy = plan.handingOff?.releaseBy
+    if (!goesOff(plan.handingOff) || releaseBy === undefined) return start()
+    if (Date.now() >= releaseBy - RELEASE_TAKES_MS) throw new Error(TOO_LATE)
+    const work = start()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<"late">((resolve) => { timer = setTimeout(() => resolve("late"), Math.max(0, releaseBy - RELEASE_TAKES_MS - Date.now())) })
+    try {
+      if ((await Promise.race([work.then(() => "done" as const), late])) === "done") return
+    } finally {
+      clearTimeout(timer)
+    }
+    void work.then(() => this.#refuse(plan, TOO_LATE)).catch(() => undefined)
+    throw new Error(TOO_LATE)
   }
 
   /**
@@ -1030,21 +1104,98 @@ export class CloudMoves {
       // The cloud Thread made ahead was this move's alone: refused, the cloud ends its machine now, not at its lease's end.
       if (plan.timings.made !== undefined) await this.#refuse(plan, reason)
     }
-    // A turn the handoff paused goes on here, as Mako's: nothing of it was lost, and nothing waits for the person.
     const paused = plan.handingOff?.paused ?? []
-    for (const { conversationId, requestId, stopped } of paused) {
-      try {
-        this.#options.live.continueTurn(conversationId, { requestId: namedUuid(`mako move\0${plan.move}\0${requestId}\0continue-here`), reason: "handed-off", continues: requestId, stopped, stayed: true, actor: { kind: "service", name: "handoff" } })
-      } catch (error) {
-        hostWarn("moves", "a turn the handoff paused couldn't continue here", { move: plan.move, conversation: conversationId, error: errorMessage({ error }) })
-      }
-    }
+    await this.#stayed(plan.move, plan.thread, plan.handingOff, paused, plan.sessions.map((session) => session.conversationId))
     plan.phase = "kept-here"
     plan.reason = reason
     await this.#write(plan)
     hostLog("moves", "a Thread stayed here", { move: plan.move, released, reason, continued: paused.length })
     this.#options.step(plan.asked, plan.move, { kind: "kept-here", reason, ...paused.length && { continued: true } })
     return { kind: "kept-here", reason }
+  }
+
+  /**
+   * A move that may have paused turns stayed here. A Mac going off parks them, pausing any turn of the Thread still
+   * running too, so the Thread reads idle while the Mac is off and Continue in the cloud from another device can take
+   * it; they go on here once this Mac hears its account again (`unpark`). Otherwise each goes on here now.
+   */
+  async #stayed(move: string, thread: string | undefined, handOff: ThreadHandOff | undefined, paused: Paused[], conversations: readonly string[]): Promise<void> {
+    if (goesOff(handOff) && thread) {
+      for (const conversationId of conversations) {
+        const each = await this.#options.live.handOff(conversationId).catch((error: Error) => {
+          hostWarn("moves", "a turn couldn't be paused as this Mac went off", { move, conversation: conversationId, error: error.message })
+          return undefined
+        })
+        if (each && !paused.some((known) => known.requestId === each.requestId)) paused.push({ conversationId, ...each })
+      }
+      if (!paused.length) return
+      const at = Date.now()
+      await this.#changeParked((parked) => [...parked.filter((known) => !paused.some((turn) => turn.requestId === known.requestId)), ...paused.map((turn) => ({ move, thread, ...turn, at }))])
+        .catch((error: Error) => hostWarn("moves", "the turns paused as this Mac went off couldn't be kept; they wait for Continue turn", { move, error: error.message }))
+      hostLog("moves", "turns paused as this Mac went off wait for it to be back, or for Continue in the cloud", { move, thread, turns: paused.length })
+      return
+    }
+    for (const turn of paused) this.#continueHere(move, turn)
+  }
+
+  /** A turn a handoff paused goes on here, as Mako's: nothing of it was lost, and nothing waits for the person. */
+  #continueHere(move: string, { conversationId, requestId, stopped }: Paused): void {
+    try {
+      this.#options.live.continueTurn(conversationId, { requestId: namedUuid(`mako move\0${move}\0${requestId}\0continue-here`), reason: "handed-off", continues: requestId, stopped, stayed: true, actor: { kind: "service", name: "handoff" } })
+    } catch (error) {
+      hostWarn("moves", "a turn the handoff paused couldn't continue here", { move, conversation: conversationId, error: errorMessage({ error }) })
+    }
+  }
+
+  /**
+   * This Mac heard its account again (`OwnerCheck`): each turn parked as it went off goes on here, if its Thread is
+   * still here and not on its way. One the account continued in the cloud meanwhile goes there with the continue this
+   * Mac joins (`#sendParked`).
+   */
+  async unpark(): Promise<void> {
+    const threads = this.#options.threads()
+    if (!threads) return
+    const here = (thread: string) => {
+      const id = ThreadIdSchema.safeParse(thread)
+      return id.success && !this.leaving(thread) &&
+        threads.threadSessions(id.data).every(({ session }) => (threads.execution(session)?.state ?? "here") === "here" && !this.joining(session))
+    }
+    const going: Parked[] = []
+    await this.#changeParked((parked) => parked.filter((turn) => {
+      if (!here(turn.thread)) return true
+      going.push(turn)
+      return false
+    }))
+    for (const turn of going) this.#continueHere(turn.move, turn)
+    if (going.length) hostLog("moves", "turns paused as this Mac went off go on here", { turns: going.length })
+  }
+
+  /** The turns this Mac parked for the Thread a joined continue took: each continued in the cloud, as a handoff's is. */
+  async #sendParked(plan: Plan): Promise<void> {
+    const mine = (await this.#parkedTurns()).filter((turn) => turn.thread === plan.thread)
+    if (!mine.length) return
+    for (const { move, conversationId, requestId, stopped } of mine)
+      await this.#options.cloud.callThread(plan.cloudThread, "mako:live-continue-turn", [conversationId, namedUuid(`mako move\0${move}\0${requestId}\0continue`), { reason: "handed-off", continues: requestId, ...stopped.length && { stopped } }], conversationId)
+    await this.#changeParked((parked) => parked.filter((turn) => turn.thread !== plan.thread))
+    hostLog("continues", "turns paused as this Mac went off go on in the cloud with the Thread", { move: plan.move, cloudThread: plan.cloudThread, turns: mine.length })
+  }
+
+  async #parkedTurns(): Promise<Parked[]> {
+    const read = ParkedSchema.safeParse(JSON.parse(await readFile(join(this.#options.folder, "parked-turns"), "utf8").catch(() => "null")))
+    return read.success ? read.data.turns : []
+  }
+
+  /** Changes the parked turns, one change at a time, each written whole: `<moves folder>/parked-turns`. */
+  #changeParked(change: (turns: Parked[]) => Parked[]): Promise<void> {
+    const write = this.#parking.then(async () => {
+      const turns = change(await this.#parkedTurns()).filter((turn) => Date.now() - turn.at < PARKED_KEPT_MS)
+      await mkdir(this.#options.folder, { recursive: true })
+      const file = join(this.#options.folder, "parked-turns")
+      await writeFile(`${file}.tmp`, JSON.stringify(ParkedSchema.parse({ version: 1, turns })))
+      await rename(`${file}.tmp`, file)
+    })
+    this.#parking = write.catch(() => undefined)
+    return write
   }
 
   #account(): CloudAccount {
