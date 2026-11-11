@@ -116,26 +116,29 @@ async function checkWindow() {
       return
     }
     if (!Number.isFinite(boundaryDeadline)) throw new Error("INPUT precondition: unknown overall clock; no press")
-    // One original point/hover, then frame-based readiness; reserve both existing diagnostic caps + hard-guard turn.
+    // Settle the exact row before choosing one point/hover; keep both phases within the original input cap.
     const inputDeadline = Math.min(boundaryDeadline - 1100, Date.now() + 1000)
     const check = () => { if (!Number.isFinite(inputDeadline) || Date.now() >= inputDeadline) throw new Error("INPUT precondition: preparation clock exhausted; outcome UNKNOWN, no press") }
     const prepare = async () => {
       try {
         check()
-        const chosen = await evaluate(`(() => { if (Date.now() >= ${JSON.stringify(inputDeadline)}) throw new Error('INPUT precondition: expired target evaluation; no press'); const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('INPUT precondition: missing click target'); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); const point = {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)}; return window.inboxBoundaryProbe.target(node, r, point, ${JSON.stringify(inputDeadline)}) })()`)
+        const chosen = await evaluate(`(() => { if (Date.now() >= ${JSON.stringify(inputDeadline)}) throw new Error('INPUT precondition: expired target evaluation; no press'); const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('INPUT precondition: missing click target'); const chosen = window.inboxBoundaryProbe.target(node, ${JSON.stringify(inputDeadline)}); node.scrollIntoView({ block: 'nearest' }); return chosen })()`)
         check()
-        const point = chosen.point
-        if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) throw new Error("INPUT precondition: nonfinite point; no press")
-        await move(point.x, point.y)
-        while (true) {
+        const sample = async point => {
           check()
           const lease = { owner: chosen.owner, key: chosen.key, deadline: inputDeadline }
           const receipt = await evaluate(`(() => { if (Date.now() >= ${inputDeadline}) throw new Error('INPUT precondition: expired frame evaluation; no press'); return new Promise((resolve, reject) => requestAnimationFrame(frame => { try { const lease = ${JSON.stringify(lease)}; const probe = window.inboxBoundaryProbe; if (probe?.id !== lease.owner) throw new Error('INPUT precondition: probe ownership changed; no press'); resolve(probe.point(${JSON.stringify(point)}, {...lease, frame})) } catch (error) { reject(error) } })) })()`)
           check()
-          if (receipt?.owner !== chosen.owner || receipt?.key !== chosen.key || receipt?.point?.x !== point.x || receipt?.point?.y !== point.y) throw new Error("INPUT precondition: foreign/malformed readiness receipt; no press")
-          if (receipt.ready === true) break
-          if (receipt.ready !== false) throw new Error("INPUT precondition: unknown readiness; no press")
+          if (receipt?.owner !== chosen.owner || receipt?.key !== chosen.key || (point !== null && (receipt?.point?.x !== point.x || receipt?.point?.y !== point.y))) throw new Error("INPUT precondition: foreign/malformed readiness receipt; no press")
+          if (receipt.ready !== true && receipt.ready !== false) throw new Error("INPUT precondition: unknown readiness; no press")
+          return receipt
         }
+        let settled
+        do { settled = await sample(null) } while (!settled.ready)
+        const point = settled.point
+        if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) throw new Error("INPUT precondition: nonfinite point; no press")
+        await move(point.x, point.y)
+        while (!(await sample(point)).ready) { /* The chosen point is never resampled after hover. */ }
         return point
       } catch (error) { throw new Error("INPUT precondition: preparation refused; no press", { cause: error }) }
     }
