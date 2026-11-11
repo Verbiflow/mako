@@ -171,6 +171,21 @@ try {
   const repeatedAnswer = await call(stdio, "agents_answer", decision)
   assert.equal(repeatedAnswer.ask, question.id)
   assert.equal(repeatedAnswer.deduped, true)
+  const target = { ref: "fixture:sidebar-review", version: "head-1" }
+  const action = await world.agents.report(world.caller(first.conversation), { status: "done", summary: "Action-only review handoff.", action: "Dispatch exact sidebar review.", followUp: target, clientKey: "action-only" })
+  assert.ok(!("refused" in action), JSON.stringify(action))
+  const disposition = { kind: "defer", reason: "Review slot pending.", resume: "Exact review slot assigned." }
+  const settlement = { to: "sidebar", report: action.id, version: 1, target, disposition, clientKey: "same-action-disposition" }
+  const deferred = await call(thread, "agents_settle", settlement)
+  assert.equal(deferred.refused, undefined)
+  const duplicateDisposition = await call(stdio, "agents_settle", settlement)
+  assert.equal(duplicateDisposition.deduped, true)
+  assert.deepEqual(await command("settle", "sidebar", "--report", action.id, "--version", "1", "--target", JSON.stringify(target), "--disposition", JSON.stringify(disposition), "--key", "same-action-disposition"), duplicateDisposition, "CLI/stdio/in-Thread resolve the exact same durable operation")
+  const pendingAction = z.object({ actions: z.object({ items: z.array(z.object({ report: z.string(), version: z.number() })) }) }).parse(await call(thread, "agents_read", { child: "sidebar" }))
+  assert.deepEqual(pendingAction.actions.items, [{ report: action.id, version: 2 }], "defer remains pending across all doors")
+  const dismissed = await command("settle", "sidebar", "--report", action.id, "--version", "2", "--target", JSON.stringify(target), "--disposition", JSON.stringify({ kind: "dismiss", reason: "Explicitly withdrawn at this exact target." }), "--key", "close-deferred-action")
+  assert.equal(dismissed.refused, undefined)
+  assert.equal((await call(thread, "agents_read", { child: "sidebar" })).actions, undefined, "silent exact disposition clears no unrelated question")
   const unknown = [await call(thread, "agents_stop", { child: "nobody" }), await command("stop", "nobody")]
   assert.equal(unknown[0]!.refused, "unknown-child")
   assert.deepEqual(unknown[1], unknown[0], "mako agents exits 1 with the same refusal")

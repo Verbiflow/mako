@@ -13,6 +13,7 @@ import {
   type AgentsMoveInput,
   type AgentsReadInput,
   type AgentsReportInput,
+  type AgentsSettleInput,
   type AgentsSendInput,
   type AgentsStartInput,
   type AgentsStopInput,
@@ -42,6 +43,7 @@ export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOp
   methods.handle("mako:agents-read", async (caller: AgentCaller, input: AgentsReadInput) => {
     const service = agents()
     if (!service) return UNAVAILABLE
+    if (input.view === "pulls" && input.afterAction !== undefined) return { refused: "conflict", why: "afterAction applies to report follow-up pages, not PR snapshots." } satisfies AgentRefused
     if (input.view === "pulls") return listResults.read(caller, await service.read(caller, { child: input.child, view: "report", maxChars: 200 }), input)
     if (input.snapshot !== undefined || input.offset !== undefined || input.limit !== undefined)
       return { refused: "conflict", why: "snapshot, offset and limit apply only to view pulls." } satisfies AgentRefused
@@ -49,6 +51,7 @@ export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOp
   })
   methods.handle("mako:agents-report", (caller: AgentCaller, input: AgentsReportInput) => agents()?.report(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-send", (caller: AgentCaller, input: AgentsSendInput) => agents()?.send(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-settle", (caller: AgentCaller, input: AgentsSettleInput) => agents()?.settle(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-answer", (caller: AgentCaller, input: AgentsAnswerInput) => agents()?.answer(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-stop", (caller: AgentCaller, input: AgentsStopInput) => agents()?.stop(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-wait", (caller: AgentCaller, input: AgentsWaitInput) => agents()?.wait(caller, input) ?? UNAVAILABLE)

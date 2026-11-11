@@ -45,7 +45,7 @@ let throwOnList = false
 let listCalls = 0
 let readCalls = 0
 const operations: AgentOperations & PlacementOperations = {
-  start: unavailable, move: unavailable, link: unavailable, report: unavailable, send: unavailable, answer: unavailable, stop: unavailable, wait: unavailable,
+  start: unavailable, move: unavailable, link: unavailable, report: unavailable, send: unavailable, answer: unavailable, settle: unavailable, stop: unavailable, wait: unavailable,
   capabilities: () => ({ orchestration: { version: 1 }, slots: { used: 0, of: 1 }, harnesses: [] }),
   place: unavailable, cancel: unavailable, notice: async () => ({ heard: true }),
   list: async (caller) => {
