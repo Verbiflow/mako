@@ -1,3 +1,4 @@
+import "./test-borrowed-simulator-io.mjs"
 /**
  * iOS simulators from a cloud Thread (design 7.8), end to end without Xcode: a borrower on a cloud machine waits in
  * words, gets a session lease on one of the person's Macs, and drives that Mac's simulator through its real dispatcher

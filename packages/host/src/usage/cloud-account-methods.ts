@@ -1,3 +1,4 @@
+import type { SourceProjectCommand, SourceProjectReceipt } from "@mako/protocol/source-project"
 import type { Advertisement, ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
@@ -42,6 +43,8 @@ export type AccountListGap = { gap: { after: number; seq: number; why: "skipped"
 export type AccountListNotice = AccountListHeard | "account-changed" | "linked" | AccountListGap
 
 export interface CloudAccount {
+  /** Internal control transport; no caller-selected URL or clone authority. */
+  sourceProjectControl?(input: SourceProjectCommand): Promise<SourceProjectReceipt>
   /** A connection token while this Mac is signed in to Mako. */
   token(): Promise<string | undefined>
   /** The cloud's address this Mac reaches, such as `https://api.example.com`; undefined in a build without one. */
@@ -135,8 +138,8 @@ export interface CloudAccount {
   unwaitMessage?(session: string, id: string): Promise<WaitingMessage[]>
   /** This Mac's claim on a message that waited for one of its Sessions, before it runs it here (`CloudAccount.claimWaiting`). */
   claimWaiting?(session: string, id: string): Promise<WaitingClaim>
-  /** The account's devices, by ID, name and kind, and which is this one. */
-  devices?(): Promise<{ devices: Array<{ id: string; name: string; kind?: string }>; current: string }>
+  /** The account's devices, by ID and name, and which is this one. */
+  devices?(): Promise<{ devices: Array<{ id: string; name: string; kind?: string; platform?: string }>; current: string }>
   /** The harness versions the cloud's machines run, or null from a cloud that doesn't say (`CloudAccounts.cloudHarnesses`). */
   cloudHarnesses?(): Promise<CloudHarnesses | null>
   /** The person's access choices as the account keeps them, or null from a cloud that doesn't keep them yet. */
@@ -166,6 +169,8 @@ export interface CloudAccount {
   }
   /** Hears what the account's list of Sessions is told (`AccountListNotice`), in the stream's order, as it comes; returns how to stop. */
   onThreadListings?(listener: (heard: AccountListNotice) => void): () => void
+  /** Hears each time this device's runtime is enrolled on a new link: its account's other devices' calls reach it from then. */
+  onRuntimeLinked?(listener: () => void): () => void
   /** Whether the account's link is open and heard from within a ping: what the account says reaches this Mac now. */
   accountHeard?(): boolean
   /** The account's link tried now if it isn't heard, rather than at its next backoff step: whether it opened (`CloudLink.reach`). */
@@ -268,6 +273,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
   })
   const threadListeners = new Set<(heard: AccountListNotice) => void>()
+  const runtimeListeners = new Set<() => void>()
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
     secrets: secrets.secrets,
@@ -318,6 +324,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     onAccountLinked: () => {
       for (const listener of threadListeners) listener("linked")
+    },
+    onRuntimeLinked: () => {
+      for (const listener of runtimeListeners) listener()
     },
     onRequest: request,
     sessions,
@@ -377,6 +386,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       return state.status === "signed-in" ? state.account.id : undefined
     },
     session: () => cloud.session(),
+    sourceProjectControl: (input) => cloud.sourceProjectControl(input),
     deviceId: () => cloud.deviceId(),
     cloudBlocked: () => cloud.signInsBlocked(),
     createThread: (threadId, repository, options) => cloud.createThread(threadId, repository, options),
@@ -432,6 +442,10 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onThreadListings: (listener) => {
       threadListeners.add(listener)
       return () => threadListeners.delete(listener)
+    },
+    onRuntimeLinked: (listener) => {
+      runtimeListeners.add(listener)
+      return () => runtimeListeners.delete(listener)
     },
     leaving: (why) => cloud.leaving(why),
     accountHeard: () => cloud.accountHeard(),

@@ -560,13 +560,13 @@ export type BrokerState = {
   account: string
   grants: Record<string, GrantState>
   leases: Record<string, LeaseState>
-  /** Each need's answer, by its borrower's Thread and correlation ID. */
+  /** Each need's answer, by the versioned whole-borrower/correlation tuple. */
   answers: Record<string, BorrowAnswer>
   asks: Record<string, AskState>
   devices: Record<string, DeviceState>
   /** The Threads that have ended, by account and Thread, with when: nothing is lent to them after. */
   endedThreads: Record<string, number>
-  /** Needs waiting for a capable device, by their borrower's Thread and correlation ID. */
+  /** Needs waiting for a capable device, by the versioned whole-borrower/correlation tuple. */
   waiting: Record<string, WaitState>
 }
 
@@ -622,24 +622,88 @@ export type BrokerResult = {
  * from another repository or place is another borrower, decided afresh, never handed the first one's answer.
  */
 export function needKey(borrower: Borrower, correlationId: string): string {
-  const place = borrower.place.kind === "device" ? `device:${borrower.place.device}` : `machine:${borrower.place.machine}`
-  return `${borrower.account}\0${borrower.repository}\0${borrower.thread}\0${place}\0${correlationId}`
+  const placeId = borrower.place.kind === "device" ? borrower.place.device : borrower.place.machine
+  return `borrow-need:v2:${JSON.stringify([borrower.account, borrower.repository, borrower.thread, borrower.place.kind, placeId, correlationId])}`
+}
+
+/** Old keys always contain literal NUL separators; never split or interpret them as a borrower. */
+function currentNeedKey(key: string): boolean {
+  return key.startsWith("borrow-need:v2:") && !key.includes("\0")
 }
 
 function borrowerKey(borrower: Borrower): string {
   return `${borrower.account}\0${borrower.repository}\0${borrower.thread}`
 }
 
+/**
+ * Keep current answers, recover old lease answers only from their structured lease/correlation, and rebuild pending
+ * work from its validated Need. Unattributed old refusals miss once. No legacy key is decoded. Canonical work wins
+ * a duplicate from an old writer; leases and the winning ask/wait's IDs and queue times are never rewritten.
+ * An old binary can still make its own ambiguous lookup: this reader does not make rollback to it safe.
+ */
 function clone(state: BrokerState): BrokerState {
+  const answers: BrokerState["answers"] = {}
+  const leaseAnswer = (answer: BorrowAnswer) => {
+    if (!("lease" in answer)) return undefined
+    const held = state.leases[answer.lease.id]
+    const lease = LeaseSchema.safeParse(held?.lease)
+    const correlation = Id.safeParse(held?.correlation)
+    if (!lease.success || !correlation.success || lease.data.borrower.account !== state.account) return undefined
+    return { key: needKey(lease.data.borrower, correlation.data), answer: { lease: lease.data } }
+  }
+  for (const [key, answer] of Object.entries(state.answers)) {
+    if (!currentNeedKey(key)) continue
+    const recovered = leaseAnswer(answer)
+    if (recovered?.key === key) answers[key] = recovered.answer
+    else if ("refusal" in answer && answer.refusal.refused === "declined") answers[key] = answer
+    // A pending answer is valid only while its retained ask below still exists.
+  }
+  const pending = Object.entries(state.asks).flatMap(([id, ask]) => {
+    const need = NeedSchema.safeParse(ask.need)
+    if (!need.success || need.data.for.account !== state.account || ask.ask !== id) return []
+    const key = needKey(need.data.for, need.data.correlationId)
+    const known = state.answers[key]
+    const preferred = known && "pending" in known && known.pending === "source" && known.ask === id ? 0 : 1
+    return [{ id, ask: { ...ask, need: need.data }, key, preferred }]
+  }).sort((a, b) => a.preferred - b.preferred || a.ask.at - b.ask.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const currentPendingKeys = new Set(pending.filter((item) => item.preferred === 0).map((item) => item.key))
+  for (const [key, answer] of Object.entries(state.answers)) {
+    if (currentNeedKey(key)) continue
+    const recovered = leaseAnswer(answer)
+    if (recovered && !currentPendingKeys.has(recovered.key) && !state.waiting[recovered.key] && !answers[recovered.key]) answers[recovered.key] = recovered.answer
+  }
+
+  const asks: BrokerState["asks"] = {}
+
+  for (const { id, ask, key } of pending) {
+    const current = state.answers[key]
+    const canonicalPending = current && "pending" in current && current.pending === "source" && current.ask === id
+    if (answers[key] || (state.waiting[key] && !canonicalPending)) continue
+    const source = state.grants[ask.grant]?.grant.source
+    const device = source?.kind === "device" ? source.device : source?.kind === "capable" ? ask.device : undefined
+    if (!device) continue
+    asks[id] = ask
+    answers[key] = { pending: "source", ask: id, source: { kind: "device", device } }
+  }
+
+  const waiting: BrokerState["waiting"] = {}
+  const line = Object.entries(state.waiting).flatMap(([oldKey, wait]) => {
+    const need = NeedSchema.safeParse(wait.need)
+    if (!need.success || need.data.for.account !== state.account) return []
+    const key = needKey(need.data.for, need.data.correlationId)
+    return [{ wait: { ...wait, need: need.data }, key, preferred: oldKey === key ? 0 : 1 }]
+  }).sort((a, b) => a.preferred - b.preferred || a.wait.since - b.wait.since || (a.wait.ask < b.wait.ask ? -1 : a.wait.ask > b.wait.ask ? 1 : 0))
+  for (const { wait, key } of line) if (!answers[key] && !waiting[key]) waiting[key] = wait
+
   return {
     account: state.account,
     grants: { ...state.grants },
     leases: { ...state.leases },
-    answers: { ...state.answers },
-    asks: { ...state.asks },
+    answers,
+    asks,
     devices: { ...state.devices },
     endedThreads: { ...state.endedThreads },
-    waiting: { ...state.waiting },
+    waiting,
   }
 }
 

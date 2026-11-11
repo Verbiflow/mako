@@ -4,6 +4,8 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
+import { crewEvidencePlugin, CREW_EVIDENCE_PRELOAD, withCrewFailureEvidence, saveCrewInteraction } from "./lib/crew-card-evidence.mjs"
 
 // The crew card (`crew-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
 // its own turn settles and its Fins still work, on the mock bridge's Apex scene (`?mock&app=apex`): every Fin
@@ -33,6 +35,7 @@ if (process.versions.electron) {
     const { createServer } = await import("vite")
     server = await createServer({
       cacheDir: join(root, "cache"),
+      plugins: [crewEvidencePlugin()],
       server: {
         host: "127.0.0.1",
         port: 0,
@@ -102,14 +105,15 @@ window.__benchReset = () => (tally = { commits: 0, components: {} })
 async function check() {
   const { app, BrowserWindow } = await import("electron")
   const root = process.env.MAKO_CREW_UI_ROOT
-  const shots = process.env.MAKO_CREW_UI_SHOTS ?? join(root, "shots")
+  const shots = process.env.MAKO_CREW_UI_SHOTS ?? (process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "crew-card") : join(root, "shots"))
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const base = process.env.MAKO_CREW_UI_URL
   const preload = join(root, "commit-counter.cjs")
-  await writeFile(preload, COMMIT_COUNTER)
+  await writeFile(preload, COMMIT_COUNTER + CREW_EVIDENCE_PRELOAD)
 
   const window = new BrowserWindow({
     width: 1440,
@@ -122,7 +126,13 @@ async function check() {
       sandbox: false,
     },
   })
+  atSize(window, 1440, 900)
   const page = window.webContents
+  await withCrewFailureEvidence({ page, shots }, () => checkPage({ window, page, shots, base }))
+  app.exit(0)
+}
+
+async function checkPage({ window, page, shots, base }) {
   const errors = []
   page.on("console-message", (event) => {
     if (event.level === "error") errors.push(event.message)
@@ -160,9 +170,9 @@ async function check() {
     await capture(`${name}-light`)
     await theme(false)
   }
-  const click = (selector) =>
+  const click = (selector, evidence = false) =>
     evaluate(
-      `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true })()`
+      `(() => { const probe = ${evidence} ? window.__crewEvidence : undefined; probe?.begin(); try { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true } finally { probe?.post() } })()`
     )
   // The card virtualizes past its own height, so a row off screen isn't in the DOM yet: scroll its own scroller
   // top to bottom, a screenful at a time, collecting every row once, in the order it comes into view (the order
@@ -345,11 +355,12 @@ async function check() {
     "[...document.querySelectorAll('[data-sonner-toast]')].forEach((toast) => toast.remove()); true"
   )
   await both("away")
-  await click("[data-crew-away]")
+  assert.equal(await click("[data-crew-away]", true), true, "the crew-away click target exists at dispatch")
   await until(
     "!document.querySelector('[data-crew-away]')",
     "the line leaves once Needs you is back in view"
   )
+  await saveCrewInteraction({ page, shots })
 
   // Working: the current step, time run; the Fin asking its own Apex says so with a turned-back arrow.
   const working = rows12.filter((row) => row.group === "working")
@@ -528,14 +539,30 @@ async function check() {
   )
   assert.ok(forty.scrollable, "the card scrolls inside itself past twenty rows")
   assert.equal(forty.more, false, "no cutoff text, however many Fins there are")
-  const lastTitle = await evaluate("window.apexScene.children().at(-1).title")
+  // The roster's last inserted Fin is a needs-you row, sorted near the top. Check the last queued row in display
+  // order (oldest start first), before the folded settled group, after the virtualizer has painted the scroll.
+  const lastTitle = await evaluate(`(() => {
+    const queued = window.apexScene.children().filter(agent => agent.child.state.kind === 'queued')
+    queued.sort((left, right) => (left.startedAt ?? left.observedAt) - (right.startedAt ?? right.observedAt))
+    return queued.at(-1).title
+  })()`)
   await evaluate(
     "(() => { const scroller = document.querySelector('[data-crew-scroller]'); scroller.scrollTop = scroller.scrollHeight; return true })()"
   )
+  await evaluate("new Promise(done => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))")
   await until(
-    `document.querySelector('[data-crew-scroller]').innerText.includes(${JSON.stringify(lastTitle)})`,
+    `(() => {
+      const scroller = document.querySelector('[data-crew-scroller]')
+      const row = [...scroller.querySelectorAll('[data-crew-row]')].find(row => row.innerText.includes(${JSON.stringify(lastTitle)}))
+      const bounds = row?.getBoundingClientRect(), viewport = scroller.getBoundingClientRect()
+      if (bounds && bounds.top >= viewport.top && bounds.bottom <= viewport.bottom) return true
+      // Measuring newly mounted rows can extend the scroll range. Continue to the end of that measured range.
+      scroller.scrollTop = scroller.scrollHeight
+      return false
+    })()`,
     "the last Fin reachable by scrolling"
   )
+  console.log("SCROLLED LAST", lastTitle)
   await evaluate(
     "document.querySelector('[data-crew]')?.scrollIntoView({ block: 'start' }); true"
   )
@@ -699,5 +726,4 @@ async function check() {
   console.log(
     "Crew card UI: header, order, needs/working/done rows, answers moving everywhere, forty Fins, re-render discipline, and the phone passed"
   )
-  app.exit(0)
 }

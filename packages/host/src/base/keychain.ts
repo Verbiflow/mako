@@ -1,7 +1,7 @@
+import { hostCommand, hostSpawn } from "./host-command.js"
 import type * as Keyring from "@napi-rs/keyring"
-import { execFile, spawn } from "node:child_process"
-import { promisify } from "node:util"
 import { z } from "zod"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /**
  * One generic password in the login keychain. A read without an account
@@ -83,7 +83,7 @@ const SECURITY = "security"
 /** `errSecItemNotFound`, as `security`'s exit status. */
 const NOT_FOUND = 44
 const ExitSchema = z.object({ code: z.number() })
-const run = promisify(execFile)
+const run = hostCommand
 
 /**
  * The value in `security find-generic-password -g`'s report: `password:
@@ -111,12 +111,11 @@ function securityWord(text: string): string {
  */
 function securityCommand(command: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(SECURITY, ["-i"], { stdio: ["pipe", "ignore", "ignore"] })
+    const child = hostSpawn(SECURITY, ["-i"], { stdio: ["pipe", "ignore", "ignore"] })
     child.once("error", reject)
     child.once("close", (code) => resolve(code ?? 1))
     // A `security` that exits before reading closes the pipe; its status says what happened.
-    child.stdin.on("error", () => undefined)
-    child.stdin.end(`${command}\n`)
+    endChildInput(child, `${command}\n`)
   })
 }
 
@@ -130,7 +129,7 @@ const INTERACTIVE_LIMIT = 4032
 /** `security` run with `args`, its output dropped, for its exit status alone. */
 function securityStatus(args: string[]): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(SECURITY, args, { stdio: ["ignore", "ignore", "ignore"] })
+    const child = hostSpawn(SECURITY, args, { stdio: ["ignore", "ignore", "ignore"] })
     child.once("error", reject)
     child.once("close", (code) => resolve(code ?? 1))
   })

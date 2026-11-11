@@ -32,13 +32,15 @@ import {
 } from "../../contracts/simulators.js"
 import { HeldLeases } from "../../base/held-leases.js"
 import { hostLog, hostWarn } from "../../base/host-log.js"
+import { hostStopping, untilStopped } from "../../base/host-stopping.js"
 import type { RemoteSimulatorHost } from "./host.js"
 import { RemoteMacSimulators, type SimulatorHostCall } from "./remote-host.js"
 
 /** What borrowing a simulator needs of the place this host runs at: its Thread's routes to the account's broker. */
 export interface SimulatorBorrowing {
   need(need: Omit<Need, "for">): Promise<BorrowAnswer>
-  release(lease: string): Promise<void>
+  /** A final shutdown release may use its own bounded cleanup signal after the host stopped. */
+  release(lease: string, cleanup?: AbortSignal): Promise<void>
   /** The lease again for its next stretch, or why it can't be. */
   renew(lease: string): Promise<BorrowAnswer>
   /** A host operation, as wire text, to the device serving the lease; its reply as wire text. Throws `LeaseEnded` once it ended. */
@@ -58,12 +60,25 @@ const WordedDevicesSchema = z.object({ devices: z.array(z.object({ id: z.string(
  * A cloud Thread's machine's routes to the account's broker, as its credential names it, for borrowing a simulator.
  * Every answer but a success is a failure, a release's included (`410` is the lease already gone: ended, not failed).
  */
-export function accountBorrowing(link: () => BorrowingLink | null, fetching: typeof fetch = fetch): SimulatorBorrowing {
-  const call = async (method: string, path: string, body?: string): Promise<Response> => {
+export function accountBorrowing(link: () => BorrowingLink | null, fetching: typeof fetch = fetch, owner: AbortSignal | undefined = hostStopping()?.signal): SimulatorBorrowing {
+  const request = async <Result>(method: string, path: string, read: (response: Response) => Promise<Result>, body?: string, cleanup?: AbortSignal): Promise<Result> => {
+    // Normal work belongs to this host (or its admitted call). Shutdown's final DELETE has a separate, bounded owner.
+    const lifetime = cleanup ?? owner ?? hostStopping()?.signal
+    const controller = new AbortController()
+    const deadline = AbortSignal.timeout(75_000)
+    const signal = AbortSignal.any([controller.signal, deadline, ...(lifetime ? [lifetime] : [])])
+    signal.throwIfAborted()
     const linked = link()
     if (!linked) throw new Error("This machine isn't linked to Mako's cloud yet.")
     const url = new URL(`/v1/machines/${encodeURIComponent(linked.machine)}/borrow${path}`, linked.gatewayUrl)
-    return fetching(url, { method, headers: { authorization: `Bearer ${linked.credential}`, ...(body !== undefined && { "content-type": "application/json" }) }, ...(body !== undefined && { body }), signal: AbortSignal.timeout(75_000) })
+    try {
+      const response = await untilStopped(fetching(url, { method, headers: { authorization: `Bearer ${linked.credential}`, ...(body !== undefined && { "content-type": "application/json" }) }, ...(body !== undefined && { body }), signal }), signal)
+      // Keep the same owner through json/text/binary reads and error bodies, not just the response headers.
+      return await untilStopped(read(response), signal)
+    } finally {
+      // End any unread/error body too; no request remains owned only by its independent deadline.
+      controller.abort()
+    }
   }
   const ok = async (response: Response): Promise<Response> => {
     if (response.status === 410) throw new LeaseEnded(await response.text())
@@ -71,15 +86,14 @@ export function accountBorrowing(link: () => BorrowingLink | null, fetching: typ
     return response
   }
   return {
-    need: async (need) => BorrowAnswerSchema.parse(await (await ok(await call("POST", "/needs", JSON.stringify(need)))).json()),
-    release: async (lease) => {
-      const response = await call("DELETE", `/leases/${encodeURIComponent(lease)}`)
+    need: (need) => request("POST", "/needs", async (response) => BorrowAnswerSchema.parse(await (await ok(response)).json()), JSON.stringify(need)),
+    release: (lease, cleanup) => request("DELETE", `/leases/${encodeURIComponent(lease)}`, async (response) => {
       if (response.status !== 410) await ok(response)
-    },
-    renew: async (lease) => BorrowAnswerSchema.parse(await (await ok(await call("POST", `/leases/${encodeURIComponent(lease)}/renew`))).json()),
-    call: async (lease, operation) => (await ok(await call("POST", `/leases/${encodeURIComponent(lease)}/call`, operation))).text(),
-    artifact: async (lease, hash) => new Uint8Array(await (await ok(await call("GET", `/leases/${encodeURIComponent(lease)}/artifacts/${encodeURIComponent(hash)}`))).arrayBuffer()),
-    devices: async (ref) => WordedDevicesSchema.parse(await (await ok(await call("GET", `/devices?ref=${encodeURIComponent(ref)}`))).json()).devices,
+    }, undefined, cleanup),
+    renew: (lease) => request("POST", `/leases/${encodeURIComponent(lease)}/renew`, async (response) => BorrowAnswerSchema.parse(await (await ok(response)).json())),
+    call: (lease, operation) => request("POST", `/leases/${encodeURIComponent(lease)}/call`, async (response) => (await ok(response)).text(), operation),
+    artifact: (lease, hash) => request("GET", `/leases/${encodeURIComponent(lease)}/artifacts/${encodeURIComponent(hash)}`, async (response) => new Uint8Array(await (await ok(response)).arrayBuffer())),
+    devices: (ref) => request("GET", `/devices?ref=${encodeURIComponent(ref)}`, async (response) => WordedDevicesSchema.parse(await (await ok(response)).json()).devices),
   }
 }
 
@@ -121,6 +135,7 @@ export class BorrowedSimulators {
   #host: LeasedMac | undefined
   #words: string | undefined
   #closed = false
+  #closing: Promise<void> | undefined
 
   constructor(options: { port: SimulatorBorrowing; shots: string; now?: () => number }) {
     this.#port = options.port
@@ -161,14 +176,14 @@ export class BorrowedSimulators {
   /**
    * The Thread is done with its simulator: the claim and the lease go, and its Mac's slot is free. Anything still being
    * acquired holds nothing when it comes. The release is kept until the account confirms it, tried again by the next
-   * release, keep-alive or close, and a failure is thrown, so it's said.
+   * release or keep-alive, or the host's first close, and a failure is thrown, so it's said.
    */
-  async release(): Promise<void> {
+  async release(cleanup?: AbortSignal): Promise<void> {
     this.#held.invalidate()
     const lease = this.#lease
     this.#drop("released")
     if (lease) this.#held.releasing(lease.id)
-    await this.#releasePending()
+    await this.#releasePending(cleanup)
   }
 
   /** The releases the account hasn't confirmed yet, by lease. */
@@ -179,14 +194,21 @@ export class BorrowedSimulators {
   /**
    * This host stops: everything it borrowed is released, the lease a list took included, and one still being acquired
    * is released when it comes. It waits for the account at most `CLOSE_RELEASE_MS`; a release it didn't hear confirmed
-   * is logged, and the broker ends that lease at its expiry.
+   * is cancelled and logged as unconfirmed, and the broker ends that lease at its expiry. Repeated closes join this
+   * one cleanup window.
    */
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    if (this.#closing) return this.#closing
     this.#closed = true
-    const released = this.release().catch((error: Error) => hostWarn("simulators", "a borrowed lease's release on close failed", { error: error.message, leases: this.unreleased().join(",") }))
-    let timer: NodeJS.Timeout | undefined
-    await Promise.race([released, new Promise<void>((resolve) => (timer = setTimeout(resolve, CLOSE_RELEASE_MS).unref()))])
-    clearTimeout(timer)
+    const cleanup = new AbortController()
+    const timer = setTimeout(() => cleanup.abort(new Error("The borrowed lease release grace ended")), CLOSE_RELEASE_MS).unref()
+    this.#closing = this.release(cleanup.signal)
+      .catch((error: Error) => hostWarn("simulators", "a borrowed lease's release on close failed", { error: error.message, leases: this.unreleased().join(",") }))
+      .finally(() => {
+        clearTimeout(timer)
+        cleanup.abort()
+      })
+    return this.#closing
   }
 
   /**
@@ -267,11 +289,13 @@ export class BorrowedSimulators {
   }
 
   /** Every release not yet confirmed, asked of the account again; the first failure is thrown once all were tried. */
-  async #releasePending(): Promise<void> {
+  async #releasePending(cleanup?: AbortSignal): Promise<void> {
     const failures: Error[] = []
     for (const lease of this.#held.unreleased()) {
       try {
-        await this.#port.release(lease)
+        cleanup?.throwIfAborted()
+        const released = this.#port.release(lease, cleanup)
+        await (cleanup ? untilStopped(released, cleanup) : released)
         this.#held.released(lease)
       } catch (error) {
         if (error instanceof LeaseEnded) this.#held.released(lease)

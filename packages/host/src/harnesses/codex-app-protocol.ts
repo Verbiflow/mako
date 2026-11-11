@@ -42,6 +42,7 @@ export type {
   Tuning,
   Turn,
 } from "./codex-app-types.js"
+import { writeChildInput } from "@mako/sessions/child-input"
 
 const RPC_TIMEOUT_MS = 30_000
 export const MAX_STDOUT_BUFFER = 8 * 1024 * 1024
@@ -569,12 +570,9 @@ export function sendRpc(
     !context.child.stdin.writable
   )
     return false
-  try {
-    context.child.stdin.write(`${JSON.stringify(message)}\n`)
-    return true
-  } catch {
-    return false
-  }
+  // An app-server gone as it's written to ends the session as its stdin's error says (`handleProcessEnd`), failing what's pending.
+  writeChildInput(context.child, `${JSON.stringify(message)}\n`).catch(() => {})
+  return true
 }
 
 export function sendRpcResult(

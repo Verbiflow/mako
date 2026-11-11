@@ -1,7 +1,6 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
-import { promisify } from "node:util"
 import { z } from "zod"
 import { cliListingCache, type CliListingCache } from "./mcp-cli-cache.js"
 import type { McpReadFormat, ProviderMcpSource } from "./mcp-source.js"
@@ -16,7 +15,7 @@ import {
 } from "./retired-mcp.js"
 import type { McpProvider, McpRegistryProviderStatus, McpRegistrySnapshot, McpServerDefinition, McpServerOrigin, McpServerRecord, McpTransport } from "../contracts/mcp-skills-integrations.js"
 
-const run = promisify(execFile)
+const run = hostCommand
 const SECRET_KEY =
   /(?:authorization|api[-_]?key|access[-_]?token|bearer|credential|oauth|password|secret|token)/i
 const MAX_CLI_OUTPUT = 4 * 1024 * 1024

@@ -14,8 +14,10 @@ import {
   installNotificationEnvironment,
   markAllSeen,
   noteOutcome,
+  noticeId,
   notificationsStore,
   reconcileVisible,
+  retireNotice,
   retireSubject,
   subjectId,
   unseenItems,
@@ -327,14 +329,19 @@ threadsStore.set({ descriptors: harnessDescriptors.map((descriptor) => ({ ...des
   assert.equal(fake.log.toasts.length, toastsBefore + 1)
   fake.setDeliver(true)
 
-  // A retired kind leaves the thread's other items alone.
+  // An ask is taken back by its own notice, leaving the thread's other items alone; a thread starting again takes back
+  // what's past and leaves an ask, which waits on its own answer.
   noteOutcome({ kind: "approval", subject: subjectFor("/f"), marker: "perm-9" })
   noteOutcome({ kind: "finished", subject: subjectFor("/f"), marker: "t9" })
   const dismissedBefore = fake.log.dismissedDesktop.length
-  retireSubject("thread:/f", "asks")
+  retireNotice(noticeId(subjectFor("/f"), "approval", "perm-9"))
   const remaining = notificationsStore.get().items.filter((item) => item.subject.id === "thread:/f")
   assert.deepEqual(remaining.map((item) => item.kind), ["finished"])
   assert.equal(fake.log.dismissedDesktop.length, dismissedBefore, "a partial retire keeps the banner")
+  noteOutcome({ kind: "question", subject: subjectFor("/f"), marker: "q-1" })
+  noteOutcome({ kind: "question", subject: subjectFor("/f"), marker: "q-2" })
+  retireSubject("thread:/f")
+  assert.deepEqual(notificationsStore.get().items.filter((item) => item.subject.id === "thread:/f" && !item.seen).map((item) => item.id), [noticeId(subjectFor("/f"), "question", "q-2"), noticeId(subjectFor("/f"), "question", "q-1")], "two asks on one thread each stand, and a thread starting again leaves both")
 
   flushNotificationBursts()
   uninstall()

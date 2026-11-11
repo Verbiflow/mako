@@ -68,6 +68,38 @@ const verb = (base: string, running: string, done: string): Verb => [base, runni
 const START = verb("Start", "Starting", "Started")
 const READ = verb("Read", "Reading", "Read")
 const MOVE = verb("Move", "Moving", "Moved")
+
+/** `automation`: the list, or what it did to one. */
+function automationWords(args: Fields): Said {
+  const what = text(args.id) ? `the automation ${text(args.id)}` : "an automation"
+  if (args.action === "run") return { verb: verb("Run", "Running", "Ran"), what }
+  if (args.action === "on") return { verb: verb("Turn on", "Turning on", "Turned on"), what }
+  if (args.action === "off") return { verb: verb("Turn off", "Turning off", "Turned off"), what }
+  return { verb: verb("List", "Listing", "Listed"), what: "the automations" }
+}
+
+/** `harness`: what it read, or which it installed or updated. */
+function harnessWords(args: Fields): Said {
+  const what = text(args.harness) ?? "a harness"
+  if (args.action === "install") return { verb: verb("Install", "Installing", "Installed"), what }
+  if (args.action === "update") return { verb: verb("Update", "Updating", "Updated"), what }
+  return { verb: verb("Read", "Reading", "Read"), what: "the harnesses' versions" }
+}
+
+/** `settings`: what it read, or which it changed. */
+function settingsWords(args: Fields): Said {
+  if (args.action === "read") return { verb: verb("Read", "Reading", "Read"), what: "Settings" }
+  const setting = text(args.setting)
+  return { verb: verb("Change", "Changing", "Changed"), what: setting ? `the setting ${setting}` : "a setting" }
+}
+
+/** `thread`, by its action, in the words of the Thread's menu. */
+function threadWords(args: Fields): Said {
+  if (args.action === "archive") return { verb: verb("Archive", "Archiving", "Archived"), what: "this Thread" }
+  if (args.action === "restore") return { verb: verb("Restore", "Restoring", "Restored"), what: "this Thread" }
+  const title = firstWords(text(args.title))
+  return { verb: verb("Rename", "Renaming", "Renamed"), what: title ? `this Thread to ${title}` : "this Thread" }
+}
 const MERGE = verb("Merge", "Merging", "Merged")
 const OPEN = verb("Open", "Opening", "Opened")
 const STOP = verb("Stop", "Stopping", "Stopped")
@@ -190,7 +222,7 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
       const pull = artifacts.success ? artifacts.data.find((artifact) => artifact.kind === "pull-request") : undefined
       const number = pull ? /(?:\/pull\/|#)(\d+)\b/.exec(pull.ref)?.[1] ?? (/^\d+$/.test(pull.ref) ? pull.ref : undefined) : undefined
       const what = `${(status && REPORT_WORDS.get(status)) ?? status ?? "back"}${number ? ` · PR #${number}` : ""}`
-      return { verb: verb("Report", "Reporting", "Reported"), what, ...pull && /^https:\/\//.test(pull.ref) && { link: pull.ref } }
+      return { verb: verb("Report", "Reporting", "Reported"), what, ...pull && pull.ref.startsWith("https://") && { link: pull.ref } }
     },
   }],
   ["agents_answer", {
@@ -229,8 +261,11 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
     say: ({ args, answer }) => {
       const child = text(args["child"])
       const stopped = texts(answer?.["stopped"])
-      if (child === "all") return { verb: STOP, what: "all Fins", ...stopped.length && { done: count(stopped.length, "Fin", "Fins") } }
-      return { verb: STOP, what: fin(child, answer) }
+      // On a device that couldn't be reached: nothing stopped yet, and the stop is kept for when it answers.
+      const pending = Array.isArray(answer?.["pending"]) ? answer["pending"].length : 0
+      const kept = pending > 0 && !stopped.length ? verb("Stop", "Stopping", "Stop kept for") : STOP
+      if (child === "all") return { verb: kept, what: "all Fins", ...(stopped.length || pending) && { done: count(stopped.length || pending, "Fin", "Fins") } }
+      return { verb: kept, what: fin(child, answer) }
     },
   }],
   ["agents_wait", {
@@ -326,6 +361,10 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
   ["app_own_packages", { group: "app", say: () => ({ verb: verb("Unlink", "Unlinking", "Unlinked"), what: "packages" }) }],
   ["port_holder", { group: "port", say: ({ args }) => ({ verb: CHECK, what: text(args["port"]) ? `port ${text(args["port"])}` : "a port" }) }],
   ["thread_move", { group: "cloud", say: () => ({ verb: MOVE, what: "this Thread to the cloud" }) }],
+  ["thread", { group: "cloud", say: ({ args }) => threadWords(args) }],
+  ["settings", { group: "cloud", say: ({ args }) => settingsWords(args) }],
+  ["harness", { group: "cloud", say: ({ args }) => harnessWords(args) }],
+  ["automation", { group: "cloud", say: ({ args }) => automationWords(args) }],
 ])
 
 /** The worktree tools' earlier names, in saved history. */

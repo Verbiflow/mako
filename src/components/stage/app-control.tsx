@@ -36,6 +36,8 @@ import {
   type SetupAgent,
 } from "@/state/project-setup"
 import { actions } from "@/state/session"
+import { acpStore } from "@/state/acp-state"
+import { inboxView } from "@/state/inbox-view"
 import {
   checkMark,
   checkTitle,
@@ -501,8 +503,13 @@ function SetupRow({ step, children }: { step: SetupStep; children: ReactNode }) 
 }
 
 async function openConversation(id: string): Promise<void> {
+  if (!acpStore.get().conversations[id]) {
+    toast("That Thread isn't open in this window")
+    return
+  }
+  const current = inboxView.beginOpen()
   const { acp } = await import("@/state/acp")
-  if (!acp.activate(id)) toast("That Thread isn't open in this window")
+  if (current() && !acp.open(id)) toast("That Thread isn't open in this window")
 }
 
 function ReadyMenu({ cwd, view, target }: { cwd: string; view: Ready; target: string | undefined }) {

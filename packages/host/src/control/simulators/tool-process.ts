@@ -1,4 +1,5 @@
-import { spawn, type SpawnOptions } from "node:child_process"
+import { hostSpawn } from "../../base/host-command.js"
+import type { SpawnOptions } from "node:child_process"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { createServer } from "node:net"
 import { dirname } from "node:path"
@@ -88,7 +89,7 @@ export class ToolProcess {
     const port = await freeLoopbackPort()
     if (generation !== this.#generation) throw this.#stoppedError()
     const origin = `http://127.0.0.1:${port}`
-    const start: ToolSpawn = this.#options.spawn ?? spawn
+    const start: ToolSpawn = this.#options.spawn ?? hostSpawn
     const child = start(this.#options.node ?? process.execPath, [...(this.#options.execArgv ?? []), this.#options.entry, ...this.#options.args(port)], {
       env: { ...this.#options.env, ELECTRON_RUN_AS_NODE: "1", FORCE_COLOR: "0", NO_COLOR: "1" },
       // Its stdin closes when this host dies however it dies, and the tool exits with it.

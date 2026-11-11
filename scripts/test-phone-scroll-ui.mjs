@@ -16,7 +16,7 @@ import { testScratch } from "./lib/test-scratch.mjs"
  *   turn shows; back at the end, it follows again. A finger resting at the end lets it wait, and lifting catches up.
  * - The keyboard opening leaves what's read where it was, and the end in view when it was followed.
  * - Turned sideways at the end and back, the newest turn stays where the end shows it.
- * - An earlier page arriving under a dragging finger moves the line under it no more than the finger does.
+ * - An earlier page arriving under a resting finger leaves the line under it where it is.
  * - A flick makes no long tasks.
  * - On a laptop, the wheel leaves the end of a streaming answer in a short transcript and a windowed one, and the
  *   windowed one's rows aren't scrolled under it.
@@ -36,7 +36,7 @@ if (process.versions.electron) {
   const portAt = args.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(args.splice(portAt, 2)[1])
   const root = testScratch("mako-phone-scroll-ui-")
-  const evidence = args[0] ? resolve(args[0]) : root
+  const evidence = args[0] ? resolve(args[0]) : process.env.MAKO_TEST_EVIDENCE ? resolve(process.env.MAKO_TEST_EVIDENCE, "phone-scroll-ui") : root
   await mkdir(evidence, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: port !== 0, hmr: false } })
   await server.listen()
@@ -58,6 +58,87 @@ if (process.versions.electron) {
  * Records the transcript's own scroll writes that move it, every `scrollTo` call on it (one that moves nothing still
  * ends a smooth wheel scroll), and long tasks; read by `written`, `scrollCalls` and `longTasks`.
  */
+/** Opt-in metadata only. Native tracing and diagnostic screenshots are deliberately not requested. */
+const FLICK_DIAGNOSTIC = `(() => {
+  const limit = 64, observers = [], started = Date.now()
+  const seen = window.__flickDiagnosticResult = { status: 'starting', start: performance.now(), timeOrigin: performance.timeOrigin,
+    tasks: [], frames: [], droppedTasks: 0, droppedFrames: 0, outputDroppedTasks: 0, outputDroppedFrames: 0,
+    errors: [], droppedErrors: 0, collection: {}, cleanup: 'not-requested', captureMs: 15000, outputBytes: 16384 }
+  let closed = false, expiry
+  const text = value => { try { return String(value ?? '').slice(0, 512) } catch { return '[unprintable]' } }
+  const error = (stage, value) => { if (seen.errors.length < 8) seen.errors.push({ stage, message: text(value) }); else seen.droppedErrors += 1 }
+  const items = (values, pick) => {
+    const result = []
+    for (let index = 0; index < Math.min(values.length, 8); index += 1) result.push(pick(values[index]))
+    return result
+  }
+  const consume = (records, owner) => {
+    const room = Math.max(0, limit - owner.output.length), count = Math.min(records.length, room)
+    seen[owner.dropped] += records.length - count
+    for (let index = 0; index < count; index += 1) {
+      try { owner.output.push(owner.pick(records[index])) } catch (value) { error('entry', value); seen[owner.dropped] += 1 }
+    }
+  }
+  const finish = window.__finishFlickDiagnostic = (reason = 'requested') => {
+    if (closed) return seen.cleanup === 'completed'
+    closed = true
+    if (expiry !== undefined) clearTimeout(expiry)
+    seen.finishReason = reason
+    let clean = true
+    for (const owner of observers) {
+      try { consume(owner.observer.takeRecords(), owner) } catch (value) { error('tail', value) }
+      finally { try { owner.observer.disconnect() } catch (value) { clean = false; error('disconnect', value) } }
+    }
+    seen.cleanup = clean ? 'completed' : 'unknown-process-exit-required'
+    seen.end = performance.now()
+    seen.status = reason === 'expired' ? 'capture-expired' : seen.status
+    return clean
+  }
+  window.__readFlickDiagnostic = () => {
+    let output = JSON.stringify(seen)
+    // Three bytes per UTF-16 code unit is a conservative UTF-8 bound. Trim in halves, not an unbounded walk.
+    for (let pass = 0; output.length * 3 > seen.outputBytes && pass < 14; pass += 1) {
+      const key = seen.frames.length ? 'frames' : 'tasks', dropped = key === 'frames' ? 'outputDroppedFrames' : 'outputDroppedTasks'
+      const keep = Math.floor(seen[key].length / 2)
+      seen[dropped] += seen[key].length - keep
+      seen[key].length = keep
+      output = JSON.stringify(seen)
+    }
+    if (output.length * 3 > seen.outputBytes) return JSON.stringify({ status: 'output-budget-exceeded', cleanup: seen.cleanup })
+    return output
+  }
+  if (started > (window.__flickDiagnosticRequestDeadline ?? Infinity)) { seen.status = 'expired-before-setup'; finish('expired-before-setup'); return false }
+  const observe = (type, output, pick, dropped) => {
+    if (!PerformanceObserver.supportedEntryTypes.includes(type)) { seen.collection[type] = 'unsupported'; return }
+    try {
+      const owner = { output, pick, dropped }
+      owner.observer = new PerformanceObserver(list => {
+        if (closed) return
+        if (Date.now() - started >= seen.captureMs) { finish('expired'); return }
+        try { consume(list.getEntries(), owner) } catch (value) { error('callback', value) }
+      })
+      observers.push(owner)
+      owner.observer.observe({ type })
+      seen.collection[type] = 'active'
+    } catch (value) { seen.collection[type] = 'failed'; error('observe ' + type, value) }
+  }
+  try {
+    observe('longtask', seen.tasks, entry => ({ at: entry.startTime, ms: entry.duration, name: text(entry.name),
+      attribution: items(entry.attribution, each => ({ name: text(each.name), containerType: text(each.containerType), containerSrc: text(each.containerSrc) })) }), 'droppedTasks')
+    observe('long-animation-frame', seen.frames, entry => ({ at: entry.startTime, ms: entry.duration, blockingDuration: entry.blockingDuration,
+      renderStart: entry.renderStart, styleAndLayoutStart: entry.styleAndLayoutStart,
+      scripts: items(entry.scripts, each => ({ duration: each.duration, executionStart: each.executionStart,
+        forcedStyleAndLayoutDuration: each.forcedStyleAndLayoutDuration, sourceURL: text(each.sourceURL),
+        sourceFunctionName: text(each.sourceFunctionName), invoker: text(each.invoker), invokerType: text(each.invokerType) })) }), 'droppedFrames')
+    if (seen.collection.longtask !== 'active' || Object.values(seen.collection).includes('failed')) {
+      seen.status = 'setup-unavailable'; finish('setup-failed'); return false
+    }
+    seen.status = 'active'
+    if (typeof setTimeout === 'function') expiry = setTimeout(() => finish('expired'), seen.captureMs)
+    return true
+  } catch (value) { error('setup', value); seen.status = 'setup-unavailable'; finish('setup-failed'); return false }
+})()`
+
 const INSTRUMENT = `(() => {
   const writes = window.__scrollWrites = []
   const calls = window.__scrollCalls = []
@@ -244,15 +325,97 @@ async function checkScroll() {
 
     // 3. A flick up glides and stays; it makes no long tasks.
     await toEnd()
-    since = await now()
-    await flick(400, 2_500)
-    await rest()
-    const flung = await fromEnd()
-    assert.ok(flung > 600, `a flick of 400 px glided ${Math.round(flung)} px from the end`)
-    const tasks = await longTasks(since)
-    assert.deepEqual(tasks, [], `a flick while streaming made long tasks: ${tasks.join(", ")} ms`)
-    held = await holds("after a flick")
-    console.log(`Flick up: glided to ${Math.round(flung)} px from the end, no long tasks, held within ${Math.abs(held.worst).toFixed(1)} px`)
+    const diagnostic = process.env.MAKO_FLICK_DIAGNOSTICS === "1"
+    const packet = { mode: "instrumented diagnostic; not normative performance acceptance", status: "requested", attempts: [],
+      oracle: { status: "not-run" }, tracing: "removed-not-requested", screenshot: "removed-not-requested",
+      budgets: { operationMs: 1000, captureMs: 15000, rendererBytes: 16384, fileBytes: 65536, files: 1, traceBytes: 0, screenshots: 0, statusBytes: 4096 },
+      limits: "IPC and write promises cannot be forcibly cancelled. Unknown completion aborts this owned process before another test scope. Late writes use a unique capture filename; no retry or late follow-up is issued." }
+    const captureName = `flick-diagnostic-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`
+    const text = value => { try { return String(value).slice(0, 512) } catch { return "[unprintable]" } }
+    const emit = () => {
+      try {
+        const line = `FLICK_DIAGNOSTIC_STATUS ${JSON.stringify({ status: packet.status, oracle: packet.oracle.status,
+          attempts: packet.attempts.map(({ name, status, lateSettlement, completion }) => ({ name, status, lateSettlement, completion })),
+          file: captureName, disposition: packet.disposition })}`
+        console.log(Buffer.byteLength(line, "utf8") <= packet.budgets.statusBytes ? line : 'FLICK_DIAGNOSTIC_STATUS {"status":"status-output-over-budget"}')
+      } catch { /* Keep the original failure primary. */ }
+    }
+    const attempt = async (name, operation) => {
+      const record = { name, status: "requested" }
+      packet.attempts.push(record)
+      let timer
+      const work = Promise.resolve().then(operation).then(value => {
+        if (record.status !== "requested") { record.lateSettlement = "completed-after-timeout"; return }
+        record.status = "completed"
+        return { status: record.status, value }
+      }, error => {
+        if (record.status !== "requested") { record.lateSettlement = "failed-after-timeout"; return }
+        record.status = "failed"; record.error = text(error)
+        return { status: record.status }
+      })
+      const timeout = new Promise(resolve => { timer = setTimeout(() => {
+        record.status = "timed-out"; record.completion = "unknown; process exit required"
+        resolve({ status: record.status })
+      }, packet.budgets.operationMs) })
+      const result = await Promise.race([work, timeout])
+      clearTimeout(timer)
+      return result
+    }
+    let primary, hasPrimary = false, unavailable = false, setup
+    if (diagnostic) {
+      emit()
+      setup = await attempt("setup", () => evaluate(`window.__flickDiagnosticRequestDeadline=${Date.now() + packet.budgets.operationMs};${FLICK_DIAGNOSTIC}`))
+      unavailable = setup.status !== "completed" || setup.value !== true
+    }
+    if (!unavailable) try {
+      since = await now()
+      await flick(400, 2_500)
+      await rest()
+      const flung = await fromEnd()
+      assert.ok(flung > 600, `a flick of 400 px glided ${Math.round(flung)} px from the end`)
+      const tasks = await longTasks(since)
+      if (diagnostic) packet.oracle = { status: "observed", since, tasks: tasks.slice(0, 64), droppedTasks: Math.max(0, tasks.length - 64) }
+      assert.deepEqual(tasks, [], `a flick while streaming made long tasks: ${tasks.join(", ")} ms`)
+      held = await holds("after a flick")
+      console.log(`Flick up: glided to ${Math.round(flung)} px from the end, no long tasks, held within ${Math.abs(held.worst).toFixed(1)} px`)
+      if (diagnostic) packet.oracle.status = "passed-instrumented-only"
+    } catch (value) {
+      primary = value; hasPrimary = true
+      if (diagnostic) packet.oracle = { ...packet.oracle, status: "threw", thrown: text(value) }
+    }
+    if (diagnostic) try {
+      if (setup.status !== "timed-out") {
+        const cleanup = await attempt("cleanup", () => evaluate("window.__finishFlickDiagnostic?.() === true"))
+        unavailable ||= cleanup.status !== "completed" || cleanup.value !== true
+        if (cleanup.status === "completed" && cleanup.value === true) {
+          const readback = await attempt("readback", () => evaluate("window.__readFlickDiagnostic?.()"))
+          unavailable ||= readback.status !== "completed"
+          if (readback.status === "completed") try {
+            if (Buffer.byteLength(readback.value, "utf8") > packet.budgets.rendererBytes) throw new Error("Renderer diagnostic exceeds byte budget")
+            packet.renderer = JSON.parse(readback.value)
+            unavailable ||= packet.renderer.status !== "active" || packet.renderer.cleanup !== "completed"
+          } catch (value) { packet.readbackError = text(value); unavailable = true }
+        }
+      }
+      packet.status = unavailable ? "diagnostic-unavailable" : "completed"
+      packet.primaryThrown = hasPrimary
+      packet.disposition = hasPrimary ? "throw-original" : unavailable ? "abort-before-next-scope" : "continue-original-test"
+      packet.fileWrite = "One bounded request; final delivery state is in FLICK_DIAGNOSTIC_STATUS, not self-certified by this file. A timed-out OS write may finish later; no cancellation claim."
+      let bytes = Buffer.from(JSON.stringify(packet, null, 2))
+      if (bytes.length > packet.budgets.fileBytes) { delete packet.renderer; packet.retention = "renderer-omitted-for-budget"; bytes = Buffer.from(JSON.stringify(packet, null, 2)) }
+      if (bytes.length <= packet.budgets.fileBytes) {
+        const written = await attempt("write", () => writeFile(join(evidence, captureName), bytes, { flag: "wx" }))
+        unavailable ||= written.status !== "completed"
+      } else { packet.retention = "file-not-requested-over-budget"; unavailable = true }
+      if (unavailable) { packet.status = "diagnostic-unavailable"; packet.disposition = hasPrimary ? "throw-original" : "abort-before-next-scope" }
+    } catch (value) {
+      unavailable = true
+      packet.status = "diagnostic-unavailable"
+      packet.finalizationError = text(value)
+      packet.disposition = hasPrimary ? "throw-original" : "abort-before-next-scope"
+    } finally { if (diagnostic) emit() }
+    if (hasPrimary) throw primary
+    if (unavailable) throw Object.assign(new Error("Flick diagnostic unavailable; invocation aborted before another scope"), { code: "FLICK_DIAGNOSTIC_UNAVAILABLE" })
 
     // 4. Back at the end, it follows again.
     await flick(-6_000, 4_000)
@@ -311,33 +474,47 @@ async function checkScroll() {
     await evaluate("window.scrollCheck.stop(), true")
 
     // 7. An earlier page arriving under a resting finger: the line under it stays.
-    await window.loadURL(`${new URL("scripts/transcript-scroll-browser.html", process.env.MAKO_SCROLL_URL).href}?turns=90&paged=12`)
+    await window.loadURL(`${new URL("scripts/transcript-scroll-browser.html", process.env.MAKO_SCROLL_URL).href}?turns=90&paged=12&answer=4000`)
     await until(`document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length >= 2`, "the paged transcript")
     await rest()
-    // Drags up until a page lands during one (the source answers 300 ms after it's asked, and its turns are placed as
-    // the reader scrolls). Past the touch slop the transcript follows the finger 1:1, so whatever the line under it
-    // moved beyond the finger's own travel, the page moved; it lifts as a cancel, so no glide.
+    // Flicked up to the top until its source is asked for a page ("Loading earlier turns…"; the turns it already holds
+    // come in first, each placed at once). The source answers 4 s later, so the glide ends and the finger lands and
+    // rests before the page does. Measured from the rest, every frame until the page is in and a second on: an
+    // emulated finger's drag isn't followed 1:1 (as much as 10 px either way over 140 px, with no write of the
+    // transcript's own), which would hide a page's move or fake one.
     const height = () => evaluate(`${scroller}.scrollHeight`)
     const first = await height()
-    let paged
-    for (let pull = 0; pull < 60 && paged === undefined; pull += 1) {
-      await touch("touchStart", centre)
-      await touch("touchMove", { x: centre.x, y: centre.y + 20 })
-      await wait(32)
-      const was = await height()
-      await markAnchor()
-      for (let step = 1; step <= 14; step += 1) {
-        await touch("touchMove", { x: centre.x, y: centre.y + 20 + step * 10 })
-        await wait(16)
-      }
-      await wait(50)
-      if ((await height()) > was) paged = (await anchorMoved()) - 140
-      await touch("touchCancel")
-      await rest()
+    const loading = () => evaluate(`Boolean(document.querySelector('[data-earlier="loading"]'))`)
+    let asking = false
+    for (let flicks = 0; flicks < 40 && !asking; flicks += 1) {
+      await flick(1_500, 6_000)
+      asking = await loading()
     }
-    assert.notEqual(paged, undefined, "an earlier page arrived under the finger")
-    assert.ok(Math.abs(paged) <= 1, `an earlier page moved the line under the finger ${Math.round(paged)} px`)
-    console.log(`Paging under a finger: the transcript grew ${first} → ${await height()} px above it, the line under it moved ${Math.abs(paged).toFixed(1)} px beyond the finger`)
+    assert.ok(asking, "the transcript asked its source for an earlier page")
+    await rest()
+    await touch("touchStart", centre)
+    await rest()
+    assert.ok(await loading(), "the page is still on its way once the finger rests")
+    const was = await height()
+    await markAnchor()
+    const paged = await evaluate(`new Promise(resolve => {
+      const node = ${scroller}
+      const until = performance.now() + 20000
+      let worst = 0, inAt
+      const step = () => {
+        const moved = window.__anchor.turn.isConnected ? window.__anchor.turn.getBoundingClientRect().top - window.__anchor.top : Infinity
+        if (Math.abs(moved) > Math.abs(worst)) worst = moved
+        if (!document.querySelector('[data-earlier="loading"]') && !node.hasAttribute('data-preserve-scroll')) inAt ??= performance.now()
+        if (inAt !== undefined && performance.now() - inAt >= 1000) return resolve(node.scrollHeight > ${was} ? worst : undefined)
+        performance.now() > until ? resolve(undefined) : requestAnimationFrame(step)
+      }
+      requestAnimationFrame(step)
+    })`)
+    await touch("touchCancel")
+    await rest()
+    assert.notEqual(paged, undefined, "an earlier page arrived under the resting finger")
+    assert.ok(Math.abs(paged) <= 1, `an earlier page moved the line under the resting finger ${Math.round(paged)} px`)
+    console.log(`Paging under a resting finger: the transcript grew ${first} → ${await height()} px above it, the line under it moved ${Math.abs(paged).toFixed(1)} px at most`)
 
     // 8. A laptop's wheel leaves the end of a streaming answer, in a short transcript and a windowed one.
     await send("Emulation.setTouchEmulationEnabled", { enabled: false })

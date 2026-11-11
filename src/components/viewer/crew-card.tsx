@@ -19,25 +19,12 @@ import {
   SquareIcon,
   XIcon,
 } from "lucide-react"
-import {
-  CHILD_GROUPS,
-  askWords,
-  childGroup,
-  childLine,
-  childStateOf,
-  openAsk,
-  rollup,
-  rollupLabel,
-  rollupLine,
-  stoodFor,
-  timeWords,
-  type ChildGroup,
-  type Rollup,
-} from "@mako/host/contracts/children"
+import { approvalWords, CHILD_GROUPS, askWords, childGroup, childLine, childStateOf, openAsk, rollup, rollupLabel, rollupLine, stoodFor, timeWords, type ChildGroup, type Rollup } from "@mako/host/contracts/children"
 import { APEX_WORD, FIN_WORD, finsWord, type ChildState } from "@mako/host/contracts/agents"
 import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { FinMark } from "@/components/stage/child-tabs"
+import { NOT_OPENABLE } from "@/components/rail/apex-asks"
 import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { LiveMark } from "@/components/ui/live-mark"
 import { Shimmer } from "@/components/ui/shimmer"
@@ -51,6 +38,7 @@ import { useThreads } from "@/state/threads"
 import {
   apexConversation,
   openFinInApex,
+  useFinOpenable,
   threadChildren,
   useThreadAsks,
   useThreadChildren,
@@ -186,6 +174,7 @@ const NeedsRow = memo(function NeedsRow({
   useHarnessIdentity()
   const [sent, setSent] = useState<FinAnswer | undefined>(undefined)
   const state = childStateOf(agent)
+  const openable = useFinOpenable(agent)
   const open = openAsk(state)
   if (!open || !agent.child) return null
   const ask = open.ask
@@ -229,7 +218,10 @@ const NeedsRow = memo(function NeedsRow({
         <button
           type="button"
           onClick={() => onOpen(agent)}
-          className="pressable min-w-0 truncate text-ui font-medium text-foreground hover:underline"
+          data-openable={openable}
+          aria-disabled={openable ? undefined : true}
+          title={openable ? undefined : NOT_OPENABLE}
+          className={cn("pressable min-w-0 truncate text-ui font-medium text-foreground hover:underline", !openable && "cursor-default opacity-60 hover:no-underline")}
         >
           {agent.title}
         </button>
@@ -261,7 +253,7 @@ const NeedsRow = memo(function NeedsRow({
                 )}
               >
                 <CheckIcon className="size-3.5" />
-                Allow once
+                {approvalWords(ask ?? {}).allow}
               </button>
               <button
                 type="button"
@@ -275,7 +267,7 @@ const NeedsRow = memo(function NeedsRow({
                 )}
               >
                 <XIcon className="size-3.5" />
-                Refuse
+                {approvalWords(ask ?? {}).refuse}
               </button>
             </>
           ) : (
@@ -318,7 +310,7 @@ const NeedsRow = memo(function NeedsRow({
           {!compact ? (
             <span className="ml-auto text-label text-faint">
               {approval
-                ? `${agent.title} waits on this command`
+                ? ask?.named ? `${agent.title} waits on your answer` : `${agent.title} waits on this command`
                 : `Answer here or tell ${apexTitle}`}
             </span>
           ) : null}
@@ -362,6 +354,7 @@ const CrewLineRow = memo(function CrewLineRow({
 }) {
   useHarnessIdentity()
   const state = childStateOf(agent)
+  const openable = useFinOpenable(agent)
   const group = childGroup(state)
   const waiting = waitsOutside(state)
   // "Waiting on acme/app#371 checks · 12m": the same string for a whole minute, so the row repaints once a minute.
@@ -380,10 +373,14 @@ const CrewLineRow = memo(function CrewLineRow({
       data-crew-row={agent.child?.thread}
       data-child-group={group}
       data-child-state={state.kind}
+      data-openable={openable}
+      aria-disabled={openable ? undefined : true}
+      title={openable ? undefined : NOT_OPENABLE}
       onClick={() => onOpen(agent)}
       className={cn(
         "pressable group flex w-full items-center gap-2 px-1.5 text-left hover:bg-fill-hover",
-        compact ? "min-h-11 py-1.5" : "h-8"
+        compact ? "min-h-11 py-1.5" : "h-8",
+        !openable && "cursor-default opacity-60 hover:bg-transparent",
       )}
     >
       <FinMark agent={agent} state={state} cut="var(--surface)" />

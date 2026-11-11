@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 // An Apex's Fins on the desk and the phone, through production components on the mock bridge (`?mock&app=apex`):
 // the rail lists only the Fins that need the person, under the Apex's row and its pips; a Fin's tab opens it in place with its brief and its
@@ -49,6 +50,7 @@ async function check() {
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const base = process.env.MAKO_ORCH_UI_URL
   if (process.env.MAKO_ORCH_UI_BENCH) {
@@ -61,6 +63,7 @@ async function check() {
     return
   }
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
+  atSize(window, 1440, 900)
   const page = window.webContents
   page.debugger.attach("1.3")
   const type = (text) => page.debugger.sendCommand("Input.insertText", { text })
@@ -561,6 +564,7 @@ async function bench(BrowserWindow, base, root) {
   await writeFile(preload, COMMIT_COUNTER)
   const open = async (query, counting) => {
     const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false, ...(counting && { preload, contextIsolation: false, sandbox: false }) } })
+    atSize(window, 1440, 900)
     // A cold dev server reloads the page once its dependencies are bundled, aborting this load; the wait below holds.
     await window.loadURL(`${base}?mock&app=apex${query}`).catch((error) => {
       if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error

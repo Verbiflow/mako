@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process"
+import { hostSpawn } from "../../base/host-command.js"
+import type { ChildProcess } from "node:child_process"
 import { z } from "zod"
 import type { SimulatorOrientation } from "../../contracts/simulators.js"
 import type { Run } from "./setup.js"
@@ -80,12 +81,12 @@ export interface Recording {
 export class Simctl {
   readonly #run: Run
   readonly #developerDir: string
-  readonly #spawn: typeof spawn
+  readonly #spawn: typeof hostSpawn
 
-  constructor(options: { run: Run; developerDir: string; spawn?: typeof spawn }) {
+  constructor(options: { run: Run; developerDir: string; spawn?: typeof hostSpawn }) {
     this.#run = options.run
     this.#developerDir = options.developerDir
-    this.#spawn = options.spawn ?? spawn
+    this.#spawn = options.spawn ?? hostSpawn
   }
 
   get env(): NodeJS.ProcessEnv {

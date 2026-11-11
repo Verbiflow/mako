@@ -1,15 +1,14 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { unlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { packagedDistribution } from "../application/index.js"
 import { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES } from "../application/index.js"
 import type { MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import { onMac } from "../base/platform.js"
 
-const execute = promisify(execFile)
+const execute = hostCommand
 
 export type TccService = (typeof MAKO_GRANT_SERVICES)[number]
 

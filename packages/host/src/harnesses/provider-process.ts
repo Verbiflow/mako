@@ -1,9 +1,9 @@
-import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process"
+import { hostSpawn, closeHostChild, endHostChildWithParent } from "../base/host-command.js"
+import type { ChildProcess, ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process"
 import { statSync } from "node:fs"
-import { basename } from "node:path"
-import { hostLog, hostWarn } from "../base/host-log.js"
+import { hostWarn } from "../base/host-log.js"
 import { trackProviderPid, untrackProviderPid } from "../base/provider-children.js"
-import { onWindows } from "../base/platform.js"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /**
  * A provider was asked to start in a folder that is gone. Node reports that
@@ -42,19 +42,13 @@ export function spawnProviderProcess(
 ): ChildProcessWithoutNullStreams {
   if (options.cwd !== undefined && !workingDirectoryExists(options.cwd))
     throw new MissingWorkingDirectoryError(options.cwd)
-  const group = !onWindows()
-  const child = spawn(command, args, { detached: group, ...options, stdio: ["pipe", "pipe", "pipe"] })
+  const child = hostSpawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] })
+  endHostChildWithParent(child)
   const pid = child.pid
   if (tracked && pid) trackProviderPid({ pid, executable: child.spawnfile, ...tracked })
-  const label = tracked?.kind ?? basename(command)
-  const releasePipes = pipeRelease(child, label)
-  // One exit listener for all of Mako's cleanup: an SDK that owns the
-  // process adds its own (Claude's adds seven), and past ten Node reports a
-  // leak that would hide a real one.
-  child.once("exit", () => {
-    if (tracked && pid) untrackProviderPid(pid)
-    releasePipes()
-    if (group && pid) endGroup(pid, label)
+  // The runner owns the single exit listener, leaving an SDK room for its own.
+  child.once("close", () => {
+    if (tracked && pid) void closeHostChild(child).then(() => untrackProviderPid(pid), () => {})
   })
   return child
 }
@@ -107,7 +101,7 @@ export function endProviderProcess(child: ChildProcess, first: "input" | "SIGTER
     const signal = (name: NodeJS.Signals) => {
       if (!providerProcessGone(child)) child.kill(name)
     }
-    if (first === "input") child.stdin?.end()
+    if (first === "input") endChildInput(child)
     else signal("SIGTERM")
     const harder: NodeJS.Signals[] = first === "input" ? ["SIGTERM", "SIGKILL"] : ["SIGKILL"]
     harder.forEach((name, step) => timers.push(setTimeout(() => signal(name), graceMs * (step + 1))))
@@ -124,48 +118,8 @@ export function endProviderProcess(child: ChildProcess, first: "input" | "SIGTER
 /** `endProviderProcess` for what holds a place on the process: resolves only once it's gone, and rejects when it can't say so. */
 export async function closeProviderProcess(child: ChildProcess, first: "input" | "SIGTERM" = "SIGTERM", graceMs = END_GRACE_MS): Promise<void> {
   if (await endProviderProcess(child, first, graceMs) === "outlived") throw new ProviderProcessOutlivedError(child.pid)
+  await closeHostChild(child)
 }
 
-/**
- * A provider's own children outlive it when it dies: the native binary under
- * an npm wrapper, a tool's shell, an MCP server. Nothing reads them any more,
- * and one still writing the session keeps Mako from reopening it. They share
- * the provider's process group, which ends with it.
- */
-function endGroup(pid: number, label: string): void {
-  try {
-    process.kill(-pid, "SIGTERM")
-  } catch {
-    return
-  }
-  hostLog("provider", "ending what a provider left running when it exited", { process: label, pid })
-  setTimeout(() => {
-    try { process.kill(-pid, "SIGKILL") } catch { return }
-  }, GROUP_END_GRACE_MS).unref()
-}
-
-/**
- * A process the provider started can inherit its pipes and outlive it; then
- * they never close, and whatever reads them (an SDK's message stream, a Close
- * waiting for the process) waits forever. After a grace for the dead
- * process's last output, Mako closes its own ends, which also ends any stdio
- * server still attached to them. Returns what to run when the process exits.
- */
-function pipeRelease(child: ChildProcess, label: string): () => void {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  child.once("close", () => clearTimeout(timer))
-  return () => {
-    timer = setTimeout(() => {
-      hostWarn("provider", "a process the provider started still held its pipes after it exited; closing them", { process: label, pid: child.pid ?? "" })
-      child.stdin?.destroy()
-      child.stdout?.destroy()
-      child.stderr?.destroy()
-    }, PIPE_DRAIN_GRACE_MS)
-    timer.unref?.()
-  }
-}
-
-const PIPE_DRAIN_GRACE_MS = 1_000
-const GROUP_END_GRACE_MS = 2_000
 /** How long a provider gets to end at each request before the next, harder one. */
 const END_GRACE_MS = 2_000

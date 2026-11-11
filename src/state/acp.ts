@@ -1,4 +1,5 @@
 import { answerLiveApproval } from "./live-approvals"
+import { inboxView } from "@/state/inbox-view"
 import type { WorktreeStart } from "@mako/host/contracts/thread-worktrees"
 import type { TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "@mako/host/contracts/turn-review"
 import { durableAttachments, saveMessage, settleMessage } from "@/state/message-outbox"
@@ -27,7 +28,8 @@ import { reviewTargetLabel, type ReviewTarget } from "@mako/host/contracts/live-
 import type { SideQuestionCommand } from "@mako/host/contracts/live-side-questions"
 import { submitTransfer } from "@/state/live-transfers"
 import { performLiveAction } from "@/state/live-actions"
-import { applyLiveSnapshot, hydrateLive } from "@/state/live-recovery"
+import { hydrateLive, readContinuation, readLive, readLives } from "@/state/live-recovery"
+import { letGoLive } from "@/state/live-door"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type {
   ContextBreakdown,
@@ -196,6 +198,13 @@ export const acp = {
     return acp.startFresh(current.harness, current.cwd, request.text, request.attachments)
   },
 
+  /** The person's explicit open; activation by recovery or an operation's completion is not navigation. */
+  open(key: string, refresh = true): boolean {
+    if (!acpStore.get().conversations[key]) return false
+    inboxView.close()
+    return acp.activate(key, refresh)
+  },
+
   activate(key: string, refresh = true): boolean {
     const conversation = acpStore.get().conversations[key]
     if (!conversation) return false
@@ -269,9 +278,7 @@ export const acp = {
       )
       if (!ref || ref.path === conversation.threadPath || claimedPaths.has(ref.path)) continue
       claimedPaths.add(ref.path)
-      void getMako()
-        .liveBind(conversation.key, ref.path)
-        .then(applyLiveSnapshot)
+      void readLive(conversation.key, () => getMako().liveBind(conversation.key, ref.path))
         .catch((error) => toast.error(String(error)))
       const next = updateLive(conversation.key, (current) => ({
         ...current,
@@ -307,11 +314,8 @@ export const acp = {
     if (!hasBridge()) return false
     let canResume: boolean
     try {
-      const resolved = await getMako().resolveContinuation(ref.path)
-      if (resolved.transport === "attached") {
-        applyLiveSnapshot(resolved.snapshot, resolved.bindingId ?? null)
-        return acp.activate(resolved.conversationId, false)
-      }
+      const resolved = await readContinuation(ref.path)
+      if (resolved.transport === "attached") return acp.activate(resolved.conversationId, false)
       if (resolved.transport === "refused" || resolved.transport === "unavailable") throw new Error(resolved.reason)
       canResume = resolved.transport === "live"
     } catch (error) {
@@ -367,9 +371,9 @@ export const acp = {
   ): Promise<boolean> {
     if (!hasBridge()) return false
     try {
-      const resolved = resolution ?? await getMako().resolveContinuation(ref.path)
+      // One handed in was read, and its snapshot taken, by whoever resolved it (`readContinuation`).
+      const resolved = resolution ?? await readContinuation(ref.path)
       if (resolved.transport === "attached") {
-        applyLiveSnapshot(resolved.snapshot, resolved.bindingId ?? null)
         acp.activate(resolved.conversationId, false)
         return sendTo(resolved.conversationId, prompt, attachments, undefined, resolved.bindingId)
       }
@@ -410,9 +414,8 @@ export const acp = {
     if (!hasBridge()) return false
     const act = "goal" in first ? "set its goal" : "start the review"
     try {
-      const resolved = await getMako().resolveContinuation(ref.path)
+      const resolved = await readContinuation(ref.path)
       if (resolved.transport === "attached") {
-        applyLiveSnapshot(resolved.snapshot, resolved.bindingId ?? null)
         acp.activate(resolved.conversationId, false)
         return "goal" in first
           ? acp.goal({ kind: "set", ...first.goal }, resolved.conversationId)
@@ -561,7 +564,7 @@ export const acp = {
     if (live?.kind !== "live") return false
     try {
       const tuning = command.kind === "set" ? await settingsForSend(liveSettingsTarget(live)) : undefined
-      applyLiveSnapshot(await getMako().liveGoal(live.key, command, tuning))
+      await readLive(live.key, () => getMako().liveGoal(live.key, command, tuning))
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
@@ -577,7 +580,8 @@ export const acp = {
     const live = current.kind === "live" ? current : await waitForPromotion(current.draftKey).then((ready) => ready ? promoted() : undefined)
     if (live?.kind !== "live") return false
     try {
-      applyLiveSnapshot(await getMako().liveReview(live.key, target, await settingsForSend(liveSettingsTarget(live))))
+      const tuning = await settingsForSend(liveSettingsTarget(live))
+      await readLive(live.key, () => getMako().liveReview(live.key, target, tuning))
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
@@ -590,7 +594,7 @@ export const acp = {
     const current = key ? acpStore.get().conversations[key] : undefined
     if (current?.kind !== "live" || !hasBridge()) return false
     try {
-      applyLiveSnapshot(await getMako().liveSideQuestion(current.key, command))
+      await readLive(current.key, () => getMako().liveSideQuestion(current.key, command))
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
@@ -599,8 +603,9 @@ export const acp = {
   },
 
   async openRelated(id: string): Promise<void> {
+    const current = acpStore.get().conversations[id] ? inboxView.beginOpen() : inboxView.pendingOpen()
     await hydrateLive(id)
-    acp.activate(id)
+    if (current()) acp.open(id, false)
   },
 
   async mergeFork(): Promise<void> {
@@ -608,7 +613,7 @@ export const acp = {
     if (!current || !hasBridge()) return
     const id = crypto.randomUUID()
     try {
-      applyLiveSnapshot(await getMako().liveMergeFork(current.key, id))
+      await readLive(current.key, () => getMako().liveMergeFork(current.key, id))
       toast("Fork findings will be included in the parent's next turn")
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
@@ -635,13 +640,13 @@ export const acp = {
         : undefined
     if (!point) return undefined
     try {
-      const snapshot = await getMako().liveFork(current.key, {
-        id: crypto.randomUUID(),
+      const fork = crypto.randomUUID()
+      const snapshot = await readLive(fork, () => getMako().liveFork(current.key, {
+        id: fork,
         provider: current.harness,
         point,
         thread,
-      })
-      applyLiveSnapshot(snapshot)
+      }))
       if (open) acp.activate(snapshot.session.id)
       return snapshot.session.id
     } catch (error) {
@@ -709,8 +714,8 @@ export const acp = {
   },
 
   async rewind(sourceId: string, input: RewindInput): Promise<void> {
-    const snapshot = await getMako().liveRewind(sourceId, input)
-    applyLiveSnapshot(snapshot)
+    // Its answer is the fork the rewind makes (`input.id`), which the read is of.
+    const snapshot = await readLive(input.id, () => getMako().liveRewind(sourceId, input))
     if (activeLiveAcp(acpStore.get())?.key === sourceId)
       acp.activate(snapshot.session.id)
   },
@@ -721,8 +726,7 @@ export const acp = {
   },
 
   async recoverRewinds(): Promise<number> {
-    const snapshots = await getMako().liveRecoverRewinds()
-    for (const snapshot of snapshots) applyLiveSnapshot(snapshot)
+    const snapshots = await readLives(() => getMako().liveRecoverRewinds())
     return snapshots.length
   },
 
@@ -874,7 +878,7 @@ export const acp = {
 
   async unqueue(): Promise<void> {
     const current = activeLiveAcp(acpStore.get())
-    if (current) applyLiveSnapshot(await getMako().liveClearQueue(current.key))
+    if (current) await readLive(current.key, () => getMako().liveClearQueue(current.key))
   },
 
   close(): boolean {
@@ -890,7 +894,7 @@ export const acp = {
       setThreadRunning(active.threadPath, false)
       setThreadAttention(active.threadPath, null)
     }
-    removeAcpConversation(active.key)
+    letGoLive(active.key, () => removeAcpConversation(active.key))
     return true
   },
 }

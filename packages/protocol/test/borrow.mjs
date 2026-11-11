@@ -1,7 +1,10 @@
+import "./borrow-composition.mjs"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { describe, test } from "node:test"
 import {
+  BorrowerSchema,
+  NeedSchema,
   BorrowAnswerSchema,
   SourceAnswerSchema,
   BorrowPushSchema,
@@ -912,4 +915,269 @@ describe("borrowing: the conformance suite fails a broker that leaks to a device
       const failed = await run(leak)
       assert.ok(failed.some((name) => name.includes(by)), `${leak} passed "${by}": ${JSON.stringify(failed)}`)
     })
+})
+
+
+describe("borrowing: canonical identity and persisted migration", () => {
+  const oldKey = (forWhom, correlation) => `${forWhom.account}\0${forWhom.repository}\0${forWhom.thread}\0${forWhom.place.kind}:${forWhom.place.kind === "device" ? forWhom.place.device : forWhom.place.machine}\0${correlation}`
+  const a = { ...mac, place: { kind: "machine", machine: "m1\0extra" } }
+  const b = { ...mac, place: { kind: "machine", machine: "m1" } }
+  const needA = () => NeedSchema.parse(need({ for: a, correlationId: "last" }))
+  const needB = () => NeedSchema.parse(need({ for: b, correlationId: "extra\0last" }))
+  const content = { version: sha("x"), size: 1 }
+  const request = (state, wanted, lease, at = 2) => step(state, { type: "borrow", need: wanted, lease, ask: `ask-${lease}`, at, content })
+  const granted = () => step(emptyBroker(ACCOUNT), { type: "grant", grant: base(), at: 1 }).state
+  const pending = () => {
+    let state = step(emptyBroker(ACCOUNT), { type: "grant", grant: base({ source: { kind: "device", device: "source" }, ask: "first-use" }), at: 1 }).state
+    state = step(state, { type: "device", device: "source", online: true, at: 2 }).state
+    const result = request(state, needA(), "reserved", 3)
+    assert.equal(result.answer.pending, "source")
+    return { ...result.state, answers: { [oldKey(a, "last")]: result.answer } }
+  }
+  const queued = (wanted = needA()) => {
+    const grant = base({ resource: { kind: "operation", ref: "ios-simulator.*" }, source: { kind: "capable", requires: [{ capability: "ios-simulator" }] }, mode: "relay", access: "run", secret: false })
+    const state = step(emptyBroker(ACCOUNT), { type: "grant", grant, at: 1 }).state
+    const operation = NeedSchema.parse({ ...wanted, kind: "operation", ref: "ios-simulator.session" })
+    const result = request(state, operation, "queued", 2)
+    assert.equal(result.answer.pending, "capacity")
+    const wait = Object.values(result.state.waiting)[0]
+    return { state: result.state, operation, wait }
+  }
+  const room = (state, at = 10) => step(state, { type: "advertise", device: "source", capabilities: [{ capability: "ios-simulator" }], slots: { used: 0, of: 1 }, at })
+
+  test("accepted delimiter counterexample issues each place its own lease", () => {
+    assert.equal(BorrowerSchema.safeParse(a).success, true)
+    assert.equal(BorrowerSchema.safeParse(b).success, true)
+    assert.equal(oldKey(a, "last"), oldKey(b, "extra\0last"), "the old accepted-input counterexample")
+    const first = request(granted(), needA(), "original")
+    const second = request(first.state, needB(), "other", 3)
+    assert.equal(second.answer.lease?.id, "other", "the other valid place must not get the original lease")
+    assert.deepEqual(second.answer.lease.borrower, b)
+    assert.notEqual(needKey(a, "last"), needKey(b, "extra\0last"))
+  })
+
+  test("tuple encoding distinguishes empty helper fields, tags, NUL, quotes, slashes and Unicode escapes", () => {
+    const values = ["", "\0", "\\u0000", "a:b", 'a"b', "a\\b", "\n", "[\"machine\",\"x\"]", "😀", "\ud800"]
+    const seen = new Map()
+    for (let field = 0; field < 6; field++) for (const value of values) {
+      const tuple = ["acct", "repo", "thread", "machine", "place", "correlation"]
+      tuple[field] = field === 3 ? "device" : value
+      const who = { account: tuple[0], repository: tuple[1], thread: tuple[2], place: tuple[3] === "device" ? { kind: "device", device: tuple[4] } : { kind: "machine", machine: tuple[4] } }
+      const key = needKey(who, tuple[5]), identity = JSON.stringify(tuple)
+      assert.equal(key.includes("\0"), false, "a current key cannot be a NUL-separated old key")
+      if (seen.has(key)) assert.equal(seen.get(key), identity)
+      seen.set(key, identity)
+      assert.equal(needKey(structuredClone(who), tuple[5]), key)
+    }
+    assert.equal(BorrowerSchema.safeParse({ ...mac, account: "" }).success, false)
+    assert.equal(NeedSchema.safeParse(need({ correlationId: "" })).success, false)
+  })
+
+  test("ordinary same-borrower restart replay and repository/place isolation stay intact", () => {
+    const first = request(granted(), need(), "same")
+    const state = JSON.parse(JSON.stringify(first.state))
+    assert.equal(request(state, need(), "retry", 3).answer.lease.id, "same")
+    assert.equal(request(state, need({ for: { ...mac, repository: "other/repo" } }), "foreign", 4).answer.refusal.refused, "out-of-scope")
+    assert.equal(request(state, need({ for: { ...mac, place: { kind: "machine", machine: "other" } } }), "other", 5).answer.lease.id, "other")
+  })
+
+  test("legacy lease answer recovers only its structured borrower/correlation, never the collided key", () => {
+    const first = request(granted(), needA(), "original")
+    const state = JSON.parse(JSON.stringify({ ...first.state, answers: { [oldKey(a, "last")]: first.answer } }))
+    const before = JSON.stringify(state)
+    const other = request(state, needB(), "other", 3)
+    assert.equal(other.answer.lease.id, "other")
+    assert.equal(request(other.state, needA(), "retry", 4).answer.lease.id, "original")
+    assert.deepEqual(Object.keys(other.state.leases).sort(), ["original", "other"])
+    assert.equal(Object.hasOwn(other.state.answers, oldKey(a, "last")), false)
+    assert.equal(JSON.stringify(state), before, "migration is pure")
+  })
+
+  test("canonical lease answer wins a duplicate legacy cache without deleting either live lease", () => {
+    const first = request(granted(), needA(), "old")
+    const current = request({ ...first.state, answers: {} }, needA(), "current", 3)
+    const mixed = { ...current.state, answers: { ...current.state.answers, [oldKey(a, "last")]: first.answer } }
+    const result = request(mixed, needA(), "retry", 4)
+    assert.equal(result.answer.lease.id, "current")
+    assert.deepEqual(Object.keys(result.state.leases).sort(), ["current", "old"])
+  })
+
+  test("unattributed old declines and lease answers without their retained lease miss safely", () => {
+    const declined = { refusal: { refused: "declined", by: { kind: "person", account: ACCOUNT } } }
+    const state = { ...granted(), answers: { [oldKey(a, "last")]: declined } }
+    assert.equal(request(state, needA(), "fresh").answer.lease.id, "fresh")
+    const first = request(granted(), needA(), "gone")
+    const orphan = { ...first.state, leases: {}, answers: { [oldKey(a, "last")]: first.answer } }
+    assert.equal(request(orphan, needB(), "other", 3).answer.lease.id, "other")
+    const canonical = { ...granted(), answers: { [needKey(a, "last")]: declined, [oldKey(a, "last")]: first.answer } }
+    assert.equal(request(canonical, needA(), "retry").answer.refusal.refused, "declined")
+  })
+
+  test("legacy waiting Need preserves queue age, deadline and reserved ask/lease through restart", () => {
+    const { state, operation, wait } = queued()
+    const old = JSON.parse(JSON.stringify({ ...state, waiting: { [oldKey(a, "last")]: wait } }))
+    const retry = request(old, operation, "replacement", 3)
+    assert.equal(retry.answer.since, wait.since)
+    assert.equal(retry.answer.deadline, wait.deadline)
+    assert.equal(Object.keys(retry.state.waiting).length, 1)
+    assert.deepEqual(retry.state.waiting[needKey(a, "last")], wait)
+    const freed = room(retry.state)
+    assert.equal(freed.effects.filter(x => x.effect === "ask").length, 1)
+    assert.equal(freed.effects.find(x => x.effect === "ask").ask.ask, wait.ask)
+    const issued = step(freed.state, { type: "source-answer", ask: wait.ask, answer: { answer: "yes" }, at: 11 })
+    assert.equal(issued.answer.lease.id, wait.lease)
+  })
+
+  test("a colliding old waiting key cannot claim or overwrite the other place's queue slot", () => {
+    const { state, wait } = queued()
+    const old = { ...state, waiting: { [oldKey(a, "last")]: wait } }
+    const operation = NeedSchema.parse({ ...needB(), kind: "operation", ref: "ios-simulator.session" })
+    const other = request(old, operation, "other", 3)
+    assert.equal(other.answer.position, 2)
+    assert.equal(Object.keys(other.state.waiting).length, 2)
+    assert.equal(other.state.waiting[needKey(a, "last")].lease, wait.lease)
+    assert.equal(other.state.waiting[needKey(b, "extra\0last")].lease, "other")
+  })
+
+  test("canonical and legacy waiting duplicates keep one canonical reservation and one source ask", () => {
+    const { state, wait } = queued()
+    const mixed = { ...state, waiting: { ...state.waiting, [oldKey(a, "last")]: { ...wait, lease: "duplicate", ask: "duplicate" } } }
+    const migrated = step(mixed, { type: "tick", at: 3 })
+    assert.equal(Object.keys(migrated.state.waiting).length, 1)
+    const freed = room(migrated.state)
+    assert.equal(freed.effects.filter(x => x.effect === "ask").length, 1)
+    assert.equal(freed.effects.find(x => x.effect === "ask").ask.ask, wait.ask)
+  })
+
+  test("a retained waiting Need is validated before rekeying", () => {
+    const { state, wait } = queued()
+    const corrupt = { ...wait, need: { ...wait.need, for: { ...a, account: 123 } } }
+    const result = step({ ...state, waiting: { [oldKey(a, "last")]: corrupt } }, { type: "tick", at: 3 })
+    assert.deepEqual(result.state.waiting, {})
+    assert.equal(result.effects.some(x => x.effect === "ask"), false)
+  })
+
+  for (const retryFirst of [false, true]) test(`persisted legacy source ask completes with its reserved lease, retry first=${retryFirst}`, () => {
+    let state = JSON.parse(JSON.stringify(pending()))
+    if (retryFirst) {
+      const retry = request(state, needA(), "duplicate", 4)
+      assert.equal(retry.answer.ask, "ask-reserved")
+      assert.equal(retry.effects.some(x => x.effect === "ask"), false)
+      state = retry.state
+    }
+    const completed = step(state, { type: "source-answer", ask: "ask-reserved", answer: { answer: "yes", version: sha("x"), size: 1 }, at: 5 })
+    assert.equal(completed.answer.lease.id, "reserved")
+    assert.deepEqual(completed.answer.lease.borrower, a)
+    assert.equal(request(completed.state, needA(), "retry", 6).answer.lease.id, "reserved")
+    assert.equal(Object.keys(completed.state.asks).length, 0)
+    assert.equal(Object.hasOwn(completed.state.answers, oldKey(a, "last")), false)
+  })
+
+  test("a persisted pending-source collision creates an independent ask for the other place", () => {
+    const state = pending()
+    const other = request(state, needB(), "other", 4)
+    assert.equal(other.answer.ask, "ask-other")
+    assert.equal(Object.keys(other.state.asks).length, 2)
+    assert.equal(other.state.asks["ask-reserved"].leaseId, "reserved")
+    const first = step(other.state, { type: "source-answer", ask: "ask-reserved", answer: { answer: "yes", version: sha("x"), size: 1 }, at: 5 })
+    const second = step(first.state, { type: "source-answer", ask: "ask-other", answer: { answer: "yes", version: sha("x"), size: 1 }, at: 6 })
+    assert.equal(first.answer.lease.id, "reserved")
+    assert.equal(second.answer.lease.id, "other")
+  })
+
+  test("a canonical pending source answer wins a legacy duplicate and late duplicate yes is fenced", () => {
+    const old = pending(), ask = old.asks["ask-reserved"]
+    const mixed = { ...old, answers: { ...old.answers, [needKey(a, "last")]: old.answers[oldKey(a, "last")] }, asks: { ...old.asks, duplicate: { ...ask, ask: "duplicate", leaseId: "duplicate" } } }
+    const retry = request(mixed, needA(), "replacement", 4)
+    assert.equal(retry.answer.ask, "ask-reserved")
+    assert.deepEqual(Object.keys(retry.state.asks), ["ask-reserved"])
+    const late = step(retry.state, { type: "source-answer", ask: "duplicate", answer: { answer: "yes", version: sha("x"), size: 1 }, at: 5 })
+    assert.ok(late.rejected)
+    assert.deepEqual(late.state.leases, {})
+  })
+
+  test("a dangling legacy pending cache is not an eternal pending answer", () => {
+    const old = pending()
+    const result = request({ ...old, asks: {} }, needA(), "fresh", 4)
+    assert.equal(result.answer.ask, "ask-fresh")
+    assert.equal(Object.keys(result.state.asks).length, 1)
+  })
+
+  test("rolling legacy answer writes cannot override an existing canonical answer or cross borrowers", () => {
+    const original = request(granted(), needA(), "original")
+    const oldWrite = { ...original.state, answers: { ...original.state.answers, [oldKey(a, "last")]: original.answer } }
+    const other = request(oldWrite, needB(), "other", 3)
+    assert.equal(other.answer.lease.id, "other")
+    const persisted = JSON.parse(JSON.stringify(other.state))
+    persisted.answers[oldKey(b, "extra\0last")] = original.answer
+    assert.equal(request(persisted, needB(), "retry", 4).answer.lease.id, "other")
+    assert.equal(request(persisted, needA(), "retry", 4).answer.lease.id, "original")
+  })
+  test("legacy-only duplicate waits keep the core's code-unit queue tie break", () => {
+    const { state, wait } = queued()
+    const mixed = { ...state, waiting: {
+      [`${a.account}\0${a.thread}\0last`]: { ...wait, ask: "A", lease: "upper" },
+      [oldKey(a, "last")]: { ...wait, ask: "a", lease: "lower" },
+    } }
+    const result = step(mixed, { type: "tick", at: 3 })
+    assert.equal(Object.keys(result.state.waiting).length, 1)
+    assert.equal(result.state.waiting[needKey(a, "last")].ask, "A")
+    assert.equal(result.state.waiting[needKey(a, "last")].lease, "upper")
+  })
+
+  test("a current source-pending reservation wins an older legacy lease answer", () => {
+    const old = request(granted(), needA(), "old")
+    let state = step(old.state, { type: "grant", grant: base({ version: 2, source: { kind: "device", device: "source" }, ask: "first-use" }), at: 3 }).state
+    state = step(state, { type: "device", device: "source", online: true, at: 4 }).state
+    const current = request({ ...state, answers: {} }, needA(), "current", 5)
+    assert.equal(current.answer.pending, "source")
+    const mixed = { ...current.state, answers: { ...current.state.answers, [oldKey(a, "last")]: old.answer } }
+    const retry = request(mixed, needA(), "replacement", 6)
+    assert.equal(retry.answer.ask, "ask-current")
+    assert.equal(retry.effects.some(x => x.effect === "ask"), false)
+    assert.ok(retry.state.asks["ask-current"])
+  })
+
+  test("recovering an expired legacy lease cache cannot renew its correlation", () => {
+    const first = request(granted(), needA(), "expired")
+    const ended = step(first.state, { type: "tick", at: first.answer.lease.expiresAt + 1 })
+    const old = { ...ended.state, answers: { [oldKey(a, "last")]: first.answer } }
+    const retried = request(old, needA(), "fresh", first.answer.lease.expiresAt + 2)
+    assert.equal(retried.answer.refusal?.refused, "expired")
+    assert.equal(retried.state.leases.fresh, undefined)
+  })
+
+  test("a canonical waiting reservation wins an older legacy lease answer", () => {
+    const old = request(granted(), needA(), "old")
+    const { state, wait, operation } = queued()
+    const mixed = { ...state, leases: old.state.leases, answers: { [oldKey(a, "last")]: old.answer } }
+    const retry = request(mixed, operation, "replacement", 3)
+    assert.equal(retry.answer.pending, "capacity")
+    assert.equal(retry.state.waiting[needKey(a, "last")].lease, wait.lease)
+    assert.ok(retry.state.leases.old, "the old live lease remains separately held")
+  })
+
+  test("a canonical waiting reservation wins a duplicate legacy pending-source record", () => {
+    const { state, wait, operation } = queued()
+    const old = room(state).state
+    const mixed = { ...state, answers: { [oldKey(a, "last")]: old.answers[needKey(a, "last")] }, asks: old.asks }
+    const retry = request(mixed, operation, "replacement", 3)
+    assert.equal(retry.answer.pending, "capacity")
+    assert.equal(retry.state.waiting[needKey(a, "last")].lease, wait.lease)
+    assert.deepEqual(retry.state.asks, {})
+  })
+
+  test("a legacy writer completing a canonical pending ask is recovered from the retained lease", () => {
+    const waiting = pending()
+    waiting.answers[needKey(a, "last")] = waiting.answers[oldKey(a, "last")]
+    const completed = step(waiting, { type: "source-answer", ask: "ask-reserved", answer: { answer: "yes", version: sha("x"), size: 1 }, at: 5 })
+    // The old writer preserves unknown canonical keys but completes under its old key.
+    const oldWrite = { ...completed.state, answers: { [needKey(a, "last")]: waiting.answers[needKey(a, "last")], [oldKey(a, "last")]: completed.answer } }
+    const retry = request(JSON.parse(JSON.stringify(oldWrite)), needA(), "duplicate", 6)
+    assert.equal(retry.answer.lease?.id, "reserved")
+    assert.deepEqual(retry.state.asks, {})
+    assert.equal(retry.effects.some(x => x.effect === "ask"), false)
+    assert.deepEqual(Object.keys(retry.state.leases), ["reserved"])
+  })
+
 })

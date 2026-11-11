@@ -1,7 +1,9 @@
 import { AppWindowIcon } from "lucide-react"
 import { AppsSection } from "@/components/settings/apps-section"
-import { APPS_SECTION } from "@/state/app-setup"
+import { APPS_SECTION, appSetupStore } from "@/state/app-setup"
 import type { SettingsSection } from "./manifest"
+
+const SETUP_KEYWORDS = ["setup", "set up", "drive", "files", "packages", "grants", "credentials", "secrets", ".env", "environment", "carry", "linked"]
 
 export const section = {
   id: APPS_SECTION,
@@ -12,17 +14,11 @@ export const section = {
     "app",
     "run",
     "recipe",
-    "setup",
-    "set up",
+    ...SETUP_KEYWORDS,
     "install",
     "checks",
     "port",
-    "credentials",
-    "secrets",
-    ".env",
-    "environment",
-    "carry",
-    "linked",
   ],
+  onSearch: (query) => appSetupStore.set({ tab: SETUP_KEYWORDS.some((keyword) => keyword.includes(query)) ? "setup" : "recipe" }),
   Component: AppsSection,
 } as const satisfies SettingsSection

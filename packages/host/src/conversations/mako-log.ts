@@ -33,7 +33,7 @@ export function makoFacts(snapshot: Pick<LiveSnapshot, "requests" | "permissions
 }
 
 /** Control's lists, in the order its schema declares them. */
-const CONTROL_LIST_NAMES = z.enum(["questions", "approvalResponses", "approvalObservations", "actions", "merges", "bindings", "transfers"])
+const CONTROL_LIST_NAMES = z.enum(["questions", "approvalResponses", "approvalObservations", "actions", "asks", "merges", "bindings", "transfers"])
 type ControlList = z.infer<typeof CONTROL_LIST_NAMES>
 /** The name each list's events take. */
 const CONTROL_LISTS = {
@@ -41,6 +41,7 @@ const CONTROL_LISTS = {
   approvalResponses: "approvalResponse",
   approvalObservations: "approvalObservation",
   actions: "action",
+  asks: "ask",
   merges: "merge",
   bindings: "binding",
   transfers: "transfer",
@@ -107,6 +108,7 @@ const LISTS: readonly List[] = [
     state: (item) => (Decided.safeParse(item).data?.decision ? "decided" : undefined),
   },
   { kind: "action", read: controlList("actions"), key: byInput, state: stateOf },
+  { kind: "ask", read: controlList("asks"), key: byId },
   { kind: "merge", read: controlList("merges"), key: byId, state: statusOf },
   { kind: "binding", read: controlList("bindings"), key: byId },
   { kind: "transfer", read: controlList("transfers"), key: byInput, state: stateOf },

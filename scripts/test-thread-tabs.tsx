@@ -204,13 +204,22 @@ assert.equal(sessionDraftKey(draft), sessionDraftKey({ ...draft, id: randomUUID(
 
 /* Strip ----------------------------------------------------------------------- */
 
-const strip = renderToStaticMarkup(
+// Initial tabs are still an initial cohort when rendering takes longer
+// than one frame. CI exposed the old wall-clock arrival heuristic here.
+const clockDescriptor = Object.getOwnPropertyDescriptor(performance, "now")
+let renderClock = 1_000
+Object.defineProperty(performance, "now", { configurable: true, value: () => (renderClock += 40) })
+let strip: string
+try { strip = renderToStaticMarkup(
   <TooltipProvider>
     <div role="tablist">
       <SessionTabList tabs={tabs} here={{ thread, session: second }} paneId="main" agentActive />
     </div>
   </TooltipProvider>
-)
+) } finally {
+  if (clockDescriptor) Object.defineProperty(performance, "now", clockDescriptor)
+  else Reflect.deleteProperty(performance, "now")
+}
 assert.match(strip, /aria-selected="true"[^>]*data-tab-id="agent"[^>]*data-session-tab="[^"]+"/, "the Session on screen is the selected tab")
 assert.equal((strip.match(/role="tab"/g) ?? []).length, 3)
 assert.match(strip, />Fix rail flicker</)

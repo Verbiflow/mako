@@ -6,6 +6,7 @@ import type { ThreadRef } from "../format.js"
 import type { NativeStores } from "../read-only-sqlite.js"
 import { READ_BUSY_TIMEOUT_MS, SqliteBusy } from "./sqlite-busy.js"
 import { SessionUnreadable } from "./types.js"
+import { CodexAgentMetaSchema, codexNativeAgent } from "./codex-native-agent.js"
 
 /**
  * Codex's spawned agents. Each is a thread of its own with its own rollout
@@ -270,7 +271,7 @@ export class CodexChildren {
     const spawn = Spawn.safeParse(meta?.source)
     const started = meta && !spawn.success ? Started.safeParse(meta.source).data : undefined
     if (meta && started && meta.parent_thread_id) {
-      const ref: ThreadRef = { harness: "codex", nativeId: meta.id, path, bytes, title: started.title, updatedAt: new Date(mtimeMs).toISOString(), childOf: { nativeId: meta.parent_thread_id } }
+      const ref: ThreadRef = { harness: "codex", nativeId: meta.id, path, bytes, title: started.title, updatedAt: new Date(mtimeMs).toISOString(), childOf: { nativeId: meta.parent_thread_id }, nativeAgent: codexNativeAgent(CodexAgentMetaSchema.safeParse(meta).data) }
       if (meta.cwd) ref.cwd = meta.cwd
       if (meta.timestamp) ref.startedAt = meta.timestamp
       return ref
@@ -284,6 +285,7 @@ export class CodexChildren {
       bytes,
       updatedAt: new Date(mtimeMs).toISOString(),
       childOf: { nativeId: parent },
+      nativeAgent: codexNativeAgent(CodexAgentMetaSchema.safeParse(meta).data),
     }
     if (meta.cwd) ref.cwd = meta.cwd
     if (meta.timestamp) ref.startedAt = meta.timestamp

@@ -21,6 +21,7 @@ export function rosterOnScreen(state: AcpState, conversation?: string) {
 export function useAgentsOffered(conversation?: string): boolean {
   return useAcp((state) => {
     const { live, counts } = rosterOnScreen(state, conversation)
-    return counts.total > 0 || (live?.nativeAgents?.agents.length ?? 0) > 0
+    // Its provider's own work, or its Thread's Fins, whichever of its Sessions is on screen (`conversationRoster`).
+    return counts.total > 0 || Boolean(live?.nativeAgents?.agents.some((agent) => !agent.child))
   })
 }

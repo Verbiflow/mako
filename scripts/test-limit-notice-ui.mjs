@@ -251,7 +251,7 @@ async function check() {
   assert.equal(await text("[data-limit-notice]"), `${LINE} Got it`, "the notice alone still stands in the Thread")
   await shoot("thread-notice", "[data-crew]")
   // Banner and mark: it asks nothing, so it says so, and the banner's line isn't a name and a cut.
-  const banner = await evaluate(`Promise.all([import('/src/state/acp-live.ts'), import('/src/state/acp.ts'), import('/src/state/notifications.ts')]).then(([{ noteFinAsks }, { acpStore, activeAcp }, { notificationsStore }]) => { noteFinAsks({ ...activeAcp(acpStore.get()), key: 'banner-probe' }); const item = notificationsStore.get().items.find((each) => each.id.includes(':limit:')); return item && { kind: item.kind, body: item.body } })`)
+  const banner = await evaluate(`Promise.all([import('/src/state/acp-live.ts'), import('/src/state/acp.ts')]).then(([{ noteFinAsks }, { acpStore, activeAcp }]) => { noteFinAsks({ ...activeAcp(acpStore.get()), key: 'banner-probe' }); const item = window.mockState.notifications().items.find((each) => each.id.includes(':limit:')); return item && { kind: item.kind, body: item.body } })`)
   assert.equal(banner?.kind, "needs-you", "a notice is no question")
   assert.ok(banner?.body.startsWith("Cursor ran out until"), `its words lead the banner: ${banner?.body}`)
   // Scrolled away, the line over the composer brings it back.
