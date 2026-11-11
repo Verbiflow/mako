@@ -1,3 +1,4 @@
+import { ReportActionTargetSchema } from "./report-actions.js"
 import { z } from "zod"
 import { NativeAgentOriginSchema } from "@mako/sessions/native-agent-origin"
 import { ACCESS_TIER_NAMES, accessModeId, type AccessTier } from "./access.js"
@@ -501,6 +502,8 @@ export const ReportSchema = z.object({
   recommended: z.number().int().nonnegative().optional(),
   /** What whoever answers does, in one sentence: "Pick the branch the release goes from." */
   action: z.string().max(400).optional(),
+  /** Explicit action-only follow-through. Questions retain their existing ask identity instead. */
+  followUp: ReportActionTargetSchema.optional(),
   /** Its Apex left its question to the person (`agents_answer` with `person`), or it was the person's from the start. */
   for: z.literal("person").optional(),
   /** The person's ask its Apex is told of though it can't answer it: an approval under an Apex below full access. */

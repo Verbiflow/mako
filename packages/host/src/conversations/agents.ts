@@ -1,3 +1,4 @@
+import { ReportActionTargetSchema, ReportDispositionSchema, type ReportAction } from "../contracts/report-actions.js"
 import type { ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
 import { SessionSettingsSchema, type SessionModel, type SessionSettings } from "@mako/sessions/settings"
@@ -100,6 +101,8 @@ import {
   type AgentsReadInput,
   type AgentsReadResult,
   type AgentsReportInput,
+  type AgentsSettleInput,
+  type AgentsSettleResult,
   type AgentsReportResult,
   type AgentsAnswered,
   type AgentsAnswerInput,
@@ -1045,21 +1048,25 @@ export class Agents implements AgentOperations, ConversationChildren {
     return roleRuleLines(policy, { fin: edge !== undefined, apex: !edge || edge.role === APEX_ROLE || this.isApex(conversation), read })
   }
 
-  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>): string[] {
+  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance = true): string[] {
     const order = request.actor && request.actor.kind !== "person" ? agentMessageOrder(this.deps.live.snapshot(conversation), request.id, (session) => this.store()?.sessionPlacement(session)?.thread ?? session) : []
     const store = this.store()
     const thread = store?.journalPlacement(conversation)?.thread
     if (!store || !thread) return order
     const rules = request.actor && request.actor.kind !== "person" ? order : this.rulesNote(conversation)
     const open = store.edges().children(thread).filter((edge) => !edge.closedAt)
-    if (!open.length) return rules
     this.sync()
     const pending = open.flatMap((edge) => this.pendingReports(edge).map((report) => ({ edge, report })))
     const questions = pending.slice(0, 8).map(({ edge, report }) => `fin:${edge.name} · ask ${report.id} · ${decisionOn(edge.asked, report) === "lead" ? "Apex" : "person"}: ${report.question!.replace(/\s+/g, " ").slice(0, 240)}`)
     const note = questions.length ? ["Pending report questions (notice delivery and reading do not resolve them):", ...questions,
       ...(pending.length > 8 ? [`${pending.length - 8} more: agents_list gives pendingQuestions counts; agents_read pages exact ask IDs with afterAsk.`] : []),
       "agents_answer with to and ask resolves only that question; use an explicit answer/park decision. Progress stays quiet."] : []
-    const lines = [...rules, ...(!request.actor || request.actor.kind === "person" ? frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), this.now()) : []), ...note]
+    const actions = store.reportActionInbox(thread)
+    const actionLines = actions.items.map(action => this.actionLine(action))
+    const followUps = actionLines.length ? ["Pending action-only reports (delivery/read is not disposition):", ...actionLines,
+      `${actions.total} pending; source Apex uses agents_read on the source Fin with afterAction. Custodian uses agents_read {child: its own Thread ID, view: actions, afterAction} for full targets and more pages.`,
+      "Source Apex alone records exact agents_settle dispositions. Dispatch/handoff/defer stay pending; receiver outcome alone resolves nothing. Reclaim returns custody to Apex. No automatic reminder/reply."] : []
+    const lines = [...rules, ...(!request.actor || request.actor.kind === "person" ? frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), this.now(), includeGuidance) : []), ...note, ...followUps]
     hostLog("agents", "front door", { conversation, children: open.length, chars: lines.reduce((sum, line) => sum + line.length + 1, 0) })
     return lines
   }
@@ -1976,6 +1983,16 @@ export class Agents implements AgentOperations, ConversationChildren {
   async read(caller: AgentCaller, input: AgentsReadInput): Promise<AgentsReadResult> {
     const apex = this.apexOf(caller)
     if ("refused" in apex) return apex
+    if (input.view === "actions") {
+      if (apex.away || input.child !== apex.thread || input.report !== undefined || input.afterAsk !== undefined || input.snapshot !== undefined || input.offset !== undefined || input.limit !== undefined)
+        return { refused: "conflict", why: "view actions reads only your own delegated custody with your exact Thread ID and optional afterAction; it grants no source conversation access." }
+      try {
+        const actions = this.store()!.reportCustody(apex.thread, input.afterAction)
+        const own = this.store()!.edges().of(apex.thread)
+        return { child: apex.thread, name: own?.name ?? "self", state: own ? this.stateOf(own) : { kind: "idle" }, actions,
+          text: actions.items.map(action => this.actionLine(action)).join("\n") }
+      } catch { return { refused: "conflict", why: "afterAction must name a report in your exact custody view." } }
+    }
     const edge = this.resolve(apex, input.child, true)
     if (!edge) {
       const held = this.heldNamed(apex, input.child)
@@ -1984,7 +2001,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       return { child: held.placeholder.child, name: held.placeholder.name, state, text: `Queued, not started yet: ${queuedWords(state)}. It has nothing to read until it starts.` }
     }
     const limit = Math.max(200, Math.min(input.maxChars ?? READ_CHARS, 64_000))
-    if (edge.placed && (input.report !== undefined || input.afterAsk !== undefined)) return { refused: "unsupported", why: "Exact report reads and question paging for placed Fins need verified receiver capability. Read the specific report on the Fin's owning device." }
+    if (edge.placed && (input.report !== undefined || input.afterAsk !== undefined || input.afterAction !== undefined)) return { refused: "unsupported", why: "Exact report reads and question paging for placed Fins need verified receiver capability. Read the specific report on the Fin's owning device." }
     const reports = this.store()!.reportsOf(edge.child)
     const selected = input.report !== undefined ? reports.find((report) => report.id === input.report) : undefined
     if (input.report !== undefined && (!selected || input.view === "transcript")) return { refused: "conflict", why: "report must name this Fin's stored report and uses the report view." }
@@ -1993,6 +2010,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     const positions = new Map(reports.map((report, index) => [report.id, index]))
     const pending = this.pendingReports(edge).filter((report) => (positions.get(report.id) ?? -1) > after)
     const asks = pending.slice(0, 8).map((report) => ({ id: report.id, question: report.question!.slice(0, 400), on: decisionOn(edge.asked, report), ...(report.action && { action: report.action }) }))
+    if (input.afterAction !== undefined) {
+      const cursor = this.store()!.reportAction(input.afterAction)
+      if (!cursor || cursor.parent !== edge.parent || cursor.child !== edge.child)
+        return { refused: "conflict", why: "afterAction must name an action-only report of this Fin." }
+    }
+    const actions = this.pendingActions(edge.parent, edge.child, input.afterAction)
     const state = this.stateOf(edge)
     let away: string | undefined
     if (edge.placed) {
@@ -2009,6 +2032,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       child: edge.child,
       name: edge.name,
       state,
+      ...((actions.items.length || input.afterAction !== undefined) && { actions }),
+      ...(selected?.followUp && { followUp: this.store()!.reportAction(selected.id) }),
       ...(asks.length && { pending: { asks, ...(pending.length > asks.length && { more: pending.length - asks.length, next: asks.at(-1)!.id }) } }),
       text: truncated ? text.slice(text.length - limit) : text,
       ...(truncated && { truncated: true as const }),
@@ -2021,6 +2046,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     if ("refused" in apex) return apex
     const edge = this.store()!.edges().of(apex.thread)
     if (!edge) return { refused: "no-parent", why: `This Thread has no ${APEX_WORD}: agents_report is for a ${FIN_WORD}, a Thread another one started.` }
+    if (input.followUp !== undefined && (!ReportActionTargetSchema.safeParse(input.followUp).success || !input.action?.trim() || input.question?.trim() || input.decides === "person" || (input.status !== "done" && input.status !== "failed")))
+      return { refused: "conflict", why: "followUp pairs action with an exact target/version on a done/failed action-only result. Questions/person decisions use their retained ask; progress stays quiet." }
+    if (input.followUp && (edge.placed || edge.remote))
+      return { refused: "unsupported", why: "Action-only follow-up requires a local parent/Fin; remote ownership capability is not negotiated. Use the existing explicit question/answer contract." }
     const own = new Set(this.store()!.reportsOf(edge.child).filter((report) => report.question?.trim()).map((report) => report.id))
     if (input.supersedes && (input.supersedes.length > 8 || input.supersedes.some((id) => !own.has(id)) || (input.supersedes.length > 0 && !input.summary.trim()))) return { refused: "conflict", why: "supersedes needs a reason in summary and at most eight exact question report IDs owned by this Fin." }
     const report: Report = {
@@ -2035,6 +2064,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(input.options?.length && { options: input.options.slice(0, ASK_OPTIONS).map((option) => ({ label: option.label.slice(0, 200), ...(option.detail && { detail: option.detail.slice(0, 600) }) })) }),
       ...(input.recommended !== undefined && input.recommended < (input.options?.length ?? 0) && { recommended: input.recommended }),
       ...(input.action && { action: input.action.slice(0, 400) }),
+      ...(input.followUp && { followUp: input.followUp }),
       ...(input.status === "done" && input.question && input.decides && { decides: input.decides }),
       ...(input.status !== "failed" && input.waitingOn?.length && { waitingOn: input.waitingOn.slice(0, WAITING_ON_LIMIT).map(waitingItem) }),
       ownerGeneration: this.generation,
@@ -2042,7 +2072,41 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const kept = this.keepReport(edge, report)
     if ("refused" in kept) return kept
-    return { id: kept.report.id, ...(kept.deduped && { deduped: true as const }), delivered: kept.report.status === "progress" ? "none" : "notice", ...(kept.report.waitingOn?.length && { subscriptions: this.waitSubscriptions(edge, kept.report) }), ...(kept.report.supersedes?.length && { superseded: kept.report.supersedes }) }
+    return { id: kept.report.id, ...(kept.report.followUp && { followUp: this.store()!.reportAction(kept.report.id) }), ...(kept.deduped && { deduped: true as const }), delivered: kept.report.status === "progress" ? "none" : "notice", ...(kept.report.waitingOn?.length && { subscriptions: this.waitSubscriptions(edge, kept.report) }), ...(kept.report.supersedes?.length && { superseded: kept.report.supersedes }) }
+  }
+
+  /** Silent disposition of ordinary follow-through; native questions/approvals remain in answer(). */
+  async settle(caller: AgentCaller, input: AgentsSettleInput): Promise<AgentsSettleResult> {
+    const apex = this.apexOf(caller)
+    if ("refused" in apex) return apex
+    const edge = this.resolve(apex, input.to, false)
+    if (!edge) return unknownFin(input.to)
+    if (apex.away || edge.placed || edge.remote) return { refused: "unsupported", why: "Exact action disposition across devices needs negotiated ownership; resolve on its local owning host." }
+    const target = ReportActionTargetSchema.safeParse(input.target)
+    const parsed = ReportDispositionSchema.safeParse(input.disposition)
+    if (!target.success || !parsed.success || !Number.isSafeInteger(input.version) || input.version < 1 || !input.clientKey?.trim() || input.clientKey.length > 200)
+      return { refused: "conflict", why: "Disposition needs an exact report, positive version, target and valid evidence/reason." }
+    const store = this.store()!
+    const op = `report-action:${apex.thread}:${input.clientKey}`
+    let disposition = parsed.data
+    if (disposition.kind === "dispatch" || disposition.kind === "handoff") {
+      const next = this.resolve(apex, disposition.to, false)
+      const there = next && this.conversationOf(next.child)
+      const requestId = disposition.request
+      const request = there ? this.deps.live.snapshot(there)?.requests.find(item => item.id === requestId) : undefined
+      const sender = request && request.actor?.kind === "agent" ? store.sessionPlacement(request.actor.session) : undefined
+      if (!next || next.placed || next.remote || (!store.hasReportActionOperation(op) &&
+          (next.closedAt !== undefined || (there && this.deps.archived?.(there)) || !request || sender?.thread !== apex.thread ||
+          (request.status !== "queued" && request.status !== "dispatching" && request.status !== "completed"))))
+        return { refused: "conflict", why: "Dispatch/handoff must link an existing admitted request from this Apex to its own local Fin; a receipt is not completion of that work." }
+      disposition = { ...disposition, to: next.child }
+    }
+    try {
+      return store.resolveReportAction({ parent: apex.thread, child: edge.child, report: input.report, version: input.version,
+        target: target.data, disposition, op, at: this.now() })
+    } catch (error) {
+      return { refused: "conflict", why: `Disposition changed nothing: ${errorMessage({ error })}` }
+    }
   }
 
   /** What was actually registered, from the kept report, its current owner, configured reader and durable claims. */
@@ -2324,6 +2388,23 @@ export class Agents implements AgentOperations, ConversationChildren {
     const finConversation = first.ask.kind === "report" ? undefined : this.askingConversation(first.edge.child)
     const line = (finConversation && this.personWaiting(finConversation)?.line) || first.question
     return { fin: first.edge.child, name: first.edge.name, line, ask: first.ask, more: asks.length - 1 }
+  }
+
+  private actionLine(action: ReportAction): string {
+    const store = this.store()!
+    const source = store.edges().of(action.child)
+    const receiver = this.conversationOf(action.owner)
+    const receiverEdge = store.edges().of(action.owner)
+    const request = action.custody && receiver ? this.deps.live.snapshot(receiver)?.requests.find(item => item.id === action.custody!.request) : undefined
+    const state = receiverEdge?.closedAt !== undefined ? "stopped" : receiver && this.deps.archived?.(receiver) ? "archived" : "present"
+    const custody = action.custody ? ` · custodian ${state} · request ${request?.status ?? "unavailable"}` : ""
+    return `fin:${source?.name ?? action.child} · source Apex ${action.parent} · action ${JSON.stringify(action.report)} · v${action.version} · owner ${action.owner} · ${action.disposition.kind}${action.disposition.kind === "defer" ? ` until ${noteLine(action.disposition.resume, 120)}` : ""}${custody}: ${noteLine(action.action, 180)} · target ${noteLine(action.target.ref, 120)} @ ${noteLine(action.target.version, 80)}`
+  }
+
+  private pendingActions(parent: string, child?: string, after?: string) {
+    // Action decisions are silent and outlive native work. Stop/archive never sends or cancels a disposition.
+    const children = this.store()!.edges().children(parent).filter(edge => child === undefined || edge.child === child)
+    return this.store()!.reportActions(parent, children.map(edge => edge.child), after)
   }
 
   /**
@@ -4544,6 +4625,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const idle = this.idleOf(edge, state, reading)
     const pulls = this.openPRsOf(edge)
     const pendingQuestions = this.pendingReports(edge).length
+    const pendingActions = this.pendingActions(edge.parent, edge.child).total
+    const custodyActions = this.store()!.reportCustody(edge.child).total
     return {
       child: edge.child,
       name: edge.name,
@@ -4559,6 +4642,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(reading.toolUses && { toolUses: reading.toolUses }),
       ...(latest && { report: { status: latest.status, line: reportPhase(latest) ?? latest.status, at: latest.at } }),
       ...(pendingQuestions && { pendingQuestions }),
+      ...(pendingActions && { pendingActions }),
+      ...(custodyActions && { custodyActions }),
       ...(waiting && { waiting }),
       ...(idle !== undefined && { idleFor: idle }),
       ...(pulls.length && { openPRs: pulls }),
