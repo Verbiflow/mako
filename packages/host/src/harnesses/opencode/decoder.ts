@@ -33,7 +33,8 @@ export interface OpenCodeNotice {
  */
 export type OpenCodeTurnFact =
   | { type: "enqueued"; inbox: string; item: InboxItem["type"]; notice?: OpenCodeNotice }
-  | { type: "delivered"; inbox: string }
+  /** `between`: no step of the root runs, so the item opens a turn of its own rather than joining one. */
+  | { type: "delivered"; inbox: string; between?: true }
   /** Withdrawn before OpenCode delivered it. */
   | { type: "cancelled"; inbox: string }
   | { type: "started" }
@@ -199,6 +200,8 @@ export class OpenCodeDecoder {
   private reply: string | undefined
   /** The root's last step that failed: a retry of it goes on in a new message, and its stored `retry` stays. */
   private failedStep: string | undefined
+  /** Whether a step of the root runs now, from its start to its end. */
+  private stepping = false
   /** The running compaction's stored message. */
   private compaction: string | undefined
   /** The stored message each compaction's end named, by the ending event: a replayed end names the same one. */
@@ -254,7 +257,11 @@ export class OpenCodeDecoder {
       if (!event.location || event.location.directory === this.cwd) decoded.push({ kind: "effect", effect: { type: "mcp", server: event.data.server } })
       return decoded
     }
-    if (event.type === "session.step.started" && event.data.sessionID === this.root) this.reply = event.data.assistantMessageID
+    if (event.type === "session.step.started" && event.data.sessionID === this.root) {
+      this.reply = event.data.assistantMessageID
+      this.stepping = true
+    }
+    if ((event.type === "session.step.ended" || event.type === "session.step.failed") && event.data.sessionID === this.root) this.stepping = false
     if (event.type === "session.step.failed" && event.data.sessionID === this.root) this.failedStep = event.data.assistantMessageID
     if (TURN.has(event.type)) return [...decoded, ...this.turn(event)]
     if (SESSION_STATE.has(event.type)) return [...decoded, ...this.session(event)]
@@ -296,7 +303,7 @@ export class OpenCodeDecoder {
         return turn(enqueued)
       }
       case "session.inbox.delivered":
-        return turn({ type: "delivered", inbox: event.data.inboxID })
+        return turn({ type: "delivered", inbox: event.data.inboxID, ...!this.stepping && { between: true as const } })
       case "session.inbox.cancelled":
         return turn({ type: "cancelled", inbox: event.data.inboxID })
       case "session.execution.started":

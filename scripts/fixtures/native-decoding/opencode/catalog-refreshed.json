@@ -233,7 +233,8 @@
             "type": "turn",
             "turn": {
               "type": "delivered",
-              "inbox": "msg_147653d04001cnoKPKrqsAEsa5"
+              "inbox": "msg_147653d04001cnoKPKrqsAEsa5",
+              "between": true
             }
           }
         }

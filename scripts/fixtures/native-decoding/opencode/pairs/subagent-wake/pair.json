@@ -7,29 +7,8 @@
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e3a095412ffeVDUntxIWDUCZkR",
-      "known": [
-        {
-          "side": "-",
-          "line": "text: Started one subagent in the background.The subagent replied marker-7.",
-          "reason": ""
-        },
-        {
-          "side": "+",
-          "line": "text: Started one subagent in the background.",
-          "reason": ""
-        },
-        {
-          "side": "+",
-          "line": "note: Subagent \"Reply with a marker\" completed",
-          "reason": ""
-        },
-        {
-          "side": "+",
-          "line": "text: The subagent replied marker-7.",
-          "reason": ""
-        }
-      ]
+      "path": ".local/share/opencode/opencode.db#v2:ses_e331974fbffe1S1lc9xHkpB2e4",
+      "known": []
     }
   ]
 }

@@ -155,7 +155,8 @@
             "type": "turn",
             "turn": {
               "type": "delivered",
-              "inbox": "msg_144d953db001EMxFzsrsBHL52g"
+              "inbox": "msg_144d953db001EMxFzsrsBHL52g",
+              "between": true
             }
           }
         }
