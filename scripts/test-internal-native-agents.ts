@@ -120,7 +120,7 @@ async function restart(root: string) {
   w.store.keepEdge({ ...old.edge, run: { ...old.edge.run!, nativeAgent: { kind: "unknown", role: "unclassified" } } })
   await w.close()
   const gate = deferred(), entered = deferred(); fake = fakeCatalog(); fake.write(stale(ref), [])
-  w = new AgentsWorld({ root, script: () => "ok", resumeInSlices: true, catalog: { ...fake.catalog, readRef: async () => { entered.resolve(); await gate.promise; return ref } } })
+  w = new AgentsWorld({ root, script: () => "ok", budget: { running: 2, started: 1 }, resumeInSlices: true, catalog: { ...fake.catalog, readRef: async () => { entered.resolve(); await gate.promise; return ref } } })
   try {
     await reached(entered.promise); assert.equal(w.prompts.length, 0, "no legacy cut is replayed ahead of native classification")
     gate.resolve(); await w.resumed; await w.settle()
@@ -129,9 +129,23 @@ async function restart(root: string) {
     assert.equal(keptEdge(root, old.edge.child).run?.nativeAgent?.kind, "internal-review")
     assert.deepEqual(keptEdge(root, old.edge.child).run?.ended, old.edge.run?.ended, "no new exit or Stop is invented")
     assert.equal(w.prompts.length, 0, "no guardian decision or synthetic completion reaches the Apex")
+    const caller = w.caller(apex.conversation)
+    const listed = await w.agents.list(caller, {})
+    assert.ok("tree" in listed)
+    assert.deepEqual(listed.tree, { running: 0, started: 0, of: { running: 2, started: 1 } }, "an internal review consumes neither running room nor the lifetime start budget")
+    const real = await w.agents.start(caller, { name: "real-after-review", clientKey: "real", cwd: root, brief: { objective: "Do actual delegated work" } })
+    assert.ok(!("refused" in real), "the internal review did not spend the real Fin's admission")
+    assert.equal(real.tree.started, 1)
+    const refused = await w.agents.start(caller, { name: "one-too-many", clientKey: "second", cwd: root, brief: { objective: "Do other delegated work" } })
+    assert.ok("refused" in refused && refused.refused === "budget", "real delegated work still spends the unchanged lifetime budget")
+    await w.settle()
   } finally { gate.resolve(); await w.close() }
   w = world(root)
-  try { await w.settle(); assert.equal(w.store.edges().of(old.edge.child), undefined); assert.equal(w.prompts.length, 0, "classification survives restart without native metadata") } finally { await w.close() }
+  try {
+    await w.settle()
+    assert.equal(w.store.edges().of(old.edge.child), undefined)
+    assert.equal(w.prompts.length, 0, "classification survives restart without native metadata")
+  } finally { await w.close() }
 }
 async function realWorkers(root: string) {
   const fake = fakeCatalog(), w = world(root, fake)

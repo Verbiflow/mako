@@ -716,13 +716,28 @@ async function check() {
     const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + 80 } })()")
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY: -500 })
     await wait(500)
-    await evaluate(`(() => { const node = document.querySelector('[data-transcript-viewport]'); const view = node.getBoundingClientRect(); const seen = window.__gesture = { steps: [], crossed: false, tallest: 0 }
+    // Each frame: how far the line under the middle moved on screen, and how far it moved against the scroll offset, the
+    // transcript's own writes to that offset counted as its own. A frame of any length that only scrolled moves it 0 px
+    // against the offset; a row that jumps under the reader moves it however far the row jumped.
+    await evaluate(`(() => { const node = document.querySelector('[data-transcript-viewport]'); const view = node.getBoundingClientRect(); const seen = window.__gesture = { frames: [], crossed: false, tallest: 0 }
+      window.__wrote = 0
+      if (!window.__writesCounted) {
+        window.__writesCounted = true
+        const own = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop'), counted = (el) => el.hasAttribute('data-transcript-viewport')
+        Object.defineProperty(Element.prototype, 'scrollTop', { configurable: true, get() { return own.get.call(this) }, set(value) { if (!counted(this)) return own.set.call(this, value); const was = own.get.call(this); own.set.call(this, value); window.__wrote += own.get.call(this) - was } })
+        for (const name of ['scrollTo', 'scroll', 'scrollBy']) { const real = Element.prototype[name]; Element.prototype[name] = function (...args) { if (!counted(this)) return real.apply(this, args); const was = own.get.call(this); real.apply(this, args); window.__wrote += own.get.call(this) - was } }
+      }
       const under = () => [...node.querySelectorAll('[data-exchange]')].find((turn) => { const box = turn.getBoundingClientRect(); return box.top <= view.top + view.height / 2 && box.bottom > view.top + view.height / 2 })
-      let id, before
-      const read = () => { const was = node.hasAttribute('data-virtualized'); if (was && !seen.crossed) { seen.crossed = true; seen.at = seen.steps.length }
+      let id, last, crossing = false
+      const read = () => { if (node.hasAttribute('data-virtualized') && !seen.crossed) { seen.crossed = true; crossing = true }
         const turn = (id && node.querySelector('[data-exchange="' + id + '"]')) || under(); if (!turn) return
         const box = turn.getBoundingClientRect(); seen.tallest = Math.max(seen.tallest, box.height)
-        if (turn.dataset.exchange === id) seen.steps.push(Math.round(box.top - before)); id = turn.dataset.exchange; before = box.top }
+        const now = { top: box.top, scrolled: node.scrollTop, wrote: window.__wrote, at: performance.now() }
+        if (turn.dataset.exchange === id && last) {
+          seen.frames.push({ step: Math.round(now.top - last.top), against: Math.round((now.top - last.top + now.scrolled - last.scrolled - (now.wrote - last.wrote)) * 10) / 10, ms: Math.round(now.at - last.at), crossing })
+          crossing = false
+        }
+        id = turn.dataset.exchange; last = now }
       const after = new MessageChannel(); after.port1.onmessage = read
       const tick = () => { after.port2.postMessage(0); requestAnimationFrame(tick) }; requestAnimationFrame(tick); return true })()`)
     let moving = true
@@ -738,10 +753,19 @@ async function check() {
     moving = false
     await mover
     const seen = await evaluate("window.__gesture")
-    const leaps = seen.steps.map((by, frame) => ({ by, frame })).filter(({ by }) => Math.abs(by) > 400)
-    console.log(`${form}: crossed ${seen.crossed}, ${seen.steps.length} frames, in a turn ${Math.round(seen.tallest)} px tall, the biggest step ${Math.max(...seen.steps.map(Math.abs))} px, leaps ${JSON.stringify(leaps.slice(0, 3))}`)
+    const { frames } = seen
+    await writeFile(join(evidence, `${form} frames.json`), JSON.stringify(frames))
+    const crossingAt = frames.findIndex((frame) => frame.crossing)
+    // The crossing's own frame sets the scroll offset afresh (the offset and its height both change many times over), so
+    // there the line is held to what the gesture could move it in that frame's time: its fastest in any other frame.
+    const fastest = Math.max(0, ...frames.filter((frame, index) => index !== crossingAt && frame.ms >= 8).map((frame) => Math.abs(frame.step) / frame.ms))
+    const crossing = frames[crossingAt]
+    const moved = frames.map((frame, index) => ({ ...frame, index })).filter((frame) => frame.index !== crossingAt && Math.abs(frame.against) > 1)
+    console.log(`${form}: crossed ${seen.crossed}, ${frames.length} frames, the longest ${Math.max(...frames.map((frame) => frame.ms))} ms, in a turn ${Math.round(seen.tallest)} px tall; at the crossing ${crossing ? `${crossing.step} px in ${crossing.ms} ms, the gesture at most ${Math.round(fastest * 1000)} px/s` : "no frame"}; moved against the scroll ${JSON.stringify(moved.slice(0, 3))}`)
     assert.ok(seen.crossed, `${form}: the turns crossed into a window`)
-    assert.deepEqual(leaps.slice(0, 3), [], `${form}: what's read goes with the gesture across the crossing`)
+    assert.ok(crossing, `${form}: the crossing came during the gesture`)
+    assert.deepEqual(moved.slice(0, 3), [], `${form}: what's read goes with the gesture across the crossing, in frames of any length`)
+    assert.ok(Math.abs(crossing.step) <= fastest * crossing.ms + 2, `${form}: at the crossing, what's read moved ${crossing.step} px in ${crossing.ms} ms, past the gesture's ${Math.round(fastest * 1000)} px/s`)
   }
 
   console.log("Transcript rows: held apart in every frame on the desk, in a laptop's browser and on a phone, with and without the observer")
