@@ -47,11 +47,11 @@ if (!worker) {
   const runtime = await import(
     pathToFileURL(require.resolve("@mako/control-runtime/session")).href
   )
-  const source = await mkdtemp(join(tmpdir(), "mako-packaged-cli-"))
-  const owner = await runtime.startDesktopControlSession({
-    taskId: "packaged-cli",
-  })
+  const source = await mkdtemp(join(tmpdir(), "mc-"))
+  const workers = new runtime.ControlWorkers({ spare: false, cleanup: { scope: "owned", root: source } })
+  let owner
   try {
+    owner = await runtime.startDesktopControlSession({ taskId: "packaged-cli" }, { workers })
     const adapter = createControlMcpServer(owner.request)
     await adapter.close()
     const initialized = await owner.request({method:"js",code:"let packaged=41; packaged",timeout_ms:5000}, AbortSignal.timeout(7000))
@@ -108,7 +108,8 @@ if (!worker) {
       })
     )
   } finally {
-    await owner.close()
+    await owner?.close()
+    await workers.close()
     await rm(source, { recursive: true, force: true })
   }
 }
