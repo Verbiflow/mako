@@ -6,10 +6,28 @@ import { EventEmitter } from "node:events"
 import { pathToFileURL } from "node:url"
 import * as path from "node:path"
 import { SourceTextModule, SyntheticModule, createContext } from "node:vm"
+import { finishControlFixture } from "./lib/packaged-control-cleanup.mjs"
 
 const startupOnly = process.argv.includes("--startup-only")
 const sourceAt = process.argv.indexOf("--source")
 const sources = sourceAt < 0 ? new URL("../packages/control-runtime/src/", import.meta.url) : pathToFileURL(path.resolve(process.argv[sourceAt + 1]) + path.sep)
+
+/** Construct/cache modules only in the linker. Node links the entire graph once from this root, including cycles. */
+function fixtureGraph(context, entries, construct) {
+  const cache = new Map()
+  const load = (name) => {
+    if (!cache.has(name)) cache.set(name, Promise.resolve().then(() => construct(name)))
+    return cache.get(name)
+  }
+  const root = new SourceTextModule(entries.map((name) => `import ${JSON.stringify(name)}`).join("\n"), { context })
+  let ready
+  return async (name) => {
+    await (ready ??= root.link(load).then(() => root.evaluate()))
+    const module = await load(name)
+    assert.equal(module.status, "evaluated", "only modules in this coherent root graph are exposed")
+    return module.namespace
+  }
+}
 
 // Actual runtime modules, with only filesystem/OS/IPC boundaries replaced.
 // No real temp listing, socket connection, worker, or cleanup runs here.
@@ -99,24 +117,20 @@ async function fixture(options = {}) {
     "./control-session-client.js": { invokeControlSession: () => { throw new Error("fixture must not dispatch") } },
     "./control-session-server.js": { refuseControlConnection: () => { throw new Error("fixture must not receive clients") } },
   }
-  const cache = new Map()
-  async function load(name) {
-    if (cache.has(name)) return cache.get(name)
+  const entries = ["./launch-folders.js", "./private-socket.js", "./control-workers.js", "./desktop-session.js"]
+  const api = fixtureGraph(context, entries, async (name) => {
     let module
     if (external[name]) {
       const values = external[name]
       module = new SyntheticModule(Object.keys(values), function () { for (const [key, value] of Object.entries(values)) this.setExport(key, value) }, { context })
     } else {
-      assert.ok(["./launch-folders.js", "./private-socket.js", "./control-workers.js", "./desktop-session.js"].includes(name), name)
+      assert.ok(entries.includes(name), name)
       const url = new URL(name.slice(2).replace(/\.js$/, ".ts"), sources)
       const source = stripTypeScriptTypes(await readFile(url, "utf8"))
       module = new SourceTextModule(source, { context, identifier: name, initializeImportMeta(meta) { meta.url = url.href } })
     }
-    cache.set(name, module)
-    await module.link(load)
     return module
-  }
-  async function api(name) { const m = await load(name); if (m.status !== "evaluated") await m.evaluate(); return m.namespace }
+  })
   return { root, nodes, reads, mutations, probes, pids, put, api, handles }
 }
 
@@ -248,6 +262,209 @@ for (const patch of [{ type: "link" }, { uid: 502 }, { mode: 0o755 }]) {
   await assert.rejects(createControlDirectory("mako-cli-42-", { scope: "owned", root: "/own" }))
   assert.deepEqual(f.mutations, [])
   rows.push({ label: "unverified owned root refuses", patch })
+}
+
+// Delayed construction, shared dependencies and cycles are deterministic, not
+// repetitions hoping to avoid the old recursive-link race.
+for (const { order, delayed, cyclic } of [
+  { order: ["entry", "left", "right"], delayed: "shared", cyclic: true },
+  { order: ["right", "entry", "left"], delayed: "left", cyclic: true },
+  { order: ["left", "right", "entry"], delayed: "right", cyclic: false },
+]) {
+  let release, entered
+  const gate = new Promise((resolve) => { release = resolve })
+  const constructing = new Promise((resolve) => { entered = resolve })
+  const built = new Map()
+  const context = createContext({ evaluations: 0 })
+  const code = {
+    entry: 'import {left} from "left"; import {right} from "right"; export function value(){return left()+right()}',
+    left: 'import {read,token} from "shared"; export const label=5; export {token}; export function left(){return read()}',
+    right: 'import {read,token} from "shared"; export {token}; export function right(){return read()+1}',
+    shared: (cyclic ? 'import {label} from "left";' : 'const label=5;') + 'globalThis.evaluations++; export const token={}; export function read(){return label}',
+  }
+  const graph = fixtureGraph(context, order, async (name) => {
+    built.set(name, (built.get(name) ?? 0) + 1)
+    if (name === delayed) { entered(); await gate }
+    return new SourceTextModule(code[name], { context, identifier: name })
+  })
+  let timer
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("deterministic fixture graph did not link")), 3000) })
+  try {
+    const loading = Promise.all([graph("entry"), graph("left"), graph("right")])
+    await Promise.race([constructing, loading, deadline])
+    release()
+    const [entry, left, right] = await Promise.race([loading, deadline])
+    assert.equal(entry.value(), 11)
+    assert.equal(left.token, right.token, "shared dependency has one identity across the graph")
+    assert.equal((await graph("shared")).token, left.token)
+    assert.equal(context.evaluations, 1)
+    assert.equal(built.size, 4)
+    assert.ok([...built.values()].every((count) => count === 1))
+    rows.push({ label: "one coherent delayed/shared/cyclic graph", order, delayed, cyclic })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// Execute the actual fixture's declarations/start/catch/finally. Only its
+// positive-test body and external resource boundaries are synthetic here.
+const packagedFixture = await readFile(new URL("./test-packaged-control-cli.mjs", import.meta.url), "utf8")
+const declarations = packagedFixture.indexOf("  let owner\n")
+const bodyAt = packagedFixture.indexOf("    const adapter =", declarations)
+const catchAt = packagedFixture.indexOf("  } catch (error) {", bodyAt)
+assert.ok(declarations >= 0 && bodyAt > declarations && catchAt > bodyAt)
+const fixtureCode = packagedFixture.slice(declarations, bodyAt) + "    await body(owner)\n" + packagedFixture.slice(catchAt, packagedFixture.lastIndexOf("\n}"))
+const executeFixture = new (async () => {}).constructor("runtime", "workers", "source", "rm", "finishControlFixture", "body", "process", fixtureCode)
+async function teardownCase(options = {}) {
+  const calls = [], reports = [], logs = []
+  const owner = {
+    exited: options.exit ?? Promise.resolve("stopped"),
+    close: () => { calls.push("owner-close"); return options.ownerClose?.() },
+  }
+  const workers = { close: () => { calls.push("workers-close"); return options.workersClose?.() } }
+  let threw = false, thrown
+  try {
+    await executeFixture(
+      { startDesktopControlSession: async () => { if (options.startFailed) throw options.primary; return owner } }, workers, "/synthetic/owned-root",
+      async () => { calls.push("root-remove"); return options.remove?.() },
+      (input) => finishControlFixture({ ...input, timeoutMs: 5, report: (result) => { reports.push(result); return input.report(result) } }),
+      async () => { if (options.primaryFailed) throw options.primary },
+      { stderr: { write: (text) => { logs.push(text); if (options.writerFailed) throw options.writerError } } }
+    )
+  } catch (error) {
+    threw = true
+    thrown = error
+  }
+  return { calls, reports, logs, threw, thrown }
+}
+let primaryFormatting = 0
+const opaquePrimary = Object.freeze({ toString() { primaryFormatting++; throw new Error("must not format primary") } })
+for (const [primaryKind, primary] of [["Error", new Error("primary fixture error")], ["null", null], ["undefined", undefined], ["zero", 0], ["false", false], ["empty string", ""], ["Symbol", Symbol("fixture primary")], ["opaque object", opaquePrimary]]) {
+  const ownerError = new Error("owner close failed")
+  const result = await teardownCase({ primaryFailed: true, primary, ownerClose: async () => { throw ownerError }, workersClose: async () => { throw 0 } })
+  assert.equal(result.threw, true)
+  assert.ok(Object.is(result.thrown, primary), "the exact primary rejection survives every cleanup failure")
+  assert.deepEqual(result.calls, ["owner-close", "workers-close"])
+  const report = result.reports[0]
+  assert.equal(report.root, "retained")
+  assert.equal(report.terminationKnown, true)
+  assert.deepEqual(report.failures.map(({ stage }) => stage), ["owner-close", "workers-close"])
+  assert.equal(report.failures[0].error, ownerError)
+  assert.equal(report.failures[1].error, 0)
+  assert.ok(!result.logs.join("").includes("owner close failed"), "fixed cleanup summary never formats resource error values")
+  rows.push({ label: "actual fixture exact primary plus ordered independent cleanup failures", primaryKind })
+}
+assert.equal(primaryFormatting, 0)
+{
+  const result = await teardownCase({ ownerClose: async () => { throw undefined }, workersClose: async () => { throw null } })
+  assert.ok(result.thrown instanceof AggregateError)
+  assert.deepEqual(result.thrown.errors, [undefined, null])
+  assert.deepEqual(result.calls, ["owner-close", "workers-close"])
+  rows.push({ label: "cleanup-only failures are visible in resource order, even undefined/null" })
+}
+{
+  let formatted = 0
+  const fault = { get message() { formatted++; throw new Error("must not read resource error") }, toString() { formatted++; throw new Error("must not format resource error") } }
+  const result = await teardownCase({ ownerClose: async () => { throw fault } })
+  assert.ok(result.thrown instanceof AggregateError)
+  assert.equal(result.thrown.errors[0], fault)
+  assert.equal(result.reports[0].failures[0].error, fault)
+  assert.equal(formatted, 0)
+  rows.push({ label: "opaque cleanup error is retained without message access or coercion" })
+}
+for (const reason of ["stopped", "failed"]) {
+  const result = await teardownCase({ exit: Promise.resolve(reason) })
+  assert.equal(result.threw, false)
+  assert.deepEqual(result.calls, ["owner-close", "workers-close", "root-remove"])
+  assert.equal(result.reports[0].root, "removed")
+  assert.deepEqual(result.reports[0].failures, [])
+  rows.push({ label: "known original owner termination permits root cleanup", reason })
+}
+{
+  const primary = new Error("original body failure")
+  const result = await teardownCase({ primaryFailed: true, primary })
+  assert.equal(result.thrown, primary)
+  assert.equal(result.reports[0].root, "removed")
+  assert.deepEqual(result.reports[0].failures, [])
+  rows.push({ label: "primary error remains exact when all cleanup succeeds" })
+}
+{
+  const fault = new Error("pool close failed")
+  const result = await teardownCase({ workersClose: async () => { throw fault } })
+  assert.ok(result.thrown instanceof AggregateError)
+  assert.equal(result.thrown.errors[0], fault)
+  assert.equal(result.reports[0].root, "retained")
+  assert.ok(!result.calls.includes("root-remove"))
+  rows.push({ label: "pool close failure alone retains root despite known owner exit" })
+}
+for (const pending of ["ownerClose", "workersClose", "exit"]) {
+  let release
+  const late = new Promise((resolve) => { release = resolve })
+  const result = await teardownCase(pending === "exit" ? { exit: late } : { [pending]: () => late })
+  assert.ok(result.thrown instanceof AggregateError)
+  assert.equal(result.reports[0].root, "retained")
+  assert.equal(result.reports[0].failures[0].kind, "timeout")
+  assert.ok(result.calls.includes("workers-close"), "a pending owner close does not skip independent pool cleanup")
+  assert.ok(!result.calls.includes("root-remove"))
+  release("stopped")
+  await new Promise(setImmediate)
+  assert.ok(!result.calls.includes("root-remove"), "late settlement never schedules a later root deletion")
+  rows.push({ label: "bounded pending cleanup retains root even after late settlement", pending })
+}
+for (const value of [undefined, 0, "unknown"]) {
+  const result = await teardownCase({ exit: Promise.resolve(value) })
+  assert.ok(result.thrown instanceof AggregateError)
+  assert.equal(result.reports[0].terminationKnown, false)
+  assert.equal(result.reports[0].root, "retained")
+  assert.ok(!result.calls.includes("root-remove"), "a close acknowledgement without owner termination grants no deletion")
+  rows.push({ label: "unknown exit is not a cleanup acknowledgement" })
+}
+{
+  const result = await teardownCase({ exit: Promise.reject(null) })
+  assert.ok(result.thrown instanceof AggregateError)
+  assert.deepEqual(result.thrown.errors, [null])
+  assert.equal(result.reports[0].root, "retained")
+  assert.equal(result.reports[0].terminationKnown, false)
+  rows.push({ label: "rejected owner exit preserves null failure and no termination acknowledgement" })
+}
+{
+  const result = await teardownCase({ startFailed: true, primary: undefined })
+  assert.equal(result.threw, true)
+  assert.equal(result.thrown, undefined)
+  assert.deepEqual(result.calls, ["workers-close"])
+  assert.equal(result.reports[0].root, "retained")
+  rows.push({ label: "failed startup without returned owner preserves undefined primary and retains unconfirmed context" })
+}
+{
+  const fault = new Error("root removal failed")
+  const result = await teardownCase({ remove: async () => { throw fault } })
+  assert.ok(result.thrown instanceof AggregateError)
+  assert.equal(result.thrown.errors[0], fault)
+  assert.equal(result.reports[0].root, "removal-unconfirmed")
+  rows.push({ label: "failed removal is unconfirmed, never a fake cleanup success" })
+}
+{
+  let release
+  const pending = new Promise((resolve) => { release = resolve })
+  const result = await teardownCase({ remove: () => pending })
+  assert.ok(result.thrown instanceof AggregateError)
+  assert.equal(result.reports[0].root, "removal-unconfirmed")
+  assert.equal(result.reports[0].failures[0].kind, "timeout")
+  assert.equal(result.calls.filter((call) => call === "root-remove").length, 1)
+  release()
+  await new Promise(setImmediate)
+  assert.equal(result.reports[0].root, "removal-unconfirmed", "a late operation never rewrites the returned cleanup acknowledgement")
+  assert.equal(result.calls.filter((call) => call === "root-remove").length, 1)
+  rows.push({ label: "pending root removal remains explicitly unconfirmed, with no retry" })
+}
+{
+  const writer = new Error("summary writer failed")
+  const result = await teardownCase({ primaryFailed: true, primary: null, ownerClose: async () => { throw 0 }, writerFailed: true, writerError: writer })
+  assert.equal(result.threw, true)
+  assert.equal(result.thrown, null)
+  assert.deepEqual(result.reports[0].failures.map(({ stage }) => stage), ["owner-close", "cleanup-report"])
+  assert.equal(result.reports[0].failures[1].error, writer)
+  rows.push({ label: "cleanup reporting failure cannot replace the exact primary" })
 }
 
 console.log(JSON.stringify({ passed: rows.length, rows }, null, 2))
