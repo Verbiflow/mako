@@ -590,13 +590,19 @@ export interface FrontDoorChild {
 /** Fins the note lists by name; the rest are counted, and `agents_list` has them. */
 export const FRONT_DOOR_LISTED = 16
 
+/** Standing routing instructions; the live prompt sends them on the control note's reset-aware cadence. */
+export const FRONT_DOOR_GUIDANCE = [
+  "If the message is for one of them (its work, its branch, what it asked or reported), call agents_send {to, forward: true} first, adding text only for what it can't know, and end your turn. A finished one takes it as its next task, in its own Thread; a working one, after its turn unless the message corrects what it's doing now (deliver: steer).",
+  "If it's for you, or about how they stand, answer from this list. If none fits and it's work worth a Thread, use agents_start; otherwise do it yourself.",
+] as const
+
 /**
  * What an Apex hears before each message the person sends it (Mako's control
  * note, never shown as the person's words): its Fins as they stand, and how
  * to route the message. It's read from typed state, so routing costs no read
  * of any transcript and no tool call before the one that sends it on.
  */
-export function frontDoorNote(fins: readonly FrontDoorChild[], now: number): string[] {
+export function frontDoorNote(fins: readonly FrontDoorChild[], now: number, includeGuidance = true): string[] {
   if (!fins.length) return []
   const listed = [...fins].sort((a, b) => routeOrder(a.state) - routeOrder(b.state)).slice(0, FRONT_DOOR_LISTED)
   const more = fins.length - listed.length
@@ -604,8 +610,7 @@ export function frontDoorNote(fins: readonly FrontDoorChild[], now: number): str
     `You're this Thread's ${APEX_WORD}: the person writes to you, and you decide who handles it. Your ${FIN_WORD}s now:`,
     ...listed.map((fin) => frontDoorLine(fin, now)),
     ...(more > 0 ? [`… and ${more} more (agents_list).`] : []),
-    "If the message is for one of them (its work, its branch, what it asked or reported), call agents_send {to, forward: true} first, adding text only for what it can't know, and end your turn. A finished one takes it as its next task, in its own Thread; a working one, after its turn unless the message corrects what it's doing now (deliver: steer).",
-    "If it's for you, or about how they stand, answer from this list. If none fits and it's work worth a Thread, use agents_start; otherwise do it yourself.",
+    ...(includeGuidance ? FRONT_DOOR_GUIDANCE : []),
   ]
 }
 
