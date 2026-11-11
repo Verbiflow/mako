@@ -4,6 +4,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
 import { digestAsks } from "../contracts/agents.js"
+import { FRONT_DOOR_GUIDANCE } from "../contracts/agent-tools.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
 import { quietSwitch } from "../contracts/conversation-control.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
@@ -387,10 +388,15 @@ export class LiveDispatch {
         const since = request.continues?.since
         const moved = since !== undefined ? await cutAccount(cwd, since, request.continues!.reason, Date.now()).catch(() => undefined) : undefined
         const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
-        const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id, { role: dependencies.agents?.()?.isApex(resident.snapshot.session.id) ? "apex" : "thread" })
+        const apex = !asWritten && (dependencies.agents?.()?.isApex(resident.snapshot.session.id) ?? false)
+        const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id, { role: apex ? "apex" : "thread" })
         const rules = asWritten ? {} : (dependencies.agents?.()?.ruleLines(resident.snapshot.session.id) ?? {})
-        const standing = instructions || Object.keys(rules).length
-          ? standingLines(resident.controlSaid, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0 }, { ...instructions?.standing, ...rules })
+        const person = !request.actor || request.actor.kind === "person"
+        // Service-only turns need no routing paragraph. Once heard, keep its key through service turns, without repeating it.
+        const guidance = apex && (person || resident.controlSaid?.lines.has("front-door-guidance"))
+          ? `For messages from the person:\n${FRONT_DOOR_GUIDANCE.join("\n")}` : undefined
+        const standing = instructions || Object.keys(rules).length || guidance
+          ? standingLines(resident.controlSaid, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0 }, { ...instructions?.standing, ...rules, "front-door-guidance": guidance })
           : undefined
         if (standing) {
           resident.controlSaid = standing.said
@@ -409,7 +415,7 @@ export class LiveDispatch {
             ...(standing?.lines ?? []),
             ...(instructions?.notices ?? []),
             ...(told ? [checkout ? `${told.account}\n${checkout}` : told.account] : []),
-            ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request) ?? []),
+            ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request, false) ?? []),
           ]),
           current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), moved ? `${words}\n\n${moved}` : words),
         ].filter(Boolean).join("\n\n")

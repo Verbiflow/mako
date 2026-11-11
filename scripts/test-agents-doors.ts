@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import "./test-agent-list-results.ts"
 import { execFile } from "node:child_process"
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -10,7 +11,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { unwatchedWork } from "@mako/host/base/event-loop"
-import { AGENT_TOOLS } from "@mako/host/contracts/agent-tools"
+import { AGENT_TOOLS, ORCHESTRATION_INSTRUCTIONS } from "@mako/host/contracts/agent-tools"
+import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "@mako/host/contracts/report-actions"
 import { hostCallSchema } from "@mako/host/contracts/host-call-inputs"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { decodeRuntimeValue } from "@mako/host/contracts/runtime-value"
@@ -91,7 +93,7 @@ try {
   const session = apex.caller.kind === "agent" ? apex.caller.session : ""
   const cwd = world.root
 
-  const inThread = new McpServer({ name: "mako", version: "1.0.0" })
+  const inThread = new McpServer({ name: "mako", version: "1.0.0" }, { instructions: ORCHESTRATION_INSTRUCTIONS })
   registerAgentTools(inThread, {
     invoke: async (channel, args) => AgentAnswerSchema.parse(decodeRuntimeValue(await methods.invoke(channel, args))),
     caller: () => apex.caller,
@@ -110,6 +112,7 @@ try {
   const doors = { "in-thread": thread, "mako mcp": stdio }
   const listed: Record<string, Awaited<ReturnType<Client["listTools"]>>["tools"]> = {}
   for (const [door, client] of Object.entries(doors)) {
+    assert.ok(client.getInstructions()?.includes(REPORT_FOLLOW_UP_INSTRUCTIONS), `${door} carries the common actionable-report directive`)
     listed[door] = (await client.listTools()).tools
     assert.deepEqual(listed[door]!.map((tool) => tool.name).filter((name) => name.startsWith("agents_")).sort(), AGENT_TOOLS.map((tool) => tool.mcp.name).sort(), `${door} lists every tool`)
     for (const tool of AGENT_TOOLS) {
@@ -170,9 +173,51 @@ try {
   const repeatedAnswer = await call(stdio, "agents_answer", decision)
   assert.equal(repeatedAnswer.ask, question.id)
   assert.equal(repeatedAnswer.deduped, true)
+  const target = { ref: "fixture:sidebar-review", version: "head-1" }
+  const action = await world.agents.report(world.caller(first.conversation), { status: "done", summary: "Action-only review handoff.", action: "Dispatch exact sidebar review.", followUp: target, clientKey: "action-only" })
+  assert.ok(!("refused" in action), JSON.stringify(action))
+  const disposition = { kind: "defer", reason: "Review slot pending.", resume: "Exact review slot assigned." }
+  const settlement = { to: "sidebar", report: action.id, version: 1, target, disposition, clientKey: "same-action-disposition" }
+  const deferred = await call(thread, "agents_settle", settlement)
+  assert.equal(deferred.refused, undefined)
+  const duplicateDisposition = await call(stdio, "agents_settle", settlement)
+  assert.equal(duplicateDisposition.deduped, true)
+  assert.deepEqual(await command("settle", "sidebar", "--report", action.id, "--version", "1", "--target", JSON.stringify(target), "--disposition", JSON.stringify(disposition), "--key", "same-action-disposition"), duplicateDisposition, "CLI/stdio/in-Thread resolve the exact same durable operation")
+  const pendingAction = z.object({ actions: z.object({ items: z.array(z.object({ report: z.string(), version: z.number() })) }) }).parse(await call(thread, "agents_read", { child: "sidebar" }))
+  assert.deepEqual(pendingAction.actions.items, [{ report: action.id, version: 2 }], "defer remains pending across all doors")
+  const reclaimed = await command("settle", "sidebar", "--report", action.id, "--version", "2", "--target", JSON.stringify(target), "--disposition", JSON.stringify({ kind: "reclaim", reason: "Apex keeps the decision." }), "--key", "cli-reclaim")
+  assert.equal(reclaimed.refused, undefined)
+  const own = world.store.journalPlacement(apex.conversation)!.thread
+  assert.deepEqual(await command("read", own, "--actions"), await call(thread, "agents_read", { child: own, view: "actions" }), "CLI custody view grants only the caller's own records")
+  assert.deepEqual(await call(stdio, "agents_read", { child: own, view: "actions" }), await call(thread, "agents_read", { child: own, view: "actions" }))
+  const dismissed = await command("settle", "sidebar", "--report", action.id, "--version", "3", "--target", JSON.stringify(target), "--disposition", JSON.stringify({ kind: "resolve", evidence: "fixture:verified-exact-target-outcome" }), "--key", "close-deferred-action")
+  assert.equal(dismissed.refused, undefined)
+  assert.equal((await call(thread, "agents_read", { child: "sidebar" })).actions, undefined, "silent exact disposition clears no unrelated question")
   const unknown = [await call(thread, "agents_stop", { child: "nobody" }), await command("stop", "nobody")]
   assert.equal(unknown[0]!.refused, "unknown-child")
   assert.deepEqual(unknown[1], unknown[0], "mako agents exits 1 with the same refusal")
+  for (let number = 1; number <= 4; number++) {
+    await world.agents.report(world.caller(first.conversation), { status: "progress", summary: `PR reference ${number}.`, artifacts: [{ kind: "pull-request", ref: `https://github.com/example/list-details/pull/${number}` }], clientKey: `pr-reference-${number}` })
+  }
+  const fullFacts = await world.agents.list(apex.caller, {})
+  assert.ok("children" in fullFacts)
+  const originalPulls = fullFacts.children.find(child => child.child === first.child)!.openPRs
+  assert.equal(originalPulls?.length, 4)
+  assert.deepEqual(await call(thread, "agents_list", {}), await call(thread, "agents_list", { presentation: "full" }), "the model door defaults to complete PR facts")
+  const summarized = z.object({ children: z.array(z.looseObject({ child: z.string(), pulls: z.object({ reported: z.number(), read: z.object({ child: z.string(), view: z.literal("pulls"), snapshot: z.string() }) }) })) }).parse(await call(thread, "agents_list", { presentation: "summary" }))
+  const reference = summarized.children.find(child => child.child === first.child)!.pulls.read
+  assert.equal(summarized.children[0].pulls.reported, 4, "historical references stay explicitly unknown")
+  const recovered: unknown[] = []
+  let offset: number | undefined = 0
+  while (offset !== undefined) {
+    const page = ReadSchema.extend({ pulls: z.object({ next: z.number().optional() }) }).parse(await call(stdio, "agents_read", { ...reference, offset, limit: 2 }))
+    recovered.push(...z.array(z.json()).parse(JSON.parse(page.text)))
+    offset = page.pulls.next
+  }
+  assert.deepEqual(recovered, originalPulls, "a summary from one door recovers every fact through the real engine/read authorization at another door")
+  const unchanged = await world.agents.list(apex.caller, {})
+  assert.ok("children" in unchanged)
+  assert.deepEqual(unchanged.children.find(child => child.child === first.child)!.openPRs, originalPulls, "the UI/engine still has full facts")
   console.log("agents doors: ok")
 } finally {
   for (const client of clients) await client.close().catch(() => undefined)

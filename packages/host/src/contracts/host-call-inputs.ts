@@ -167,6 +167,9 @@ const inputs = {
         }),
       ]),
       z.object({
+        presentation: z
+          .union([z.literal("full"), z.literal("summary")])
+          .optional(),
         scope: z
           .union([
             z.literal("children"),
@@ -283,6 +286,9 @@ const inputs = {
             .optional(),
           recommended: z.number().optional(),
           action: z.string().optional(),
+          followUp: z
+            .object({ ref: z.string(), version: z.string() })
+            .optional(),
           for: z.literal("person").optional(),
           told: z.literal(true).optional(),
           implicit: z.literal(true).optional(),
@@ -392,10 +398,19 @@ const inputs = {
       z.object({
         child: z.string(),
         view: z
-          .union([z.literal("report"), z.literal("transcript")])
+          .union([
+            z.literal("report"),
+            z.literal("transcript"),
+            z.literal("pulls"),
+            z.literal("actions"),
+          ])
           .optional(),
+        snapshot: z.string().optional(),
+        offset: z.number().optional(),
+        limit: z.number().optional(),
         maxChars: z.number().optional(),
         report: z.string().optional(),
+        afterAction: z.string().optional(),
         afterAsk: z.string().optional(),
       }),
     ]),
@@ -461,6 +476,7 @@ const inputs = {
           .optional(),
         recommended: z.number().optional(),
         action: z.string().optional(),
+        followUp: z.object({ ref: z.string(), version: z.string() }).optional(),
         decides: z.union([z.literal("person"), z.literal("apex")]).optional(),
         waitingOn: z
           .array(
@@ -535,6 +551,63 @@ const inputs = {
           .optional(),
         reply: z.literal("none").optional(),
         context: z.array(z.object({ thread: z.string() })).optional(),
+        clientKey: z.string(),
+      }),
+    ]),
+  "mako:agents-settle": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        to: z.string(),
+        report: z.string(),
+        version: z.number(),
+        target: z.object({ ref: z.string(), version: z.string() }),
+        disposition: z.union([
+          z.object({ kind: z.literal("resolve"), evidence: z.string() }),
+          z.object({ kind: z.literal("reclaim"), reason: z.string() }),
+          z.object({ kind: z.literal("dismiss"), reason: z.string() }),
+          z.object({
+            kind: z.literal("defer"),
+            reason: z.string(),
+            resume: z.string(),
+          }),
+          z.object({
+            kind: z.literal("supersede"),
+            report: z.string(),
+            reason: z.string(),
+          }),
+          z.object({
+            kind: z.literal("dispatch"),
+            to: z.string(),
+            request: z.string(),
+          }),
+          z.object({
+            kind: z.literal("handoff"),
+            to: z.string(),
+            request: z.string(),
+          }),
+        ]),
         clientKey: z.string(),
       }),
     ]),
@@ -1626,8 +1699,8 @@ const inputs = {
                 kind: z.literal("service"),
                 name: z.union([
                   z.literal("workspace"),
-                  z.literal("goal"),
                   z.literal("handoff"),
+                  z.literal("goal"),
                   z.literal("catalog"),
                   z.literal("migration"),
                   z.literal("auto-continue"),
@@ -2278,7 +2351,7 @@ const inputs = {
   "mako:prompt": () =>
     z.tuple([
       z.string(),
-      z.union([z.literal("steer"), z.literal("followUp")]).optional(),
+      z.union([z.literal("followUp"), z.literal("steer")]).optional(),
       z.array(z.object({ mimeType: z.string(), data: z.string() })).optional(),
     ]),
   "mako:provider-connection-action": () =>
@@ -3265,6 +3338,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:agents-report", "conversations"],
   ["mako:agents-respond", "conversations"],
   ["mako:agents-send", "conversations"],
+  ["mako:agents-settle", "conversations"],
   ["mako:agents-start", "conversations"],
   ["mako:agents-stop", "conversations"],
   ["mako:agents-wait", "conversations"],
