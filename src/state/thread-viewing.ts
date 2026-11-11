@@ -13,8 +13,9 @@ import type {
   ViewedThreadEntry,
 } from "@/state/thread-state"
 import { markObserved, markThreadReviewed } from "@/state/thread-status"
-import { threadsStore } from "@/state/thread-store"
-import { openThreadTab } from "@/state/thread-tabs"
+import { nativeSessionRefs, threadsStore } from "@/state/thread-store"
+import { closeThreadTab, openThreadTab } from "@/state/thread-tabs"
+import { internalReviewSession, sameNativeSession } from "@mako/host/contracts/thread-list"
 import { toast } from "sonner"
 import { createHook, createStore } from "@/state/store"
 import { nativeReadingSource, transcriptReaders } from "@/state/transcript-reading"
@@ -99,6 +100,9 @@ function viewedPage(page: ThreadPage): ViewedThread {
 }
 
 export function rememberThread(thread: ViewedThread) {
+  if (retireInternalReview(thread.ref)) return
+  if (!nativeSessionRefs.readable(thread.ref)) return
+  nativeSessionRefs.observe(thread.ref)
   if (threadCache.get(thread.ref.path) === thread) return
   threadCache.delete(thread.ref.path)
   threadCache.set(thread.ref.path, thread)
@@ -166,11 +170,20 @@ export function loadReleasedThreadTurn(path: string, id: string): Promise<void> 
     const turn = thread?.releasedTurns?.find(item => item.id === id)
     if (!thread || !turn || !hasBridge()) return
     const release = transcriptReaders.protect(nativeReadingSource(path), id)
+    const version = nativeSessionRefs.version(path)
     try {
       let before = turn.base.end
+      let ref = thread.ref
       const entries: Entry[] = []
       while (before > turn.base.start) {
         const page = await getMako().pageThread(path, before)
+        if (!page && nativeSessionRefs.version(path) !== version) return
+        if (page) {
+          if (!admitThreadPage(page, path, version)) return
+          const canonical = pageRefForRead(ref, page.ref)
+          if (!canonical) return
+          ref = canonical
+        }
         if (!page || page.start >= before || page.start + page.entries.length !== before ||
             nativeHistoryRevision(page) !== nativeHistoryRevision({ ...thread, total: thread.totalEntries })) {
           if (threadsStore.get().viewing?.ref.path === path) await recoverThreadReader(path)
@@ -189,10 +202,9 @@ export function loadReleasedThreadTurn(path: string, id: string): Promise<void> 
           nativeHistoryRevision({ ...thread, total: thread.totalEntries })) return
       const restored = current.entries.slice()
       restored.splice(turn.base.start - current.pageStart, entries.length, ...entries)
-      const next = { ...current, entries: restored, releasedTurns: current.releasedTurns.filter(item => item !== turn),
+      const next = { ...current, ref, entries: restored, releasedTurns: current.releasedTurns.filter(item => item !== turn),
         streamRevision: (current.streamRevision ?? 0) + 1, streamReplaceFrom: turn.base.start - current.pageStart }
-      if (threadsStore.get().viewing?.ref.path === path) threadsStore.set({ viewing: next })
-      rememberThread(next)
+      rememberThreadRead(next, version)
     } finally { release() }
   })().finally(() => turnReads.delete(key))
   turnReads.set(key, work)
@@ -204,27 +216,70 @@ export function rememberedThread(path: string): ViewedThread | undefined {
   return threadCache.get(path)
 }
 
+/** Reconcile an old opened/cached row when its provider identifies internal safety work. */
+export function retireInternalReview(ref: ThreadRef, notify = false): boolean {
+  ref = nativeSessionRefs.classify(ref)
+  if (!internalReviewSession(ref)) return false
+  const paths = new Set([ref.path, ...nativeSessionRefs.pathsOf(ref)])
+  for (const path of paths) nativeSessionRefs.observe({ ...ref, path })
+  nativeSessionRefs.observe(ref)
+  const matches = (candidate: ThreadRef | undefined) => candidate !== undefined && sameNativeSession(nativeSessionRefs.classify(candidate), ref)
+  const cached = [...threadCache.values()]
+  let evicted = false
+  for (const entry of cached) if (matches(entry.ref)) {
+    paths.add(entry.ref.path)
+    evicted = threadCache.delete(entry.ref.path) || evicted
+  }
+  if (evicted) threadCacheStore.set({ views: new Map(threadCache) })
+  const { viewing, opening } = threadsStore.get()
+  const viewed = matches(viewing?.ref), asked = matches(opening?.ref)
+  const shown = opening ? asked : viewed
+  if (viewed && viewing) paths.add(viewing.ref.path)
+  if (asked && opening) paths.add(opening.ref.path)
+  for (const path of paths) {
+    const other = [...cached.map(entry => entry.ref), viewing?.ref, opening?.ref].some(candidate => candidate?.path === path && !matches(candidate))
+    if (nativeSessionRefs.owns({ ...ref, path }) && !other) closeThreadTab(path)
+  }
+  if (viewed || asked) {
+    const otherView = viewing && !viewed, otherOpening = opening && !asked
+    if (!otherView && !otherOpening) threadViewingActions.closeViewer()
+    else {
+      if (asked) viewingGeneration += 1
+      threadsStore.set({ ...(viewed && { viewing: null }), ...(asked && { opening: null }), ...(asked && viewing && !viewed && { composerHarness: viewing.ref.harness }) })
+    }
+  }
+  if (shown || notify) toast.info("This is an internal safety review, not a conversation. Your agent handles its result.")
+  return true
+}
+
 /** A fresh read for a pane without focus, kept for the moment it takes focus. */
 export function readThreadForPane(path: string): Promise<ViewedThread | null> {
   if (!hasBridge()) return Promise.resolve(null)
   const pending = windowReads.get(path)
-  if (pending) {
+  const version = nativeSessionRefs.version(path)
+  if (pending && pending.version === version) {
     // A record-change notification arriving during a read must be observed
     // by a subsequent capture, even when both panes ask at once.
     pending.again = true
     return pending.promise
   }
-  const read = { again: false, promise: Promise.resolve<ViewedThread | null>(null) }
+  const read = { again: false, version, promise: Promise.resolve<ViewedThread | null>(null) }
   const release = transcriptReaders.protect(nativeReadingSource(path), "*")
   read.promise = (async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       read.again = false
+      const captured = nativeSessionRefs.version(path)
       const held = threadCache.get(path)
-      const page = await readThreadWindow(path, held?.pageStart ?? transcriptReaders.rememberedWindow(nativeReadingSource(path))?.base)
+      const page = await readThreadWindow(path, held?.pageStart ?? transcriptReaders.rememberedWindow(nativeReadingSource(path))?.base, captured)
+      if (page && retireInternalReview(page.ref)) return null
+      if (nativeSessionRefs.version(path) !== captured) return null
       // Streaming, paging, or a range reload published while this capture
       // was in flight. Its bytes are no longer entitled to replace that view.
       if (read.again || threadCache.get(path) !== held) continue
       if (!page) return null
+      // A fresh read may discover a new worker at this path. Only the
+      // unchanged capture can claim it; an overtaken read cannot.
+      nativeSessionRefs.observe(page.ref)
       const arrived = new Set(page.entries.filter(entry => entry.type === "user").map(entry => entry.text))
       const echoes = held?.entries.filter(entry => isOptimisticEcho(entry) && entry.type === "user" && !arrived.has(entry.text)) ?? []
       const thread: ViewedThread = { ...viewedPage(page), entries: [...page.entries, ...echoes],
@@ -240,14 +295,39 @@ export function readThreadForPane(path: string): Promise<ViewedThread | null> {
   windowReads.set(path, read)
   return read.promise
 }
-const windowReads = new Map<string, { again: boolean; promise: Promise<ViewedThread | null> }>()
+const windowReads = new Map<string, { again: boolean; version: ReturnType<typeof nativeSessionRefs.version>; promise: Promise<ViewedThread | null> }>()
 
 /** Refresh the held reading window coherently. A fresh tail alone must not
  * discard the earlier pages a returning or unfocused pane still reads. */
-async function readThreadWindow(path: string, from?: number): Promise<ThreadPage | null> {
+function admitThreadPage(page: ThreadPage, path: string, version: ReturnType<typeof nativeSessionRefs.version>): boolean {
+  return !retireInternalReview(page.ref) && nativeSessionRefs.version(path) === version
+}
+
+/** Within one unchanged capture, a complete page can supply a missing placement. Conflicting complete identities cannot fold. */
+function pageRefForRead(ref: ThreadRef, page: ThreadRef): ThreadRef | null {
+  if (ref.harness !== page.harness || ref.nativeId !== page.nativeId || ref.identity !== page.identity ||
+      (ref.sessionId !== undefined && page.sessionId !== undefined && ref.sessionId !== page.sessionId)) return null
+  return ref.sessionId === undefined && page.sessionId !== undefined ? { ...ref, sessionId: page.sessionId } : ref
+}
+
+/** A complete placement learned by one unchanged read must be admitted before
+ * the cache publishes it to the view. Refusal publishes none of its pages. */
+function rememberThreadRead(thread: ViewedThread, version: ReturnType<typeof nativeSessionRefs.version>): void {
+  if (nativeSessionRefs.version(thread.ref.path) !== version) return
+  const ref = version ? pageRefForRead(thread.ref, version.ref) : thread.ref
+  if (!ref || retireInternalReview(ref)) return
+  nativeSessionRefs.observe(ref)
+  rememberThread({ ...thread, ref })
+}
+
+async function readThreadWindow(path: string, from: number | undefined, version: ReturnType<typeof nativeSessionRefs.version>): Promise<ThreadPage | null> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const latest = await getMako().pageThread(path)
-    if (!latest || from === undefined || latest.start <= from) return latest
+    if (latest && !admitThreadPage(latest, path, version)) return null
+    if (!latest) return null
+    let ref = latest.ref
+    if (version?.ref && ref.sessionId === undefined) ref = pageRefForRead(ref, version.ref) ?? ref
+    if (from === undefined || latest.start <= from) return ref === latest.ref ? latest : { ...latest, ref }
     let first = latest
     const chunks = [latest.entries]
     let changed = false
@@ -255,13 +335,17 @@ async function readThreadWindow(path: string, from?: number): Promise<ThreadPage
       const earlier = await getMako().pageThread(path, first.start)
       if (!earlier)
         throw new Error("Earlier conversation history could not be read")
+      if (!admitThreadPage(earlier, path, version)) return null
+      const canonical = pageRefForRead(ref, earlier.ref)
+      if (!canonical) return null
+      ref = canonical
       if (nativeHistoryRevision(earlier) !== nativeHistoryRevision(latest)) { changed = true; break }
       if (earlier.start >= first.start || earlier.start + earlier.entries.length !== first.start)
         throw new Error("Earlier conversation history could not be read")
       chunks.push(earlier.entries)
       first = earlier
     }
-    if (!changed) return { ...latest, entries: chunks.reverse().flat(), start: first.start, hasEarlier: first.hasEarlier }
+    if (!changed) return { ...latest, ref, entries: chunks.reverse().flat(), start: first.start, hasEarlier: first.hasEarlier }
   }
   throw new Error("The conversation kept changing while its history was refreshed. Try opening it again.")
 }
@@ -397,7 +481,7 @@ export function loadThreadEntry(path: string, id: string): Promise<void> {
 const liveModules = Promise.all([
   import("@/state/acp"),
   import("@/state/live-recovery"),
-]).then(([acpModule, recovery]) => ({ ...acpModule, applyLiveSnapshot: recovery.applyLiveSnapshot }))
+]).then(([acpModule, recovery]) => ({ ...acpModule, applyLiveSnapshot: recovery.applyLiveSnapshot, readLiveFrom: recovery.readLiveFrom }))
 
 /**
  * How long a row another host owns waits for that conversation before its
@@ -408,15 +492,19 @@ const OWNER_PATIENCE_MS = 1_200
 
 /** Show the Mako conversation that owns `ref`; false when none took over. */
 async function adoptOwner(ref: ThreadRef, generation: number): Promise<boolean> {
+  const version = nativeSessionRefs.version(ref.path)
   try {
-    const [owner, { acp, acpStore, applyLiveSnapshot }] = await Promise.all([
-      getMako().resolveOwner(ref.path),
-      liveModules,
-    ])
-    if (!owner || generation !== viewingGeneration) return false
+    const { acp, acpStore, applyLiveSnapshot, readLiveFrom } = await liveModules
     // The row is the Session, whichever of its native records the list shows
-    // for it: it opens where the conversation is now, on its active harness.
-    applyLiveSnapshot(owner.snapshot, null)
+    // for it: it opens where the conversation is now, on its active harness,
+    // read as any snapshot is, and taken only while this view still asks.
+    let taken = false
+    const owner = await readLiveFrom(undefined, () => getMako().resolveOwner(ref.path), (found) => found?.snapshot, (snapshot) => {
+      if (generation !== viewingGeneration || nativeSessionRefs.version(ref.path) !== version || !nativeSessionRefs.readable(ref)) return
+      applyLiveSnapshot(snapshot, null)
+      taken = true
+    })
+    if (!owner || !taken) return false
     if (acpStore.get().activeKey !== owner.snapshot.session.id)
       acp.activate(owner.snapshot.session.id, false)
     openThreadTab(ref.path)
@@ -436,8 +524,12 @@ export async function recoverThreadReader(path: string): Promise<void> {
   const viewing = threadsStore.get().viewing
   if (!viewing || viewing.ref.path !== path || !hasBridge()) return
   const generation = ++viewingGeneration
-  rememberThread({ ...viewing, loadingEarlier: false })
-  const current = () => generation === viewingGeneration && threadsStore.get().viewing?.ref.path === path
+  rememberThread({ ...viewing, loadingEarlier: undefined })
+  const version = nativeSessionRefs.version(path)
+  const current = () => {
+    const ref = threadsStore.get().viewing?.ref
+    return generation === viewingGeneration && nativeSessionRefs.version(path) === version && nativeSessionRefs.readable(viewing.ref) && ref?.path === path && sameNativeSession(ref, viewing.ref)
+  }
   try {
     const next = await readThreadForPane(path)
     if (!current()) return
@@ -519,10 +611,13 @@ export const threadViewingActions = {
   /** Open a foreign session read-only, translated to the canonical shape. */
   async view(ref: ThreadRef, mode: "conversation" | "native" = "conversation") {
     if (!hasBridge()) return
+    if (retireInternalReview(ref, true)) return
+    nativeSessionRefs.observe(ref)
+    const version = nativeSessionRefs.version(ref.path)
     const generation = ++viewingGeneration
     handedOff = null
     const { acp, acpStore, activeAcp } = await liveModules
-    if (generation !== viewingGeneration) return
+    if (generation !== viewingGeneration || nativeSessionRefs.version(ref.path) !== version || !nativeSessionRefs.readable(ref)) return
     // A Mako conversation that owns this thread takes over when the host
     // names it. Sending resolves again, so this lookup never decides where
     // a reply goes.
@@ -549,7 +644,8 @@ export const threadViewingActions = {
       const owned = await Promise.race([adopted, patience])
       if (owned === true || generation !== viewingGeneration) return
     }
-    const cached = threadCache.get(ref.path)
+    const held = threadCache.get(ref.path)
+    const cached = held && sameNativeSession(held.ref, ref) ? held : undefined
     if (cached) {
       // Instant: the last read paints now, the fresh one lands underneath.
       if (harnessBeforeViewing === null) {
@@ -627,6 +723,7 @@ export const threadViewingActions = {
           state.opening?.kind !== "loading"
         )
           return
+        if (retireInternalReview(preview.ref) || nativeSessionRefs.version(ref.path) !== version || !nativeSessionRefs.readable(preview.ref)) return
         threadsStore.set({
           viewing: { ...viewedPage(preview), preview: true },
           composerHarness: liveHarness,
@@ -693,9 +790,12 @@ export const threadViewingActions = {
       return
     const generation = viewingGeneration
     const release = transcriptReaders.protect(nativeReadingSource(viewing.ref.path), "*")
-    rememberThread({ ...viewing, loadingEarlier: true })
+    const loadingEarlier = Symbol("earlier history read")
+    rememberThread({ ...viewing, loadingEarlier })
+    const version = nativeSessionRefs.version(viewing.ref.path)
     try {
       const earlier: Entry[] = []
+      let ref = viewing.ref
       let page: ThreadPage | null = null
       let before = viewing.pageStart
       for (let pages = 0; pages < EARLIER_PAGES_PER_LOAD; pages += 1) {
@@ -703,7 +803,12 @@ export const threadViewingActions = {
           viewing.ref.path,
           before
         )
+        if (fetched && !admitThreadPage(fetched, viewing.ref.path, version)) return
+        if (threadCache.get(viewing.ref.path)?.loadingEarlier !== loadingEarlier) return
         if (!fetched) break
+        const canonical = pageRefForRead(ref, fetched.ref)
+        if (!canonical) return
+        ref = canonical
         if (fetched.start >= before || fetched.start + fetched.entries.length !== before ||
             nativeHistoryRevision(fetched) !== nativeHistoryRevision({ ...viewing, total: viewing.totalEntries })) {
           await recoverThreadReader(viewing.ref.path)
@@ -719,36 +824,35 @@ export const threadViewingActions = {
           break
       }
       const current = threadsStore.get().viewing
-      if (generation !== viewingGeneration || !current || current.ref.path !== viewing.ref.path) return
+      if (generation !== viewingGeneration || nativeSessionRefs.version(viewing.ref.path) !== version || !current || current.ref.path !== viewing.ref.path || !sameNativeSession(current.ref, viewing.ref)) return
       if (current.pageStart !== viewing.pageStart || nativeHistoryRevision({ ...current, total: current.totalEntries }) !==
           nativeHistoryRevision({ ...viewing, total: viewing.totalEntries })) {
         await recoverThreadReader(viewing.ref.path)
         return
       }
-      if (!page) {
-        rememberThread({ ...current, loadingEarlier: false })
-        return
-      }
+      if (!page) return
       const next: ViewedThread = {
         ...current,
-        ref: page.ref,
+        ref,
         entries: [...earlier, ...current.entries],
         pageStart: page.start,
         totalEntries: page.total,
         hasEarlier: page.hasEarlier,
-        loadingEarlier: false,
+        loadingEarlier: undefined,
         streamRevision: (current.streamRevision ?? 0) + 1,
         streamReplaceFrom: 0,
       }
-      threadsStore.set({ viewing: next })
-      rememberThread(next)
+      rememberThreadRead(next, version)
     } catch (error) {
-      const current = threadsStore.get().viewing
-      if (generation !== viewingGeneration) return
-      if (current?.ref.path === viewing.ref.path)
-        rememberThread({ ...current, loadingEarlier: false })
+      if (generation !== viewingGeneration || nativeSessionRefs.version(viewing.ref.path) !== version ||
+          threadCache.get(viewing.ref.path)?.loadingEarlier !== loadingEarlier) return
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
+      // Compatible placement upgrades retain this operation's token. A new
+      // read replaces it; retirement or a new worker cannot inherit cleanup.
+      const current = threadCache.get(viewing.ref.path)
+      if (current?.loadingEarlier === loadingEarlier)
+        rememberThread({ ...current, loadingEarlier: undefined })
       release()
     }
   },

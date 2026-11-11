@@ -8,7 +8,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import { sameAcpPresence, selectAcpPresence } from "@/state/acp-presence"
 import { acpStore, activeLiveAcp, type AcpState } from "@/state/acp-state"
 import { descriptorFor } from "@/state/descriptors"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { readLive } from "@/state/live-recovery"
 import { nativeThreadTarget, threadLifecycle, type ThreadTarget } from "@/state/thread-lifecycle"
 import type { ThreadsState } from "@/state/thread-state"
 import { threadsStore } from "@/state/threads"
@@ -179,21 +179,23 @@ async function forkIntoWorktree(source: Source): Promise<{ fork: LiveSnapshot; l
     const { live } = source
     const last = live.requests?.findLast((request) => request.status === "completed")
     if (!last || live.session.status === "running") throw new Error("Wait for the answer to finish, then move it to its own branch.")
-    const fork = await getMako().liveFork(live.key, { id, provider: live.harness, point: { kind: "run", requestId: last.id }, thread: "parent", worktree: true, move: true })
+    const fork = await readLive(id, () => getMako().liveFork(live.key, { id, provider: live.harness, point: { kind: "run", requestId: last.id }, thread: "parent", worktree: true, move: true }))
     return { fork, leaving: { kind: "live", id: live.key } }
   }
   const { ref } = source.viewing
   const anchor = lastAnswer(source.viewing)
   if (!anchor) throw new Error("Move it to its own branch after its first answer.")
-  const captured = await getMako().liveCapture(crypto.randomUUID(), ref.path)
-  const fork = await getMako().liveFork(captured.session.id, {
+  // The capture is read only to fork from: the window takes the fork, never the capture.
+  const capture = crypto.randomUUID()
+  const captured = await readLive(capture, () => getMako().liveCapture(capture, ref.path), () => {})
+  const fork = await readLive(id, () => getMako().liveFork(captured.session.id, {
     id,
     provider: ref.harness,
     point: { kind: "native", index: anchor.index, revision: JSON.stringify([ref.revision, ref.bytes, ref.updatedAt]), anchor },
     thread: "parent",
     worktree: true,
     move: true,
-  })
+  }))
   return { fork, leaving: nativeThreadTarget(ref) }
 }
 
@@ -215,9 +217,9 @@ export async function moveToWorktree(changed: number): Promise<boolean> {
   if (!source) return false
   const before = new Set(worktreesStore.get().worktrees.map((worktree) => worktree.path))
   try {
-    const { fork, leaving } = await forkIntoWorktree(source)
     const { acp } = await import("@/state/acp")
-    applyLiveSnapshot(fork)
+    // The fork is taken as it's answered (`readLive`).
+    const { fork, leaving } = await forkIntoWorktree(source)
     acp.activate(fork.session.id)
     await refreshWorktrees()
     const relocated = leaving.kind === "live" && leaving.id === fork.session.id

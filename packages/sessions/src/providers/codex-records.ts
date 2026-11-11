@@ -15,6 +15,8 @@ import type { SessionSettings } from "../settings.js"
 import type { ToolEffect } from "../tool-effects.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import { codexPlanDetails } from "../tool-plan.js"
+import { CodexAgentMetaSchema, codexNativeAgent } from "./codex-native-agent.js"
+import type { NativeAgentOrigin } from "../format.js"
 import { mediaDetails } from "../turn-media.js"
 import { codexToolEffects, type CodexCallFacts } from "./codex-effects.js"
 import {
@@ -143,7 +145,7 @@ interface RolloutBase {
 
 /** A record as the decoder reads it, before its meaning; `parseCodexRecord`. */
 export type CodexRolloutEvent = RolloutBase & (
-  | { kind: "session_meta"; id: string; cwd?: string; startedAt?: string; threadSource?: string; forkedFrom?: string }
+  | { kind: "session_meta"; id: string; cwd?: string; startedAt?: string; threadSource?: string; forkedFrom?: string; nativeAgent?: NativeAgentOrigin }
   | { kind: "turn_context"; model?: string; cwd?: string; settings: SessionSettings }
   | { kind: "user_message_event"; text: string }
   | { kind: "token_count_event"; usage?: CodexCallUsage }
@@ -487,6 +489,7 @@ export function parseCodexRecord(root: CodexJsonObject): CodexRolloutEvent | nul
         cwd: stringValue(payload?.["cwd"]),
         startedAt: stringValue(payload?.["timestamp"]),
         threadSource: stringValue(payload?.["thread_source"]),
+        nativeAgent: codexNativeAgent(CodexAgentMetaSchema.safeParse(payload).data),
         forkedFrom: stringValue(payload?.["forked_from_id"]),
       }
     case "turn_context": {

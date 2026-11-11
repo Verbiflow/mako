@@ -1,4 +1,5 @@
-import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { hostSpawn } from "../base/host-command.js"
+import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -6,6 +7,7 @@ import { createInterface } from "node:readline"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { trackProviderChild } from "../base/provider-children.js"
+import { endChildInput, writeChildInput } from "@mako/sessions/child-input"
 
 /**
  * How long the helper holds a sleep for the host (`mako-sleep-watch --hold`). macOS waits at most 30 seconds for an
@@ -59,7 +61,7 @@ export class SleepHandOff {
 
   stop(): void {
     this.#stopped = true
-    this.#child?.stdin.end()
+    if (this.#child) endChildInput(this.#child)
     this.#child?.kill()
     this.#child = undefined
   }
@@ -69,7 +71,7 @@ export class SleepHandOff {
     const enabled = await this.#options.enabled()
     if (!enabled) {
       if (this.#child) hostLog("handoff", "the sleep watch stopped: handing off on sleep is off")
-      this.#child?.stdin.end()
+      if (this.#child) endChildInput(this.#child)
       this.#child = undefined
       return
     }
@@ -117,13 +119,14 @@ export class SleepHandOff {
     } catch (error) {
       hostWarn("handoff", "agents at work couldn't be handed off as this Mac slept", { error: errorMessage({ error }) })
     }
-    if (!child.stdin.destroyed) child.stdin.write(`allow ${id}\n`)
+    // A watch gone by now lets the Mac sleep anyway, and its `exit` starts another.
+    writeChildInput(child, `allow ${id}\n`).catch(() => {})
     hostLog("handoff", "this Mac may sleep", { ms: Date.now() - began })
   }
 }
 
 function spawnHelper(path: string, args: readonly string[]): ChildProcessWithoutNullStreams {
-  return spawnProcess(path, args, { stdio: ["pipe", "pipe", "pipe"] })
+  return hostSpawn(path, args, { stdio: ["pipe", "pipe", "pipe"] })
 }
 
 /** The helper's name, in a packaged app's `Contents/MacOS` and in a checkout's build of it. */

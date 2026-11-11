@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import type { MethodTable } from "../base/methods.js"
-import type { AgentCaller, AgentRefused } from "../contracts/agents.js"
+import type { AgentCaller, AgentRefused, AgentsCancelInput, AgentsNoticeInput, AgentsPlaceInput } from "../contracts/agents.js"
 import {
   AGENT_TOOLS,
   type AgentOperations,
@@ -13,24 +13,45 @@ import {
   type AgentsMoveInput,
   type AgentsReadInput,
   type AgentsReportInput,
+  type AgentsSettleInput,
   type AgentsSendInput,
   type AgentsStartInput,
   type AgentsStopInput,
   type AgentsWaitInput,
+  type PlacementOperations,
 } from "../contracts/agent-tools.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
+import { AgentListResults } from "./agent-list-results.js"
 
 const UNAVAILABLE: AgentRefused = { refused: "unavailable", why: "Children need the Thread store, which didn't open on this host." }
 
 /** `mako:agents-<verb>`: every door's one way in, each the engine's operation of the same name. */
-export function declareAgentMethods(methods: MethodTable, agents: () => AgentOperations | undefined): void {
+export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOperations & PlacementOperations) | undefined): void {
+  const listResults = new AgentListResults()
+  // Between hosts, for Fins placed across the person's devices: no door shows these to an agent.
+  methods.handle("mako:agents-capabilities", () => agents()?.capabilities() ?? UNAVAILABLE)
+  methods.handle("mako:agents-place", (input: AgentsPlaceInput) => agents()?.place(input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-notice", (input: AgentsNoticeInput) => agents()?.notice(input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-cancel", (input: AgentsCancelInput) => agents()?.cancel(input) ?? UNAVAILABLE)
   methods.handle("mako:agents-start", (caller: AgentCaller, input: AgentsStartInput) => agents()?.start(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-move", (caller: AgentCaller, input: AgentsMoveInput) => agents()?.move(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-link", (caller: AgentCaller, input: AgentsLinkInput) => agents()?.link(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-list", (caller: AgentCaller, input: AgentsListInput) => agents()?.list(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-read", (caller: AgentCaller, input: AgentsReadInput) => agents()?.read(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-list", async (caller: AgentCaller, input: AgentsListInput) => {
+    const result = await agents()?.list(caller, input) ?? UNAVAILABLE
+    return input.presentation === "summary" ? listResults.summarize(caller, result) : result
+  })
+  methods.handle("mako:agents-read", async (caller: AgentCaller, input: AgentsReadInput) => {
+    const service = agents()
+    if (!service) return UNAVAILABLE
+    if (input.view === "pulls" && input.afterAction !== undefined) return { refused: "conflict", why: "afterAction applies to report follow-up pages, not PR snapshots." } satisfies AgentRefused
+    if (input.view === "pulls") return listResults.read(caller, await service.read(caller, { child: input.child, view: "report", maxChars: 200 }), input)
+    if (input.snapshot !== undefined || input.offset !== undefined || input.limit !== undefined)
+      return { refused: "conflict", why: "snapshot, offset and limit apply only to view pulls." } satisfies AgentRefused
+    return service.read(caller, input)
+  })
   methods.handle("mako:agents-report", (caller: AgentCaller, input: AgentsReportInput) => agents()?.report(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-send", (caller: AgentCaller, input: AgentsSendInput) => agents()?.send(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-settle", (caller: AgentCaller, input: AgentsSettleInput) => agents()?.settle(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-answer", (caller: AgentCaller, input: AgentsAnswerInput) => agents()?.answer(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-stop", (caller: AgentCaller, input: AgentsStopInput) => agents()?.stop(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-wait", (caller: AgentCaller, input: AgentsWaitInput) => agents()?.wait(caller, input) ?? UNAVAILABLE)

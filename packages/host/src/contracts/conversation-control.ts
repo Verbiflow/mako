@@ -1,3 +1,4 @@
+import { AgentAskSchema } from "./agent-asks.js"
 import { LiveQuestionSchema } from "./live-questions.js"
 import { ApprovalResponseSchema, NativeApprovalDecisionSchema, NativeApprovalIdentitySchema, sameNativeApproval } from "./approval-response.js"
 import { SessionSettingsSchema } from "@mako/sessions/settings"
@@ -26,6 +27,7 @@ export const TransferInputSchema = z.object({
   account: z.string().optional(),
   /** What its message may attach (`LiveRequest.grants`), kept with the words it carries. */
   grants: z.array(z.string().max(1024)).max(100).optional(),
+  notification: z.literal(true).optional(),
 })
 export type TransferInput = z.infer<typeof TransferInputSchema>
 /** A harness's running totals for one native session, as `NativeTotals`. */
@@ -218,6 +220,8 @@ export const ConversationControlSchema = z.object({
   approvalObservations: z.array(z.object({ bindingId: z.string(), identity: NativeApprovalIdentitySchema, decision: NativeApprovalDecisionSchema.optional() })
     .refine(item => !item.decision || sameNativeApproval(item.identity, item.decision.identity), "Native decision belongs to another question")).max(2000).optional(),
   actions: z.array(LiveActionSchema).optional(),
+  /** What its agent asked the person to let it do through Mako's tools, until they answer (`LiveAsks`). */
+  asks: z.array(AgentAskSchema).max(32).optional(),
   merges: z
     .array(
       z.object({

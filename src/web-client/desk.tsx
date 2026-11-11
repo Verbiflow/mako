@@ -1,4 +1,6 @@
 import { useLimitContinueNotice } from "@/components/composer/account-notice"
+import { useAskNotice } from "@/components/composer/agent-ask-card"
+import { askBringBack } from "./moves"
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
@@ -40,7 +42,7 @@ import { closeSetup, setupOpenStore } from "./setup-open"
 import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
-import { FinOfApexContext, childSession } from "./fin-of-apex"
+import { FinOfApexContext, childSession, placedSessionOf } from "./fin-of-apex"
 import { webHarnessLabel } from "./labels"
 import { StartForm, StartSheet, type AddingTo, type StartIn } from "./new-thread"
 import { CLOUD_PLACE } from "./places"
@@ -51,7 +53,7 @@ import { startingWhere } from "./started"
 import { archiveWithUndo } from "./archive-thread"
 import { ThreadActions, ThreadBody } from "./thread"
 import { TranscriptLoading } from "./transcript-loading"
-import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, type WebThread } from "./threads"
+import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, threadById, type WebThread } from "./threads"
 import { useThread } from "./use-thread"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
@@ -71,6 +73,11 @@ const RAIL_MAX = 420
  * page, so the web takes the chord web apps share for a new conversation; the palette offers it too.
  */
 const NEW_THREAD_KEYS = "mod+shift+o"
+
+/** A browser reaches a Mac through the sheet that picks it, where the desk's own window brings a Thread back itself. */
+function useWebAskNotice() {
+  return useAskNotice(askBringBack)
+}
 
 /**
  * Mako in a laptop's browser: the desktop app, drawn by the desktop's own pieces. Its title strip (the rail's header on
@@ -123,6 +130,10 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         threadMenu: (thread) => <DeskThreadMenu thread={thread} />,
         agents: toggleAgents,
         fin: (thread, agent) => {
+          // A Fin placed on another device is a Thread of its own there (decision D6): its own page opens, by the row
+          // its device lists, through the gateway to that device, which answers.
+          const own = placedSessionOf(agent)
+          if (own) return latest.current.open({ kind: "thread", thread: own.row.thread, session: own.row.session })
           const listed = foldThreads(latest.current.list).threads.find((each) => each.id === thread)
           if (listed) openDeskFin(agent, thread, openingSession(listed).row.conversation)
           latest.current.open({ kind: "thread", thread })
@@ -133,9 +144,11 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   // The Inbox lies over whatever the desk shows; its address opens it, and going anywhere else puts it away.
   useEffect(() => (under.kind === "inbox" ? inboxView.open() : inboxView.close()), [route, under.kind])
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
-  // Of the desk's notices above its composer, the one a laptop's browser needs: a send to an old Session asks first.
+  // Of the desk's notices above its composer, those a laptop's browser needs: a send to an old Session asks first, and
+  // what an agent asked is answered here as on the desk.
   useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
   useEffect(() => registerNotice("limit-continue", useLimitContinueNotice, -4), [])
+  useEffect(() => registerNotice("agent-ask", useWebAskNotice), [])
 
   return (
     <TooltipProvider delayDuration={350}>
@@ -374,7 +387,7 @@ function DeskIdentity({ settings, onSettings }: { settings: boolean; onSettings:
  */
 function DeskThreadMenu({ thread: id }: { thread: string | undefined }) {
   const client = useWebClient()
-  const thread = useAccountList((state) => (id ? foldThreads(state).threads.find((each) => each.id === id) : undefined))
+  const thread = useAccountList((state) => (id ? threadById(foldThreads(state), (each) => each.id === id) : undefined))
   if (!thread) return null
   const reachable = !thread.quietSince && !thread.archived
   const copyLink = async () => {

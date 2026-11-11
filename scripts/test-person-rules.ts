@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { briefText } from "@mako/host/contracts/children"
+import { FRONT_DOOR_GUIDANCE } from "@mako/host/contracts/agent-tools"
 import { ROLE_RULE_LINES, ROLE_RULES_CHARS, roleRuleLines, type FinPolicy } from "@mako/host/contracts/fin-tuning"
 import { CHANGED_LINE } from "@mako/host/conversations/control-cadence"
 import { FinDefaultsStore } from "@mako/host/harnesses/fin-defaults"
@@ -13,7 +14,7 @@ import { AgentsWorld } from "./lib/agents-world.ts"
  * alone into the Fin policy, which keeps everything else in the file as it was; each a standing line of Mako's note
  * (`standingLines`), so a process hears it whole once and then as it changes, whoever's message starts the turn; a
  * conversation that read rules the person cleared is told they no longer apply, after a restart too; and with both
- * empty, briefs and notes are byte for byte what they were.
+ * empty, Fin briefs and notes are byte for byte what they were; Apex routing guidance follows its own cadence.
  */
 const root = mkdtempSync(join(tmpdir(), "mako-person-rules-"))
 const FIN_RULES = "Run the tests you touch before you report.\nNever push to main."
@@ -70,6 +71,17 @@ const promptsOf = (world: AgentsWorld, conversation: string) => world.prompts.fi
 const note = (text: string | undefined) => (text ? /^<mako-local-control>\n([\s\S]*?)\n<\/mako-local-control>\n\n/.exec(text)?.[1] : undefined)
 const last = (world: AgentsWorld, conversation: string) => note(promptsOf(world, conversation).at(-1))
 
+/** Exact standing guidance, when due, followed by the current single-Fin roster; no role-rule line when empty. */
+function apexNote(world: AgentsWorld, conversation: string, guidance: boolean): string {
+  const text = last(world, conversation)!
+  const lines = text.split("\n")
+  const standing = guidance ? ["For messages from the person:", ...FRONT_DOOR_GUIDANCE] : []
+  assert.deepEqual(lines.slice(0, -1), [...standing, "You're this Thread's Apex: the person writes to you, and you decide who handles it. Your Fins now:"])
+  for (const line of FRONT_DOOR_GUIDANCE) assert.equal(text.split(line).length - 1, Number(guidance), "each exact routing paragraph appears only when due")
+  assert.match(lines.at(-1)!, /^- fin:android · Claude · done [^\n]* · asked: Fix the Android build\.$/, "the current Fin stays in the note")
+  return lines.at(-1)!
+}
+
 async function team(name: string, role?: "lead") {
   const world = new AgentsWorld({ root: join(root, name), script: () => "Done.", policy: () => policy })
   const apex = await world.apex("codex")
@@ -86,7 +98,7 @@ async function tell(world: AgentsWorld, apex: { caller: Parameters<AgentsWorld["
   await world.settle(undefined, undefined, "ignore")
 }
 
-/** Both fields empty: the brief and every note are what they were. */
+/** Both fields empty: no role rules; routing guidance once, but a fresh roster on each person message. */
 async function emptyIsUnchanged(): Promise<void> {
   policy = { rules: [] }
   const { world, apex, fin } = await team("empty")
@@ -96,7 +108,13 @@ async function emptyIsUnchanged(): Promise<void> {
     assert.equal(last(world, fin), undefined, "no note before a Fin's next turn")
     world.say(apex.conversation, "How is it going?")
     await world.settle()
-    assert.match(last(world, apex.conversation)!, /^You're this Thread's Apex: [^\n]*\n- fin:android [^\n]*\nIf the message[^\n]*\nIf it's for you[^\n]*$/, "the Apex's note is its Fins alone")
+    assert.ok(apexNote(world, apex.conversation, true).includes("Done."))
+    const report = await world.agents.report(world.caller(fin), { clientKey: "fresh-roster", status: "done", summary: "The Android check failed; the mutation outcome is unknown." })
+    assert.ok(!("refused" in report))
+    await world.settle(undefined, undefined, "ignore")
+    world.say(apex.conversation, "What changed?")
+    await world.settle(undefined, undefined, "ignore")
+    assert.ok(apexNote(world, apex.conversation, false).includes("The Android check failed; the mutation outcome is unknown."), "the new report reaches the roster without repeating guidance")
   } finally {
     await world.close()
   }
@@ -126,7 +144,7 @@ async function finRules(): Promise<void> {
     assert.equal(last(world, fin), FIN_NONE, "and after a restart, still told, never silence that leaves the brief's rules standing")
     world.say(apex.conversation, "Anything new?")
     await world.settle(undefined, undefined, "ignore")
-    assert.match(last(world, apex.conversation)!, /^You're this Thread's Apex: /, "an Apex never hears the Fin rules")
+    apexNote(world, apex.conversation, true) // Exact guidance and roster, with no Fin-rule or rule-removal line.
   } finally {
     await world.close()
   }

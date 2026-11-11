@@ -1,13 +1,12 @@
-import { spawn } from "node:child_process"
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
+import { command } from "./processes.js"
+import { spawn } from "./processes.js"
 import { rename, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import { mediaExecutable, recordingVideoEncoding } from "./control-media.js"
 import { MovVideoInput } from "./mov-video-input.js"
 
-const execute = promisify(execFile)
+const execute = command
 
 /** One encoder process per recording. A write is complete only after pipe admission;
  * the worker submits one raw frame at a time and the owner bounds source history. */

@@ -9,7 +9,7 @@ import { returnNotice } from "@/lib/restore-plan"
 import { MoveSteps as Steps } from "./move-steps"
 import { activeAcp, useAcp } from "@/state/acp"
 import { application } from "@/state/application"
-import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, dismissFollowStopped, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, updateThen, useCloudMoves, whileAwaySentence, type HarnessUpdating } from "@/state/cloud-moves"
+import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, checkMoveAgain, dismissFailedMove, dismissFollowStopped, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, retryFailedMove, updateThen, useCloudMoves, whileAwaySentence, type HarnessUpdating } from "@/state/cloud-moves"
 
 /** A move's steps in the order they're taken, each in the words its step says. */
 const STEPS = [
@@ -76,6 +76,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   useHarnessIdentity()
   const key = useAcp((state) => activeAcp(state)?.key)
   const moving = useCloudMoves((state) => (key ? state.moving[key] : undefined))
+  const failed = useCloudMoves((state) => (key ? state.failedMoves[key] : undefined))
   const returning = useCloudMoves((state) => (key ? state.returning[key] : undefined))
   const outdated = useCloudMoves((state) => (key ? state.outdated[key] : undefined))
   const missing = useCloudMoves((state) => (key ? state.missing[key] : undefined))
@@ -109,18 +110,31 @@ export function useThreadMoveNotice(): ComposerNotice | null {
     return {
       id: "thread-move",
       tone: unsettled ? "caution" : "progress",
-      title: unsettled ? "Waiting for the cloud's answer" : handOff ? "Handing off to the cloud" : "Moving to the cloud",
+      title: unsettled ? "Move not confirmed" : handOff ? "Handing off to the cloud" : "Moving to the cloud",
       description: unsettled ? undefined : steps[at]?.words,
       detail: (
         <>
           <p>{detail(moving.step, handOff)}</p>
+          {unsettled && <p>Keep this Mac awake until the move is confirmed.</p>}
           {!unsettled && <Steps steps={steps} at={at} />}
         </>
       ),
+      actions: unsettled ? [{ label: moving.checking ? "Checking status…" : "Check status", disabled: moving.checking, primary: true, onClick: () => void checkMoveAgain(key) }] : undefined,
       data: { "data-thread-move": moving.step.kind, "data-thread-handoff": handOff || undefined },
     }
   }
   if (!returning) {
+    if (failed) return {
+      id: "thread-move",
+      tone: "caution",
+      title: "Still on this Mac",
+      description: failed.reason,
+      detail: <p>{failed.continued ? "Its turn continues here. Keep this Mac awake while it works." : "Its work and sessions remain here. Keep this Mac awake while its agents are running."}</p>,
+      actions: [{ label: "Retry move", primary: true, onClick: () => void retryFailedMove(key, failed.move) }],
+      onDismiss: () => dismissFailedMove(key, failed.move),
+      dismissLabel: "Dismiss move failure",
+      data: { "data-thread-move": "kept-here", "data-thread-move-failed": true },
+    }
     if (missing) return missingProject(key, missing)
     if (stopped) return followStoppedNotice(key, stopped)
     return outdated ? outdatedReturn(key, outdated, check) : null

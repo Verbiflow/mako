@@ -4,10 +4,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
-import { automationTriggerAvailable, type Automation, type AutomationRun } from "../contracts/automations-usage-updates.js"
+import { automationTriggerAvailable, type Automation, type AutomationFired, type AutomationRun } from "../contracts/automations-usage-updates.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { watchTree, type TreeWatch } from "./tree-watcher.js"
 import type { WatchBackend } from "./watch-backend.js"
+import { AutomationNotStartedError, type AutomationLaunches } from "./automation-launches.js"
 
 /**
  * Saved prompts that can fire on their own.
@@ -252,6 +253,8 @@ export interface AutomationsDeps {
   emit(event: HostEvent): void
   /** Starts the prompt in `cwd` as a new conversation, named `label`. */
   launch(cwd: string, prompt: string, label: string): Promise<void>
+  /** Receipts for agent-approved launches; without one those launches are refused. */
+  launches?: AutomationLaunches
 }
 
 /** The automations of the workspace in front, and what fires them. */
@@ -259,6 +262,7 @@ export class Automations {
   private readonly deps: AutomationsDeps
   private runtime: Runtime | null = null
   private automations: Automation[] = []
+  private loadedFor: string | undefined
 
   constructor(deps: AutomationsDeps) {
     this.deps = deps
@@ -268,15 +272,25 @@ export class Automations {
     return this.automations
   }
 
+  /** The list and its owner are one reading, before a tool asks permission for any of it. */
+  context() {
+    return { cwd: this.runtime?.cwd === this.loadedFor ? this.loadedFor : undefined, automations: this.automations }
+  }
+
   async load(cwd: string): Promise<Automation[]> {
+    const runtime = this.runtime
+    let loaded: Automation[]
     try {
       const document = parseAutomationDocument(
         await readFile(join(cwd, FILE), "utf8")
       )
-      this.automations = document.automations
+      loaded = document.automations
     } catch {
-      this.automations = []
+      loaded = []
     }
+    if (this.runtime !== runtime) return this.automations
+    this.automations = loaded
+    this.loadedFor = cwd
     if (this.runtime?.cwd === cwd) this.syncFileWatcher(this.runtime)
     this.publish()
     return this.automations
@@ -284,6 +298,7 @@ export class Automations {
 
   async save(cwd: string, next: Automation[]): Promise<Automation[]> {
     this.automations = next
+    this.loadedFor = cwd
     if (this.runtime?.cwd === cwd) this.syncFileWatcher(this.runtime)
     this.publish()
     try {
@@ -303,7 +318,8 @@ export class Automations {
   }
 
   /** Enabling is per-machine and is not written to the shared file. */
-  setEnabled(id: string, enabled: boolean): Automation[] {
+  setEnabled(id: string, enabled: boolean, cwd?: string): Automation[] {
+    if (cwd !== undefined && (this.runtime?.cwd !== cwd || this.loadedFor !== cwd)) throw new Error("The workspace changed. Open the automation's original workspace to answer its ask.")
     this.automations = this.automations.map((entry) =>
       entry.id === id && (!enabled || automationTriggerAvailable(entry.trigger))
         ? { ...entry, enabled }
@@ -322,15 +338,21 @@ export class Automations {
    * watcher pointed at a directory an agent is editing will otherwise re-trigger
    * on the agent's own output, which is a loop that bills.
    */
-  async fire(id: string, reason: AutomationRun["reason"]): Promise<void> {
+  async fire(id: string, reason: AutomationRun["reason"], operation?: string, cwd?: string): Promise<AutomationFired> {
+    if (cwd !== undefined && (this.runtime?.cwd !== cwd || this.loadedFor !== cwd)) return { status: "not-run", why: "The workspace changed. Open the automation's original workspace to answer its ask." }
+    if (operation !== undefined) {
+      const state = this.runtime
+      if (reason !== "manual" || !this.deps.launches || !state || !cwd) return { status: "not-run", why: "This host can't safely record that automation's approved run." }
+      return this.deps.launches.run(operation, { cwd, id }, () => this.runtime === state ? this.fire(id, reason, undefined, cwd) : Promise.resolve({ status: "not-run", why: "The workspace changed before this automation could start." }))
+    }
     const automation = this.automations.find((entry) => entry.id === id)
     const state = this.runtime
-    if (!automation || !state) return
-    if (reason !== "manual" && (!automation.enabled || automation.trigger.kind !== reason)) return
-    if (state.inFlight.has(id)) return
+    if (!automation || !state || this.loadedFor !== state.cwd) return { status: "not-run", why: "Mako can't find that automation here." }
+    if (reason !== "manual" && (!automation.enabled || automation.trigger.kind !== reason)) return { status: "not-run", why: "It isn't on for this." }
+    if (state.inFlight.has(id)) return { status: "not-run", why: "It's running already." }
 
     const last = state.lastRun.get(id) ?? 0
-    if (reason !== "manual" && Date.now() - last < MIN_INTERVAL_MS) return
+    if (reason !== "manual" && Date.now() - last < MIN_INTERVAL_MS) return { status: "not-run", why: "It ran a moment ago." }
 
     state.inFlight.add(id)
     const runId = randomUUID()
@@ -361,7 +383,9 @@ export class Automations {
           status: "completed",
         },
       })
+      return { status: "completed" }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
       emit({
         type: "automation-run",
         run: {
@@ -371,9 +395,10 @@ export class Automations {
           reason,
           at: Date.now(),
           status: "failed",
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
         },
       })
+      return error instanceof AutomationNotStartedError ? { status: "not-run", why: message } : { status: "failed", error: message }
     } finally {
       state.inFlight.delete(id)
     }

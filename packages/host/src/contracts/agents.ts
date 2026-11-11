@@ -1,4 +1,6 @@
+import { ReportActionTargetSchema } from "./report-actions.js"
 import { z } from "zod"
+import { NativeAgentOriginSchema } from "@mako/sessions/native-agent-origin"
 import { ACCESS_TIER_NAMES, accessModeId, type AccessTier } from "./access.js"
 import { ASK_OPTIONS, AskOptionSchema, CHILDREN_BINDING, WAITING_ON_LIMIT, WaitingOnSchema, type ChildStateReading, type FinAnswered, type FinAsk, type FinDecision, type NativeAgent, type WaitingOn } from "./native-agents.js"
 import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"
@@ -48,6 +50,68 @@ export const APEX_ROLE = "lead" satisfies ChildRole
 export const PlaceSchema = z.union([z.literal("here"), z.literal("cloud"), z.templateLiteral(["device:", z.string().min(1).max(120)])])
 export type Place = z.infer<typeof PlaceSchema>
 const PLACE_TEXT = /^(here|cloud|device:.{1,120})$/s
+
+/** The device a `device:<name>` place names; undefined for any other place. */
+export function placeDevice(place: string | undefined): string | undefined {
+  return place?.startsWith("device:") ? place.slice("device:".length) : undefined
+}
+
+/**
+ * The version of placement a host speaks (`AgentsCapabilities`): Fins started from another device, their notices
+ * back, and their Apex's operations on them. A host without it is never a place.
+ */
+export const ORCHESTRATION_VERSION = 1
+
+/**
+ * A Fin's Apex on another device, on the Fin's own edge: the device whose runtime its notices go to, the Apex's
+ * conversation there, and the Apex's access as it started the Fin, which bounds what it answers for it.
+ */
+export const RemoteParentSchema = z.object({
+  device: z.string().uuid(),
+  conversation: z.string().min(1).max(512).optional(),
+  access: z.enum(ACCESS_TIER_NAMES),
+  /** The newest of its Apex's messages that reached it, by the count its Apex's device keeps of them (`Placed.epoch`). */
+  heard: z.number().int().positive().optional(),
+})
+export type RemoteParent = z.infer<typeof RemoteParentSchema>
+
+/** Where a placed Fin runs, as a call is addressed to it: a device's runtime, or a cloud Thread's machine. */
+export const PlaceTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("device"), device: z.string().uuid(), name: z.string().min(1).max(200) }),
+  z.object({ kind: z.literal("cloud"), thread: z.string().min(1).max(160) }),
+])
+export type PlaceTarget = z.infer<typeof PlaceTargetSchema>
+
+/**
+ * A Fin placed elsewhere, on its Apex's device: the Apex's own record of where it put it. The Fin's edge is its
+ * owner's, there; this one only routes the Apex's operations and takes the Fin's notices.
+ */
+export const PlacedSchema = z.object({
+  target: PlaceTargetSchema,
+  /** Its Session and conversation where it runs, as its start answered them. */
+  session: z.string().min(1).max(160).optional(),
+  conversation: z.string().min(1).max(512).optional(),
+  /**
+   * Whether it's at work: set when this device sets it to work, and by its own device's word after. Kept on the edge,
+   * so a host that restarts still counts it against its tree's budget.
+   */
+  working: z.boolean().optional(),
+  /**
+   * How many times this device set it to work: its start, then each message and answer that reached it. Its device
+   * says the newest it heard with every notice (`RemoteParent.heard`), so a report made before a message reached it
+   * can't end the turn that message started.
+   */
+  epoch: z.number().int().positive().optional(),
+  /** Its Apex stopped it while its device couldn't be reached: kept until that device says it stopped, or its Apex sends it on. */
+  stop: z.object({ at: z.number(), why: z.string().max(2_000) }).optional(),
+  /**
+   * The newest word of its device on how it stands that this device took (`AgentsNoticeInput.standing`, a list's
+   * strips): the host that said it, by its generation, and that host's count of sayings. Kept with `working`, written
+   * together, so an older word, a notice replayed or one that was on its way, changes nothing, after a restart too.
+   */
+  said: z.object({ owner: z.number(), seq: z.number() }).optional(),
+})
+export type Placed = z.infer<typeof PlacedSchema>
 
 /** What a child is asked to do, readable two levels down: the parent's intent, and how it knows it's done. */
 export const BriefSchema = z.object({
@@ -165,7 +229,7 @@ export function waitingWords(items: readonly WaitingOn[] | undefined): string | 
     return repository ? [repository] : []
   }))
   const words = items.map((item) => {
-    if (item.kind === "other") return item.text.trim()
+    if (item.kind === "other") return `${item.text.trim()} (no automatic wake)`
     if (item.kind === "person") return `the person to ${item.what.trim()}`
     const pull = pullRef(item.ref)
     const repository = item.repository ?? pull?.repository
@@ -182,7 +246,7 @@ export function waitingWords(items: readonly WaitingOn[] | undefined): string | 
  */
 export function waitingStateWords(items: readonly WaitingOn[], since: number | undefined, now: number | undefined): string {
   const words = items.map((item) => {
-    if (item.kind === "other") return item.text.trim()
+    if (item.kind === "other") return `${item.text.trim()} (no automatic wake)`
     if (item.kind === "person") return `the person to ${item.what.trim()}`
     const pull = pullRef(item.ref)
     const repository = item.repository ?? pull?.repository
@@ -257,6 +321,8 @@ export function idleFor(state: ChildState, at: number, now: number): number | un
  */
 export const FollowedRunSchema = z.object({
   harness: z.string().min(1).max(64),
+  /** Native origin retained on historical discoveries, even once they leave the managed Fin lifecycle. */
+  nativeAgent: NativeAgentOriginSchema.optional(),
   /** Its harness's ID for its Session, once known. */
   nativeId: z.string().min(1).max(512).optional(),
   /** The device it runs on: only that device's hosts can see its process. */
@@ -369,8 +435,29 @@ export const ThreadParentSchema = z.object({
       rule: z.object({ n: z.number().int().positive().optional(), when: z.string().max(400) }).optional(),
     })
     .optional(),
+  /** Its Apex runs on another device (`RemoteParent`): `parent` and `parentSession` name a Thread and a Session there. */
+  remote: RemoteParentSchema.optional(),
+  /** It runs elsewhere (`Placed`): this row is its Apex's record of it, and `child` names a Thread there. */
+  placed: PlacedSchema.optional(),
 })
 export type ThreadParent = z.infer<typeof ThreadParentSchema>
+
+/** An old discovery of a provider's internal reviewer is history, never a managed delegation. */
+export function internalDiscoveredRun(edge: ThreadParent): boolean {
+  return edge.origin === "discovered" && edge.run?.nativeAgent?.kind === "internal-review"
+}
+
+/**
+ * Whether a Fin is listed inside its Apex's Thread on this device. One whose Apex runs on another device
+ * (`ThreadParent.remote`) has no such Thread here to be listed in, so on this device it's a Thread of its own, in the
+ * rail and in the account's list, and this device is the one that writes its row there: what it's doing and what it
+ * asks come from here, whether or not its Apex's device is up. Every other device shows that row under its Apex
+ * (`listedApexOf`) and opens it from there, so the person reaches it, and answers what it asks, on the web or from
+ * any device of theirs.
+ */
+export function listedUnderApex(edge: ThreadParent | undefined): edge is ThreadParent {
+  return edge !== undefined && edge.remote === undefined
+}
 
 /**
  * What a start that makes a child says of its edge (`LiveStartOptions.parent`): all of it but the Thread the start makes.
@@ -398,6 +485,10 @@ export const ReportSchema = z.object({
   artifacts: z.array(ArtifactSchema).max(64).optional(),
   /** What it waits on, for `blocked` and `needs-input`; on `done`, the decision its finished work leaves. */
   question: z.string().max(4_000).optional(),
+  /** New explicit report questions persist independently of later narration. Absent in legacy reports. Host-owned. */
+  retainsQuestion: z.literal(true).optional(),
+  /** This Fin explicitly withdraws/replaces these report questions; an unrelated report settles nothing. */
+  supersedes: z.array(z.string().min(1).max(600)).max(8).optional(),
   /** Who decides a done report's question (`decisionOn`): its Apex when absent, or the person. */
   decides: z.enum(["apex", "person"]).optional(),
   /**
@@ -411,6 +502,8 @@ export const ReportSchema = z.object({
   recommended: z.number().int().nonnegative().optional(),
   /** What whoever answers does, in one sentence: "Pick the branch the release goes from." */
   action: z.string().max(400).optional(),
+  /** Explicit action-only follow-through. Questions retain their existing ask identity instead. */
+  followUp: ReportActionTargetSchema.optional(),
   /** Its Apex left its question to the person (`agents_answer` with `person`), or it was the person's from the start. */
   for: z.literal("person").optional(),
   /** The person's ask its Apex is told of though it can't answer it: an approval under an Apex below full access. */
@@ -465,7 +558,8 @@ export type ChildState = ChildStateReading
  * start (`childReading` in the engine). One source at a time.
  */
 export interface ChildThread {
-  source: "live" | "followed"
+  /** `placed`: it runs elsewhere, and this is read from the notices its device sent (`ThreadParent.placed`). */
+  source: "live" | "followed" | "placed"
   /** Its Session, its harness's ID for it, and where this device's catalog reads its transcript. */
   session?: SessionId
   nativeId?: string
@@ -673,7 +767,7 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
     provider: thread.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown",
     observedAt: thread.updatedAt ?? edge.createdAt,
     startedAt: thread.startedAt ?? edge.createdAt,
-    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }) },
+    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(edge.placed && edge.asked.place && { place: edge.asked.place }), ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }) },
   }
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
@@ -717,6 +811,7 @@ export function queuedWords(state: Extract<ChildState, { kind: "queued" }>): str
   if (state.after?.length) return `Starts after ${state.after.join(", ")} ${state.after.length === 1 ? "finishes" : "finish"}`
   if (state.reason === "tree-running") return `Queued: ${state.ahead} ahead, the tree's running budget is in use`
   if (state.reason === "place-full") return `Queued: ${state.ahead} ahead, your limit of Fins at once is in use`
+  if (state.reason === "device-offline") return "Waiting for its device to answer"
   return `Queued: ${state.ahead} ahead`
 }
 
@@ -890,7 +985,123 @@ export interface AgentsRespondInput {
 }
 
 /** Who calls an orchestration operation: the door stamps it, and through the socket it's a label, not a grant. */
-export type AgentCaller = { kind: "agent"; session: string } | { kind: "person" }
+export type AgentCaller = { kind: "agent"; session: string } | { kind: "person" } | ApexCaller
+
+/**
+ * An Apex on another device calling for the Fins it placed here (`mako:agents-place`): its device, Thread, Session and
+ * conversation there, and its access now. `forwards` is the person's message its turn answers, which a `forward` send
+ * passes on; only its words cross.
+ */
+export interface ApexCaller {
+  kind: "apex"
+  device: string
+  thread: string
+  session: string
+  conversation?: string
+  access: AccessTier
+  forwards?: string
+  /** With a message or an answer for a Fin: the count its Apex's device will keep once it reaches it (`Placed.epoch`). */
+  epoch?: number
+}
+
+/**
+ * What a host says of itself as a place for Fins (`mako:agents-capabilities`), so a caller checks before it places one.
+ * A stand-in: the same room goes out on the runtime link's `advertise` frame (`slots: { used, of }`, the shape here,
+ * with no harnesses), which replaces this call once that lands. Then `harnesses` and the version join the probe, room
+ * is read from one place, the version refusal stays, and this call goes.
+ */
+export interface AgentsCapabilities {
+  orchestration: { version: number }
+  /** How many Fins this device runs at once, and how many are at work or on their way now, as `advertise` says them. */
+  slots: { used: number; of: number }
+  /** The harnesses a Fin can run on here. */
+  harnesses: string[]
+}
+
+/** The checkout a placed Fin works in: a Git remote this device has, or clones; `folder` instead when it's there already (a cloud Thread's clone). */
+export interface PlaceWorkspace {
+  remote?: string
+  branch?: string
+  base?: string
+  folder?: string
+}
+
+/**
+ * A Fin started here for an Apex on another device (`mako:agents-place`), settled by `op`
+ * (`start:{apexSession}:{clientKey}`): a repeat answers the same Fin. `access` is at most the Apex's own; this device
+ * caps it by its own ceiling too.
+ */
+export interface AgentsPlaceInput {
+  version: number
+  op: string
+  clientKey: string
+  parent: { device: string; thread: string; session: string; conversation?: string; access: AccessTier }
+  brief: Brief
+  name: string
+  title?: string
+  role?: ChildRole
+  harness: string
+  model?: string
+  reasoning?: string
+  fast?: boolean
+  access: AccessTier
+  workspace: PlaceWorkspace
+  mode?: StartMode
+  wake?: WakeOn
+  queue?: boolean
+}
+
+export interface AgentsPlaced {
+  child: string
+  name: string
+  session?: string
+  conversation?: string
+  harness: string
+  access: AccessTier
+  state: ChildState["kind"]
+  runsOn?: string
+  note?: string
+  deduped?: true
+}
+
+/**
+ * A placed Fin's report for its Apex's device (`mako:agents-notice`), under `notice:{child}:{reportId}`: a repeat is
+ * the same notice, and one from an owner older than the newest heard is refused (`stale-owner`).
+ */
+export interface AgentsNoticeInput {
+  id: string
+  /** The Fin's start (`start:{apexSession}:{clientKey}`): a notice that outruns its start's answer waits for it. */
+  op: string
+  parent: { thread: string; session: string }
+  child: string
+  /** It crosses the host call unbranded; the Apex's device parses it. */
+  report: z.input<typeof ReportSchema>
+  /**
+   * How the Fin stands as this is sent: whether it holds a place, and the newest of its Apex's messages it had heard
+   * by then (`RemoteParent.heard`). Its Apex's device takes it only when that's no older than what it sent the Fin,
+   * and only the newest said: `owner` is the host that says it (its generation) and `seq` its count of sayings. A
+   * Fin whose standing changes with nothing new to report says its last report again, with how it stands now.
+   */
+  standing?: { heard: number; working: boolean; owner: number; seq: number }
+}
+
+/**
+ * A placed start its Apex stopped before it knew how the start went (`mako:agents-cancel`), by the start's op. The
+ * device ends the Fin if that start made one, and answers it; if it made none, it keeps the stop, so the start is
+ * refused whenever it arrives. A repeat answers the same.
+ */
+export interface AgentsCancelInput {
+  version: number
+  op: string
+  parent: { device: string; thread: string; session: string; conversation?: string; access: AccessTier }
+  reason?: string
+}
+
+/** `fin`: the Fin that start had made here, now stopped. Absent: it made none, and never will. */
+export type AgentsCancelled = { cancelled: true; fin?: AgentsPlaced } | AgentRefused
+
+/** Heard, once: a refusal that isn't `stale-owner` leaves it in the Fin's device's outbox, to be sent again. */
+export type AgentsNoticed = { heard: true; deduped?: true } | AgentRefused
 
 /** A refusal is an answer, not an error, so every door says it the same way. */
 export type AgentRefusalReason =
@@ -910,6 +1121,7 @@ export type AgentRefusalReason =
   | "stale-owner"
   | "rate-limited"
   | "unavailable"
+  | "unsupported"
 export interface AgentRefused {
   refused: AgentRefusalReason
   why: string

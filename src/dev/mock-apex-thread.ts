@@ -34,7 +34,27 @@ interface ChildFixture {
   toolUses?: number
   objective: string
   said?: string
+  /** It runs on another device (`&placed=`): its Apex's device has its edge and its reports, and no conversation of it. */
+  placed?: true
 }
+
+/**
+ * `&placed=<scene>`: a thirteenth Fin, Docs sweep, placed on another device of the person's, Loft, where its OpenCode
+ * asks to run a command. Its Apex's device reads it as waiting on the person and holds no conversation of it; what
+ * opens for it is the row Loft writes to the account's list, which this window holds as a conversation listed from
+ * elsewhere (`placedSummary`). `studio` and `loft`: Loft is heard, and the row says what it asks. `quiet`: Loft hasn't
+ * been heard from for 25 minutes. `unlisted`: no row of it at all, so nothing opens. `off`, for the web's fixtures:
+ * the Apex's device is the quiet one, and the Fin's row still says what it asks.
+ */
+export const PLACED_SCENE = new URLSearchParams(globalThis.location?.search).get("placed")
+export const PLACED_DEVICE = "00000000-0000-4000-8000-00000000106f"
+export const PLACED_WHERE = "Loft"
+export const PLACED_THREAD = "1ead1ead-3000-4000-8000-000000000013"
+export const PLACED_SESSION = "1ead1ead-4000-4000-8000-000000000013"
+export const PLACED_CONVERSATION = "1ead1ead-5000-4000-8000-000000000013"
+export const PLACED_TITLE = "Docs sweep"
+export const PLACED_ASKS = "Approve: npm run docs:check"
+const PLACED_FIXTURE: ChildFixture = { name: "docs-sweep", title: PLACED_TITLE, harness: "opencode", model: "kimi-k3", state: { kind: "blocked", on: "person", question: PLACED_ASKS, ask: { kind: "report", id: "report:docs-sweep:to-person" } }, minutes: 3, objective: "Sweep docs/ for stale links and fix them.", placed: true }
 
 /**
  * `&fins=decisions`: two of the done Fins finished with a decision their work leaves, one the person's (Thread list
@@ -47,11 +67,23 @@ const DECIDED = new Map<string, ChildState>([
 const DECISIONS_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "decisions"
 
 /** The twelve, as the prototype has them: 2 need you, 5 working (one asking its Apex), 2 queued, 3 done. */
+/**
+ * `&ask=fin`: "Dictation fallback"'s agent asked to move its Thread, as its Apex's host builds its row (`askWaiting`,
+ * `LiveAsks.pending` through `waitingOf`): blocked on an approval in the ask's own words, left to the person.
+ */
+const FIN_ASKS = new URLSearchParams(globalThis.location?.search).get("ask") === "fin"
+const FIN_MOVE_ASK: ChildState = {
+  kind: "blocked",
+  on: "approval",
+  question: "Wants to move this Thread to the cloud (yours to answer: its Apex isn't on full access)",
+  ask: { kind: "approval", id: "1ead1ead-7000-4000-8000-0000000000b5", options: [{ label: "Move to the cloud" }, { label: "Keep here" }], named: true },
+}
+
 const CHILDREN: ChildFixture[] = ([
   { name: "push-wording", title: "Quiet-hours push wording", harness: "codex", model: "gpt-5.6-sol", state: { kind: "blocked", on: "person", question: "Which tone for the quiet-hours notice? Plain or friendly?", ask: { kind: "report", id: "report:push-wording:tone", options: [{ label: "Plain", detail: "Pushes are held until 7:00." }, { label: "Friendly", detail: "Quiet hours: we'll tell you at 7:00." }], recommended: 0, action: "Pick the tone the phone ships with." } }, minutes: 14, toolUses: 22, objective: "Write the quiet-hours notice the phone shows when pushes are held, in both tones, and ask which one ships." },
   { name: "sheet-motion", title: "Sheet motion on iPad", harness: "cursor", model: "composer-2.5", state: { kind: "blocked", on: "approval", question: "Approve: npm ci", ask: { kind: "approval", id: "a7c0ffee-0000-4000-8000-00000000a11c", options: [{ label: "Allow once" }, { label: "Always allow" }, { label: "Reject" }] } }, minutes: 22, toolUses: 41, objective: "Make the sheet's open and close motion match the iPad's split view, on the composer branch. Done when the sheet case passes on an iPad in both themes. Report with what you changed and the shots.", said: "The sheet animates from its own height, so in split view it starts off screen. I'll measure the container instead, then run the iPad case." },
   { name: "composer-chips", title: "Composer chips on iPad", harness: "claude", model: "claude-opus-5-5", state: { kind: "working", phase: "Running the iPad cases", step: "Shell npm run test:phone" }, minutes: 18, toolUses: 64, objective: "Make the composer's chips wrap on an iPad the way they do on a Mac." },
-  { name: "dictation", title: "Dictation fallback", harness: "codex", model: "gpt-5.6-sol", state: { kind: "working", step: "Edit src/web-client/dictation.ts" }, minutes: 11, toolUses: 30, objective: "When the recognizer is unavailable, fall back to the keyboard's dictation without an error." },
+  { name: "dictation", title: "Dictation fallback", harness: "codex", model: "gpt-5.6-sol", state: FIN_ASKS ? FIN_MOVE_ASK : { kind: "working", step: "Edit src/web-client/dictation.ts" }, minutes: 11, toolUses: 30, objective: "When the recognizer is unavailable, fall back to the keyboard's dictation without an error." },
   { name: "token-refresh", title: "Push token refresh", harness: "grok", model: "grok-4.7", state: { kind: "blocked", on: "lead", question: "Should an expired token be dropped or retried once?" }, minutes: 9, toolUses: 12, objective: "Refresh a phone's push token when the platform rotates it, without a second registration." },
   { name: "outbox", title: "Offline outbox retry", harness: "opencode", model: "kimi-k3", state: { kind: "working", step: "Read src/web-client/outbox.ts" }, minutes: 6, toolUses: 8, objective: "Retry the outbox once the page is back online, oldest first." },
   { name: "hunks", title: "Review screen hunks", harness: "devin", model: "swe-2", state: { kind: "starting", step: "launching" }, minutes: 0.4, objective: "Read the review screen's hunks from the record instead of the file." },
@@ -60,12 +92,17 @@ const CHILDREN: ChildFixture[] = ([
   { name: "swipe", title: "Thread list swipe", harness: "codex", model: "gpt-5.6-sol", state: { kind: "ended", outcome: "done", reason: "Swipe to archive now springs back below the threshold; PR on your branch." }, minutes: 31, toolUses: 52, objective: "Make the list's swipe to archive spring back below its threshold." },
   { name: "deep-links", title: "Settings deep links", harness: "claude", model: "claude-opus-5-5", state: { kind: "idle" }, minutes: 27, toolUses: 19, objective: "Open each settings page from a link." },
   { name: "pull-refresh", title: "Pull to refresh", harness: "grok", model: "grok-4.7", state: { kind: "ended", outcome: "done", reason: "Pull to refresh reads the account list again and keeps its place." }, minutes: 40, toolUses: 33, objective: "Pull to refresh reads the account list again." },
-] satisfies ChildFixture[]).map((fixture) => (DECISIONS_SCENE && DECIDED.has(fixture.name) ? { ...fixture, state: DECIDED.get(fixture.name)! } : fixture))
+] satisfies ChildFixture[]).map((fixture): ChildFixture => (DECISIONS_SCENE && DECIDED.has(fixture.name) ? { ...fixture, state: DECIDED.get(fixture.name)! } : fixture)).concat(PLACED_SCENE ? [PLACED_FIXTURE] : [])
 
 /**
  * `&fins=limit`: the tree on 2026-11-05, as the host says it. Cursor ran out: three of its Fins moved to Claude Code,
  * one had nowhere to go and stopped with its work unfinished, and the first moved carries the tree's one notice.
  */
+/**
+ * `&ask=move` or `&ask=back`: the Apex's own agent asks, below full access, to move its Thread or bring it back;
+ * `&ask=fin`: its Fin "Dictation fallback" does, which goes to the Apex first (`test-agent-ask-ui.mjs`).
+ */
+const ASK_SCENE = new URLSearchParams(globalThis.location?.search).get("ask")
 const LIMIT_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "limit"
 const LIMIT_UNTIL = "Sun 12:00 AM PST"
 const LIMIT_MOVED = `Moved to Claude Code: Cursor is at its limit until ${LIMIT_UNTIL}`
@@ -81,7 +118,7 @@ const LIMIT_FINS = new Map<string, (entry: NativeAgent) => NativeAgent>([
 ])
 
 function childThread(index: number): string {
-  return `1ead1ead-3000-4000-8000-${String(index + 1).padStart(12, "0")}`
+  return CHILDREN[index]?.placed ? PLACED_THREAD : `1ead1ead-3000-4000-8000-${String(index + 1).padStart(12, "0")}`
 }
 function childSession(index: number): string {
   return `1ead1ead-4000-4000-8000-${String(index + 1).padStart(12, "0")}`
@@ -90,9 +127,9 @@ function childConversation(index: number): string {
   return `1ead1ead-5000-4000-8000-${String(index + 1).padStart(12, "0")}`
 }
 
-/** Whether the Fin has started: a queued one has no conversation yet. */
+/** Whether the Fin has started here: a queued one has no conversation yet, and one placed elsewhere none on this device. */
 function started(fixture: ChildFixture): boolean {
-  return fixture.state.kind !== "queued"
+  return fixture.state.kind !== "queued" && !fixture.placed
 }
 
 /** What a Fin's Thread shows and its journal holds, for `childState` to read a state back from. */
@@ -101,7 +138,7 @@ interface ChildShowing {
   journal: ChildJournal
 }
 
-function shown(state: ChildState, child: string, at: number): ChildShowing {
+function shown(state: ChildState, child: string, at: number, placed = false): ChildShowing {
   switch (state.kind) {
     case "queued":
       return { thread: { queued: { reason: state.reason, ahead: state.ahead } }, journal: {} }
@@ -113,6 +150,8 @@ function shown(state: ChildState, child: string, at: number): ChildShowing {
         journal: state.phase ? { latest: { id: `report:${child}:phase`, child: ThreadIdSchema.parse(child), status: "progress", summary: state.phase, ownerGeneration: 1, at } } : {},
       }
     case "blocked":
+      // A placed Fin's ask reaches its Apex's device as its report of it, the person's to answer where it runs.
+      if (placed && state.ask) return { thread: {}, journal: { latest: { id: state.ask.id, child: ThreadIdSchema.parse(child), status: "blocked", summary: `It waits: ${state.question}`, question: state.question, for: "person", told: true, implicit: true, ownerGeneration: 1, at } } }
       return { thread: { waiting: { question: state.question, on: state.on, ...(state.ask && { ask: state.ask }) } }, journal: {} }
     case "idle":
       return { thread: {}, journal: {} }
@@ -181,17 +220,18 @@ export function apexFin(index: number, state: ChildState = CHILDREN[index]!.stat
     name: fixture.name,
     role: "worker",
     origin: "started",
-    asked: { brief: { objective: fixture.objective }, harness: fixture.harness, model: fixture.model },
+    asked: { brief: { objective: fixture.objective }, harness: fixture.harness, model: fixture.model, ...(fixture.placed && { place: `device:${PLACED_WHERE}` }) },
     op: `start:${APEX_SESSION}:${fixture.name}`,
+    ...(fixture.placed && { placed: { target: { kind: "device" as const, device: PLACED_DEVICE, name: PLACED_WHERE }, session: PLACED_SESSION, working: false, epoch: 1 } }),
     startedBy: { kind: "agent", session: apex },
     createdAt,
     tuned: { source: PASSED_OVER.has(fixture.name) ? "used" : "apex", ...(PASSED_OVER.has(fixture.name) && { note: PASSED_OVER.get(fixture.name) }), ...(RULES.has(fixture.name) && { rule: RULES.get(fixture.name) }), ...(MOVED.has(fixture.name) && { rerouted: MOVED.get(fixture.name) }) },
   }
-  const { thread, journal } = shown(state, child, now - 60_000)
+  const { thread, journal } = shown(state, child, now - 60_000, fixture.placed)
   const entry = childEntry(
     edge,
     {
-      source: "live",
+      source: fixture.placed ? "placed" : "live",
       title: fixture.title,
       harness: fixture.harness,
       model: fixture.model,
@@ -421,7 +461,14 @@ export function apexSnapshot(): LiveSnapshot {
       { type: "user", text: request.text, requestId: request.id },
       { type: "text", text: "Reading the digest." },
     ],
-    control: { activeBindingId: APEX_CONVERSATION, bindings: [], merges: [], transfers: [], actions: [] },
+    control: {
+      activeBindingId: APEX_CONVERSATION,
+      bindings: [],
+      merges: [],
+      transfers: [],
+      actions: [],
+      ...((ASK_SCENE === "move" || ASK_SCENE === "back") && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a5", at: STARTED, want: ASK_SCENE === "back" ? { kind: "back" as const } : { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a6", handsOff: true } }] }),
+    },
     nativeAgents: { agents: apexFins(), limited: false },
   }
 }
@@ -475,7 +522,14 @@ export function finSnapshot(index: number): LiveSnapshot {
       ...(waits ? [{ type: "tool" as const, id: `apex-fin-ci-${index}`, toolKind: "execute" as const, title: "npm ci", input: "{\"command\":\"npm ci\"}", status: "pending" as const }] : []),
       ...(fixture.state.kind === "ended" && fixture.state.reason ? [{ type: "text" as const, text: fixture.state.reason }] : []),
     ],
-    control: { activeBindingId: childConversation(index), bindings: [], merges: [], transfers: [], actions: [] },
+    control: {
+      activeBindingId: childConversation(index),
+      bindings: [],
+      merges: [],
+      transfers: [],
+      actions: [],
+      ...(ASK_SCENE === "fin" && index === 3 && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000b5", at: STARTED, want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000b6", handsOff: true } }] }),
+    },
   }
 }
 
@@ -484,12 +538,59 @@ export function apexSnapshots(): LiveSnapshot[] {
   return [...CHILDREN.flatMap((fixture, index) => (started(fixture) ? [finSnapshot(index)] : [])), apexSnapshot()]
 }
 
-/** As the desktop's host lists them at boot: each Fin with its edge, as `placement` gives it. */
+/** As the desktop's host lists them at boot: each Fin with its edge, as `placement` gives it; the placed one as Loft's row lists it. */
 export function apexSummaries(): LiveSummary[] {
-  return apexSnapshots().map(({ session, revision, createdAt, threadPath, threadId, sessionId, parent, nativeAgents }) => {
-    const children = rollup(rosterChildren(nativeAgents))
-    return { session, revision, createdAt, threadPath, threadId, sessionId, ...(parent && { parent }), ...(children.total && { children }) }
-  })
+  const placed = placedSummary()
+  return [
+    ...apexSnapshots().map(({ session, revision, createdAt, threadPath, threadId, sessionId, parent, nativeAgents }) => {
+      const children = rollup(rosterChildren(nativeAgents))
+      return { session, revision, createdAt, threadPath, threadId, sessionId, ...(parent && { parent }), ...(children.total && { children }) }
+    }),
+    ...(placed ? [placed] : []),
+  ]
+}
+
+/**
+ * The placed Fin's conversation as this window lists it from the account: Loft's own row of it, under its Apex
+ * (`listedApexOf`), waiting on an approval there. Undefined when Loft never listed it (`&placed=unlisted`), or the
+ * scene has no placed Fin.
+ */
+export function placedSummary(): LiveSummary | undefined {
+  if (!PLACED_SCENE || PLACED_SCENE === "unlisted") return undefined
+  const createdAt = Date.now() - PLACED_FIXTURE.minutes * 60_000
+  const quiet = PLACED_SCENE === "quiet"
+  return {
+    session: { id: PLACED_CONVERSATION, harness: PLACED_FIXTURE.harness, cwd: "/home/you/.mako/projects/mako/.mako/worktrees/docs-sweep", title: PLACED_TITLE, connection: "hibernated", status: quiet ? "ready" : "running", modes: [], currentMode: null, configOptions: [] },
+    revision: 0,
+    createdAt,
+    elsewhere: PLACED_WHERE,
+    threadId: PLACED_THREAD,
+    sessionId: PLACED_SESSION,
+    movedAt: Date.now() - 60_000,
+    parent: { thread: APEX_THREAD, session: APEX_SESSION },
+    ...(!quiet && { waitingOn: PLACED_ASKS, waitingFor: "approval" as const }),
+    ...(quiet && { quietSince: Date.now() - 25 * 60_000 }),
+  }
+}
+
+/** What Loft answers when the placed Fin is opened from here: its brief, its first step, and the approval it waits on. */
+export function placedSnapshot(): LiveSnapshot | undefined {
+  const summary = placedSummary()
+  if (!summary) return undefined
+  const request = { id: "1ead1ead-8000-4000-8000-000000000013", createdAt: summary.createdAt, text: brief(PLACED_FIXTURE), attachments: [], status: "dispatching" as const }
+  return {
+    ...summary,
+    base: null,
+    permissions: summary.waitingOn
+      ? [{ id: "placed-approval", sessionId: PLACED_CONVERSATION, title: "npm run docs:check", kind: "execute", options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }, { optionId: "always", name: "Always allow npm *", kind: "allow_always" }, { optionId: "deny", name: "Reject", kind: "reject_once" }] }]
+      : [],
+    requests: [request],
+    blocks: [
+      { type: "user", text: request.text, requestId: request.id },
+      { type: "text", text: "Checking every link under docs/ first, then fixing what's stale." },
+    ],
+    control: { activeBindingId: PLACED_CONVERSATION, bindings: [], merges: [], transfers: [], actions: [] },
+  }
 }
 
 /** The catalog's rows: the Apex's, and each started Fin's under it (`parent`), which the rail never lists. */

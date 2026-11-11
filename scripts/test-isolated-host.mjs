@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
 import { startHost } from "./linux-host/host-process.mjs"
 import { describeProcesses, processesLeftIn, removeScratch } from "./lib/scratch-processes.mjs"
+import { KEPT } from "./lib/test-scratch.mjs"
 
 /*
  * A host started with a data root of its own (a test's, a proof's, outside
@@ -123,6 +124,7 @@ try {
 } finally {
   stopped = await host.stop()
   await connections
+  if (stopped.code !== 0) await keepHostLogs(stopped)
 }
 try {
   const left = await processesLeftIn(scratch, 5_000)
@@ -141,4 +143,17 @@ try {
   console.log(`isolated host: ${kept.filter((path) => !path.includes("/")).length} entries in its root, its accounts and its Cursor agent among them; ${relative(scratch, home)}/.mako as it was, cursor-sdk included`)
 } finally {
   await removeScratch(scratch)
+}
+
+/**
+ * A host that didn't stop cleanly: its logs copied to `MAKO_TEST_EVIDENCE` (the job's artifacts) or the kept test folder
+ * before the scratch folder goes, and the end of its log printed, so the next slow stop says what it waited on.
+ */
+async function keepHostLogs(stopped) {
+  const into = join(process.env.MAKO_TEST_EVIDENCE ?? KEPT, `isolated-host-${Date.now()}`)
+  await mkdir(into, { recursive: true })
+  await cp(join(dataRoot, "logs"), into, { recursive: true }).catch((error) => console.error(`the host's logs weren't copied: ${error.message}`))
+  await cp(join(scratch, "host-output.log"), join(into, "host-output.log")).catch(() => undefined)
+  const log = existsSync(join(dataRoot, "logs", "host.log")) ? readFileSync(join(dataRoot, "logs", "host.log"), "utf8") : ""
+  console.error(`The host stopped as ${JSON.stringify(stopped)}; its logs are in ${into}. The end of its log:\n${log.split("\n").slice(-80).join("\n")}`)
 }
