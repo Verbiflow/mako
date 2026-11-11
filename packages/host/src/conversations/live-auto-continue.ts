@@ -9,6 +9,7 @@ import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } 
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
+import { modelByIdentity, type SessionModel } from "@mako/sessions/settings"
 import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { promptFingerprint } from "./live-assets.js"
 import { LiveRequestSchema } from "./live-journal.js"
@@ -137,7 +138,7 @@ export class LiveAutoContinue {
     if (!resident) throw new Error("This conversation is no longer available")
     if (resident.snapshot.requests.some((request) => request.id === input.requestId)) return
     this.decline(resident)
-    const tuning = [...resident.snapshot.requests].reverse().find((request) => request.tuning)?.tuning
+    const tuning = runningTuning(resident, this.access.dependencies.heldModels)
     const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true, ...input.brief && { brief: input.brief }, ...input.since !== undefined && { since: input.since } }
     // A brief carried again goes as itself, framed; as it's sent, a transcript that shows it has a Continue go instead.
     const brief = input.brief && resident.snapshot.requests.find((request) => request.id === input.brief)
@@ -258,6 +259,24 @@ export class LiveAutoContinue {
     const driver = this.access.dependencies.driver(binding?.provider ?? "")
     return binding?.nativeId && driver && resumes(driver) && driver.available(this.access.dependencies.appPath) ? binding : undefined
   }
+}
+
+/**
+ * What the conversation's session runs on: the newest tuning a request ran with on its active binding, else that
+ * binding's own, and of those only one whose model its harness offers when its catalog has been read. Never another
+ * harness's: a Fin that began on Cursor keeps Cursor's model ID on its first request
+ * (`claude-opus-5-5[cyber=false,context=1m,…]`), and on 2026-11-11 a continuation after a crash carried it to the Claude
+ * session the Fin had moved to, which refused it on every turn after; its binding kept it, so the Fin's next message
+ * met it too. Undefined when none fits: the session goes on as its harness has it.
+ */
+export function runningTuning(resident: Resident, heldModels?: (harness: string) => readonly SessionModel[] | undefined): LiveRequest["tuning"] {
+  const binding = activeBinding(resident)
+  if (!binding) return undefined
+  const models = heldModels?.(binding.provider)
+  const offered = (tuning: NonNullable<LiveRequest["tuning"]>) => !tuning.model || !models?.length || modelByIdentity(models, tuning.model) !== undefined
+  const ranOn = (request: LiveRequest) => (request.nativeRun?.bindingId ?? request.nativeDelivery?.bindingId) === binding.id
+  const ran = [...resident.snapshot.requests].reverse().flatMap((request) => (request.tuning && ranOn(request) ? [request.tuning] : []))
+  return [...ran, ...binding.tuning ? [binding.tuning] : []].find(offered)
 }
 
 /**
