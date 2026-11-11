@@ -1,3 +1,4 @@
+import type { SourceProjectCommand, SourceProjectReceipt } from "@mako/protocol/source-project"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
@@ -42,6 +43,8 @@ export type AccountListGap = { gap: { after: number; seq: number; why: "skipped"
 export type AccountListNotice = AccountListHeard | "account-changed" | "linked" | AccountListGap
 
 export interface CloudAccount {
+  /** Internal control transport; no caller-selected URL or clone authority. */
+  sourceProjectControl?(input: SourceProjectCommand): Promise<SourceProjectReceipt>
   /** A connection token while this Mac is signed in to Mako. */
   token(): Promise<string | undefined>
   /** The cloud's address this Mac reaches, such as `https://api.example.com`; undefined in a build without one. */
@@ -365,6 +368,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       return state.status === "signed-in" ? state.account.id : undefined
     },
     session: () => cloud.session(),
+    sourceProjectControl: (input) => cloud.sourceProjectControl(input),
     deviceId: () => cloud.deviceId(),
     cloudBlocked: () => cloud.signInsBlocked(),
     createThread: (threadId, repository, options) => cloud.createThread(threadId, repository, options),

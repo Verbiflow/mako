@@ -1,3 +1,4 @@
+import { SOURCE_PROJECT_PATH, SourceProjectReceiptSchema, type SourceProjectCommand } from "@mako/protocol/source-project"
 import { stoppingSignal } from "../base/host-stopping.js"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { createServer, type Server } from "node:http"
@@ -1290,6 +1291,11 @@ export class CloudAccounts {
    * ends for an expired token opens again on the next call; one ended because this device was removed signs it out.
    * Signing out closes every session.
    */
+  /** Internal selected-project publication only; not exposed as a model/UI move action. */
+  async sourceProjectControl(input: SourceProjectCommand) {
+    return SourceProjectReceiptSchema.parse(await (await this.#call("source-project.control", "POST", SOURCE_PROJECT_PATH, input)).json())
+  }
+
   session(): ClientSessionOverSockets {
     const cloud = this.#require()
     const session = clientSessionOverSockets(
