@@ -66,7 +66,12 @@ export async function sweepAbandonedLaunches(): Promise<void> {
         for (const entry of inside) {
           const path = join(files, entry)
           const info = await lstat(path)
-          if (info.uid !== owned.info.uid || (info.mode & 0o7777) !== 0o600 || (entry === "session.json" ? !info.isFile() || info.nlink !== 1 : !info.isSocket()))
+          // Pre-PID primary sockets could be bound without chmod. Only their
+          // ordinary permission bits may vary: both ancestors are verified
+          // private, and the legacy liveness and identity gates still apply.
+          const mode = info.mode & 0o7777
+          const legacySocketMode = !pid && entry === "session.sock" && (mode & 0o7000) === 0
+          if (info.uid !== owned.info.uid || (!legacySocketMode && mode !== 0o600) || (entry === "session.json" ? !info.isFile() || info.nlink !== 1 : !info.isSocket()))
             throw new Error("Unverified launch file")
           checkedFiles.set(path, info)
         }

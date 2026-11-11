@@ -90,7 +90,12 @@ back to `/tmp`. The caller owns removal of its root after all sessions close.
 Abandoned-launch cleanup opens root/session directories without following their
 final symlinks, validates expected file types, ownership and modes before any
 unlink, and rechecks identities before each mutation. It does not read session
-credentials. These checks are conservative, not an atomic directory-relative
+credentials. Only a no-PID legacy launch's primary `session.sock` may retain the
+ordinary permission bits from a raw bind without chmod; special bits are refused.
+Its root and session directories must still be private mode-0700 directories of
+this user, the leaf must be this user's socket, and its connection must be refused
+before cleanup. PID-bearing sockets, staging sockets and all other leaves retain
+their exact mode checks. These checks are conservative, not an atomic directory-relative
 unlink: same-user replacement after the final path check remains possible, and
 a partial failure cannot undo earlier unlinks. Unknown entries or observed
 changes stop further cleanup. Use owned mode when global stale cleanup is outside

@@ -92,7 +92,12 @@ async function fixture(options = {}) {
       probes.push(name)
       const socket = new EventEmitter()
       socket.destroy = () => {}
-      queueMicrotask(() => options.unused || options.socketCode ? socket.emit("error", { code: options.socketCode ?? "ECONNREFUSED" }) : socket.emit("connect"))
+      queueMicrotask(() => {
+        options.onProbe?.(name, nodes)
+        if (options.silentSocket) return
+        if (options.unused || options.socketCode) socket.emit("error", { code: options.socketCode ?? "ECONNREFUSED" })
+        else socket.emit("connect")
+      })
       return socket
     },
     createServer: () => {
@@ -465,6 +470,55 @@ for (const value of [undefined, 0, "unknown"]) {
   assert.deepEqual(result.reports[0].failures.map(({ stage }) => stage), ["owner-close", "cleanup-report"])
   assert.equal(result.reports[0].failures[1].error, writer)
   rows.push({ label: "cleanup reporting failure cannot replace the exact primary" })
+}
+
+if (!startupOnly) {
+// The supported pre-PID fixture binds a raw Unix socket without chmod. Model
+// bind's permission bits under several umasks; never bind or probe a real socket.
+const legacySocket = (mode) => ({ nodes, root }) => {
+  nodes.delete(root + "/session/session.json")
+  nodes.delete(root + "/mako-control")
+  nodes.get(root + "/session/session.sock").mode = mode
+}
+for (const mask of [0o000, 0o022, 0o077, 0o177, 0o777]) {
+  const mode = 0o777 & ~mask
+  await sweep(`legacy raw socket, umask ${mask.toString(8)}`, { legacy: true, unused: true, setup: legacySocket(mode) }, (f) => {
+    assert.equal(f.nodes.has(f.root), false, "a verified private legacy root with a dead raw socket remains sweepable")
+    assert.equal(f.mutations.length, 3)
+    assert.deepEqual(f.probes, [f.root + "/session/session.sock"])
+  })
+}
+for (const [label, options] of [
+  ["PID socket still needs exact private mode", { unused: true, setup: legacySocket(0o755) }],
+  ["legacy live default-mode socket", { legacy: true, setup: legacySocket(0o755) }],
+  ["legacy inaccessible default-mode socket", { legacy: true, socketCode: "EACCES", setup: legacySocket(0o755) }],
+  ["legacy silent default-mode socket", { legacy: true, silentSocket: true, setup: legacySocket(0o755) }],
+  ["legacy default-mode socket in public root", { legacy: true, unused: true, mode: 0o755, setup: legacySocket(0o755) }],
+  ["legacy default-mode socket in foreign root", { legacy: true, unused: true, uid: 502, setup: legacySocket(0o755) }],
+  ...[
+    ["session wrong mode", "/session", { mode: 0o755 }],
+    ["session wrong UID", "/session", { uid: 502 }],
+    ["session link", "/session", { type: "link" }],
+    ["root link", "", { type: "link" }],
+    ["socket wrong UID", "/session/session.sock", { uid: 502 }],
+    ["socket link", "/session/session.sock", { type: "link" }],
+    ["socket regular file", "/session/session.sock", { type: "file" }],
+    ["socket special mode bits", "/session/session.sock", { mode: 0o1755 }],
+    ["socket setgid bit", "/session/session.sock", { mode: 0o2755 }],
+    ["socket setuid bit", "/session/session.sock", { mode: 0o4755 }],
+  ].map(([label, suffix, patch]) => [`legacy default-mode ${label}`, { legacy: true, unused: true, setup: (f) => { legacySocket(0o755)(f); Object.assign(f.nodes.get(f.root + suffix), patch) } }]),
+  ["legacy staging socket still needs exact private mode", { legacy: true, unused: true, setup: (f) => { legacySocket(0o755)(f); f.put(f.root + "/session/.ession.sock", "socket", 0o755) } }],
+  ["legacy descriptor still needs exact private mode", { legacy: true, unused: true, setup: (f) => { legacySocket(0o755)(f); f.put(f.root + "/session/session.json", "file", 0o644) } }],
+  ["legacy command still needs exact private mode", { legacy: true, unused: true, setup: (f) => { legacySocket(0o755)(f); f.put(f.root + "/mako-control", "file", 0o755) } }],
+  ["legacy unknown entry keeps whole root", { legacy: true, unused: true, extra: true, setup: legacySocket(0o755) }],
+]) await sweep(label, options, none)
+for (const [label, suffix, patch] of [
+  ["root replaced after refusal", "", { ino: 999 }],
+  ["session linked after refusal", "/session", { ino: 999, type: "link" }],
+  ["socket replaced after refusal", "/session/session.sock", { ino: 999 }],
+  ["socket UID changed after refusal", "/session/session.sock", { uid: 502 }],
+  ["socket mode changed after refusal", "/session/session.sock", { mode: 0o777 }],
+]) await sweep(`legacy ${label}`, { legacy: true, unused: true, setup: legacySocket(0o755), onProbe: (name, nodes) => Object.assign(nodes.get(path.dirname(path.dirname(name)) + suffix), patch) }, none)
 }
 
 console.log(JSON.stringify({ passed: rows.length, rows }, null, 2))
