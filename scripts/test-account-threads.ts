@@ -381,6 +381,10 @@ test("an Apex's row waits on its Fin's ask that's the person's, saying what it s
   const working = conversationShown({ session: { id: "apex", status: "running" }, working: "running", waitingOn: () => undefined, background: 2, asking: () => asks })
   assert.deepEqual({ state: working.state, waitingOn: working.waitingOn, waitingFor: working.waitingFor, under: working.asking?.under, background: working.background }, { state: "waiting", waitingOn: "push-wording: Which tone? Plain or friendly?", waitingFor: "question", under: "working", background: undefined })
   assert.equal(conversationShown({ session: { id: "apex", status: "ready" }, working: undefined, waitingOn: () => undefined, asking: () => asks }).asking?.under, "idle", "an Apex at rest under it rests")
+  // What its own agent asked through Mako's tools leaves it working and waits on the person; its Fins stay on its row.
+  const fins: ListedFin[] = [{ thread: ThreadIdSchema.parse(randomUUID()), name: "first", harness: "cursor", state: { kind: "working" }, startedAt: new Date(NOW).toISOString() }]
+  const asked = conversationShown({ session: { id: "apex", status: "running" }, working: "running", waitingOn: () => undefined, background: 2, asking: () => asks, asked: () => ({ for: "needs-you", line: "Wants to move this Thread to the cloud" }), fins: () => fins })
+  assert.deepEqual([asked.state, asked.waitingFor, asked.waitingOn, asked.background, asked.asking, asked.fins], ["waiting", "needs-you", "Wants to move this Thread to the cloud", undefined, undefined, fins])
   const own = conversationShown({ session: { id: "apex", status: "running" }, working: "waiting", waitingOn: () => ({ for: "approval", line: "Approve: git push" }), asking: () => asks })
   assert.deepEqual({ state: own.state, waitingOn: own.waitingOn, asking: own.asking }, { state: "waiting", waitingOn: "Approve: git push", asking: undefined }, "its own ask first")
   const approval = finAsking({ fin, name: "sheet-motion", line: "Approve: npm ci", ask: { kind: "approval", id: "a-1" }, more: 0 })

@@ -21,7 +21,7 @@ import { ContinueOffer, ContinueSheet } from "./continue-cloud"
 import { startContinue, useContinueChoice } from "./continue-actions"
 import { startMove, type MoveMac } from "./move-actions"
 import type { MoveWay } from "./move-progress"
-import { listedMove, useMoves } from "./moves"
+import { askBringBack, listedMove, useBringBackAsked, useMoves } from "./moves"
 import { StartSheet, type AddingTo } from "./new-thread"
 import { PreviewSheet, ServerCard } from "./preview"
 import { appKey, appShownAs, askPreview, loopbackTarget, useApps, useThreadApp } from "./previews"
@@ -42,7 +42,7 @@ import { activeLiveAcp, useAcp } from "@/state/acp"
 import { openFiles } from "./files-open"
 import { openReview } from "./review-open"
 import { useCopyMissing } from "./copies"
-import { FinOfApexContext, OpenChildContext, childSession } from "./fin-of-apex"
+import { FinOfApexContext, OpenChildContext, childSession, placedSessionOf } from "./fin-of-apex"
 import { PhoneFinCount } from "./apex-fins"
 import { transcriptChunk } from "./chunks"
 import { TranscriptLoading } from "./transcript-loading"
@@ -61,7 +61,7 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   // waiting or working doesn't hand the screen to another tab under the person's thumb.
   const [openedOn, setOpenedOn] = useState<string | undefined>(undefined)
   // One of its Fins opened from a chip under its bar, back to it by the bar's back button.
-  const [child, setChild] = useState<{ apex: string; agent: NativeAgent } | null>(null)
+  const [child, setChild] = useState<{ apex: string; agent: NativeAgent; own?: WebSession } | null>(null)
   if (child && child.apex !== threadId) setChild(null)
   useEffect(() => heading.current?.focus({ preventScroll: true }), [threadId])
   const client = useWebClient()
@@ -99,9 +99,12 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   if (sessionId === undefined && openedOn !== session.row.session && !thread.sessions.some((each) => each.row.session === openedOn)) setOpenedOn(session.row.session)
   const owner = ownerOf(session)
   const addingTo: AddingTo | undefined = session.row.folder && !thread.archived && !session.quietSince ? { thread: thread.id, folder: session.row.folder, owner, where: session.where === CLOUD_WHERE ? "Cloud" : session.where } : undefined
-  const opened = child ? childSession(session, child.agent) : undefined
+  const opened = child ? child.own ?? childSession(session, child.agent) : undefined
   const openChild = (agent: NativeAgent) => {
-    if (agent.child?.conversation) setChild({ apex: thread.id, agent })
+    if (!agent.child?.conversation) return
+    // A Fin placed on another device: its own row, written by that device, is what opens, and that device answers.
+    const own = placedSessionOf(agent)
+    setChild({ apex: thread.id, agent, ...(own && { own }) })
   }
   if (child && opened)
     return (
@@ -320,6 +323,9 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
   const [busy, setBusy] = useState<string | undefined>(undefined)
   const [asking, setAsking] = useState<MoveWay | undefined>(undefined)
   const [continuing, setContinuing] = useState(false)
+  // The person allowed its agent's ask to come back: the sheet that picks the Mac, as the menu's Bring it back opens.
+  const backAsked = useBringBackAsked((state) => state.conversation === session.row.conversation)
+  const way = backAsked ? "device" : asking
   const choice = useContinueChoice(session.quietSince ? session : undefined)
   const offered = choice?.offer && cloudOn(client.account.entitlements) && !moving ? choice : undefined
   const onMac = session.owner.kind === "device" && !session.quietSince ? session.owner : undefined
@@ -333,8 +339,8 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
   })
   const working = liveWorking || session.row.state === "working"
   const move = (mac: MoveMac) => {
-    const way = asking
     setAsking(undefined)
+    askBringBack(undefined)
     if (way) void startMove(client, { thread, conversation: session.row.conversation, way, mac, handOff: working })
   }
   if (busy)
@@ -407,7 +413,17 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
           </MenuItem>
         </MenuContent>
       </Menu>
-      <MoveSheet open={asking !== undefined} way={asking ?? "cloud"} working={working} from={onMac ? { deviceId: onMac.deviceId, name: session.where } : undefined} onDismiss={() => setAsking(undefined)} onMove={move} />
+      <MoveSheet
+        open={way !== undefined}
+        way={way ?? "cloud"}
+        working={working}
+        from={onMac ? { deviceId: onMac.deviceId, name: session.where } : undefined}
+        onDismiss={() => {
+          setAsking(undefined)
+          askBringBack(undefined)
+        }}
+        onMove={move}
+      />
       {offered ? (
         <ContinueSheet
           open={continuing}

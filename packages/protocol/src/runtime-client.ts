@@ -62,7 +62,7 @@ export type RuntimeOptions = {
    */
   watch?: (conversations: readonly string[], after?: Readonly<Record<string, number>>, forms?: Readonly<Record<string, LiveForm>>) => void
   /**
-   * What this device lends (version 23 on, `borrow.ts`): what it's asked as a source, and the leases it serves as
+   * What this device lends (version 24 on, `borrow.ts`): what it's asked as a source, and the leases it serves as
    * they're issued and end. Without it, those frames are dropped.
    */
   lending?: {
@@ -108,12 +108,12 @@ export type ServedRuntime = {
    */
   goingQuiet(reason: GoingQuietReason): boolean
   /**
-   * Says what this device can serve and its room (`advertise`, version 22 on). False on an older gateway, which routes
+   * Says what this device can serve and its room (`advertise`, version 23 on). False on an older gateway, which routes
    * nothing to it by capability, or on a closed link. Not kept: each new link is told again.
    */
   advertise(advertisement: Advertisement): boolean
   /**
-   * Says a session this device serves is alive, with its progress when that changed (`lease-beat`, version 23 on).
+   * Says a session this device serves is alive, with its progress when that changed (`lease-beat`, version 24 on).
    * False on an older gateway, which lends nothing through this device, or on a closed link.
    */
   beat(lease: string, progress?: Progress, streams?: Stream[]): boolean

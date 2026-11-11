@@ -31,7 +31,9 @@
     "./gateway-http": "./dist/gateway-http.js",
     "./conformance": "./dist/conformance.js",
     "./attribution-conformance": "./dist/attribution-conformance.js",
-    "./borrow-conformance": "./dist/borrow-conformance.js"
+    "./borrow-conformance": "./dist/borrow-conformance.js",
+    "./handoff-project": "./dist/handoff-project.js",
+    "./source-project": "./dist/source-project.js"
   },
   "files": [
     "dist"

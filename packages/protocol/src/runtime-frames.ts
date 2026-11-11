@@ -142,7 +142,7 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
    */
   z.object({ type: z.literal("going-quiet"), reason: z.enum(["sleep", "quit", "sign-out"]) }).strict(),
   /**
-   * What a device's runtime can serve, as it probed it, and its room (version 22 on, `borrow.ts`): sent on enrolment,
+   * What a device's runtime can serve, as it probed it, and its room (version 23 on, `borrow.ts`): sent on enrolment,
    * on each change, and hourly. `slots.used` is its own work (its Fins); the account's broker counts what it lends.
    * `load` says the room in the person's words ("14 cores, 36 GB"). Capabilities are names and versions, never a value.
    */
@@ -156,7 +156,7 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   /**
-   * A session this device serves under a lease is alive (version 23 on, `borrow.ts`'s `heartbeat`), with how far it
+   * A session this device serves under a lease is alive (version 24 on, `borrow.ts`'s `heartbeat`), with how far it
    * is when that changed (`progress`), and the streams it serves when they changed (`streams`). The gateway takes it only
    * from the lease's own device. Missed beats end the lease.
    */
@@ -308,13 +308,13 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
    */
   z.object({ type: z.literal("borrow"), threadId: ThreadIdSchema, seq: SeqSchema, push: BorrowPushSchema }).strict(),
   /**
-   * What this device is asked as a source (version 23 on, `borrow.ts`'s `SourceAsk`): it answers on the account's
+   * What this device is asked as a source (version 24 on, `borrow.ts`'s `SourceAsk`): it answers on the account's
    * routes, by itself or after its person. Said as the broker asks, and again on enrolment for any still waiting.
    */
   z.object({ type: z.literal("source-ask"), ask: SourceAskSchema }).strict(),
-  /** A lease this device serves was issued (version 23 on): its session starts here, and it holds one of the device's slots. */
+  /** A lease this device serves was issued (version 24 on): its session starts here, and it holds one of the device's slots. */
   z.object({ type: z.literal("lent"), lease: LeaseSchema }).strict(),
-  /** A lease this device serves ended, and why (version 23 on): it stops the operation and frees its slot. */
+  /** A lease this device serves ended, and why (version 24 on): it stops the operation and frees its slot. */
   z.object({ type: z.literal("lent-ended"), lease: z.string().min(1).max(128), why: z.enum(LEASE_ENDS) }).strict(),
 ])
 

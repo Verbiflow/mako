@@ -4,7 +4,7 @@ import { z } from "zod"
 import { getMako } from "@/lib/bridge"
 import type { LiveAction, LiveActionInput } from "@/lib/types"
 import { actionRetainsInput } from "@mako/host/contracts/operation-recovery"
-import { applyLiveSnapshot } from "./live-recovery"
+import { readLive } from "./live-recovery"
 
 // Older desktop preloads still route every action through live-action. Read
 // their exact pre-dispatch rejection until those clients have been retired.
@@ -53,10 +53,8 @@ export async function performLiveAction(
     if (result.state.kind === "uncertain" || result.state.kind === "failed") toast.error(result.state.reason)
     return actionRetainsInput(result)
   } catch (error) {
-    const snapshot = await readLiveSnapshot(id)
-      .catch(() => null)
+    const snapshot = await readLive(id, () => readLiveSnapshot(id).catch(() => null))
     if (snapshot) {
-      applyLiveSnapshot(snapshot)
       const receipt = snapshot.control?.actions?.find(
         (action) => action.input.id === input.id
       )
@@ -76,8 +74,7 @@ export async function acknowledgeLiveAction(
 ): Promise<void> {
   try {
     await getMako().liveAcknowledgeAction(id, actionId)
-    const snapshot = await readLiveSnapshot(id)
-    if (snapshot) applyLiveSnapshot(snapshot)
+    await readLive(id, () => readLiveSnapshot(id))
   } catch (error) {
     toast.error(error instanceof Error ? error.message : String(error))
   }

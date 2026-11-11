@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { hostSpawn } from "../base/host-command.js"
 import { createHash } from "node:crypto"
 import { lstat, mkdir, readFile, readlink, rm, stat, symlink, utimes } from "node:fs/promises"
 import { dirname, isAbsolute, join, normalize, sep } from "node:path"
@@ -6,6 +6,7 @@ import { z } from "zod"
 import type { CloudSignIn, CloudSignInChain } from "../contracts/cloud-sign-ins.js"
 import type { JsonValue } from "../contracts/json.js"
 import { publishFile } from "../base/published-files.js"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /** A harness's sign-in as its adapter reads it for the cloud: everything but which harness it is. */
 export type CloudSignInExport = Omit<CloudSignIn, "harness">
@@ -131,7 +132,7 @@ print "held
 
 export async function withFlock<T>(path: string, work: () => Promise<T>, waitMs = 2_000): Promise<T | undefined> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-  const holder = spawn("/usr/bin/perl", ["-e", FLOCK_HOLDER, path, String(waitMs / 1000)], { stdio: ["pipe", "pipe", "ignore"] })
+  const holder = hostSpawn("/usr/bin/perl", ["-e", FLOCK_HOLDER, path, String(waitMs / 1000)], { stdio: ["pipe", "pipe", "ignore"] })
   const held = await new Promise<boolean>((resolve) => {
     holder.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString().startsWith("held")))
     holder.once("exit", () => resolve(false))
@@ -145,7 +146,7 @@ export async function withFlock<T>(path: string, work: () => Promise<T>, waitMs 
     if (!held) return undefined
     return await work()
   } finally {
-    holder.stdin.end()
+    endChildInput(holder)
     await released
   }
 }

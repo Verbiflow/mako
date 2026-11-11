@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "./host-command.js"
 import { readdir, readFile, readlink } from "node:fs/promises"
-import { promisify } from "node:util"
 import { onLinux, onMac } from "./platform.js"
 
-const run = promisify(execFile)
+const run = hostCommand
 
 /** A process whose environment names a value, as `markedProcesses` finds it. */
 export interface MarkedProcess {

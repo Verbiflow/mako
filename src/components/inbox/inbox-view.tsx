@@ -1,3 +1,4 @@
+import { approvalWords } from "@mako/host/contracts/children"
 import { memo, useEffect, useRef, useState } from "react"
 import { CheckIcon, ChevronRightIcon, XIcon } from "lucide-react"
 import { childStateOf } from "@mako/host/contracts/children"
@@ -10,7 +11,7 @@ import { harnessLabel } from "@/components/rail/harness-meta"
 import { formatRelative } from "@/lib/format"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { acpStore } from "@/state/acp-state"
+import { agentAskCard } from "@/state/agent-asks"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
 import { ASK_TOUCH, runChoice, type AskCard as AskWords } from "@/lib/ask-card"
 import { setupAskCard } from "@/state/setup"
@@ -27,7 +28,6 @@ import {
   type InboxModel,
   type ReadInboxItem,
 } from "@/state/inbox"
-import { threadsStore } from "@/state/thread-store"
 
 function sameModel(left: InboxModel, right: InboxModel): boolean {
   return sameItems(left.asks, right.asks) && sameItems(left.toRead, right.toRead)
@@ -41,25 +41,6 @@ function useMinute(): number {
     return () => window.clearInterval(timer)
   }, [])
   return now
-}
-
-/** Leaves when the person opens something else: a row, a tab, a new Thread. */
-function useCloseOnNavigate(open: boolean) {
-  useEffect(() => {
-    if (!open) return
-    const where = () => [acpStore.get().activeKey, threadsStore.get().viewing?.ref.path ?? threadsStore.get().opening?.ref.path] as const
-    const at = where()
-    const check = () => {
-      const now = where()
-      if (now[0] !== at[0] || now[1] !== at[1]) inboxView.close()
-    }
-    const offAcp = acpStore.subscribe(check)
-    const offThreads = threadsStore.subscribe(check)
-    return () => {
-      offAcp()
-      offThreads()
-    }
-  }, [open])
 }
 
 function summary(model: InboxModel): string {
@@ -79,7 +60,6 @@ function summary(model: InboxModel): string {
  */
 export function InboxView() {
   const open = useInboxView((state) => state.open)
-  useCloseOnNavigate(open)
   useEffect(() => {
     if (!open) return
     const onKey = (event: KeyboardEvent) => {
@@ -148,7 +128,7 @@ function InboxPane() {
 function Crumb({ item }: { item: InboxAsk }) {
   const apex = item.kind === "fin" || item.kind === "approval" ? item.apex : undefined
   return (
-    <span className="flex min-w-0 flex-1 items-center gap-1.5 text-label text-faint">
+    <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-label text-faint">
       {apex ? (
         <>
           <ApexMark className="size-3 shrink-0" />
@@ -156,7 +136,7 @@ function Crumb({ item }: { item: InboxAsk }) {
           <ChevronRightIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         </>
       ) : null}
-      <span className="min-w-0 shrink-[0.5] truncate font-medium text-foreground/90">{item.title}</span>
+      <span className="min-w-0 flex-1 truncate font-medium text-foreground/90">{item.title}</span>
       <span aria-hidden className="shrink-0 opacity-60">·</span>
       {item.harness ? <span className="shrink-0">{harnessLabel(item.harness)}</span> : null}
     </span>
@@ -222,6 +202,8 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
           <FinAnswers item={item} sending={sending} send={(answer) => settle(answerFin(item.apex.conversation, item.ask, answer))} />
         ) : item.kind === "approval" && item.answerable ? (
           <ApprovalAnswers item={item} sending={sending} send={(option) => settle(answerApproval(item, option))} />
+        ) : item.kind === "agent-ask" ? (
+          <AskChoices card={agentAskCard(item.conversation, item.ask, harnessLabel(item.harness))} sending={sending} setSending={setSending} />
         ) : item.kind === "setup" ? (
           <AskChoices card={setupAskCard(item.folder, item.ask, item.away)} sending={sending} setSending={setSending} />
         ) : null}
@@ -255,11 +237,11 @@ function FinAnswers({ item, sending, send }: { item: FinInboxItem; sending: bool
       <>
         <button type="button" data-inbox-answer="allow" disabled={sending} onClick={() => send({ allow: true })} className={cn(BUTTON, PRIMARY)}>
           <CheckIcon className="size-3" />
-          Allow once
+          {approvalWords(item.ask.ask).allow}
         </button>
         <button type="button" data-inbox-answer="refuse" disabled={sending} onClick={() => send({ allow: false })} className={cn(BUTTON, QUIET)}>
           <XIcon className="size-3" />
-          Refuse
+          {approvalWords(item.ask.ask).refuse}
         </button>
       </>
     )

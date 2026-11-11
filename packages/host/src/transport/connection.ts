@@ -1,7 +1,7 @@
 import { request } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import { LineAssembler } from "@mako/sessions/daemon-wire"
-import { WHOLE_LIVE_FORM, type LiveForm } from "@mako/protocol/live-form"
+import { WHOLE_LIVE_FORM, type WindowLiveForm } from "@mako/protocol/live-form"
 import { CORRELATION_HEADER, LIVE_FORM_HEADER, RuntimeEventHeadSchema, RuntimeFailureSchema, RuntimeInfoSchema, RuntimeReadySchema, encodeRuntimeCall, runtimeFailureError, type RuntimeFailure, type RuntimePacket, type RuntimeValue } from "../contracts/runtime.js"
 import { decodeRuntimeValue, runtimeSuccessValue, splitRuntimeEventLine, type EncodedValue } from "../contracts/runtime-value.js"
 import { HostCallTimeoutError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
@@ -293,7 +293,7 @@ export type RuntimeStreamEnd = { why: string; livedMs: number; heardBytes: numbe
  * `heard`: called for every chunk the stream carries, the host's 15-second heartbeat too. `live`: the live form its
  * reader reads (`@mako/protocol/live-form`); a batch in the compact one is read by `expandLiveBatch`. Form 1 when unsaid.
  */
-export function subscribeRuntime(socket: string, client: string, receive: (packet: RuntimePacket) => void, disconnected: (end: RuntimeStreamEnd) => void, options: { observer?: boolean; history?: boolean; eventLimit?: number; heard?: () => void; live?: LiveForm } = {}) {
+export function subscribeRuntime(socket: string, client: string, receive: (packet: RuntimePacket) => void, disconnected: (end: RuntimeStreamEnd) => void, options: { observer?: boolean; history?: boolean; eventLimit?: number; heard?: () => void; live?: WindowLiveForm } = {}) {
   let closed = false
   let ended = false
   const openedAt = Date.now()

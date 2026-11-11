@@ -1,6 +1,7 @@
 import type { SessionSettings } from "@mako/sessions/settings"
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
+import { AgentAskGate } from "@mako/host/conversations/agent-ask-gate"
 import { mock } from "node:test"
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -326,6 +327,66 @@ async function resumesAfterQuitInFirstTurn() {
     assert.deepEqual(starts.at(-1), { resume: "native-unlocated", modeId: "plan" }, "the follow-up resumes the same native session in the chosen mode")
     assert.equal(owner.snapshot(id)?.control?.bindings.find((binding) => binding.id === owner.snapshot(id)?.control?.activeBindingId)?.path, nativePath)
     console.log("PASS: a session the host quit inside its first turn resumes after a restart, in the mode chosen meanwhile")
+  } finally {
+    await owner.stop()
+    memory.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/** What its agent asks through Mako's tools is the conversation's: it says on its row, outlives the host and goes once answered. */
+async function agentAsksOutliveTheHost() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-agent-asks-"))
+  const id = randomUUID()
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume(),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => ({
+      id: options.conversationId, nativeId: `fresh-${options.conversationId}`, nativePath: join(root, "native-session"),
+      harness: "test-provider", cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [],
+    }),
+    prompt: async () => {},
+    permission: async () => {},
+    cancel: async () => {},
+    close: async () => {},
+    setMode: async () => {},
+  }
+  const dependencies = (memory: SessionMemory): ConstructorParameters<typeof LiveConversations>[0] => ({
+    appPath: root, root: join(root, "journals"), driver: () => driver, history: async () => null, emit: () => {}, memory,
+    resumeVerdict: async () => ({ kind: "unavailable", reason: "This test never resumes." }),
+    workspaceSnapshots: new WorkspaceSnapshots(gitRunner, join(root, "workspace-snapshots")),
+  })
+  const firstMemory = new SessionMemory(join(root, "memory.sqlite"), { pid: 11_301, startedAt: Date.now(), label: "the host that quits" }, { alive: () => true })
+  const first = new LiveConversations(dependencies(firstMemory))
+  await first.start("test-provider", root, { conversationId: id })
+  const ask = { id: randomUUID(), at: Date.now(), want: { kind: "move" as const, move: randomUUID(), handsOff: true } }
+  first.asks.raise(id, ask)
+  first.asks.raise(id, ask)
+  assert.deepEqual(first.snapshot(id)?.control?.asks, [ask], "raised once")
+  assert.deepEqual(first.askWaiting(id), { for: "needs-you", line: "Wants to move this Thread to the cloud" })
+  assert.deepEqual(first.waitingOn(id), first.askWaiting(id), "its row says so")
+  const gate = new AgentAskGate(first.asks)
+  let attempts = 0
+  gate.runs.move = () => { attempts += 1; throw new Error("The cloud refused the action") }
+  await assert.rejects(gate.answer(id, ask.id, true), /cloud refused/)
+  assert.deepEqual(first.asks.open(id), [ask], "an action failure leaves the exact durable ask in place")
+  await first.stop()
+  firstMemory.close()
+  const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: 11_302, startedAt: Date.now(), label: "the restarted host" }, { alive: () => true })
+  const owner = new LiveConversations(dependencies(memory))
+  try {
+    assert.deepEqual(owner.asks.open(id), [ask], "a restart keeps it")
+    const recovered = new AgentAskGate(owner.asks)
+    recovered.runs.move = () => { attempts += 1 }
+    await recovered.answer(id, ask.id, true)
+    await recovered.answer(id, ask.id, true)
+    assert.equal(attempts, 2, "the same choice retries once after recovery, then stays settled")
+    assert.equal(owner.asks.settle(id, ask.id), undefined, "a repeat of an answer finds nothing")
+    assert.equal(owner.snapshot(id)?.control?.asks, undefined)
+    assert.equal(owner.askWaiting(id), undefined)
+    console.log("PASS: an agent's ask lives in its conversation, through a restart, until it's answered")
   } finally {
     await owner.stop()
     memory.close()
@@ -2884,6 +2945,7 @@ await closeBeforeNativeSpawn()
 await durabilityAndBatching()
 await unhandedMessageWaitsAfterCrash()
 await unhandedMessageWaitsAfterQuit()
+await agentAsksOutliveTheHost()
 await resumedHibernatesBeforeATurn()
 await hibernatesAndWakesExactlyOnce()
 await hibernatesAndWakesExactlyOnce(true)

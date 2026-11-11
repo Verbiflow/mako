@@ -1,8 +1,7 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { appendFile, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import {
   DEGRADED_LAG_MS, DEGRADED_MEMORY_BYTES, DEGRADED_SILENCE_MS, EPISODE_GAP_MS, LAG_BEATS, LAG_BEATS_NEEDED, MEMORY_READINGS_NEEDED, SAMPLE_EVERY_MS, SETTLE_MS, WORSE_BY,
@@ -12,7 +11,7 @@ import type { MethodTable } from "../base/methods.js"
 import type { DaemonRestarts, FileHistory } from "./watch-backend.js"
 import type { DeliveryListener } from "./watch-readings.js"
 
-const execute = promisify(execFile)
+const execute = hostCommand
 
 const DAY_MS = 24 * 3_600_000
 /** Samples the file keeps: a week. */

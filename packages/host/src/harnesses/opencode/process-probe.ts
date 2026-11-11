@@ -1,3 +1,4 @@
+import { hostFetch } from "../../base/host-stopping.js"
 import { probeOpenFiles, type OpenFilesResult } from "../open-files-probe.js"
 import { processIdentityMatches } from "../../base/process-liveness.js"
 import { open, readdir, realpath } from "node:fs/promises"
@@ -61,7 +62,7 @@ async function routeText(
   headers: Headers,
   signal: AbortSignal
 ): Promise<string | undefined> {
-  const response = await fetch(url, { headers, signal, redirect: "error" })
+  const response = await hostFetch(url, { headers, signal, redirect: "error" })
   if (response.status === 404) {
     await response.body?.cancel()
     return undefined

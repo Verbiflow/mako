@@ -81,7 +81,7 @@ const recordPath = (name: string) => join(vault, "mako-sign-in", ...`${name}.jso
 type FakeDevice = CloudDevice & { credential: string; removed: boolean; successor?: string | undefined; retired: string[] }
 
 /** The gateway's identity API, in memory. */
-async function fakeCloud() {
+async function fakeCloud({ runtimeEnrolled }: { runtimeEnrolled?: Promise<void> } = {}) {
   const codes = new Map<string, { challenge: string; device: Pick<CloudDevice, "name" | "platform" | "appVersion"> }>()
   const devices = new Map<string, FakeDevice>()
   /** Every live socket: whose device, and whether it's the account's connection or the device's runtime's link. */
@@ -323,7 +323,10 @@ async function fakeCloud() {
         link.close()
       })
       void (async () => {
-        for await (const frame of link.frames()) if (ws.readyState === ws.OPEN) ws.send(encodeGatewayFrame(frame))
+        for await (const frame of link.frames()) {
+          if (frame.type === "enrolled" && runtimeEnrolled) await runtimeEnrolled
+          if (ws.readyState === ws.OPEN) ws.send(encodeGatewayFrame(frame))
+        }
         if (ws.readyState === ws.OPEN) ws.close(1000)
       })()
     })
@@ -1192,9 +1195,17 @@ test("a device removed while its runtime is connected signs out, and its runtime
 })
 
 test("a Mac going to sleep says so on its runtime's link first, which stays closed until the wake; shutting down, quitting and signing out say it too", async () => {
-  const cloud = await fakeCloud()
-  const mac = await signedIn(cloud, { runtime: laptop })
+  // Receiving enroll at the gateway is not the host having received enrolled.
+  // Hold that answer to prove the test waits for the host's own readiness.
+  const enrolled = Promise.withResolvers<void>()
+  after(() => enrolled.resolve())
+  const cloud = await fakeCloud({ runtimeEnrolled: enrolled.promise })
+  let linked = 0
+  const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { linked += 1 } })
   while (cloud.enrolments.length === 0) await sleep(10)
+  assert.equal(linked, 0, "the gateway's answer has not reached the host")
+  enrolled.resolve()
+  await waitFor(() => linked === 1, "this Mac's runtime finished enrollment")
   mac.accounts.leaving("sleep")
   await waitFor(() => cloud.runtimes().length === 0, "the runtime's link closed at once")
   assert.deepEqual(cloud.quiets, ["sleep"], "said before it closed, so the cloud takes the device as quiet now")
@@ -1203,20 +1214,19 @@ test("a Mac going to sleep says so on its runtime's link first, which stays clos
   assert.equal(cloud.enrolments.length, 1, "not opened again before the wake")
   assert.ok(connected(mac.accounts.account().state), "and nothing shown for it")
   mac.accounts.wake()
-  await waitFor(() => cloud.enrolments.length === 2 && cloud.runtimes().length === 1, "back at the wake")
+  await waitFor(() => linked === 2 && cloud.enrolments.length === 2 && cloud.runtimes().length === 1, "back at the wake")
 
   mac.accounts.leaving("quit")
   await waitFor(() => cloud.runtimes().length === 0, "shutting down")
   mac.accounts.wake()
-  await waitFor(() => cloud.enrolments.length === 3 && cloud.runtimes().length === 1, "back")
-  await sleep(50)
+  await waitFor(() => linked === 3 && cloud.enrolments.length === 3 && cloud.runtimes().length === 1, "back")
   await mac.accounts.signOut()
   await waitFor(() => cloud.quiets.length === 3, "signing out")
   assert.deepEqual(cloud.quiets, ["sleep", "quit", "sign-out"])
 
-  const other = await signedIn(cloud, { runtime: laptop })
-  await waitFor(() => cloud.runtimes().length === 1, "the other Mac's runtime")
-  await sleep(50)
+  let otherLinked = 0
+  const other = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { otherLinked += 1 } })
+  await waitFor(() => otherLinked === 1 && cloud.runtimes().length === 1, "the other Mac's runtime")
   other.accounts.close()
   await waitFor(() => cloud.quiets.length === 4, "quitting Mako")
   assert.equal(cloud.quiets.at(-1), "quit")
@@ -1228,14 +1238,14 @@ test("a Mac on a gateway older than the frame closes its runtime's link for the 
     serve: (link, { runtimeId, credential, threads }) =>
       serveRuntime(link, { runtimeId, build: "test", credential, threads, versions: { min: 1, max: QUIET_VERSION - 1 }, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true }) }),
   }
-  const mac = await signedIn(cloud, { runtime: older })
-  while (cloud.enrolments.length === 0) await sleep(10)
-  await sleep(50)
+  let linked = 0
+  const mac = await signedIn(cloud, { runtime: older, onRuntimeLinked: () => { linked += 1 } })
+  await waitFor(() => linked === 1, "the older gateway's runtime finished enrollment")
   mac.accounts.leaving("sleep")
   await waitFor(() => cloud.runtimes().length === 0, "closed cleanly, which any gateway hears")
   assert.deepEqual(cloud.quiets, [], "no frame it doesn't know")
   mac.accounts.wake()
-  await waitFor(() => cloud.enrolments.length === 2, "back at the wake")
+  await waitFor(() => linked === 2 && cloud.enrolments.length === 2, "back at the wake")
 })
 
 /** Another device's call to `runtimeId` through its session, as that device. */

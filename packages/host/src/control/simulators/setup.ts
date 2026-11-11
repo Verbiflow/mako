@@ -1,4 +1,5 @@
-import { execFile, spawn } from "node:child_process"
+import { hostSpawn } from "../../base/host-command.js"
+import { hostExecFile } from "../../base/host-command.js"
 import { mkdir, readdir, readFile, stat, statfs, writeFile } from "node:fs/promises"
 import { arch, homedir } from "node:os"
 import { dirname, join } from "node:path"
@@ -28,7 +29,7 @@ export type Run = (file: string, args: readonly string[], options?: { env?: Node
 
 export const runCommand: Run = (file, args, options = {}) =>
   new Promise((resolve) => {
-    execFile(file, [...args], { env: options.env ?? process.env, timeout: options.timeoutMs ?? 15_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    hostExecFile(file, [...args], { env: options.env ?? process.env, timeout: options.timeoutMs ?? 15_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       const code = error ? (Number.isInteger(error.code) ? Number(error.code) : null) : 0
       resolve({ code, stdout: String(stdout), stderr: error && !stderr && code === null ? error.message : String(stderr) })
     })
@@ -361,7 +362,7 @@ export class SimulatorSetupFollower {
     let said = 0
     let last = ""
     const code = await new Promise<number | null>((resolve, reject) => {
-      const child = spawn(join(developer, "usr", "bin", "xcodebuild"), ["-downloadPlatform", "iOS"], { env: { ...process.env, DEVELOPER_DIR: developer }, stdio: ["ignore", "pipe", "pipe"] })
+      const child = hostSpawn(join(developer, "usr", "bin", "xcodebuild"), ["-downloadPlatform", "iOS"], { env: { ...process.env, DEVELOPER_DIR: developer }, stdio: ["ignore", "pipe", "pipe"] })
       const heard = (chunk: Buffer) => {
         // It redraws one line with carriage returns and terminal codes.
         for (const raw of stripVTControlCharacters(chunk.toString("utf8")).split(/[\r\n]+/)) {

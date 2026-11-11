@@ -230,7 +230,7 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
           : undefined
       }
       hasEarlier={!scope && thread.hasEarlier}
-      loadingEarlier={thread.loadingEarlier}
+      loadingEarlier={Boolean(thread.loadingEarlier)}
       onLoadEarlier={() => threads.loadEarlier()}
       empty={
         <p className="pt-12 text-center text-ui text-faint">

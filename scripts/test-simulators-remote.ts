@@ -32,7 +32,11 @@ import { hostCallSchema } from "@mako/host/contracts/host-call-inputs"
 import { HostMethods } from "@mako/host/transport/methods"
 import { declareAgentMethods } from "@mako/host/conversations/agent-tools"
 import { declareThreadMoveMethods } from "@mako/host/conversations/thread-move-tool"
-import type { AgentOperations } from "@mako/host/contracts/agent-tools"
+import { declareThreadActMethods } from "@mako/host/conversations/thread-act-tool"
+import { declareSettingsMethods } from "@mako/host/conversations/settings-tool"
+import { declareAutomationToolMethods } from "@mako/host/conversations/automation-tool"
+import { declareHarnessToolMethods } from "@mako/host/conversations/harness-tool"
+import type { AgentOperations, PlacementOperations } from "@mako/host/contracts/agent-tools"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-simulators-remote-"))
 after(() => rm(scratch, { recursive: true, force: true }))
@@ -427,7 +431,7 @@ test("a machine runtime is never the person at any door that names its caller: a
   const engine = new Proxy({}, { get: (_target, verb: string) => async () => (heard.push(verb), { refused: "unknown-thread", why: "heard" }) })
   const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
   // SAFETY: every verb the declared methods call is a function on the proxy, answering as a refusal does.
-  declareAgentMethods(methods, () => engine as AgentOperations)
+  declareAgentMethods(methods, () => engine as AgentOperations & PlacementOperations)
   declareThreadMoveMethods(methods, () => ({ move: async () => (heard.push("threads-move"), { refused: "no-thread", why: "heard" }), asks: () => [], answer: () => {} }))
   const call = async (channel: string, args: unknown[], client: string) => decodeRuntimeValue(await methods.invoke(channel, args, client))
   const person = { kind: "person" }
@@ -442,5 +446,34 @@ test("a machine runtime is never the person at any door that names its caller: a
   await call("mako:agents-list", [{ kind: "agent", session: "s-1" }, {}], machine)
   await call("mako:threads-move", [person, { to: "cloud", clientKey: "k" }], "gateway:desktop:d-1")
   assert.deepEqual(heard, ["list", "list", "threads-move"], "the person's own device, and a machine as its agent, are heard")
+  await methods.close()
+})
+
+test("a machine runtime is never the person at main's later doors either: agents_settle, threads, settings, automations, harnesses", async () => {
+  const heard: string[] = []
+  const engine = new Proxy({}, { get: (_target, verb: string) => async () => (heard.push(verb), { refused: "unknown-thread", why: "heard" }) })
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
+  // SAFETY: every verb the declared methods call is a function on the proxy, answering as a refusal does.
+  declareAgentMethods(methods, () => engine as AgentOperations & PlacementOperations)
+  declareThreadActMethods(methods, () => ({ act: async () => (heard.push("threads-act"), { refused: "failed", why: "heard" }) }))
+  declareSettingsMethods(methods, () => ({ call: async () => (heard.push("settings-act"), { refused: "failed", why: "heard" }) }))
+  declareAutomationToolMethods(methods, () => ({ act: async () => (heard.push("automations-act"), { refused: "failed", why: "heard" }) }))
+  declareHarnessToolMethods(methods, () => ({ act: async () => (heard.push("harnesses-act"), { refused: "failed", why: "heard" }) }))
+  const call = async (channel: string, args: unknown[], client: string) => decodeRuntimeValue(await methods.invoke(channel, args, client))
+  const person = { kind: "person" }
+  const doors = [
+    ["mako:agents-settle", { to: "fin", report: "r-1", version: 1, target: { ref: "pr", version: "v1" }, disposition: { kind: "reclaim", reason: "test" }, clientKey: "k" }],
+    ["mako:threads-act", { action: "archive", clientKey: "k" }],
+    ["mako:settings-act", { action: "read", clientKey: "k" }],
+    ["mako:automations-act", { action: "list", clientKey: "k" }],
+    ["mako:harnesses-act", { action: "read", clientKey: "k" }],
+  ] as const
+  for (const [channel, input] of doors) {
+    const refusal = Refused.safeParse(await call(channel, [person, input], "gateway:runtime:m-1.g1"))
+    assert.ok(refusal.success && refusal.data.why !== "heard", `${channel}: a machine's person claim is refused before the tool hears it`)
+  }
+  assert.deepEqual(heard, [])
+  for (const [channel, input] of doors) await call(channel, [person, input], "gateway:desktop:d-1")
+  assert.deepEqual(heard, ["settle", "threads-act", "settings-act", "automations-act", "harnesses-act"], "the person's own device is heard at each")
   await methods.close()
 })

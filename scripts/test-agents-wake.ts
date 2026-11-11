@@ -38,8 +38,12 @@ function world(name: string, script: Script): AgentsWorld {
   return new AgentsWorld({ root: join(root, name), script })
 }
 
+function spoken(text: string): string {
+  return text.replace(/^<mako-local-control>[\s\S]*?<\/mako-local-control>\n\n/, "")
+}
+
 function wakesOf(w: AgentsWorld, conversation: string) {
-  return w.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.startsWith(FROM_AGENTS))
+  return w.prompts.filter((prompt) => prompt.conversation === conversation && spoken(prompt.text).startsWith(FROM_AGENTS)).map((prompt) => ({ ...prompt, text: spoken(prompt.text) }))
 }
 
 function started(answer: AgentsStartResult | undefined): AgentsStarted {
@@ -188,7 +192,7 @@ function waitingApex(input: Omit<AgentsStartInput, "cwd" | "clientKey"> & { clie
       await after?.(turn)
       return "Noted."
     }
-    if (turn.text.startsWith(FROM_AGENTS)) return "Going on."
+    if (spoken(turn.text).startsWith(FROM_AGENTS)) return "Going on."
     return child(turn)
   }
   return { answers, script }
@@ -314,7 +318,7 @@ async function refusedSteer(): Promise<void> {
       await turn.world.hold(turn.conversation)
       return "Noted."
     }
-    if (turn.text.startsWith(FROM_AGENTS)) return "Going on."
+    if (spoken(turn.text).startsWith(FROM_AGENTS)) return "Going on."
     child = turn.conversation
     return "Lint is clean."
   } })

@@ -1,3 +1,5 @@
+import { SOURCE_PROJECT_PATH, SourceProjectReceiptSchema, type SourceProjectCommand } from "@mako/protocol/source-project"
+import { stoppingSignal } from "../base/host-stopping.js"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -312,6 +314,8 @@ export type CloudAccountOptions = {
    * stream, with nothing to say when that's all of it, so what must know the list as it stands reads it whole.
    */
   onAccountLinked?: () => void
+  /** This device's runtime is enrolled on a new link: from now its account's other devices' calls reach it again. */
+  onRuntimeLinked?: () => void
 }
 
 export class CloudAccountError extends Error {
@@ -531,7 +535,7 @@ export class CloudAccounts {
       show(shown)
       let interval = grant.interval ?? SLOW_DOWN_SECONDS
       for (;;) {
-        await delay(interval * 1000, undefined, { signal })
+        await delay(interval * 1000, undefined, { signal: stoppingSignal(signal) })
         if (Date.now() >= deadline) return this.#joinEnded({ kind: "timed-out", message: "The code expired before it was confirmed. Join again for a new one." })
         const polled = await this.#fetch("devices.code-token", new URL("/oauth/token", cloud), {
           method: "POST",
@@ -1324,6 +1328,11 @@ export class CloudAccounts {
    * ends for an expired token opens again on the next call; one ended because this device was removed signs it out.
    * Signing out closes every session.
    */
+  /** Internal selected-project publication only; not exposed as a model/UI move action. */
+  async sourceProjectControl(input: SourceProjectCommand) {
+    return SourceProjectReceiptSchema.parse(await (await this.#call("source-project.control", "POST", SOURCE_PROJECT_PATH, input)).json())
+  }
+
   session(): ClientSessionOverSockets {
     const cloud = this.#require()
     const session = clientSessionOverSockets(
@@ -1446,7 +1455,7 @@ export class CloudAccounts {
     const trace = this.#traces.follow(correlationId)
     let response: CloudResponse
     try {
-      response = await fetchWith(url, { ...init, headers: { ...init.headers, [CORRELATION_HEADER]: correlationId }, dispatcher: this.#pool })
+      response = await fetchWith(url, { ...init, signal: stoppingSignal(init.signal), headers: { ...init.headers, [CORRELATION_HEADER]: correlationId }, dispatcher: this.#pool })
     } catch (error) {
       // How far it got: whether it ever left this Mac, and on which connection, which the cloud's log can't say.
       report("unreachable", undefined, { error: errorMessage({ error }), reached: trace.describe() })
@@ -1589,6 +1598,7 @@ export class CloudAccounts {
           if (advertisement) started.advertise(advertisement)
           this.#options.lending?.enrolled()
           this.#options.log?.("cloud runtime enrolled", { runtimeId, claims: this.#claims.length })
+          this.#options.onRuntimeLinked?.()
           void started.ended.then((problem) => {
             this.#claims = started.claims()
             if (this.#served?.served === started) this.#served = undefined

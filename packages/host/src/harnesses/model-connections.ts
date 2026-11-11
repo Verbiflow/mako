@@ -1,3 +1,5 @@
+import { stoppingSignal } from "../base/host-stopping.js"
+import { hostFetch } from "../base/host-stopping.js"
 import { randomBytes } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -109,7 +111,7 @@ export async function listConnectionModels(
 ): Promise<{ models: ConnectionModel[]; truncated: boolean }> {
   const headers = new Headers({ Accept: "application/json" })
   if (apiKey) headers.set("Authorization", `Bearer ${apiKey}`)
-  const signal = AbortSignal.timeout(timeoutMs)
+  const signal = stoppingSignal(AbortSignal.timeout(timeoutMs))
   let body: unknown
   try {
     const response = await request(`${baseUrl}/models`, { headers, signal, redirect: "error" })
@@ -178,7 +180,7 @@ export class ModelConnections {
   constructor(path: string, secrets: Secrets, options: ModelConnectionsOptions = {}) {
     this.path = path
     this.secrets = secrets
-    this.request = options.request ?? fetch
+    this.request = options.request ?? hostFetch
     this.harnesses = options.harnesses ?? (() => [])
   }
 

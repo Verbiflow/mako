@@ -38,7 +38,7 @@ import type { Progress } from "./borrow.js"
 import type { Advertisement, GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import { type SshClient, SshIncoming, SshOutgoing, SshRefusedError, type SshStream } from "./ssh.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
+import { COMPACT_LIVE_VERSION, LEND_LINK_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
 import { LINGER_MS, LiveTail, frameFor, logFor, streamNoticeText } from "./live-tail.js"
 import { type LiveForm, WHOLE_LIVE_FORM, readersForm, readsLiveForm } from "./live-form.js"
 import {
@@ -977,7 +977,7 @@ export function createFakeGateway(
     beats: (runtimeId) => beaten.get(runtimeId) ?? [],
     lend: (runtimeId, frame) => {
       const runtime = runtimes.get(runtimeId)
-      if (!runtime || runtime.closed) return false
+      if (!runtime || runtime.closed || (runtime.version ?? 0) < LEND_LINK_VERSION) return false
       runtime.deliver(frame)
       return true
     },

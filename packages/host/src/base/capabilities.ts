@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process"
+import { hostExecFile } from "./host-command.js"
 import { access, readdir, readFile } from "node:fs/promises"
 import { constants } from "node:fs"
 import { homedir } from "node:os"
 import { delimiter, join } from "node:path"
-import { promisify } from "node:util"
 import type { Capability } from "@mako/protocol/borrow"
 import type { SimulatorAvailability, SimulatorSummary } from "../contracts/simulators.js"
 import { nodePlatform } from "./platform.js"
@@ -122,14 +121,13 @@ function compareVersions(left: string, right: string): number {
   return 0
 }
 
-const exec = promisify(execFile)
 
 /** This device's own reads for the probe: commands with a short timeout, the PATH as the host has it. */
 export function deviceProbe(simulators?: () => Promise<SimulatorFacts | undefined>, clis?: CapabilityProbeDeps["clis"]): CapabilityProbeDeps {
   return {
     platform: nodePlatform(),
     arch: process.arch,
-    run: (file, args) => exec(file, [...args], { timeout: 3_000 }).then((out) => out.stdout, () => undefined),
+    run: (file, args) => new Promise((resolve) => void hostExecFile(file, args, { timeout: 3_000 }, (error, stdout) => resolve(error ? undefined : stdout))),
     onPath: (command) => onPath(command),
     ...(simulators && { simulators }),
     ...(clis && { clis }),

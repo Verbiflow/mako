@@ -1,9 +1,9 @@
 import { useState, type ReactNode } from "react"
 import type { CarriedFilesView } from "@mako/host/contracts/cloud-carried-files"
-import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon } from "lucide-react"
+import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon, TriangleAlertIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { backgroundWork } from "@mako/host/contracts/background-work"
+import { conversationWork } from "@/state/acp-state"
 import { Action } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
@@ -82,10 +82,12 @@ function DeviceRunPlace({ name, kind }: { name: string; kind: string | undefined
 function ThreadRunPlace({ thread }: { thread: string }) {
   const live = useAcp((state) => {
     const active = activeLiveAcp(state)
-    return active ? { key: active.key, cwd: active.cwd, elsewhere: Boolean(active.elsewhere), running: active.session.status === "running", background: backgroundWork(active.session, active.nativeAgents) !== null, started: Boolean(active.session.nativeId) } : null
+    return active ? { key: active.key, cwd: active.cwd, elsewhere: Boolean(active.elsewhere), running: active.session.status === "running", background: conversationWork(state, active) !== null, started: Boolean(active.session.nativeId) } : null
   }, shallowEqual)
   const worktree = useWorktrees((state) => state.worktrees.find((entry) => entry.thread === thread)?.path)
-  const moving = useCloudMoves((state) => (live ? Boolean(state.moving[live.key]) : false))
+  const moveStep = useCloudMoves((state) => (live ? state.moving[live.key]?.step.kind : undefined))
+  const moving = moveStep !== undefined
+  const unconfirmed = moveStep === "unsettled"
   const returning = useCloudMoves((state) => (live ? Boolean(state.returning[live.key]) : false))
   const check = useCloudMoves((state) => (live ? state.harnesses[live.key] : undefined))
   const [open, setOpen] = useState(false)
@@ -173,10 +175,10 @@ function ThreadRunPlace({ thread }: { thread: string }) {
       }}
     >
       <PopoverTrigger asChild>
-        <button type="button" data-run-place="local" disabled={moving} aria-label={moving ? "Moving to the cloud" : "Runs on this Mac. Move it to the cloud"} title={moving ? "Moving to the cloud" : "Runs on this Mac"} className={triggerClass}>
-          {moving ? <Spinner className="size-3 shrink-0" /> : <LaptopIcon className="size-3 shrink-0" />}
+        <button type="button" data-run-place="local" disabled={moving} aria-label={unconfirmed ? "Move not confirmed. Check its status above the composer." : moving ? "Moving to the cloud" : "Runs on this Mac. Move it to the cloud"} title={unconfirmed ? "Move not confirmed" : moving ? "Moving to the cloud" : "Runs on this Mac"} className={triggerClass}>
+          {unconfirmed ? <TriangleAlertIcon className="size-3 shrink-0 text-caution" /> : moving ? <Spinner className="size-3 shrink-0" /> : <LaptopIcon className="size-3 shrink-0" />}
           <span data-collapse="1" className="truncate">
-            {moving ? "Moving…" : "Local"}
+            {unconfirmed ? "Move not confirmed" : moving ? "Moving…" : "Local"}
           </span>
         </button>
       </PopoverTrigger>

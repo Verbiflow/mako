@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { randomUUID } from "node:crypto"
 import { constants, existsSync } from "node:fs"
 import { copyFile, cp, link, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import { belowAgents } from "../base/background-priority.js"
 import type { Prepared } from "./thread-processes.js"
@@ -16,7 +15,7 @@ import type { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostWarn } from "../base/host-log.js"
 
-const execute = promisify(execFile)
+const execute = hostCommand
 
 /** Beside a project's checkouts: output clones being made, renamed into place when whole. */
 export const CARRYING = ".carrying"
@@ -231,7 +230,7 @@ export async function cloneTracked(git: Git, repoRoot: string, checkout: string,
     ])
     const here = trackedFiles(held)
     const differs = new Set(changed.split("\0").map((entry) => entry.slice(3)))
-    const same = [...trackedFiles(wanted)].flatMap(([path, file]) => here.get(path) === file && !differs.has(path) && /^100/.test(file) && !path.includes("\n") ? [path] : [])
+    const same = [...trackedFiles(wanted)].flatMap(([path, file]) => here.get(path) === file && !differs.has(path) && file.startsWith("100") && !path.includes("\n") ? [path] : [])
     await Promise.all([...new Set(same.map((path) => dirname(path)))].map((folder) => mkdir(join(checkout, folder), { recursive: true })))
     await cloneFiles(same.map((path) => [join(repoRoot, path), join(checkout, path)]), `${checkout}.clones`, background)
     await git.output(checkout, ["read-tree", commit], background)
