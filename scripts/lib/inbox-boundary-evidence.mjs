@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { literal } from "./page-code.mjs"
 
 const BoundaryEvidence = z.object({
   events: z.array(z.record(z.string(), z.json())).max(128),
@@ -228,7 +229,7 @@ export async function withInboxBoundaryEvidence(evaluate, record, operation, dea
   let primary = { kind: "returned" }
   try {
     await bounded("setup", async ({ deadline: setupDeadline }) => {
-      const lease = JSON.stringify({ id, deadline, setupDeadline })
+      const lease = literal({ id, deadline, setupDeadline })
       const result = await evaluate(`Promise.all([import('/src/state/acp.ts'), import('/src/state/session.ts'), import('/src/state/viewer.ts'), import('/src/state/thread-groups.ts'), import('/src/state/thread-store.ts'), import('/src/state/window-routes.ts'), import('/src/state/tabs.ts'), import('/scripts/lib/inbox-boundary-evidence.mjs')]).then(([{acp,acpStore},{store},{viewerStore},{threadGroupsStore,rowThread},{threadsStore},{windowRoutesStore},{tabsStore},{prepareInboxBoundaryProbe}]) => prepareInboxBoundaryProbe({acp,acpStore,store,viewerStore,threadGroupsStore,threadsStore,windowRoutesStore,tabsStore,rowThread}, ${lease}))`)
       if (!z.object({ installed: z.literal(true), id: z.literal(id) }).strict().safeParse(result).success) throw new Error("Inbox probe installation receipt missing or foreign")
     })
@@ -236,7 +237,7 @@ export async function withInboxBoundaryEvidence(evaluate, record, operation, dea
   } catch (error) { failures.push(error) }
   let evidence
   try {
-    evidence = BoundaryEvidence.parse(await bounded("finish", ({ deadline: finishDeadline }) => evaluate(`(() => { if (Date.now() >= ${finishDeadline}) throw new Error('Inbox finish lease expired; cleanup UNKNOWN'); const probe = window.inboxBoundaryProbe; if (probe?.id !== ${JSON.stringify(id)}) throw new Error('Inbox probe missing/foreign; cleanup UNKNOWN'); return probe.finish() })()`)))
+    evidence = BoundaryEvidence.parse(await bounded("finish", ({ deadline: finishDeadline }) => evaluate(`(() => { if (Date.now() >= ${literal(finishDeadline)}) throw new Error('Inbox finish lease expired; cleanup UNKNOWN'); const probe = window.inboxBoundaryProbe; if (probe?.id !== ${literal(id)}) throw new Error('Inbox probe missing/foreign; cleanup UNKNOWN'); return probe.finish() })()`)))
   } catch (error) { failures.push(error) }
   if (evidence && !evidence.complete) failures.push(new Error("Inbox boundary evidence is incomplete; inspect bounds/dropped/unavailable/cleanup"))
   // Even a failed/unknown finish gets one independent bounded publication attempt. Never retry a write.

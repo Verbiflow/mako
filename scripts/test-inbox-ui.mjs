@@ -8,6 +8,7 @@ import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
 import { atSize, withMotion } from "./lib/test-window.mjs"
 import { checkInboxNavigation } from "./lib/inbox-navigation-ui.mjs"
+import { literal } from "./lib/page-code.mjs"
 
 /**
  * The rail's top rows and the Inbox, against the production components on the Apex scene (`?mock&app=apex`, "Mobile
@@ -109,7 +110,7 @@ async function checkWindow() {
   const move = (x, y) => page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x, y })
   const click = async (selector, boundary = false) => {
     if (!boundary) {
-      const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target ' + ${JSON.stringify(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
+      const point = await evaluate(`(() => { const node = document.querySelector(${literal(selector)}); if (!node) throw new Error('Missing click target ' + ${literal(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
       await move(point.x, point.y)
       await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
       await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
@@ -122,12 +123,12 @@ async function checkWindow() {
     const prepare = async () => {
       try {
         check()
-        const chosen = await evaluate(`(() => { if (Date.now() >= ${JSON.stringify(inputDeadline)}) throw new Error('INPUT precondition: expired target evaluation; no press'); const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('INPUT precondition: missing click target'); const chosen = window.inboxBoundaryProbe.target(node, ${JSON.stringify(inputDeadline)}); node.scrollIntoView({ block: 'nearest' }); return chosen })()`)
+        const chosen = await evaluate(`(() => { if (Date.now() >= ${literal(inputDeadline)}) throw new Error('INPUT precondition: expired target evaluation; no press'); const node = document.querySelector(${literal(selector)}); if (!node) throw new Error('INPUT precondition: missing click target'); const chosen = window.inboxBoundaryProbe.target(node, ${literal(inputDeadline)}); node.scrollIntoView({ block: 'nearest' }); return chosen })()`)
         check()
         const sample = async point => {
           check()
           const lease = { owner: chosen.owner, key: chosen.key, deadline: inputDeadline }
-          const receipt = await evaluate(`(() => { if (Date.now() >= ${inputDeadline}) throw new Error('INPUT precondition: expired frame evaluation; no press'); return new Promise((resolve, reject) => requestAnimationFrame(frame => { try { const lease = ${JSON.stringify(lease)}; const probe = window.inboxBoundaryProbe; if (probe?.id !== lease.owner) throw new Error('INPUT precondition: probe ownership changed; no press'); resolve(probe.point(${JSON.stringify(point)}, {...lease, frame})) } catch (error) { reject(error) } })) })()`)
+          const receipt = await evaluate(`(() => { if (Date.now() >= ${literal(inputDeadline)}) throw new Error('INPUT precondition: expired frame evaluation; no press'); return new Promise((resolve, reject) => requestAnimationFrame(frame => { try { const lease = ${literal(lease)}; const probe = window.inboxBoundaryProbe; if (probe?.id !== lease.owner) throw new Error('INPUT precondition: probe ownership changed; no press'); resolve(probe.point(${literal(point)}, {...lease, frame})) } catch (error) { reject(error) } })) })()`)
           check()
           if (receipt?.owner !== chosen.owner || receipt?.key !== chosen.key || (point !== null && (receipt?.point?.x !== point.x || receipt?.point?.y !== point.y))) throw new Error("INPUT precondition: foreign/malformed readiness receipt; no press")
           if (receipt.ready !== true && receipt.ready !== false) throw new Error("INPUT precondition: unknown readiness; no press")
@@ -192,7 +193,7 @@ async function checkWindow() {
   const searchFailures = []
   const replaceInput = async (selector, text) => {
     await click(selector)
-    await evaluate(`document.querySelector(${JSON.stringify(selector)}).select()`)
+    await evaluate(`document.querySelector(${literal(selector)}).select()`)
     await page.debugger.sendCommand("Input.insertText", { text })
     await until(`document.querySelector(${JSON.stringify(selector)})?.value === ${JSON.stringify(text)}`, `typed ${text}`)
     await frames()
@@ -224,7 +225,7 @@ async function checkWindow() {
     if (term === "Drive" && !(await evaluate(`document.querySelector('[role="dialog"] main').textContent.includes('Choose a project to see its files')`))) searchFailures.push("Settings Drive picker loses Setup intent")
     await click('[data-app-project="mako"]')
     await until(`Boolean(document.querySelector('[data-project-tab]'))`, `${term} chosen project`)
-    if (!(await evaluate(`Boolean(document.querySelector('[data-project-tab="${tab}"][aria-selected="true"]'))`))) searchFailures.push(`Settings ${term} opens the wrong project tab`)
+    if (!(await evaluate(`Boolean(document.querySelector(${literal(`[data-project-tab="${tab}"][aria-selected="true"]`)}))`))) searchFailures.push(`Settings ${term} opens the wrong project tab`)
     if (term === "Drive") {
       await replaceInput('[aria-label="Search settings"]', "run")
       if (!(await evaluate(`Boolean(document.querySelector('[data-project-tab="recipe"][aria-selected="true"]'))`))) searchFailures.push("Settings run does not return the open project to Recipe")
@@ -274,14 +275,14 @@ async function checkWindow() {
   await click('[data-rail-top-row="inbox"]')
   await until(`document.querySelector('[data-inbox]') !== null`)
   const target = items.find((item) => item.kind === "fin")
-  const answer = await evaluate(`(() => { const card = document.querySelector('[data-inbox-item=${JSON.stringify(target.key)}]'); const button = card.querySelector('[data-inbox-answer="allow"], [data-inbox-answer="0"]'); button.setAttribute('data-inbox-test', 'answer'); return button.dataset.inboxAnswer })()`)
+  const answer = await evaluate(`(() => { const card = document.querySelector('[data-inbox-item=${literal(target.key)}]'); const button = card.querySelector('[data-inbox-answer="allow"], [data-inbox-answer="0"]'); button.setAttribute('data-inbox-test', 'answer'); return button.dataset.inboxAnswer })()`)
   const before = await rollup()
   await click('[data-inbox-test="answer"]')
   await until("window.apexScene.responds().length === 1", "the answer reaching the Apex's host")
   assert.equal((await evaluate("window.apexScene.responds()[0]")).fin, target.fin)
   await until(`document.querySelector('[data-inbox-item=${JSON.stringify(target.key)}]') === null`, "the answered Fin leaves the Inbox")
   await until(`Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${expected - 1}`, "the Inbox row counts one fewer")
-  const working = await evaluate(`import('/src/state/acp-state.ts').then(({acpStore}) => import('/src/state/apex-fins.ts').then(({threadChildren}) => import('/packages/host/src/contracts/children.ts').then(({childStateOf}) => { const acp = acpStore.get(); const thread = Object.values(acp.conversations).find((c) => c.kind === 'live' && threadChildren(acp, c.threadId).some((agent) => agent.child?.thread === ${JSON.stringify(target.fin)})).threadId; return childStateOf(threadChildren(acp, thread).find((agent) => agent.child?.thread === ${JSON.stringify(target.fin)})).kind })))`)
+  const working = await evaluate(`import('/src/state/acp-state.ts').then(({acpStore}) => import('/src/state/apex-fins.ts').then(({threadChildren}) => import('/packages/host/src/contracts/children.ts').then(({childStateOf}) => { const acp = acpStore.get(); const thread = Object.values(acp.conversations).find((c) => c.kind === 'live' && threadChildren(acp, c.threadId).some((agent) => agent.child?.thread === ${literal(target.fin)})).threadId; return childStateOf(threadChildren(acp, thread).find((agent) => agent.child?.thread === ${literal(target.fin)})).kind })))`)
   assert.equal(working, "working", "the answered Fin is working")
   await until(`(document.querySelector('.thread-jump-scope [data-apex-row] [data-fin-pips]')?.getAttribute('aria-label') ?? '') !== ${JSON.stringify(before)}`, "the rail's rollup moves with it")
   assert.match(await rollup(), new RegExp(`${facts.fins.length - 1} needs? you`))
