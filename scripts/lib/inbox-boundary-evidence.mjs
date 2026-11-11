@@ -24,6 +24,7 @@ export function installInboxBoundaryProbe({ acp, acpStore, store, viewerStore, t
   const selector = ".thread-jump-scope [data-apex-row]"
   const events = [], releases = [], restores = []
   let closed = false, dropped = 0, unavailable = 0, serial = 0, targetKey = null
+  let targetElement, targetScroller, targetPoint, previousInput, inputState = "not-observed"
   const bounds = { strings: 0, originalStringUnits: 0, retainedStringUnits: 0, truncatedStrings: 0,
     collectionItems: 0, retainedCollectionItems: 0, truncatedCollectionItems: 0, attemptedEvents: 0 }
   const text = value => {
@@ -39,8 +40,9 @@ export function installInboxBoundaryProbe({ acp, acpStore, store, viewerStore, t
     return values.slice(0, 16).map(project)
   }
   const node = element => element ? { tag: text(element.tagName), role: text(element.getAttribute?.("role")),
-    conversation: text(element.getAttribute?.("data-conversation-id")), tab: text(element.getAttribute?.("data-session-tab")) } : null
-  const rect = value => ({ x: value.x, y: value.y, width: value.width, height: value.height })
+    conversation: text(element.getAttribute?.("data-conversation-id")), tab: text(element.getAttribute?.("data-session-tab")),
+    closestRowKey: text(element.closest?.("[data-conversation-id]")?.getAttribute("data-conversation-id")) } : null
+  const rect = value => Object.fromEntries(["x", "y", "width", "height"].map(key => [key, Number.isFinite(value[key]) ? value[key] : null]))
   const snapshot = () => {
     const acp = acpStore.get(), view = viewerStore.get(), groups = threadGroupsStore.get(), boot = store.get()
     const current = acp.conversations[acp.activeKey], target = acp.conversations[targetKey], counts = {}
@@ -71,7 +73,7 @@ export function installInboxBoundaryProbe({ acp, acpStore, store, viewerStore, t
     if (closed) return
     bounds.attemptedEvents++
     if (events.length === 128) { dropped++; return }
-    try { events.push({ order: ++serial, kind, ...fields, state: snapshot() }) }
+    try { const entry = { order: ++serial, kind, ...fields, state: snapshot() }; events.push(entry); return entry }
     catch { unavailable++; events.push({ order: ++serial, kind: "observation-unavailable", during: kind }) }
   }
   const wrap = (owner, key, name) => {
@@ -90,21 +92,62 @@ export function installInboxBoundaryProbe({ acp, acpStore, store, viewerStore, t
   }
   const listener = event => {
     const row = document.querySelector(selector)
-    record(event.type, { trusted: event.isTrusted, x: event.clientX, y: event.clientY, hit: node(event.target), targetContainsEvent: Boolean(row?.contains(event.target)) })
+    record(event.type, { trusted: event.isTrusted, x: event.clientX, y: event.clientY, hit: node(event.target), targetContainsEvent: Boolean(row?.contains(event.target)), sameNode: row === targetElement, intendedConnected: targetElement?.isConnected === true, intendedContainsEvent: Boolean(targetElement?.contains(event.target)) })
   }
   let timer
   const probe = {
     id,
-    target(element, geometry, point) {
-      targetKey = element.getAttribute("data-conversation-id")
-      record("target-chosen", { count: document.querySelectorAll(selector).length, target: node(element), geometry: rect(geometry), point })
+    target(element, geometry, point, deadline) {
+      if (closed || !Number.isFinite(deadline) || Date.now() >= deadline) throw new Error("INPUT precondition: target lease expired/unknown; no press")
+      targetElement = element; targetKey = element.getAttribute("data-conversation-id"); targetPoint = { x: point.x, y: point.y }
+      targetScroller = element.closest(".scroll-fade-scroller"); previousInput = undefined; inputState = "chosen"
+      const matches = document.querySelectorAll(selector)
+      const entry = record("target-chosen", { count: matches.length, target: node(element), geometry: rect(geometry), point })
+      const refuse = reason => { inputState = "refused"; if (entry) entry.inputRefusal = reason; throw new Error("INPUT precondition: " + reason + "; no press") }
+      if (matches.length !== 1 || matches[0] !== element || !element.isConnected) refuse("missing/multiple/disconnected intended row")
+      if (!z.string().min(1).max(120).safeParse(targetKey).success || !id) refuse("unknown row/probe identity")
+      if (!targetScroller?.isConnected) refuse("unknown/disconnected rail scroller")
+      if (![geometry.x, geometry.y, geometry.width, geometry.height, point.x, point.y].every(Number.isFinite) || geometry.width <= 0 || geometry.height <= 0) refuse("nonfinite/empty target geometry")
+      return { point: targetPoint, key: targetKey, owner: id }
     },
-    point(point) {
-      const row = document.querySelector(selector), hit = document.elementFromPoint(point.x, point.y)
-      record("before-original-press", { point, currentGeometry: row ? rect(row.getBoundingClientRect()) : null, hit: node(hit), targetContainsHit: Boolean(row?.contains(hit)) })
+    point(point, lease) {
+      if (closed || !Number.isFinite(lease.deadline) || Date.now() >= lease.deadline) throw new Error("INPUT precondition: readiness lease expired/unknown; no press")
+      inputState = "waiting"
+      // Snapshot/diagnostic effects run BEFORE the final same-node/geometry/animation/hit observation.
+      const entry = record("before-original-press", { point, frame: Number.isFinite(lease.frame) ? lease.frame : null })
+      const refuse = reason => { inputState = "refused"; if (entry) entry.inputRefusal = reason; throw new Error("INPUT precondition: " + reason + "; no press") }
+      const matches = document.querySelectorAll(selector)
+      if (lease.owner !== id || lease.key !== targetKey || !targetElement || matches.length !== 1 || matches[0] !== targetElement || !targetElement.isConnected || targetElement.getAttribute("data-conversation-id") !== targetKey) refuse("intended row/probe missing, multiple, replaced or key changed")
+      if (point.x !== targetPoint.x || point.y !== targetPoint.y) refuse("original point changed")
+      if (!targetScroller?.isConnected || targetElement.closest(".scroll-fade-scroller") !== targetScroller) refuse("rail scroller replaced/disconnected")
+      const animations = targetScroller.getAnimations({ subtree: true }).filter(animation => animation.id === "rail-flip")
+      const counts = {}, animationFacts = list(animations, counts, "railFlip", animation => ({ id: text(animation.id), state: text(animation.playState), pending: animation.pending, endTime: animation.effect?.getComputedTiming().endTime }))
+      let settled = true
+      for (const animation of animations) {
+        if (!["idle", "running", "paused", "finished"].includes(animation.playState) || !z.boolean().safeParse(animation.pending).success || !Number.isFinite(animation.effect?.getComputedTiming().endTime)) refuse("unknown/nonfinite rail-flip animation")
+        if (animation.pending || !["idle", "finished"].includes(animation.playState)) settled = false
+      }
+      const geometry = rect(targetElement.getBoundingClientRect())
+      const scroll = { x: window.scrollX, y: window.scrollY, left: targetScroller.scrollLeft, top: targetScroller.scrollTop }
+      const position = [geometry.x, geometry.y, geometry.width, geometry.height, ...Object.values(scroll)]
+      if (!position.every(Number.isFinite) || geometry.width <= 0 || geometry.height <= 0 || !Number.isFinite(lease.frame)) refuse("nonfinite/empty geometry, scroll or frame")
+      const finalMatches = document.querySelectorAll(selector)
+      if (finalMatches.length !== 1 || finalMatches[0] !== targetElement || !targetElement.isConnected || targetElement.getAttribute("data-conversation-id") !== targetKey || !targetScroller.isConnected || targetElement.closest(".scroll-fade-scroller") !== targetScroller) refuse("intended row/scroller identity changed during readiness observation")
+      // Last DOM observation, after hover, frame, layout and diagnostic reads. No extra evaluation precedes press.
+      const hit = document.elementFromPoint(point.x, point.y), contains = targetElement.contains(hit)
+      const stable = previousInput && lease.frame > previousInput.frame && position.every((value, index) => value === previousInput.position[index])
+      const ready = Boolean(stable && settled && contains)
+      if (entry) Object.assign(entry, { count: matches.length, sameNode: true, currentGeometry: geometry, scroll, animations: animationFacts, animationCounts: counts, hit: node(hit), targetContainsHit: contains, stable: Boolean(stable), ready })
+      previousInput = { position, frame: lease.frame }
+      if (ready) inputState = "ready"
+      return { ready, point: targetPoint, key: targetKey, owner: id }
     },
     finish() {
       if (closed) throw new Error("Inbox boundary evidence already finished")
+      if (!["ready", "refused"].includes(inputState)) {
+        unavailable++
+        record("input-precondition-UNKNOWN", { inputState, reason: "preparation/capture did not settle; no readiness claim" })
+      }
       record("boundary-finished")
       closed = true
       clearTimeout(timer)

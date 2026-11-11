@@ -108,9 +108,42 @@ async function checkWindow() {
   }
   const move = (x, y) => page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x, y })
   const click = async (selector, boundary = false) => {
-    const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target ' + ${JSON.stringify(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); const point = {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)}; if (${boundary}) window.inboxBoundaryProbe.target(node, r, point); return point })()`)
-    await move(point.x, point.y)
-    if (boundary) await evaluate(`window.inboxBoundaryProbe.point(${JSON.stringify(point)})`)
+    if (!boundary) {
+      const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target ' + ${JSON.stringify(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
+      await move(point.x, point.y)
+      await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
+      await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
+      return
+    }
+    if (!Number.isFinite(boundaryDeadline)) throw new Error("INPUT precondition: unknown overall clock; no press")
+    // One original point/hover, then frame-based readiness; reserve both existing diagnostic caps + hard-guard turn.
+    const inputDeadline = Math.min(boundaryDeadline - 1100, Date.now() + 1000)
+    const check = () => { if (!Number.isFinite(inputDeadline) || Date.now() >= inputDeadline) throw new Error("INPUT precondition: preparation clock exhausted; outcome UNKNOWN, no press") }
+    const prepare = async () => {
+      try {
+        check()
+        const chosen = await evaluate(`(() => { if (Date.now() >= ${JSON.stringify(inputDeadline)}) throw new Error('INPUT precondition: expired target evaluation; no press'); const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('INPUT precondition: missing click target'); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); const point = {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)}; return window.inboxBoundaryProbe.target(node, r, point, ${JSON.stringify(inputDeadline)}) })()`)
+        check()
+        const point = chosen.point
+        if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) throw new Error("INPUT precondition: nonfinite point; no press")
+        await move(point.x, point.y)
+        while (true) {
+          check()
+          const lease = { owner: chosen.owner, key: chosen.key, deadline: inputDeadline }
+          const receipt = await evaluate(`(() => { if (Date.now() >= ${inputDeadline}) throw new Error('INPUT precondition: expired frame evaluation; no press'); return new Promise((resolve, reject) => requestAnimationFrame(frame => { try { const lease = ${JSON.stringify(lease)}; const probe = window.inboxBoundaryProbe; if (probe?.id !== lease.owner) throw new Error('INPUT precondition: probe ownership changed; no press'); resolve(probe.point(${JSON.stringify(point)}, {...lease, frame})) } catch (error) { reject(error) } })) })()`)
+          check()
+          if (receipt?.owner !== chosen.owner || receipt?.key !== chosen.key || receipt?.point?.x !== point.x || receipt?.point?.y !== point.y) throw new Error("INPUT precondition: foreign/malformed readiness receipt; no press")
+          if (receipt.ready === true) break
+          if (receipt.ready !== false) throw new Error("INPUT precondition: unknown readiness; no press")
+        }
+        return point
+      } catch (error) { throw new Error("INPUT precondition: preparation refused; no press", { cause: error }) }
+    }
+    let timer, point
+    try {
+      point = await Promise.race([prepare(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("INPUT precondition: preparation did not converge; outcome/cleanup UNKNOWN, no press")), Math.max(0, inputDeadline - Date.now())) })])
+    } finally { clearTimeout(timer) }
+    check()
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
   }
