@@ -231,7 +231,7 @@ export interface ConversationChildren {
   /** Whether the conversation's Thread is an Apex: it has Fins or queued spawns, or was started as one. */
   isApex(conversation: string): boolean
   /** The person's front door, or the precedence of newer instructions that overtook an agent's queued message. */
-  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>): string[]
+  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance?: boolean): string[]
   /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
   ruleLines(conversation: string): RoleRuleLines
   /** Whether a turn of the conversation a usage limit cut may go on now: a Fin's takes a place as anything else does. */
