@@ -1,6 +1,6 @@
 import { acpStore } from "@/state/acp-state"
 import { unloadLive } from "@/state/live-recovery"
-import { tabFor } from "@/state/session-panes"
+import { liveContentReaders } from "@/state/live-content-readers"
 import { viewerStore } from "@/state/viewer"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 import { historyTurns, releaseEntries } from "@/state/transcript-residency"
@@ -33,12 +33,7 @@ const TRIM_MS = 5_000
 
 /** Conversations whose transcript something on screen or in flight still reads. */
 function inUse(): Set<string> {
-  const keys = new Set<string>()
-  for (const source of transcriptReaders.heldSources()) if (source.startsWith("live:")) keys.add(source.slice(5))
-  for (const pane of viewerStore.get().panes) {
-    const tab = pane.session ? tabFor(pane.session) : undefined
-    if (tab?.kind === "session" && tab.presence) keys.add(tab.presence.key)
-  }
+  const keys = liveContentReaders()
   for (const conversation of Object.values(acpStore.get().conversations))
     if (
       conversation.kind === "starting" ||

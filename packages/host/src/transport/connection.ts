@@ -5,6 +5,7 @@ import { WHOLE_LIVE_FORM, type WindowLiveForm } from "@mako/protocol/live-form"
 import { CORRELATION_HEADER, LIVE_FORM_HEADER, RuntimeEventHeadSchema, RuntimeFailureSchema, RuntimeInfoSchema, RuntimeReadySchema, encodeRuntimeCall, runtimeFailureError, type RuntimeFailure, type RuntimePacket, type RuntimeValue } from "../contracts/runtime.js"
 import { decodeRuntimeValue, runtimeSuccessValue, splitRuntimeEventLine, type EncodedValue } from "../contracts/runtime-value.js"
 import { HostCallTimeoutError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
+import { LOCAL_CONTENT_HEADER } from "../contracts/local-content-watch.js"
 import type { z } from "zod"
 import { hostCallReplay } from "../contracts/host-call-policy.js"
 import { requestRuntimePreview, requestRuntimeVideo } from "./preview.js"
@@ -293,7 +294,7 @@ export type RuntimeStreamEnd = { why: string; livedMs: number; heardBytes: numbe
  * `heard`: called for every chunk the stream carries, the host's 15-second heartbeat too. `live`: the live form its
  * reader reads (`@mako/protocol/live-form`); a batch in the compact one is read by `expandLiveBatch`. Form 1 when unsaid.
  */
-export function subscribeRuntime(socket: string, client: string, receive: (packet: RuntimePacket) => void, disconnected: (end: RuntimeStreamEnd) => void, options: { observer?: boolean; history?: boolean; eventLimit?: number; heard?: () => void; live?: WindowLiveForm } = {}) {
+export function subscribeRuntime(socket: string, client: string, receive: (packet: RuntimePacket) => void, disconnected: (end: RuntimeStreamEnd) => void, options: { observer?: boolean; history?: boolean; eventLimit?: number; heard?: () => void; live?: WindowLiveForm; contentGeneration?: string } = {}) {
   let closed = false
   let ended = false
   const openedAt = Date.now()
@@ -306,6 +307,7 @@ export function subscribeRuntime(socket: string, client: string, receive: (packe
     disconnected({ why, livedMs: now - openedAt, heardBytes, quietMs: now - heardAt })
   }
   const headers = new Map([["x-mako-window", client]])
+  if (options.contentGeneration) headers.set(LOCAL_CONTENT_HEADER, options.contentGeneration)
   if (options.observer) headers.set("x-mako-observer", "1")
   if (options.history) headers.set("x-mako-history", "1")
   if (options.eventLimit) headers.set("x-mako-event-limit", String(options.eventLimit))

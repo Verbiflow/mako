@@ -17,6 +17,7 @@ import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { prependLiveHistory, readLiveSnapshot, readLiveValue, retainLiveDetails } from "@/state/live-history"
 import { isHistoryExpired, type LiveHistoryCursor, type LiveHistoryPage } from "@mako/host/contracts/live-history"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
+import { liveContentReaders, watchLiveContentReaders } from "@/state/live-content-readers"
 import { currentStarts, readsOut, readsSettled, readsSince, receiveLive, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut, type ReadOut, type Received } from "@/state/live-door"
 
 const fetching = new Map<string, Promise<boolean>>()
@@ -502,8 +503,8 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
       const waiting = restored ? pending.get(id)?.[0] : undefined
       if (!rereads.delete(id) && !waiting) {
         stuck.delete(id)
-        // Its last read settled: one read only to catch up goes back to being listed, unless it's on screen now.
-        if (releaseWhenRead.delete(id) && acpStore.get().activeKey !== id) unloadLive(id)
+        // A temporary metadata read gives its body back only after every independent reader has finished with it.
+        if (releaseWhenRead.has(id)) releaseListedReads()
       } else {
         const held = stuck.get(id)
         const tries = waiting && held?.batch === waiting ? held.tries + 1 : 0
@@ -520,14 +521,35 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
 
 /** Listed Sessions read again whole (`refreshListed`), to be let go again once their last read settles. */
 const releaseWhenRead = new Set<string>()
+let stopReleasing: (() => void) | undefined
+let releaseScheduled = false
+
+function releaseListedReads(): void {
+  const readers = liveContentReaders()
+  for (const id of releaseWhenRead) {
+    // A queued reread still owns buffered revisions, even between the two fetch promises.
+    if (fetching.has(id) || pending.get(id)?.length || rereads.has(id)) continue
+    const current = acpStore.get().conversations[id]
+    if (!current?.hydrated) releaseWhenRead.delete(id)
+    else if (acpStore.get().activeKey !== id && !readers.has(id) && unloadLive(id)) releaseWhenRead.delete(id)
+  }
+  if (!releaseWhenRead.size) { stopReleasing?.(); stopReleasing = undefined }
+}
+
+function scheduleListedRelease(): void {
+  if (releaseScheduled) return
+  releaseScheduled = true
+  queueMicrotask(() => { releaseScheduled = false; releaseListedReads() })
+}
 
 /**
- * A listed Session read again whole, quietly, and let go again unless it's on screen by then: once the last read it
- * takes settles, since one that answers before batches it overtook is read again (`hydrateLive`).
+ * A listed Session read again whole, quietly, and let go after its last read and any independent body reader settle.
+ * One that answers before batches it overtook is read again (`hydrateLive`).
  */
 function refreshListed(id: string): void {
   if (fetching.has(id)) return
   releaseWhenRead.add(id)
+  stopReleasing ??= watchLiveContentReaders(scheduleListedRelease)
   void hydrateLive(id, true)
 }
 
@@ -535,11 +557,11 @@ function refreshListed(id: string): void {
  * Put a loaded conversation back the way boot listed it: its session,
  * requests and status stay and keep following batches, its transcript goes
  * and is read again, the newest window as the host pages it, when it is
- * shown. False while a read of it is in flight.
+ * shown. False while a read of it is in flight or an independent pane/operation still reads its body.
  */
 export function unloadLive(id: string): boolean {
   const current = acpStore.get().conversations[id]
-  if (current?.kind !== "live" || !current.hydrated || fetching.has(id)) return false
+  if (current?.kind !== "live" || !current.hydrated || fetching.has(id) || liveContentReaders().has(id)) return false
   pending.delete(id)
   mergedSince.delete(id)
   stuck.delete(id)
@@ -607,6 +629,9 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
   for (const action of batch.control?.actions ?? []) if (steerTaken(action)) settleMessage(action.input.id, true)
   const current = acpStore.get().conversations[batch.id]
   if (current?.kind === "live" && sameEpoch(current, batch) && batch.revision <= (current.revision ?? 0)) return
+  // Invalidation can mean metadata was missed too. Read it authoritatively, then release the temporary body again.
+  if (batch.contentOmitted && batch.historyChanged && current?.kind === "live" && !current.hydrated &&
+    acpStore.get().activeKey !== batch.id && !fetching.has(batch.id)) return refreshListed(batch.id)
   if (
     current?.kind === "live" &&
     !current.hydrated &&
@@ -673,6 +698,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
     // and a fresh snapshot is taken rather than merged onto the wrong state.
     !sameEpoch(current, batch) ||
     unread ||
+    batch.contentOmitted ||
     batch.historyChanged ||
     (current.releasedTurns?.length && batch.updates.length &&
       (batch.changedFrom === undefined || current.releasedTurns.some(turn => batch.changedFrom! < turn.blocks.end))) ||

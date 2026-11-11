@@ -16,6 +16,7 @@ import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, invokeRuntim
 import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { runtimeEventRouting } from "@mako/host/contracts/runtime"
 import { WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
+import { LOCAL_CONTENT_CHANNEL, LocalContentIdsSchema, LocalContentReceiptSchema } from "@mako/host/contracts/local-content-watch"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { invokeWithRecovery } from "@mako/host/contracts/host-call-recovery"
 import { HostLiveness, type HostProbe } from "@mako/host/contracts/host-liveness"
@@ -67,7 +68,8 @@ protocol.registerSchemesAsPrivileged(privilegedSchemes())
 const rendererBundle = join(directory, "../dist")
 
 const launch = { dataRoot, executable: process.execPath, args: app.isPackaged ? [] : [app.getAppPath()], cwd: process.cwd(), env: process.env }
-const clients = new Map<number, { id: string; link: HostLiveness; dispose(): void }>()
+interface DesktopClient { id: string; link: HostLiveness; content?: { generation: string; sequence: number }; dispose(): void }
+const clients = new Map<number, DesktopClient>()
 const DISCONNECTED_MESSAGE = HOST_OUTAGE_MESSAGE
 let runtime: Awaited<ReturnType<typeof ensureRuntime>>
 let secretKeys: SecretKeyLink | undefined
@@ -266,7 +268,8 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
   if (closingLocally || shutdownAction || shuttingDown) throw new Error("Mako is closing safely. Open another window after it finishes.")
   const id = randomUUID()
   const agentView = options.agentView
-  const webPreferences = { preload: join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, additionalArguments: [`--mako-client=${id}`] }
+  const contentWatch = process.env.MAKO_LOCAL_CONTENT_WATCH === "1" && !agentView
+  const webPreferences = { preload: join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, additionalArguments: [`--mako-client=${id}`, ...(contentWatch ? ["--mako-local-content"] : [])] }
   const window = agentView
     ? new BrowserWindow({
       title: isDev ? "Mako Dev Agent View" : "Mako Agent View", width: 1600, height: 1000, show: false,
@@ -309,13 +312,14 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
     probe: (timeoutMs) => askHost(timeoutMs),
     log: (message, fields) => hostWarn("stream", message, { window: id, ...fields }),
   })
-  const client = { id, link, dispose() { closed = true; clearTimeout(timer); subscription?.(); link.dispose() } }
+  const client: DesktopClient = { id, link, dispose() { closed = true; clearTimeout(timer); subscription?.(); link.dispose() } }
   const rendererId = window.webContents.id
   clients.set(rendererId, client)
   const connect = () => {
     if (closed || shuttingDown || shutdownAction) return
     subscription?.()
     const stream = link.stream()
+    client.content = contentWatch ? { generation: randomUUID(), sequence: 0 } : undefined
     subscription = subscribeRuntime(runtime.socket, id, (packet) => {
       if (window.isDestroyed()) return
       if (packet.channel === "ready") {
@@ -339,7 +343,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
         void ensureRuntime(launch).then(async (next) => { runtime = next; await secretKeys?.attached(); connect() }).catch(() => { if (!closed) timer = setTimeout(retry, 2_000) })
       }
       timer = setTimeout(retry, 500)
-    }, { history: true, observer: Boolean(agentView), heard: stream.heard, live: WINDOW_LIVE_FORM })
+    }, { history: true, observer: Boolean(agentView), heard: stream.heard, live: WINDOW_LIVE_FORM, contentGeneration: client.content?.generation })
   }
   connect()
   window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); watchAgentViewsIdle(); finishClientShutdown() })
@@ -480,6 +484,18 @@ async function serveWindows() {
     if (moved.kind === "failed") console.warn(`[mako-client] renderer storage move failed: ${moved.error}`)
   }
   const inputs = new HostCallInputs()
+  ipcMain.handle(LOCAL_CONTENT_CHANNEL, async (event, ...raw: unknown[]) => {
+    const [conversations] = z.tuple([LocalContentIdsSchema]).parse(raw)
+    const client = clients.get(event.sender.id)
+    if (!client?.content || !runtime.info.localContentWatch) return null
+    const content = client.content
+    const sequence = ++content.sequence
+    const receipt = LocalContentReceiptSchema.parse(await invokeRuntime(runtime.socket, client.id, LOCAL_CONTENT_CHANNEL,
+      [{ generation: content.generation, sequence, conversations }]))
+    if (client.content !== content || receipt.generation !== content.generation || receipt.sequence !== sequence)
+      throw new Error("The local content stream changed; read again after reconnecting")
+    return receipt.generation
+  })
   for (const channel of hostChannels) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
       // A window is a page: a fixture desk refuses it what it refuses a page in a browser, before its arguments are read (`fixture-desk-policy.ts`).

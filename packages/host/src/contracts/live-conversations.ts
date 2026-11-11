@@ -673,6 +673,8 @@ export interface LiveBatch {
   blockCount?: number
   /** The event is an invalidation; reread through the bounded history protocol. */
   historyChanged?: boolean
+  /** Local opted-in stream omitted transcript bodies. Never advances a hydrated content view. */
+  contentOmitted?: true
   nativeAgents?: NativeAgentRoster
   /** `null` when the goal went away; absent when it did not change. */
   goal?: import("./live-goals.js").ConversationGoal | null
