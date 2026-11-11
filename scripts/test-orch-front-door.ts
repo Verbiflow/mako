@@ -476,14 +476,18 @@ async function routingGuidanceCadence(): Promise<void> {
       return prompt.text
     }
     const initial = count()
-    assert.equal(initial, 1, "the process hears routing guidance once, even if a report arrives before a person message")
+    assert.equal(initial, 0, "a process handling only service reports needs no person-routing guidance")
     for (let i = 0; i < 4; i++) {
-      assert.ok(!(await send(`Inspect current decision ${i}.`)).includes(FRONT_DOOR_GUIDANCE[0]))
+      assert.equal((await send(`Inspect current decision ${i}.`)).includes(FRONT_DOOR_GUIDANCE[0]), i === 0)
     }
-    assert.equal(count(), initial)
+    assert.equal(count(), initial + 1)
+    await world.agents.report(world.caller(child.conversation), { clientKey: "service-update", status: "done", summary: "An additional service report; the original decision is still open." })
+    await world.settle(40)
+    assert.ok(!(await send("After a service report.")).includes(FRONT_DOOR_GUIDANCE[0]), "service turns retain the standing key without adding or withdrawing its instructions")
+    assert.equal(count(), initial + 1)
     rules = "The replacement rule applies; keep all unanswered decisions."
     assert.ok((await send("Read the changed person rule.")).includes(rules))
-    assert.equal(count(), initial, "changing other rules does not repeat routing guidance")
+    assert.equal(count(), initial + 1, "changing other rules does not repeat routing guidance")
     world.live.observe({ type: "live-update", id: apex.conversation, update: { kind: "event", label: CONTEXT_COMPACTED } })
     const compacted = await send("After compaction.")
     for (const line of FRONT_DOOR_GUIDANCE) assert.ok(compacted.includes(line))

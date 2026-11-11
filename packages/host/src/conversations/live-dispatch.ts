@@ -391,7 +391,10 @@ export class LiveDispatch {
         const apex = !asWritten && (dependencies.agents?.()?.isApex(resident.snapshot.session.id) ?? false)
         const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id, { role: apex ? "apex" : "thread" })
         const rules = asWritten ? {} : (dependencies.agents?.()?.ruleLines(resident.snapshot.session.id) ?? {})
-        const guidance = apex ? `For messages from the person:\n${FRONT_DOOR_GUIDANCE.join("\n")}` : undefined
+        const person = !request.actor || request.actor.kind === "person"
+        // Service-only turns need no routing paragraph. Once heard, keep its key through service turns, without repeating it.
+        const guidance = apex && (person || resident.controlSaid?.lines.has("front-door-guidance"))
+          ? `For messages from the person:\n${FRONT_DOOR_GUIDANCE.join("\n")}` : undefined
         const standing = instructions || Object.keys(rules).length || guidance
           ? standingLines(resident.controlSaid, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0 }, { ...instructions?.standing, ...rules, "front-door-guidance": guidance })
           : undefined
