@@ -16,7 +16,7 @@ export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--mo
                     [--wait [--timeout <ms>]] [--wake decisions|finish|never] [--thread <ref|id|fin>]…
   mako agents move <fin|all> <harness> [--model <id>] [--reasoning <level>] [--fast|--standard] [--key <k>]
   mako agents list [--tree | --crew | --apexes | --threads [words]]
-  mako agents read <fin> [--transcript] [--report <id>] [--after-ask <id>] [--after-action <id>]
+  mako agents read <fin> [--transcript | --actions] [--report <id>] [--after-ask <id>] [--after-action <id>]
   mako agents report <status> <summary> [--question <q>] [--action <words> --follow-up <target-json>] [--supersedes <id>]… [--key <k>]
   mako agents settle <fin> --report <id> --version <n> --target <json> --disposition <json> [--key <k>]
   mako agents wait [fin…] [--timeout <ms>]
@@ -76,6 +76,7 @@ const OPTIONS = {
   crew: { type: "boolean" },
   apexes: { type: "boolean" },
   transcript: { type: "boolean" },
+  actions: { type: "boolean" },
   report: { type: "string" },
   "after-ask": { type: "string" },
   "after-action": { type: "string" },
@@ -153,7 +154,7 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
       return { tool: tool("list"), input: values.threads ? { scope: "threads", ...(positionals.length && { query: positionals.join(" ") }) } : values.apexes ? { scope: "apexes" } : values.crew ? { scope: "crew" } : values.tree ? { scope: "tree" } : {} }
     case "read":
       if (!first) throw new Error("agents read needs a Fin")
-      return { tool: tool("read"), input: { child: first, ...(values.transcript && { view: "transcript" }), ...(values.report !== undefined && { report: values.report }), ...(values["after-ask"] !== undefined && { afterAsk: values["after-ask"] }), ...(values["after-action"] !== undefined && { afterAction: values["after-action"] }) } }
+      return { tool: tool("read"), input: { child: first, ...(values.transcript && { view: "transcript" }), ...(values.actions && { view: "actions" }), ...(values.report !== undefined && { report: values.report }), ...(values["after-ask"] !== undefined && { afterAsk: values["after-ask"] }), ...(values["after-action"] !== undefined && { afterAction: values["after-action"] }) } }
     case "report":
       if (!first || !second) throw new Error("agents report needs a status and a summary")
       return {

@@ -596,6 +596,7 @@ CREATE TABLE IF NOT EXISTS agent_report_actions (
   report TEXT PRIMARY KEY REFERENCES thread_reports(id), parent_thread TEXT NOT NULL REFERENCES threads(id),
   child_thread TEXT NOT NULL REFERENCES threads(id), pending INTEGER NOT NULL, record TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS agent_report_actions_pending ON agent_report_actions(parent_thread, pending, child_thread);
+CREATE INDEX IF NOT EXISTS agent_report_actions_owner ON agent_report_actions(json_extract(record, '$.owner'), pending);
 CREATE TABLE IF NOT EXISTS agent_report_action_ops (
   op TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, record TEXT NOT NULL);
 
@@ -1329,14 +1330,28 @@ export class ThreadStore {
   reportActions(parent: string, children: readonly string[], after?: string): ReportActionsPage {
     this.syncVersion()
     if (!children.length || !this.sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_report_actions'").get()) return { items: [], total: 0 }
-    const where = `parent_thread = ? AND pending = 1 AND child_thread IN (${children.map(() => "?").join(",")})`
-    const args = [parent, ...children]
+    return this.reportActionPage(`parent_thread = ? AND child_thread IN (${children.map(() => "?").join(",")})`, [parent, ...children], after)
+  }
+
+  /** Source Apex retains custody decisions even when source/receiver native work stops or is archived. */
+  reportActionInbox(thread: string): ReportActionsPage {
+    return this.reportActionPage("parent_thread = ? OR json_extract(record, '$.owner') = ?", [thread, thread])
+  }
+
+  /** A custodian can inspect only the explicit work assigned to itself, not sibling conversations. */
+  reportCustody(owner: string, after?: string): ReportActionsPage {
+    return this.reportActionPage("json_extract(record, '$.owner') = ? AND parent_thread <> ?", [owner, owner], after)
+  }
+
+  private reportActionPage(scope: string, args: string[], after?: string): ReportActionsPage {
+    this.syncVersion()
+    if (!this.sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_report_actions'").get()) return { items: [], total: 0 }
     const count = z.object({ count: z.number() })
-    const total = count.parse(this.sql(`SELECT count(*) AS count FROM agent_report_actions WHERE ${where}`).get(...args)).count
-    const cursor = after === undefined ? undefined : this.sql("SELECT rowid AS position, child_thread FROM agent_report_actions WHERE report = ? AND parent_thread = ?").get(after, parent)
-    const position = cursor ? z.object({ position: z.number(), child_thread: z.string() }).parse(cursor) : undefined
-    if (after !== undefined && (!position || !children.includes(position.child_thread))) throw new ThreadOperationConflictError(after)
-    const rows = this.sql(`SELECT record FROM agent_report_actions WHERE ${where} AND rowid > ? ORDER BY rowid LIMIT 9`).all(...args, position?.position ?? 0)
+    const total = count.parse(this.sql(`SELECT count(*) AS count FROM agent_report_actions WHERE (${scope}) AND pending = 1`).get(...args)).count
+    const cursor = after === undefined ? undefined : this.sql(`SELECT rowid AS position FROM agent_report_actions WHERE report = ? AND (${scope})`).get(after, ...args)
+    const position = cursor ? z.object({ position: z.number() }).parse(cursor).position : undefined
+    if (after !== undefined && position === undefined) throw new ThreadOperationConflictError(after)
+    const rows = this.sql(`SELECT record FROM agent_report_actions WHERE (${scope}) AND pending = 1 AND rowid > ? ORDER BY rowid LIMIT 9`).all(...args, position ?? 0)
     const items = rows.slice(0, 8).map(row => ReportActionSchema.parse(JSON.parse(RecordRowSchema.parse(row).record)))
     return { items, total, ...(rows.length > 8 && { next: items.at(-1)!.report }) }
   }
@@ -1361,7 +1376,7 @@ export class ThreadStore {
       }
       const current = this.reportAction(input.report)
       const edge = this.edges().of(input.child)
-      if (!current || current.parent !== input.parent || current.child !== input.child || edge?.parent !== input.parent || edge.closedAt !== undefined ||
+      if (!current || current.parent !== input.parent || current.child !== input.child || edge?.parent !== input.parent ||
           current.version !== input.version || !pendingReportAction(current) || current.target.ref !== target.ref || current.target.version !== target.version)
         throw new ThreadOperationConflictError(input.op)
       if (disposition.kind === "supersede") {
@@ -1371,7 +1386,8 @@ export class ThreadStore {
           throw new ThreadOperationConflictError(input.op)
       }
       const action = ReportActionSchema.parse({ ...current, version: current.version + 1, updatedAt: input.at, disposition,
-        ...((disposition.kind === "dispatch" || disposition.kind === "handoff") && { owner: disposition.to }) })
+        ...((disposition.kind === "dispatch" || disposition.kind === "handoff") && { owner: disposition.to, custody: disposition }),
+        ...(disposition.kind === "reclaim" && { owner: current.parent, custody: undefined }) })
       const record = JSON.stringify(action)
       this.sql("UPDATE agent_report_actions SET pending = ?, record = ? WHERE report = ?").run(pendingReportAction(action) ? 1 : 0, record, input.report)
       this.sql("INSERT INTO agent_report_action_ops (op, fingerprint, record) VALUES (?, ?, ?)").run(input.op, fingerprint, record)

@@ -402,6 +402,7 @@ const inputs = {
             z.literal("report"),
             z.literal("transcript"),
             z.literal("pulls"),
+            z.literal("actions"),
           ])
           .optional(),
         snapshot: z.string().optional(),
@@ -583,6 +584,8 @@ const inputs = {
         version: z.number(),
         target: z.object({ ref: z.string(), version: z.string() }),
         disposition: z.union([
+          z.object({ kind: z.literal("resolve"), evidence: z.string() }),
+          z.object({ kind: z.literal("reclaim"), reason: z.string() }),
           z.object({ kind: z.literal("dismiss"), reason: z.string() }),
           z.object({
             kind: z.literal("defer"),

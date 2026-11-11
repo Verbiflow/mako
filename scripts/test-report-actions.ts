@@ -47,7 +47,7 @@ try {
   assert.equal(inspected.followUp?.version, 2, "exact report inspection retains terminal receipt without reintroducing pending work")
   assert.equal(kept(await resolve(1)).deduped, true)
   const sent = kept(await world.agents.send(apex.caller, { to: "b", text: "Review the exact fixture targets4 and5.", reply: "none", clientKey: "actual-dispatch" }))
-  kept(await resolve(4, { disposition: { kind: "dispatch", to: "b", request: sent.request } }))
+  kept(await resolve(4))
   kept(await world.agents.report(caller(0), { clientKey: "quiet-a", status: "progress", summary: "Additional A evidence; no new action." }))
   assert.equal((await all()).length, 8, "resolving two leaves eight, not one per Fin")
   const expected = reports.filter((_, i) => i !== 1 && i !== 4).map(r => r.id).sort()
@@ -69,7 +69,7 @@ try {
   assert.ok("refused" in await world.agents.settle(caller(1), { to: "a", report: reports[0]!.id, version: 1, target: target(0), disposition: { kind: "dismiss", reason: "Sibling cannot decide." }, clientKey: "sibling" }))
   assert.ok("refused" in await resolve(0, { disposition: { kind: "dispatch", to: "b", request: randomUUID() }, clientKey: "invented-evidence" }))
   assert.equal(kept(await resolve(1)).deduped, true, "same operation remains idempotent after restart")
-  assert.equal(kept(await resolve(4, { disposition: { kind: "dispatch", to: "b", request: sent.request } })).deduped, true, "actual dispatch receipt is durable across harness/host recreation")
+  assert.equal(kept(await resolve(4)).deduped, true, "exact terminal receipt is durable across harness/host recreation")
   assert.ok("refused" in await resolve(0, { clientKey: "resolve-1" }), "an operation key cannot settle another action")
   const deferred = kept(await resolve(0, { disposition: { kind: "defer", reason: "Target awaiting evidence.", resume: "A verified new target result." }, clientKey: "defer-a" }))
   assert.equal(deferred.action.version, 2)
@@ -143,15 +143,15 @@ try {
   assert.equal(legacy.followUp, undefined, "existing action prose without explicit target is not reclassified")
   const archivedAction = (await read(2)).actions!.items[0]!
   world.archived.add(fins[2]!.conversation!)
-  assert.equal((await read(2)).actions, undefined)
-  assert.ok("refused" in await world.agents.settle(apex.caller, { to: "c", report: archivedAction.report, version: archivedAction.version, target: archivedAction.target,
-    disposition: { kind: "dismiss", reason: "Archived owner control." }, clientKey: "archived-disposition" }))
+  assert.ok((await read(2)).actions?.items.some(action => action.report === archivedAction.report))
+  kept(await world.agents.settle(apex.caller, { to: "c", report: archivedAction.report, version: archivedAction.version, target: archivedAction.target,
+    disposition: { kind: "dismiss", reason: "Silent recovery after source archival." }, clientKey: "archived-disposition" }))
   world.archived.delete(fins[2]!.conversation!)
   const stopped = (await read(0)).actions!.items[0]!
   kept(await world.agents.stop(apex.caller, { child: "a", reason: "Stop control." }))
-  assert.ok("refused" in await world.agents.settle(apex.caller, { to: "a", report: stopped.report, version: stopped.version, target: stopped.target,
-    disposition: { kind: "dismiss", reason: "Stopped owner cannot mutate." }, clientKey: "after-stop" }))
-  assert.equal((await read(0)).actions, undefined)
+  kept(await world.agents.settle(apex.caller, { to: "a", report: stopped.report, version: stopped.version, target: stopped.target,
+    disposition: { kind: "dismiss", reason: "Silent recovery never resumes stopped native work." }, clientKey: "after-stop" }))
+  assert.ok(!(await read(0)).actions?.items.some(action => action.report === stopped.report))
   console.log("report actions: delivery/read A/B/C, ten→eight, quiet update, harness/restart, exact target/version/owner/receipt, person ask, deferred/superseded state and bounded paging PASS")
 } finally {
   await world.close()

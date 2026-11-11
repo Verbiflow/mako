@@ -1,4 +1,4 @@
-import { ReportActionTargetSchema, ReportDispositionSchema } from "../contracts/report-actions.js"
+import { ReportActionTargetSchema, ReportDispositionSchema, type ReportAction } from "../contracts/report-actions.js"
 import type { ThreadRef } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
 import { SessionSettingsSchema, type SessionModel, type SessionSettings } from "@mako/sessions/settings"
@@ -1055,18 +1055,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!store || !thread) return order
     const rules = request.actor && request.actor.kind !== "person" ? order : this.rulesNote(conversation)
     const open = store.edges().children(thread).filter((edge) => !edge.closedAt)
-    if (!open.length) return rules
     this.sync()
     const pending = open.flatMap((edge) => this.pendingReports(edge).map((report) => ({ edge, report })))
     const questions = pending.slice(0, 8).map(({ edge, report }) => `fin:${edge.name} · ask ${report.id} · ${decisionOn(edge.asked, report) === "lead" ? "Apex" : "person"}: ${report.question!.replace(/\s+/g, " ").slice(0, 240)}`)
     const note = questions.length ? ["Pending report questions (notice delivery and reading do not resolve them):", ...questions,
       ...(pending.length > 8 ? [`${pending.length - 8} more: agents_list gives pendingQuestions counts; agents_read pages exact ask IDs with afterAsk.`] : []),
       "agents_answer with to and ask resolves only that question; use an explicit answer/park decision. Progress stays quiet."] : []
-    const actions = this.pendingActions(thread)
-    const actionLines = actions.items.map((action) => `fin:${open.find(edge => edge.child === action.child)?.name ?? action.child} · action ${JSON.stringify(action.report)} · v${action.version} · owner ${action.owner} · ${action.disposition.kind}${action.disposition.kind === "defer" ? ` until ${noteLine(action.disposition.resume, 120)}` : ""}: ${noteLine(action.action, 180)} · target ${noteLine(action.target.ref, 120)} @ ${noteLine(action.target.version, 80)}`)
+    const actions = store.reportActionInbox(thread)
+    const actionLines = actions.items.map(action => this.actionLine(action))
     const followUps = actionLines.length ? ["Pending action-only reports (delivery/read is not disposition):", ...actionLines,
-      `${actions.total} pending; agents_list identifies each Fin's pendingActions; agents_read returns full target/version and pages with afterAction.`,
-      "agents_settle records only the exact action/version. Defer remains pending; no automatic reminder or reply is sent."] : []
+      `${actions.total} pending; source Apex uses agents_read on the source Fin with afterAction. Custodian uses agents_read {child: its own Thread ID, view: actions, afterAction} for full targets and more pages.`,
+      "Source Apex alone records exact agents_settle dispositions. Dispatch/handoff/defer stay pending; receiver outcome alone resolves nothing. Reclaim returns custody to Apex. No automatic reminder/reply."] : []
     const lines = [...rules, ...(!request.actor || request.actor.kind === "person" ? frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), this.now()) : []), ...note, ...followUps]
     hostLog("agents", "front door", { conversation, children: open.length, chars: lines.reduce((sum, line) => sum + line.length + 1, 0) })
     return lines
@@ -1984,6 +1983,16 @@ export class Agents implements AgentOperations, ConversationChildren {
   async read(caller: AgentCaller, input: AgentsReadInput): Promise<AgentsReadResult> {
     const apex = this.apexOf(caller)
     if ("refused" in apex) return apex
+    if (input.view === "actions") {
+      if (apex.away || input.child !== apex.thread || input.report !== undefined || input.afterAsk !== undefined || input.snapshot !== undefined || input.offset !== undefined || input.limit !== undefined)
+        return { refused: "conflict", why: "view actions reads only your own delegated custody with your exact Thread ID and optional afterAction; it grants no source conversation access." }
+      try {
+        const actions = this.store()!.reportCustody(apex.thread, input.afterAction)
+        const own = this.store()!.edges().of(apex.thread)
+        return { child: apex.thread, name: own?.name ?? "self", state: own ? this.stateOf(own) : { kind: "idle" }, actions,
+          text: actions.items.map(action => this.actionLine(action)).join("\n") }
+      } catch { return { refused: "conflict", why: "afterAction must name a report in your exact custody view." } }
+    }
     const edge = this.resolve(apex, input.child, true)
     if (!edge) {
       const held = this.heldNamed(apex, input.child)
@@ -2078,8 +2087,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!target.success || !parsed.success || !Number.isSafeInteger(input.version) || input.version < 1 || !input.clientKey?.trim() || input.clientKey.length > 200)
       return { refused: "conflict", why: "Disposition needs an exact report, positive version, target and valid evidence/reason." }
     const store = this.store()!
-    const conversation = this.conversationOf(edge.child)
-    if (conversation && this.deps.archived?.(conversation)) return { refused: "conflict", why: "An archived Fin's follow-up cannot be changed here." }
     const op = `report-action:${apex.thread}:${input.clientKey}`
     let disposition = parsed.data
     if (disposition.kind === "dispatch" || disposition.kind === "handoff") {
@@ -2383,11 +2390,20 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { fin: first.edge.child, name: first.edge.name, line, ask: first.ask, more: asks.length - 1 }
   }
 
+  private actionLine(action: ReportAction): string {
+    const store = this.store()!
+    const source = store.edges().of(action.child)
+    const receiver = this.conversationOf(action.owner)
+    const receiverEdge = store.edges().of(action.owner)
+    const request = action.custody && receiver ? this.deps.live.snapshot(receiver)?.requests.find(item => item.id === action.custody!.request) : undefined
+    const state = receiverEdge?.closedAt !== undefined ? "stopped" : receiver && this.deps.archived?.(receiver) ? "archived" : "present"
+    const custody = action.custody ? ` · custodian ${state} · request ${request?.status ?? "unavailable"}` : ""
+    return `fin:${source?.name ?? action.child} · source Apex ${action.parent} · action ${JSON.stringify(action.report)} · v${action.version} · owner ${action.owner} · ${action.disposition.kind}${action.disposition.kind === "defer" ? ` until ${noteLine(action.disposition.resume, 120)}` : ""}${custody}: ${noteLine(action.action, 180)} · target ${noteLine(action.target.ref, 120)} @ ${noteLine(action.target.version, 80)}`
+  }
+
   private pendingActions(parent: string, child?: string, after?: string) {
-    const children = this.store()!.edges().children(parent).filter(edge => {
-      const conversation = this.conversationOf(edge.child)
-      return edge.closedAt === undefined && (child === undefined || edge.child === child) && !(conversation && this.deps.archived?.(conversation))
-    })
+    // Action decisions are silent and outlive native work. Stop/archive never sends or cancels a disposition.
+    const children = this.store()!.edges().children(parent).filter(edge => child === undefined || edge.child === child)
     return this.store()!.reportActions(parent, children.map(edge => edge.child), after)
   }
 
@@ -4610,6 +4626,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const pulls = this.openPRsOf(edge)
     const pendingQuestions = this.pendingReports(edge).length
     const pendingActions = this.pendingActions(edge.parent, edge.child).total
+    const custodyActions = this.store()!.reportCustody(edge.child).total
     return {
       child: edge.child,
       name: edge.name,
@@ -4626,6 +4643,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(latest && { report: { status: latest.status, line: reportPhase(latest) ?? latest.status, at: latest.at } }),
       ...(pendingQuestions && { pendingQuestions }),
       ...(pendingActions && { pendingActions }),
+      ...(custodyActions && { custodyActions }),
       ...(waiting && { waiting }),
       ...(idle !== undefined && { idleFor: idle }),
       ...(pulls.length && { openPRs: pulls }),
