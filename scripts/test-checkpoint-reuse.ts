@@ -10,6 +10,8 @@ import { Git } from "@mako/git"
 import type { HistoryMark } from "@mako/host/contracts/watcher-child"
 import type { FileHistory, HistoryOptions } from "@mako/host/workspaces/watch-backend"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
+import { DatabaseSync } from "node:sqlite"
+import { z } from "zod"
 
 /**
  * A turn's checkpoint, which its agent waits for, is the last one taken of its workspace when nothing it holds can
@@ -101,14 +103,81 @@ try {
   assert.notEqual(unread.before.id, unsure.after.id, "a history that can't be read is a capture")
   history.since = reading
 
+  // An ignore rule outside the working tree changed: the history can't see it, its file's stamp does.
+  writeFileSync(join(cwd, ".git", "info", "exclude"), "*.log\n")
+  const excluded = await turn()
+  assert.notEqual(excluded.before.id, unread.after.id, "a changed info/exclude is captured")
+
   // Another turn in the same workspace: its checkpoint names the runs that share it, so it's always its own.
   const other = randomUUID()
   await store.beginRun(other, cwd)
   const sharing = randomUUID()
   const shared = await store.beginRun(sharing, cwd)
   assert.ok(shared.shared?.includes(other), "a shared workspace's checkpoint names the other run")
-  await store.endRun(sharing)
+  const sharedEnd = await store.endRun(sharing)
+  assert.ok(sharedEnd.shared?.includes(other), "and so does its end")
   await store.endRun(other)
+  // The last one taken there named the other run (`other`'s end shares nothing now): a turn alone next never reuses
+  // one that names others.
+  const sharingAgain = randomUUID()
+  await store.beginRun(sharingAgain, cwd)
+  const third = randomUUID()
+  await store.beginRun(third, cwd)
+  await store.endRun(third)
+  await store.endRun(sharingAgain)
+  const alone = await turn()
+  assert.equal(alone.before.shared, undefined, "a turn alone never starts on a checkpoint that names other runs")
+
+  // From the last checkpoint: the turn is told once what changed is read, and the agent writes at once. The checkpoint
+  // still holds the workspace as the turn started, tree for tree what a whole capture of that moment takes.
+  const treeOf = (storeRoot: string, id: string) => {
+    const db = new DatabaseSync(join(storeRoot, "snapshots.sqlite"), { readOnly: true })
+    try {
+      const row = z.object({ value: z.string() }).optional().parse(db.prepare("SELECT value FROM snapshots WHERE id = ?").get(id))
+      return row ? z.object({ tree: z.string() }).loose().parse(JSON.parse(row.value)).tree : undefined
+    } finally {
+      db.close()
+    }
+  }
+  await turn()
+  edit("a.txt", "the person's edit\n")
+  mkdirSync(join(cwd, "dir"), { recursive: true })
+  edit("dir/new.txt", "new in a new folder\n")
+  mkdirSync(join(cwd, "gone"), { recursive: true })
+  rmSync(join(cwd, "b.txt"))
+  heard.push({ at: ++count, path: join(cwd, "b.txt") })
+  edit("ignored.log", "an ignored file\n")
+  const whole = new WorkspaceSnapshots(new Git(), join(root, "whole"))
+  const expected = treeOf(join(root, "whole"), (await whole.capture(cwd)).id)
+  whole.close()
+  const saved = () => {
+    const db = new DatabaseSync(join(root, "store", "snapshots.sqlite"), { readOnly: true })
+    try {
+      return z.object({ n: z.number() }).parse(db.prepare("SELECT count(*) AS n FROM snapshots").get()).n
+    } finally {
+      db.close()
+    }
+  }
+  const savedBefore = saved()
+  let savedWhenTold = -1
+  const racing = randomUUID()
+  let toldAt = -1
+  const began = performance.now()
+  const raced = store.beginRun(racing, cwd, () => {
+    toldAt = performance.now() - began
+    savedWhenTold = saved()
+    // The agent's first writes, the moment it's told: a changed file again, a new one, one deleted.
+    edit("a.txt", "the agent's write\n")
+    edit("agent.txt", "the agent's new file\n")
+    rmSync(join(cwd, "dir", "new.txt"))
+    heard.push({ at: ++count, path: join(cwd, "dir", "new.txt") })
+  })
+  const startedOn = await raced
+  const savedAt = performance.now() - began
+  assert.equal(savedWhenTold, savedBefore, "the turn was told before its checkpoint was saved")
+  assert.equal(treeOf(join(root, "store"), startedOn.id), expected, "the checkpoint is the workspace as the turn started, the agent's writes left out")
+  await store.endRun(racing)
+  console.log(JSON.stringify({ toldMs: Math.round(toldAt), savedMs: Math.round(savedAt) }))
 
   // Reused, the wait is the history's read and two Git reads, not a capture.
   const settled = await turn()
