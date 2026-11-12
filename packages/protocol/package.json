@@ -33,6 +33,7 @@
     "./attribution-conformance": "./dist/attribution-conformance.js",
     "./borrow-conformance": "./dist/borrow-conformance.js",
     "./handoff-project": "./dist/handoff-project.js",
+    "./handoff": "./dist/handoff.js",
     "./source-project": "./dist/source-project.js"
   },
   "files": [

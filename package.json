@@ -64,7 +64,7 @@
     "test:git": "npm run -s build --workspace @mako/git && node packages/git/test/run.mjs",
     "test:lazy": "npm run -s build --workspace @mako/lazy && node --test packages/lazy/test/run.mjs && node scripts/test-heavy-packages-rule.mjs",
     "protocol:build": "npm run build --workspace @mako/protocol",
-    "test:protocol": "npm run -s build --workspace @mako/protocol && node --test packages/protocol/test/run.mjs packages/protocol/test/borrow.mjs packages/protocol/test/borrow-words.mjs packages/protocol/test/setup.mjs packages/protocol/test/handoff-project.mjs packages/protocol/test/source-project.mjs && tsx scripts/test-host-gateway.ts && tsx scripts/test-source-project-publisher.ts",
+    "test:protocol": "npm run -s build --workspace @mako/protocol && node --test packages/protocol/test/run.mjs packages/protocol/test/borrow.mjs packages/protocol/test/borrow-words.mjs packages/protocol/test/setup.mjs packages/protocol/test/handoff-project.mjs packages/protocol/test/handoff.mjs packages/protocol/test/source-project.mjs && tsx scripts/test-host-gateway.ts && tsx scripts/test-source-project-publisher.ts",
     "git:doctor": "npm run -s build --workspace @mako/git && node scripts/git-doctor.mjs",
     "test:commit-generation": "tsx scripts/test-utility-work.ts && tsx scripts/test-commit-generation.ts && tsx scripts/test-commit-models.ts && tsx scripts/test-utility-token-count.ts && tsx scripts/test-commit-connections.ts && tsx scripts/test-utility-model-location.ts && tsx scripts/test-utility-model-catalog.ts",
     "test:model-connections": "tsx scripts/test-model-connections.ts",
