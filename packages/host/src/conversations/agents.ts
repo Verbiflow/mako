@@ -4156,12 +4156,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     // the notice follows. Read in here, a report read the Apex's whole journal on the loop. Kept unheard in the store
     // meanwhile, so a host that stops first sends it on its start. A starting host's notices (`resume`) go in order
     // with the rest of what it resumes: one that came after its Apex's wakes resumed was never heard.
-    if (conversation) {
-      void this.deps.live.readIn([conversation]).then((read) => {
-        if (read && !this.stopped) this.wakes.notice(conversation, this.rootOf(edge.parent), notice)
-      }, (error) => hostWarn("agents", "an Apex's conversation couldn't be read in for a notice; it waits unheard", { notice: notice.id, error: errorMessage({ error }) }))
-      return
-    }
+    if (conversation) return this.wakes.noticeWhen(this.deps.live.readIn([conversation]), conversation, this.rootOf(edge.parent), notice)
     // An Apex whose turns a process Mako didn't start runs: the report waits unheard in the store until that process ends.
     const apex = this.store()!.edges().of(edge.parent)
     if (!apex?.run) return
