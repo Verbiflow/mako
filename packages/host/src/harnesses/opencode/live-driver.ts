@@ -124,6 +124,8 @@ interface Live {
   childSettling: Map<string, Array<() => void>>
   /** The latest notice OpenCode enqueued while no turn ran: the cause of the turn it starts on it. */
   providerTurnCause?: ProviderTurnCause & { source?: NativeEventSource }
+  /** Each notice OpenCode queued while a turn ran, by its inbox item: it opens its own turn once delivered between steps. */
+  queuedNotices: Map<string, ProviderTurnCause & { source?: NativeEventSource }>
   /** Shells and subagent sessions Stop ended. OpenCode notifies the root of each end. */
   stopped: Set<string>
   /** Those notices, by inbox item. A turn OpenCode starts on one is stopped too. */
@@ -440,7 +442,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   function observeNotice(live: Live, inbox: string, notice: OpenCodeNotice): void {
     if (notice.ended && live.stopped.delete(notice.ended)) live.stopNotices.add(inbox)
     // The notice is the inbox item OpenCode saves as the line that opens the turn: the turn cites it, as saved history does.
-    if (!live.turn && notice.cause) live.providerTurnCause = { ...notice.cause, source: { harness: "opencode", record: inbox } }
+    if (!notice.cause) return
+    const cause = { ...notice.cause, source: { harness: "opencode", record: inbox } }
+    if (!live.turn) live.providerTurnCause = cause
+    else live.queuedNotices.set(inbox, cause)
   }
 
   function mark(live: Live, markers: readonly TranscriptEvent[]): void {
@@ -519,7 +524,16 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (turn.kind !== "compaction") engine.patch(live, { nativeRunId: fact.inbox })
         return
       }
-      case "delivered":
+      case "delivered": {
+        // OpenCode 2.2.7 runs a notice queued during a turn in that same execution, once its last step ended: the turn
+        // ends there, and the notice opens its own, as it does when it comes after the turn (`started`).
+        const queued = live.queuedNotices.get(fact.inbox)
+        live.queuedNotices.delete(fact.inbox)
+        if (queued && fact.between && live.turn?.delivered && live.turn.inboxId !== fact.inbox) {
+          finish(live, { kind: "succeeded" })
+          live.providerTurnCause = queued
+          openProviderTurn(live)
+        }
         if (live.turn?.inboxId === fact.inbox) live.turn.delivered = true
         if (live.stopNotices.delete(fact.inbox) && live.turn?.kind === "provider") {
           live.turn.stopRequested = true
@@ -527,6 +541,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
             hostWarn("opencode", "The turn started on a stopped task's notice was not interrupted", { conversation: live.state.id, error: errorText({ error }) }))
         }
         return
+      }
       case "started":
         if (!live.turn && (live.state.status === "ready" || live.state.status === "failed")) openProviderTurn(live)
         return
@@ -856,7 +871,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const live: Live = {
         api, cwd, env, emit: options.emit, launchAccess, nativeStream: null, bounds: new OpenCodeCallBounds(options.conversationId), catalogGeneration: 0, turn: null, queue: Promise.resolve(),
         mcp: new OpenCodeMcpHealth(), mcpReads: Promise.resolve(),
-        settling: [], childSettling: new Map(), stopped: new Set(), stopNotices: new Set(), stream: new AbortController(), closed: false,
+        settling: [], childSettling: new Map(), stopped: new Set(), stopNotices: new Set(), queuedNotices: new Map(), stream: new AbortController(), closed: false,
         state: {
           executionContext: context,
           id: options.conversationId, harness: "opencode", cwd, title: options.title, nativeId: options.resume, nativePath,
@@ -1013,6 +1028,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       live.providerTurnCause = undefined
       live.stopped.clear()
       live.stopNotices.clear()
+      live.queuedNotices.clear()
       engine.patch(live, { status: "running", nativeRunId: inboxId, lastStop: undefined, error: undefined })
       engine.emitUpdate(live, { kind: "user", text })
       live.nativeStream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, run: inboxId, attachments })

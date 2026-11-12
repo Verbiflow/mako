@@ -25,7 +25,7 @@ process.on("message", (raw) => {
   const { id } = request.data
   if (request.data.t === "mark" || request.data.t === "since" || request.data.t === "probe") {
     const asked = request.data
-    void (asked.t === "mark" ? mark(id) : asked.t === "probe" ? probe(id, asked.beats) : since(id, asked.mark, asked.roots, asked.ignore, asked.exclude ?? [])).catch((error) =>
+    void (asked.t === "mark" ? mark(id) : asked.t === "probe" ? probe(id, asked.beats) : since(id, asked.mark, asked.roots, asked.ignore, asked.exclude ?? [], asked.perFolder)).catch((error) =>
       reply({ t: "failed", id, message: error instanceof Error ? error.message : String(error) }))
     return
   }
@@ -143,7 +143,7 @@ async function caughtUp(): Promise<boolean> {
   }
 }
 
-async function since(id: number, from: HistoryMark, roots: string[], ignore: readonly string[], exclude: readonly string[]): Promise<void> {
+async function since(id: number, from: HistoryMark, roots: string[], ignore: readonly string[], exclude: readonly string[], perFolder?: number): Promise<void> {
   if (process.platform !== "darwin") throw new Error("The file system's history is read through FSEvents, on macOS only.")
   const started = performance.now()
   const complete = await caughtUp()
@@ -154,6 +154,11 @@ async function since(id: number, from: HistoryMark, roots: string[], ignore: rea
   const lost: string[] = []
   const folders = new Map(ignore.map((folder, index) => [folder, index]))
   const ignored = ignore.map(() => 0)
+  // Sent per folder one level into its root, so a busy day's 345,000 changed paths (2026-11-12) aren't all sent to be
+  // parsed and walked on the host's thread for a trace that keeps a few of each folder's.
+  const sent = new Map<string, number>()
+  const capped = new Set<string>()
+  let unsent = 0
   try {
     for (const root of roots) {
       if (!existsSync(root)) continue
@@ -163,8 +168,22 @@ async function since(id: number, from: HistoryMark, roots: string[], ignore: rea
         for (const event of await parcel.getEventsSince(root, file, { backend: "fs-events", ignore: excluded })) {
           if (paths.has(event.path)) continue
           const at = folders.size ? ignoredBy(folders, event.path) : -1
-          if (at < 0) paths.add(event.path)
-          else ignored[at]! += 1
+          if (at >= 0) ignored[at]! += 1
+          else if (perFolder === undefined) paths.add(event.path)
+          else {
+            // A folder itself, or a path outside every folder, is always sent; past `perFolder`, a folder's are counted.
+            const folder = folderIn(root, event.path)
+            if (folder !== undefined && folder !== event.path) {
+              const count = sent.get(folder) ?? 0
+              if (count >= perFolder) {
+                capped.add(folder)
+                unsent += 1
+                continue
+              }
+              sent.set(folder, count + 1)
+            }
+            paths.add(event.path)
+          }
         }
         if (!complete) lost.push(root)
       } catch {
@@ -174,7 +193,14 @@ async function since(id: number, from: HistoryMark, roots: string[], ignore: rea
   } finally {
     rmSync(file, { force: true })
   }
-  reply({ t: "history", id, paths: [...paths], lost, ignored, caughtUpMs, readMs: performance.now() - started - caughtUpMs })
+  reply({ t: "history", id, paths: [...paths], lost, ignored, caughtUpMs, readMs: performance.now() - started - caughtUpMs, ...(perFolder !== undefined && { capped: [...capped], unsent }) })
+}
+
+/** The folder one level into `root` that holds `path`; undefined for the root itself or a path outside it. */
+function folderIn(root: string, path: string): string | undefined {
+  if (!path.startsWith(`${root}/`)) return undefined
+  const end = path.indexOf("/", root.length + 1)
+  return end < 0 ? path : path.slice(0, end)
 }
 
 /**

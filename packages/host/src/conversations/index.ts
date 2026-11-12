@@ -78,7 +78,7 @@ export { OwnerFiles } from "./owner-files.js"
 export { ListedRepositories } from "./listed-repositories.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudContinues } from "./cloud-continues.js"
-export { CloudHandOffs, workingThreads } from "./cloud-handoffs.js"
+export { CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, workingThreads } from "./cloud-handoffs.js"
 export { conversationShown, finAsking, ownedSessions, sessionOrderIn, REPORT_WORK, SessionPublisher, SessionReporter, type FinAsking, type ReportSources, type SessionLink } from "./session-report.js"
 export { MovesUnderWay } from "./moves-under-way.js"
 export { CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, turnOnOf, type TurnOnReading, type TurnOnSources } from "./cloud-turn-on.js"
@@ -321,6 +321,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const continueOn = continuing({
     live,
     resolveLaunch: (provider, cwd, tuning) => harnesses.profiles.resolveLaunch(provider, cwd, tuning),
+    carried: (provider, cwd, tuning) => harnesses.profiles.carried(provider, cwd, tuning),
     resumesUnderAccount: (harness) => host.liveDrivers.get(harness)?.accountContinuation?.kind === "resumes",
     switched: (provider) => deps.telemetry.feature("harness.switched", provider),
   })

@@ -742,6 +742,48 @@ test("a cloud machine's tick and an account with no link report on one publisher
   assert.ok(sent.at(-1)?.owned, "everything again")
 })
 
+test("a batch reworks its own conversation's row, never the whole list; the whole list is worked out on a structural change and every half minute", async () => {
+  let now = NOW
+  let whole = 0
+  const asked: string[][] = []
+  const sent: SessionsReport[] = []
+  let activity = NOW
+  const rowOf = (n: number) => ({ ...row(n, "working"), activityAt: new Date(activity).toISOString() })
+  const publisher = new SessionPublisher({
+    rows: () => (whole++, [row(1), row(2), row(3)]),
+    rowsOf: (conversations) => (asked.push([...conversations]), [...conversations].map((conversation) => rowOf(Number(conversation.slice(2))))),
+    now: () => now,
+    schedule: () => {},
+  })
+  const link = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  publisher.report(link)
+  assert.equal(whole, 1)
+  // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
+  const batch = (conversation: string) => ({ type: "live-batch", batch: { id: conversation, revision: 3, updates: [] } }) as never
+  for (let second = 1; second <= 10; second++) {
+    activity = NOW + second * 1_000
+    publisher.own(batch("c-2"))
+    now += 1_000
+    publisher.report(link)
+  }
+  assert.equal(whole, 1, "a working conversation's batches don't rework the whole list")
+  assert.equal(asked.length, 10)
+  assert.ok(asked.every((each) => each.length === 1 && each[0] === "c-2"), "each report reworks the conversation its batches came for")
+  assert.deepEqual(sent.slice(1).map((each) => each.listed.map((listed) => `${listed.conversation} ${listed.state}`)), [["c-2 working"]], "and says its row alone, once, as it changed")
+  assert.equal(publisher.listed()?.length, 3, "the rest of the list stays")
+  now += 1_000
+  publisher.report(link)
+  assert.equal(asked.length, 10, "nothing moved, nothing is worked out")
+  publisher.showsChanged()
+  now += 1_000
+  publisher.report(link)
+  assert.equal(whole, 2, "a change of the list itself (an archive, a rename) reworks it whole")
+  now += 30_000
+  publisher.own(batch("c-1"))
+  publisher.report(link)
+  assert.equal(whole, 3, "and so does a report half a minute after the last whole one, for what moves without an event")
+})
+
 test("a watched conversation's batch too large for the gateway goes as the notice to read it again, as a cloud Thread's does", async () => {
   const live: string[] = []
   const publisher = new SessionPublisher({ rows: () => [row(1)], now: () => NOW, schedule: () => {} })

@@ -24,6 +24,13 @@ const READY_KEPT_MS = 7 * 24 * 60 * 60_000
  * takes one that ended: an older one is left, and the move makes its own.
  */
 const READY_FRESH_MS = 20 * 60_000
+/**
+ * A Thread whose conversation hasn't moved since its last round is passed over (`revision`): its checkout capture, its
+ * cloud Thread's renewal and its records' send would each find what they sent last. It's brought up anyway once its
+ * last round is this old, so the cloud Thread standing by stays well inside `READY_FRESH_MS`, and a checkout changed
+ * from outside the conversation is sent within it. A move still sends its own last seconds.
+ */
+const STILL_KEPT_MS = 5 * 60_000
 
 const ReadyEntrySchema = z.object({
   cloudThread: z.string(),
@@ -59,6 +66,8 @@ export type CloudReadinessOptions = {
   enabled(): Promise<boolean>
   /** This Mac's Threads at work now. */
   working(): WorkingThread[]
+  /** Where a conversation stands (its live revision), or undefined when unknown: a round runs whenever it moved. */
+  revision?(conversationId: string): number | undefined
   /** Whether a move of the Thread runs now: one on its way isn't kept ready (`CloudMoves.leaving`). */
   leaving(thread: string): boolean
   /** What a move of the Thread of `conversationId` would carry; throws, saying why, when it couldn't move. */
@@ -86,6 +95,8 @@ export class CloudReadiness {
   readonly #said = new Map<string, string>()
   /** By local Thread: when a move took its cloud Thread. */
   readonly #taken = new Map<string, number>()
+  /** By local Thread: the conversation and its revision its last round brought up, and when. */
+  readonly #broughtUp = new Map<string, { conversationId: string; revision: number; at: number }>()
 
   constructor(options: CloudReadinessOptions) {
     this.#options = options
@@ -97,7 +108,7 @@ export class CloudReadiness {
     const resting = (thread: string) => this.#options.leaving(thread) || Date.now() - (this.#taken.get(thread) ?? Number.NEGATIVE_INFINITY) < TAKEN_REST_MS
     // Each round captures its checkout through Git (an `add --all` of the whole worktree) and sends its records
     // through the sync daemon: with every Thread at work at once, a Mac of many Fins ran hundreds of them together.
-    const due = this.#options.working().filter((working) => !resting(working.thread)).values()
+    const due = this.#options.working().filter((working) => !resting(working.thread) && this.#moved(working)).values()
     await Promise.all(Array.from({ length: ROUNDS_AT_ONCE }, async () => {
       for (const working of due) await this.#round(working)
     }))
@@ -126,10 +137,19 @@ export class CloudReadiness {
       return undefined
     }
     this.#taken.set(thread, Date.now())
+    this.#broughtUp.delete(thread)
     delete entries[thread]
     await this.#save()
     hostLog("readiness", "a move takes the cloud Thread kept ready for it", { thread, cloudThread: entry.cloudThread, readyForMs: Date.now() - entry.at })
     return { cloudThread: entry.cloudThread, ...entry.checkpoint && { checkpoint: entry.checkpoint } }
+  }
+
+  /** Whether a Thread's conversation moved since its last round, or that round is `STILL_KEPT_MS` old. */
+  #moved(working: WorkingThread): boolean {
+    const last = this.#broughtUp.get(working.thread)
+    const revision = this.#options.revision?.(working.conversationId)
+    return !last || revision === undefined || last.conversationId !== working.conversationId || last.revision !== revision ||
+      Date.now() - last.at >= STILL_KEPT_MS
   }
 
   #round(working: WorkingThread): Promise<void> {
@@ -143,6 +163,8 @@ export class CloudReadiness {
   async #bringUp(working: WorkingThread): Promise<void> {
     const account = this.#options.account()
     if (!account) return
+    // Read before the round, so a change while it runs is a move the next refresh brings up.
+    const revision = this.#options.revision?.(working.conversationId)
     let plan: ReadyPlan
     try {
       plan = await this.#options.plan(working.conversationId)
@@ -177,6 +199,7 @@ export class CloudReadiness {
       ready.at = Date.now()
       if (checkpoint) ready.checkpoint = checkpoint
       await this.#save()
+      if (revision !== undefined) this.#broughtUp.set(working.thread, { conversationId: working.conversationId, revision, at: ready.at })
       this.#said.delete(plan.thread)
       const versions = sent.reduce((total, each) => total + each.versions, 0)
       const bytes = sent.reduce((total, each) => total + each.bytes, 0)
