@@ -4132,7 +4132,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     hostLog("agents", "report", { op: edge.op, report: report.id, status: report.status, implicit: report.implicit ?? false })
     this.latest.set(edge.child, kept.report)
     if (report.status === "progress") store.markReportsDelivered([report.id], this.now())
-    else this.noticeOf(edge, kept.report)
+    else this.noticeOf(edge, kept.report, undefined, "off-the-call")
     this.childMoved(edge, false)
     for (const wake of this.waiters) wake()
     this.checkHolds(edge.child)
@@ -4141,7 +4141,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** `notice:{child}:{reportId}` to the Apex's owner: this host, which has the Apex's conversation; a report its spawn asked not to hear goes nowhere but its strip. */
-  private noticeOf(edge: ThreadParent, report: Report, wake?: string): void {
+  private noticeOf(edge: ThreadParent, report: Report, wake?: string, read: "in-order" | "off-the-call" = "in-order"): void {
     const notice = this.noticeFor(edge, report, wake)
     if (!notice) return
     // Its Apex is on another device: the report waits in the store, unheard, until that device's host takes it.
@@ -4151,10 +4151,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       return
     }
     const conversation = this.frontOf(edge.parent, edge.parentSession)
-    if (conversation && this.deps.live.held(conversation)) return this.wakes.notice(conversation, this.rootOf(edge.parent), notice)
-    // Its Apex's conversation isn't in memory: it's read in off this call, a slice at a time or on a reader, and the
-    // notice follows. Read in here, a report read the Apex's whole journal on the loop. Kept unheard in the store
-    // meanwhile, so a host that stops first sends it on its start.
+    if (conversation && (read === "in-order" || this.deps.live.held(conversation))) return this.wakes.notice(conversation, this.rootOf(edge.parent), notice)
+    // A report (`off-the-call`) whose Apex's conversation isn't in memory: it's read in off this call, on a reader, and
+    // the notice follows. Read in here, a report read the Apex's whole journal on the loop. Kept unheard in the store
+    // meanwhile, so a host that stops first sends it on its start. A starting host's notices (`resume`) go in order
+    // with the rest of what it resumes: one that came after its Apex's wakes resumed was never heard.
     if (conversation) {
       void this.deps.live.readIn([conversation]).then((read) => {
         if (read && !this.stopped) this.wakes.notice(conversation, this.rootOf(edge.parent), notice)
