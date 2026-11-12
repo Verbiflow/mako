@@ -58,7 +58,7 @@ try {
       assert.ok(!("refused" in started), JSON.stringify(started))
     }
   // Settled when every Fin is listed and each that finishes has: the rest work on until the end.
-  const finished = () => apexes.every((apex) => world.agents.roster(apex.conversation).filter((entry) => entry.child?.state.kind === "ended").length >= Math.floor((EACH * 2) / 3))
+  const finished = () => apexes.every((apex) => world.agents.roster(apex.conversation).filter((entry) => entry.child?.state?.kind === "ended").length >= Math.floor((EACH * 2) / 3))
   for (const deadline = Date.now() + 120_000; !finished(); ) {
     if (Date.now() > deadline) throw new Error("The Fins didn't finish in two minutes")
     await new Promise((resolve) => setTimeout(resolve, 200))
