@@ -142,7 +142,7 @@ import type { LiveRequest, LiveSnapshot, LiveStartOptions } from "../contracts/l
 import type { LivePermissionResponse, LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../contracts/thread-identity.js"
 import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTART_CHAIN, STRANDED_AFTER_MS, strandedTurn } from "../contracts/turn-continuation.js"
-import { uniqueName, type KeptAnswer, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
+import { uniqueName, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
 import { holdOf, keepsLine } from "../contracts/request-hold.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
@@ -653,6 +653,9 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly answerCounts = { apex: 0, passed: 0, refused: 0, person: 0 }
   private latest = new Map<string, Report>()
   private seen: unknown
+  /** The store's `moved` when `sync` last took it in, and where its reports and answers were read to. */
+  private syncedAt: number | undefined
+  private keptMark: KeptMark = { reports: 0, answers: 0, titles: 0, journals: 0 }
   private draining = false
   private drainAgain = false
   /**
@@ -729,9 +732,10 @@ export class Agents implements AgentOperations, ConversationChildren {
       ready: (conversation) => this.ready(conversation),
       // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against. A digest
       // sent again says what the one it repeats said, so later news goes on its own.
-      unsent: (conversation) => (deps.live.snapshot(conversation)?.requests ?? []).flatMap((request) =>
+      // Memory first: a notice for an Apex in memory reads nothing in, and one that isn't is read in before (`noticeOf`).
+      unsent: (conversation) => ((deps.live.held(conversation) ?? deps.live.snapshot(conversation))?.requests ?? []).flatMap((request) =>
         request.digest && !request.continues?.brief && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
-      carried: (conversation, notice) => Boolean(deps.live.snapshot(conversation)?.requests.some((request) =>
+      carried: (conversation, notice) => Boolean((deps.live.held(conversation) ?? deps.live.snapshot(conversation))?.requests.some((request) =>
         request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
       admit: (conversation, request, text, notices, actor, hold, lines) => {
         // The conversation took this request already: a host that died before marking its reports heard sent it.
@@ -2430,7 +2434,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * it, whether or not it stopped to wait. One that asks and works on is still asking, so its answer reaches it as a
    * message, and an answer is never refused while the digest shows the question.
    */
-  private pendingReports(edge: ThreadParent): Report[] {
+  private pendingReports(edge: ThreadParent): readonly Report[] {
     if (edge.closedAt !== undefined) return []
     const conversation = this.conversationOf(edge.child)
     if (conversation && this.deps.archived?.(conversation)) return []
@@ -4128,7 +4132,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     hostLog("agents", "report", { op: edge.op, report: report.id, status: report.status, implicit: report.implicit ?? false })
     this.latest.set(edge.child, kept.report)
     if (report.status === "progress") store.markReportsDelivered([report.id], this.now())
-    else this.noticeOf(edge, kept.report)
+    else this.noticeOf(edge, kept.report, undefined, "off-the-call")
     this.childMoved(edge, false)
     for (const wake of this.waiters) wake()
     this.checkHolds(edge.child)
@@ -4137,7 +4141,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** `notice:{child}:{reportId}` to the Apex's owner: this host, which has the Apex's conversation; a report its spawn asked not to hear goes nowhere but its strip. */
-  private noticeOf(edge: ThreadParent, report: Report, wake?: string): void {
+  private noticeOf(edge: ThreadParent, report: Report, wake?: string, read: "in-order" | "off-the-call" = "in-order"): void {
     const notice = this.noticeFor(edge, report, wake)
     if (!notice) return
     // Its Apex is on another device: the report waits in the store, unheard, until that device's host takes it.
@@ -4147,7 +4151,12 @@ export class Agents implements AgentOperations, ConversationChildren {
       return
     }
     const conversation = this.frontOf(edge.parent, edge.parentSession)
-    if (conversation) return this.wakes.notice(conversation, this.rootOf(edge.parent), notice)
+    if (conversation && (read === "in-order" || this.deps.live.held(conversation))) return this.wakes.notice(conversation, this.rootOf(edge.parent), notice)
+    // A report (`off-the-call`) whose Apex's conversation isn't in memory: it's read in off this call, on a reader, and
+    // the notice follows. Read in here, a report read the Apex's whole journal on the loop. Kept unheard in the store
+    // meanwhile, so a host that stops first sends it on its start. A starting host's notices (`resume`) go in order
+    // with the rest of what it resumes: one that came after its Apex's wakes resumed was never heard.
+    if (conversation) return this.wakes.noticeWhen(this.deps.live.readIn([conversation]), conversation, this.rootOf(edge.parent), notice)
     // An Apex whose turns a process Mako didn't start runs: the report waits unheard in the store until that process ends.
     const apex = this.store()!.edges().of(edge.parent)
     if (!apex?.run) return
@@ -5964,15 +5973,26 @@ export class Agents implements AgentOperations, ConversationChildren {
   private conversationOf(thread: string): string | undefined {
     const known = this.conversations.get(thread)
     if (known) return known
-    const sessions = this.store()?.thread(ThreadIdSchema.parse(thread))?.sessions ?? []
+    const sessions = this.sessionsOf(thread)
     for (let index = sessions.length - 1; index >= 0; index -= 1) {
-      const conversation = this.conversationOfSession(sessions[index]!)
+      // A Session's newest journal, as `conversationOfSession` reads it.
+      const conversation = sessions[index]!.at(-1)
       if (!conversation) continue
       this.conversations.set(thread, conversation)
       this.childOf.set(conversation, thread)
       return conversation
     }
     return undefined
+  }
+
+  /**
+   * A Thread's conversations, Session by Session in its order: every Fin's read together in one look at the store, and
+   * held until it moves (`ThreadStore.threadConversations`), since a roster and the list read each Fin's on every look.
+   */
+  private sessionsOf(thread: string): string[][] {
+    const store = this.store()
+    if (!store) return []
+    return store.threadConversations([thread], () => store.edges().all.map((edge) => edge.child)).get(thread) ?? []
   }
 
   /**
@@ -5999,10 +6019,9 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** Of a Thread's Sessions, newest first, the first conversation `picked` takes. */
   private newestOf(thread: string, picked: (conversation: string) => boolean): string | undefined {
-    const store = this.store()
-    const sessions = store?.thread(ThreadIdSchema.parse(thread))?.sessions ?? []
+    const sessions = this.sessionsOf(thread)
     for (let index = sessions.length - 1; index >= 0; index -= 1)
-      for (const conversation of store?.conversationsOf(sessions[index]!) ?? [])
+      for (const conversation of sessions[index]!)
         if (picked(conversation)) return conversation
     return undefined
   }
@@ -6072,16 +6091,58 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** Takes in what other hosts wrote: a commit drops every entry, read again from the store as it's asked for. */
+  /**
+   * Takes in what the store holds that this host's entries are built on. Edges that changed rebuild everything; any
+   * other commit (another Mako's, a title, this host's own report) takes the reports and answers kept since, and only
+   * the Fins they're of read again, with the rosters above them. Rebuilt on every commit, a day's 226 Fins were read
+   * again on every report and every list, seconds of the loop on a store other Makos commit to all day.
+   */
   private sync(): void {
     const store = this.store()
     if (!store) return
+    const moved = store.moved()
+    if (moved === this.syncedAt) return
+    this.syncedAt = moved
     const edges = store.edges()
-    if (edges === this.seen) return
-    this.seen = edges
-    this.latest = store.latestReports()
-    this.answersHeld = store.latestAnswers()
-    this.entries.clear()
-    this.rosters.clear()
+    if (edges !== this.seen) {
+      this.seen = edges
+      this.keptMark = store.keptMark()
+      this.latest = store.latestReports()
+      this.answersHeld = store.latestAnswers()
+      this.entries.clear()
+      this.rosters.clear()
+      return
+    }
+    const since = store.keptSince(this.keptMark)
+    this.keptMark = since.mark
+    if (since.lost) {
+      // Title changes were pruned past this mark before they were read: what any Fin shows may have changed.
+      this.latest = store.latestReports()
+      this.answersHeld = store.latestAnswers()
+      this.entries.clear()
+      this.rosters.clear()
+      return
+    }
+    // A Fin renamed, or its Session given another journal, shows that in its entry: read again, with the rosters above,
+    // and the conversation it's read from found again.
+    const changed = new Set<string>(since.threads)
+    for (const thread of since.threads) this.conversations.delete(thread)
+    for (const report of since.reports) {
+      this.latest.set(report.child, report)
+      changed.add(report.child)
+    }
+    // An answer's delivery is marked on its row in place, so answers are read again whole; there are few.
+    const answers = store.latestAnswers()
+    for (const child of new Set([...answers.keys(), ...this.answersHeld.keys()]))
+      if (JSON.stringify(answers.get(child)) !== JSON.stringify(this.answersHeld.get(child))) changed.add(child)
+    this.answersHeld = answers
+    for (const child of changed) {
+      this.entries.delete(child)
+      for (let edge = edges.of(child), hops = 0; edge && hops < 64; edge = edges.of(edge.parent), hops += 1) {
+        this.rosters.delete(edge.parent)
+        this.entries.delete(edge.parent)
+      }
+    }
   }
 
   private forget(thread: string): void {

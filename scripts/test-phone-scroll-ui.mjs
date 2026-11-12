@@ -229,7 +229,18 @@ async function checkScroll() {
   const longTasks = (since) => evaluate(`window.__longTasks.filter(task => task.at >= ${since}).map(task => Math.round(task.ms))`)
   const now = () => evaluate("performance.now()")
   const centre = { x: 196, y: 380 }
-  const touch = (type, point) => send("Input.dispatchTouchEvent", { type, touchPoints: point ? [{ x: point.x, y: point.y, id: 1 }] : [] })
+  /**
+   * Every touch is stamped with when the finger was there. Chromium reads a finger's speed from the stamps, not from
+   * when a busy machine delivered the events: a flick sent by `Input.synthesizeScrollGesture`, paced by the clock,
+   * barely glided one time in six on the macOS runner (its last moves arrived bunched, read as a stop). A touch on its
+   * own is stamped now; a stroke's moves are stamped from its start, 16 ms apart, and its lift 1 ms after its last move
+   * however late they arrive: a lift stamped when it arrived read as a finger that had stopped, and nothing glided.
+   */
+  let stamp = 0
+  const touch = (type, point, at = Math.max(Date.now() / 1000, stamp + 0.001)) => {
+    stamp = at
+    return send("Input.dispatchTouchEvent", { type, touchPoints: point ? [{ x: point.x, y: point.y, id: 1 }] : [], timestamp: at })
+  }
   /** A finger dragged down the screen by `px` (the transcript toward earlier turns) in 16 ms steps of `step` px, still down. */
   const drag = async (from, px, step = 20) => {
     for (let moved = step; Math.abs(moved) <= Math.abs(px); moved += step) {
@@ -237,8 +248,22 @@ async function checkScroll() {
       await wait(16)
     }
   }
-  /** A finger's flick: `px` down the screen at `speed` px/s, the glide left to run. */
-  const flick = (px, speed) => send("Input.synthesizeScrollGesture", { x: centre.x, y: centre.y, yDistance: px, speed, gestureSourceType: "touch", preventFling: false })
+  /**
+   * A finger's flick: `px` down the screen at `speed` px/s, lifted while moving so the glide runs. Each stroke is at most
+   * 500 px, so the finger stays on the screen.
+   */
+  const flick = async (px, speed) => {
+    for (let left = px; Math.abs(left) >= 1; ) {
+      const part = Math.sign(left) * Math.min(Math.abs(left), 500)
+      left -= part
+      const from = { x: centre.x, y: Math.min(Math.max(centre.y, 40 - Math.min(part, 0)), 812 - Math.max(part, 0)) }
+      const steps = Math.max(2, Math.round(Math.abs(part) / speed / 0.016))
+      await touch("touchStart", from)
+      const start = stamp
+      for (let step = 1; step <= steps; step += 1) await touch("touchMove", { x: from.x, y: from.y + (part * step) / steps }, start + step * 0.016)
+      await touch("touchEnd", undefined, start + steps * 0.016 + 0.001)
+    }
+  }
   const phone = async (theme) => {
     await window.loadURL(`${new URL("scripts/phone-scroll.html", process.env.MAKO_SCROLL_URL).href}?theme=${theme}`)
     await until(`document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length >= 2`, "the phone's transcript")
@@ -294,7 +319,9 @@ async function checkScroll() {
     since = await now()
     await wait(300)
     await drag(centre, 300)
-    await wait(150)
+    // Where the drag settled, the finger still down, rather than a fixed 150 ms after its last move: on a busy runner
+    // that read once found it 0 px from the end.
+    await rest()
     const dragged = await fromEnd()
     await touch("touchEnd")
     assert.ok(dragged > 250, `a 300 px drag up took the transcript ${Math.round(dragged)} px from the end`)
