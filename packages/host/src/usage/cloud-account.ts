@@ -49,6 +49,7 @@ import {
   CLOUD_ENTITLEMENT,
   servesDeviceRuntime,
   QUIET_PROJECT_LINK_VERSION,
+  QUIET_OTHERS_LINK_VERSION,
 } from "@mako/protocol"
 import {
   CloudBrowserSessionSchema,
@@ -1037,7 +1038,8 @@ export class CloudAccounts {
    * generations, and the checkpoint the cloud acknowledged, which the account may continue it from while this Mac is
    * quiet. It releases nothing. The same note again is the same note. A gateway that takes no notes yet answers 404:
    * `unserved`, and nothing is continued. A Thread's `project` goes only to a gateway whose link last agreed
-   * `QUIET_PROJECT_LINK_VERSION`: one before refuses the whole note, so to any other the Thread goes without it.
+   * `QUIET_PROJECT_LINK_VERSION`, and its `others` only to one that agreed `QUIET_OTHERS_LINK_VERSION`: one before
+   * refuses the whole note, so to any other the Thread goes without them.
    */
   async quiet(note: QuietNote): Promise<QuietAnswer | "unserved"> {
     const deviceId = await this.deviceId()
@@ -1047,15 +1049,19 @@ export class CloudAccounts {
     return QuietAnswerSchema.parse(await response.json())
   }
 
-  /** The note as this gateway takes it: a Thread's `project` only where its link agreed the version that carries it. */
+  /** The note as this gateway takes it: a Thread's `project` and `others` each only where its link agreed the version that carries it. */
   #noteFor(note: QuietNote): QuietNote {
-    if ((this.#agreed ?? 0) >= QUIET_PROJECT_LINK_VERSION || !note.threads.some((thread) => thread.project !== undefined)) return note
-    this.#options.log?.("a quiet note's project folders left out: the gateway's link hasn't agreed them", { agreed: this.#agreed ?? "none" })
+    const agreed = this.#agreed ?? 0
+    const project = agreed >= QUIET_PROJECT_LINK_VERSION || !note.threads.some((thread) => thread.project !== undefined)
+    const others = agreed >= QUIET_OTHERS_LINK_VERSION || !note.threads.some((thread) => thread.others !== undefined)
+    if (project && others) return note
+    this.#options.log?.("a quiet note's project folders left out: the gateway's link hasn't agreed them", { agreed: this.#agreed ?? "none", ...(!project && { project: "left out" }), ...(!others && { others: "left out" }) })
     return {
       ...note,
       threads: note.threads.map((thread) => {
         const without = { ...thread }
-        delete without.project
+        if (!project) delete without.project
+        if (!others) delete without.others
         return without
       }),
     }

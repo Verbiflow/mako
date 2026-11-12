@@ -115,7 +115,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 25)
+    assert.equal(SUPPORTED_VERSIONS.max, 26)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })

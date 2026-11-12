@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import * as migrationForms from "../dist/live-form.js"
-import { SESSION_ORDER_VERSION, ADVERTISE_LINK_VERSION, LEND_LINK_VERSION, QUIET_PROJECT_LINK_VERSION, LINK_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate, decodeRuntimeFrame, encodeRuntimeFrame, WireError, serveRuntime } from "../dist/index.js"
+import { SESSION_ORDER_VERSION, ADVERTISE_LINK_VERSION, LEND_LINK_VERSION, QUIET_PROJECT_LINK_VERSION, QUIET_OTHERS_LINK_VERSION, LINK_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate, decodeRuntimeFrame, encodeRuntimeFrame, WireError, serveRuntime } from "../dist/index.js"
 import { ReportedSessionSchema, ListedSessionSchema, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 describe("Session order and borrowing version migration", () => {
@@ -11,10 +11,11 @@ describe("Session order and borrowing version migration", () => {
     assert.equal(ADVERTISE_LINK_VERSION, 23)
     assert.equal(LEND_LINK_VERSION, 24)
     assert.equal(QUIET_PROJECT_LINK_VERSION, 25)
-    assert.equal(LINK_VERSION, 25)
+    assert.equal(QUIET_OTHERS_LINK_VERSION, 26)
+    assert.equal(LINK_VERSION, 26)
     assert.equal(PROTOCOL_VERSION, 1)
     assert.equal(SUPPORTED_VERSIONS.min, 1)
-    for (const maximum of [20, 21, 22, 23, 24, 25]) assert.equal(negotiate(SUPPORTED_VERSIONS, { min: 1, max: maximum }), maximum)
+    for (const maximum of [20, 21, 22, 23, 24, 25, 26]) assert.equal(negotiate(SUPPORTED_VERSIONS, { min: 1, max: maximum }), maximum)
   })
   test("order survives strict row, report and wire parsing from 22, and is stripped before 22 without mutating the owner", () => {
     for (const version of [20, 21, 22, 23, 24]) {

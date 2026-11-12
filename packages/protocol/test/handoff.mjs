@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { test } from "node:test"
 import { OwnerAnswerSchema, OwnerAskSchema, ParkedTurnSchema, QuietAnswerSchema, QuietNoteSchema, autoContinueOp } from "../dist/handoff.js"
 import { continueCloudThread } from "../dist/continues.js"
-import { QUIET_PROJECT_LINK_VERSION } from "../dist/version.js"
+import { QUIET_OTHERS_LINK_VERSION, QUIET_PROJECT_LINK_VERSION } from "../dist/version.js"
 
 const session = randomUUID()
 const note = () => ({ note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", sessions: [{ session, generation: 4 }], checkpoint: { version: 1, sha256: "a".repeat(64), bytes: 409, head: "b".repeat(40), branch: "mako/fix", index: "c".repeat(40), work: "d".repeat(40), standby: "t-standby" } }] })
@@ -92,6 +92,7 @@ test("a project folder's Thread names each other repository with its own checkpo
   const many = note()
   many.threads[0].others = Array.from({ length: 32 }, (_, i) => other(`r${i}`))
   assert.equal(QuietNoteSchema.safeParse(many).success, false, "at most 31")
+  assert.equal(QUIET_OTHERS_LINK_VERSION, 26, "sent only to a gateway whose link agreed them")
 })
 
 

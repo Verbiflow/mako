@@ -27,6 +27,7 @@ import {
   PONG,
   PROTOCOL_VERSION,
   Payload,
+  QUIET_OTHERS_LINK_VERSION,
   QUIET_PROJECT_LINK_VERSION,
   QUIET_VERSION,
   type RuntimeFrame,
@@ -1301,6 +1302,35 @@ test("a quiet note names a project folder's project worktree only to a gateway w
   await waitFor(() => cloud.runtimes().length === 0, "the link closed for the sleep")
   await mac.accounts.quiet(note(project))
   assert.equal(last().project, project, "the version its link last agreed")
+  mac.accounts.close()
+})
+
+test("a quiet note names a project folder's other repositories only to a gateway whose link agreed them", async () => {
+  const project = "/Users/ada/.mako/worktrees/shop/both-sides"
+  const checkpoint = { version: 1 as const, sha256: "e".repeat(64), bytes: 300, head: "f".repeat(40), branch: "mako/both-sides", index: "1".repeat(40), work: "2".repeat(40) }
+  const others = [{ path: `${project}/web`, url: "https://github.com/acme/web", branch: "mako/both-sides", checkpoint }]
+  const note = (): QuietNote => ({ note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", project, others, sessions: [{ session: randomUUID(), generation: 1 }] }] })
+  const cloud = await fakeCloud()
+  const last = () => QuietNoteSchema.parse(cloud.notes.at(-1)).threads[0]!
+  // A gateway whose link agrees the project's version but not the others': the project goes, the others don't.
+  const projectOnly: CloudRuntime = {
+    serve: (link, { runtimeId, credential, threads }) =>
+      serveRuntime(link, { runtimeId, build: "test", credential, threads, versions: { min: 1, max: QUIET_OTHERS_LINK_VERSION - 1 }, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true }) }),
+  }
+  let linked = 0
+  const older = await signedIn(cloud, { runtime: projectOnly, onRuntimeLinked: () => { linked += 1 } })
+  await waitFor(() => linked === 1, "the older link enrolled")
+  await older.accounts.quiet(note())
+  assert.equal(last().project, project, "the project, which it takes")
+  assert.equal(last().others, undefined, "never the others sent blind")
+  older.accounts.close()
+  // A gateway whose link agreed them: both named.
+  let agreed = 0
+  const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { agreed += 1 } })
+  await waitFor(() => agreed === 1, "the link enrolled")
+  await mac.accounts.quiet(note())
+  assert.equal(last().project, project)
+  assert.deepEqual(last().others, others)
   mac.accounts.close()
 })
 
