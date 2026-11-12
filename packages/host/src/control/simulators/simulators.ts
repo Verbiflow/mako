@@ -49,6 +49,7 @@ type Who = ({ kind: "agent" } & SimulatorAgent) | { kind: "person" }
 export type EndedThread = { thread?: string; conversation?: string; session?: string }
 
 const NOT_LEASED = "This Mac lends its simulators only under a lease of your Thread. Borrow an iOS simulator first; it's routed to a Mac that has one free."
+const OTHER_LEASE = "This simulator is held under another of your Thread's leases; each lease drives only the simulator it opened."
 
 /** A call from another place under a lease this Mac serves: the lease, and what it heard of it, for its session's progress. */
 export interface SimulatorLeases {
@@ -83,6 +84,8 @@ export class Simulators {
   readonly #remotes: () => readonly RemoteSimulatorHost[]
   readonly #borrowing: SimulatorsBorrowing | undefined
   readonly #consent: () => Promise<SetupConsent[]>
+  /** The one simulator each lease lends, from its first open until its claim ends. */
+  readonly #leased = new Map<string, string>()
   readonly #leases: SimulatorLeases | undefined
   readonly #agent: (session: string) => SimulatorAgent | undefined
   readonly #now: () => number
@@ -149,10 +152,13 @@ export class Simulators {
     if (remote) return "refused" in remote ? remote : remote.host.open(remote.caller, input)
     const found = await this.#find(caller, "open", input)
     if ("refused" in found) return found
-    const { who, host, simulator } = found
+    const { who, host, simulator, lease } = found
     const id = key(host.id, simulator.id)
     const holder = this.#claim(id)
     const thread = threadOf(who)
+    const bound = lease ? this.#leased.get(lease) : undefined
+    if (lease && bound && bound !== id) return this.#refuse("open", who, id, { refused: "not-offered", why: `A lease lends one simulator, and this one's is ${unkey(bound)[1]}. Release it before opening another.` })
+    if (lease && holder?.thread === thread && holder.lease !== lease) return this.#refuse("open", who, id, { refused: "not-offered", why: OTHER_LEASE })
     if (holder && holder.thread !== thread && who.kind === "agent") return this.#refuse("open", who, id, { refused: "held", why: `${holder.title ?? "Another Thread"} drives this simulator. Wait for it to be released, or ask the person to hand it over.`, holder })
     const done = await this.#perform("open", who, id, async () => {
       await host.boot(simulator.id)
@@ -171,8 +177,10 @@ export class Simulators {
             since: now,
             lastAt: now,
             generation: ++this.#generation,
+            ...(lease && { lease }),
           }
     this.#claims.set(id, claim)
+    if (lease) this.#leased.set(lease, id)
     this.#holding(true)
     this.#lost.get(id)?.delete(thread)
     hostLog("simulators", "open", { ...whoLog(who, caller), simulator: id, generation: claim.generation, ...(holder && holder.thread !== thread && { took: holder.thread }) })
@@ -236,10 +244,15 @@ export class Simulators {
     const who = this.#who(caller, "release")
     if ("refused" in who) return who
     const id = key(input.host, input.simulator)
+    // Another place's agent names its Thread itself (the gateway stamps only where it came from): it releases only
+    // under a live lease of that Thread from there, and only that lease's own claim.
+    const lease = caller.via && who.kind === "agent" ? this.#leases?.leaseOf(caller.via, who.thread) : undefined
+    if (caller.via && who.kind === "agent" && !lease) return this.#refuse("release", who, id, { refused: "not-offered", why: NOT_LEASED })
     const holder = this.#claim(id)
     const thread = threadOf(who)
     if (!holder) return { released: false }
     if (holder.thread !== thread && who.kind === "agent") return this.#refuse("release", who, id, { refused: "held", why: `${holder.title ?? "Another Thread"} drives this simulator, not this Thread.`, holder })
+    if (lease && holder.lease !== lease) return this.#refuse("release", who, id, { refused: "not-offered", why: OTHER_LEASE })
     this.#end(id, holder, { ...whoLog(who, caller) })
     return { released: true }
   }
@@ -276,6 +289,12 @@ export class Simulators {
       Boolean((ended.thread && owner.thread === ended.thread) || (ended.conversation && owner.conversation === ended.conversation) || (ended.session && owner.session === ended.session))
     for (const [id, claim] of this.#claims) if (owned(claim)) this.#end(id, claim, { thread: claim.thread, why: "thread ended" })
     this.#streams.leaveOwned(owned)
+  }
+
+  /** A lease this Mac served ended: the claim made under it lets go, and no other, the same Thread's included. */
+  releaseLease(lease: string): void {
+    for (const [id, claim] of this.#claims) if (claim.lease === lease) this.#end(id, claim, { thread: claim.thread, lease, why: "lease ended" })
+    this.#leased.delete(lease)
   }
 
   /** Ends every claim idle past `CLAIM_IDLE_MS`, so a billed host stops on time and not when someone next looks. */
@@ -336,6 +355,7 @@ export class Simulators {
       if (holder && who.kind === "agent") return this.#refuse(verb, who, id, { refused: "held", why: `${holder.title ?? "Another Thread"} drives this simulator.`, holder })
       if (!holder) return this.#refuse(verb, who, id, { refused: "not-open", why: "Open it with simulator_open first; that takes it for this Thread." })
     }
+    if (found.lease && holder?.lease !== found.lease) return this.#refuse(verb, who, id, { refused: "not-offered", why: OTHER_LEASE })
     if (holder?.thread === thread) this.#claims.set(id, { ...holder, lastAt: this.#now() })
     let result: Result | undefined
     const refused = await this.#perform(
@@ -431,6 +451,8 @@ export class Simulators {
   }
 
   #lose(id: string, thread: string): void {
+    const lease = this.#claims.get(id)?.lease
+    if (lease && this.#leased.get(lease) === id) this.#leased.delete(lease)
     this.#claims.delete(id)
     if (this.#claims.size === 0) this.#holding(false)
     const lost = this.#lost.get(id) ?? new Set<string>()

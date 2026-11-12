@@ -249,4 +249,19 @@ function world(options: { serve?: SourceAnswer; live?: Lease[] } = {}) {
   assert.deepEqual(endedHere, ["offline expired"])
   assert.equal(lending.served().length, 0)
 }
+{
+  // A session's streams are said with its beats until a beat is heard: a first beat lost on a link that was down
+  // doesn't lose its screen for good.
+  let up = false
+  const said: Array<[string, number]> = []
+  const lending = new Lending({ device: async () => DEVICE, answer: async () => undefined, leases: async () => [], serve: async () => ({ answer: "yes", version: "ready" }), beat: (id, _progress, streams) => (said.push([id, streams?.length ?? 0]), up), streams: () => [{ name: "screen", kind: "video" }], lent: new LentHere(), words: () => ({ what: "an iOS simulator", for: "a cloud Thread" }) })
+  await lending.lent(lease("screen"))
+  assert.deepEqual(said, [["screen", 1]])
+  up = true
+  lending.beat()
+  assert.deepEqual(said.at(-1), ["screen", 1], "the next beat says the stream again")
+  lending.beat()
+  assert.deepEqual(said.at(-1), ["screen", 0], "and once heard, not again")
+}
+
 console.log("borrow sessions: ok")
