@@ -75,6 +75,8 @@ const ReadyEntrySchema = z.object({
   noted: z.object({ note: z.string(), sha256: z.array(z.string()) }).optional(),
   /** A project folder's Thread: its project worktree, where its Sessions open on the machine (`noteProject`). */
   project: z.string().optional(),
+  /** With `project`: the folder of this Mac's it mirrors (`noteProject`). */
+  projectFrom: z.string().optional(),
   at: z.number(),
 })
 type ReadyEntry = z.infer<typeof ReadyEntrySchema>
@@ -102,6 +104,8 @@ export type ReadyPlan = {
   repositories?: { root: string; branch: string; folder?: string; url?: string }[]
   /** A project folder of several repositories: its project worktree, around `folder` (the first one's), where its Sessions work. */
   project?: string
+  /** With `project`: the folder of this Mac's it mirrors, where the Thread's Sessions work now (the project folder, or that very worktree). */
+  projectFrom?: string
 }
 
 /**
@@ -316,6 +320,12 @@ export class CloudReadiness {
     return (await this.#load())[thread]?.project
   }
 
+  /** The folder of this Mac's `thread`'s project worktree mirrors (`noteProject`): each Session goes by its path from there. */
+  async noteProjectFrom(thread: string): Promise<string | undefined> {
+    const entry = (await this.#load())[thread]
+    return entry?.project ? entry.projectFrom : undefined
+  }
+
   /** What the cloud acknowledged of a Thread in the main checkout, by repository, for its going-away to name. */
   async acknowledged(thread: string): Promise<{ cloudThread: string; acknowledged: Acknowledged[]; noted?: string[] } | undefined> {
     await this.#rounds.get(thread)?.catch(() => undefined)
@@ -453,6 +463,8 @@ export class CloudReadiness {
       ready.at = Date.now()
       if (plan.project) ready.project = plan.project
       else delete ready.project
+      if (plan.project && plan.projectFrom) ready.projectFrom = plan.projectFrom
+      else delete ready.projectFrom
       if (checkpoint) ready.checkpoint = checkpoint
       await this.#save()
       if (revision !== undefined) this.#broughtUp.set(working.thread, { conversationId: working.conversationId, revision, at: ready.at })

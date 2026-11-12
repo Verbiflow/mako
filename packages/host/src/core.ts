@@ -1432,6 +1432,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       checkpoint: async (thread) => late.readiness?.noteCheckpoint(thread),
       others: async (thread) => (await late.readiness?.noteOthers(thread)) ?? [],
       project: async (thread) => late.readiness?.noteProject(thread),
+      projectFrom: async (thread) => late.readiness?.noteProjectFrom(thread),
       sending: async (note) => {
         const sent = late.cloud?.asSent?.(note) ?? note
         await late.readiness?.noted(sent)

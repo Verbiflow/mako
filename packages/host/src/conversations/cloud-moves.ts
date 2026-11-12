@@ -488,10 +488,10 @@ export class CloudMoves {
       const { url } = await this.#options.repositoryOf(planned.repository)
       // Each repository with where its worktree would be and its GitHub repository: a going-away names the others so.
       const repositories = await Promise.all(planned.repositories.map(async ({ root, folder }) => ({ root, folder, branch: planned.branch, url: (await this.#options.repositoryOf(root)).url })))
-      return { thread: weighed.thread, folder: planned.folder, repository: { url }, paths: weighed.sessions.map((session) => session.path), harness: weighed.sessions[0]?.harness ?? "", planned: true, repositories, ...planned.project && { project: planned.project } }
+      return { thread: weighed.thread, folder: planned.folder, repository: { url }, paths: weighed.sessions.map((session) => session.path), harness: weighed.sessions[0]?.harness ?? "", planned: true, repositories, ...planned.project && { project: planned.project, ...planned.projectFrom && { projectFrom: planned.projectFrom } } }
     }
     const plan = await this.#plan(conversationId, MoveIdSchema.parse(randomUUID()), { why: "asked" })
-    return { thread: plan.thread, folder: plan.folder, repository: plan.repository, paths: plan.sessions.map((session) => session.path), harness: plan.sessions[0]?.harness ?? "", ...plan.project && { project: plan.project } }
+    return { thread: plan.thread, folder: plan.folder, repository: plan.repository, paths: plan.sessions.map((session) => session.path), harness: plan.sessions[0]?.harness ?? "", ...plan.project && { project: plan.project, projectFrom: plan.project } }
   }
 
   /**

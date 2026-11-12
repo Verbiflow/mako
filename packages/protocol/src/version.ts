@@ -39,7 +39,8 @@ export const PROTOCOL_VERSION = 1
  * and its room. 24 carries the sessions a device lends: `source-ask`, `lent` and `lent-ended` to it, and its
  * `lease-beat`. 25 says the gateway takes a project folder Thread's `project` in a device's quiet note
  * (`QUIET_PROJECT_LINK_VERSION`). 26 says it takes a project folder Thread's other repositories there too
- * (`others`, `QUIET_OTHERS_LINK_VERSION`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * (`others`, `QUIET_OTHERS_LINK_VERSION`), and the device folder its project worktree mirrors (`projectFrom`,
+ * `QUIET_PROJECT_FROM_LINK_VERSION`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
 export const LINK_VERSION = 26
 
@@ -167,6 +168,13 @@ export const QUIET_PROJECT_LINK_VERSION = 25
  * refuses a note carrying them, so a device sends them only once its link agreed this.
  */
 export const QUIET_OTHERS_LINK_VERSION = 26
+
+/**
+ * The first link version whose gateway takes a quiet note's Thread naming the device folder its `project` mirrors
+ * (`projectFrom`, `handoff.ts`), where it places each Session by its path from there. A gateway before it refuses a note
+ * carrying one, and places every Session outside the standby's folder at `project` itself.
+ */
+export const QUIET_PROJECT_FROM_LINK_VERSION = 26
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

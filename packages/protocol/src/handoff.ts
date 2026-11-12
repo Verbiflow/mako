@@ -82,6 +82,13 @@ export const QuietProjectSchema = z.string().min(1).max(QUIET_PROJECT_MAX).regex
 export const QuietThreadSchema = z.object({
   thread: ThreadIdSchema,
   project: QuietProjectSchema.optional(),
+  /**
+   * With `project`, the device's folder it mirrors: the project folder its Sessions work in (absolute). A Session in a
+   * folder inside it opens at the same place inside `project` on the machine (`<project>/<its path from projectFrom>`),
+   * so a Session that worked in one of its repositories works in that repository there. Sent only to a gateway whose link
+   * agreed `QUIET_PROJECT_FROM_LINK_VERSION`.
+   */
+  projectFrom: QuietProjectSchema.optional(),
   sessions: z.array(SessionAt).min(1).max(OWNER_SESSIONS_MAX),
   checkpoint: AcknowledgedCheckpointSchema.optional(),
   /** The Thread's turns parked as the device went away, for the continue to send on; absent from devices before it. */

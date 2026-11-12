@@ -50,6 +50,7 @@ import {
   servesDeviceRuntime,
   QUIET_PROJECT_LINK_VERSION,
   QUIET_OTHERS_LINK_VERSION,
+  QUIET_PROJECT_FROM_LINK_VERSION,
 } from "@mako/protocol"
 import {
   CloudBrowserSessionSchema,
@@ -1054,19 +1055,22 @@ export class CloudAccounts {
     return this.#noteFor(note)
   }
 
-  /** The note as this gateway takes it: a Thread's `project` and `others` each only where its link agreed the version that carries it. */
+  /** The note as this gateway takes it: a Thread's `project`, `others` and `projectFrom` each only where its link agreed the version that carries it. */
   #noteFor(note: QuietNote): QuietNote {
     const agreed = this.#agreed ?? 0
     const project = agreed >= QUIET_PROJECT_LINK_VERSION || !note.threads.some((thread) => thread.project !== undefined)
     const others = agreed >= QUIET_OTHERS_LINK_VERSION || !note.threads.some((thread) => thread.others !== undefined)
-    if (project && others) return note
-    this.#options.log?.("a quiet note's project folders left out: the gateway's link hasn't agreed them", { agreed: this.#agreed ?? "none", ...(!project && { project: "left out" }), ...(!others && { others: "left out" }) })
+    // The folder `project` mirrors goes only with `project`, to a gateway that places Sessions by it.
+    const from = (project && agreed >= QUIET_PROJECT_FROM_LINK_VERSION) || !note.threads.some((thread) => thread.projectFrom !== undefined)
+    if (project && others && from) return note
+    this.#options.log?.("a quiet note's project folders left out: the gateway's link hasn't agreed them", { agreed: this.#agreed ?? "none", ...(!project && { project: "left out" }), ...(!others && { others: "left out" }), ...(!from && { projectFrom: "left out" }) })
     return {
       ...note,
       threads: note.threads.map((thread) => {
         const without = { ...thread }
         if (!project) delete without.project
         if (!others) delete without.others
+        if (!from) delete without.projectFrom
         return without
       }),
     }

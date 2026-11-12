@@ -4,7 +4,7 @@ import { execFileSync, spawn } from "node:child_process"
 import { randomBytes, randomUUID } from "node:crypto"
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, join, relative } from "node:path"
 import { z } from "zod"
 import { Git } from "@mako/git"
 import { decodeOperation } from "@mako/protocol"
@@ -328,6 +328,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
         return note
       },
       project: (thread) => readiness.noteProject(thread),
+      projectFrom: (thread) => readiness.noteProjectFrom(thread),
       rows: async () => {
         rowReads += 1
         order.push("rows")
@@ -606,6 +607,9 @@ try {
     assert.ok(named.project && !named.project.startsWith(h.project), "names the project worktree a move would make")
     assert.equal(join(named.project, "web"), other.path, "around the other's")
     assert.equal(join(named.project, "api"), h.made.find((each) => each.threadId === named.checkpoint!.standby)?.folder, "and the first's, its standby's folder")
+    // And the folder here it mirrors: a Session in a repository of it is placed in that repository's worktree there.
+    assert.equal(named.projectFrom, realpathSync(h.project), "names the project folder it mirrors")
+    assert.equal(join(named.project, relative(named.projectFrom!, realpathSync(web))), other.path, "a Session in web goes to web's worktree")
     /** A checkpoint laid over a fresh clone of its repository's remote, as a machine's arrival does. */
     const laid = async (bare: string, checkpoint: MoveCheckpoint, name: string) => {
       const clone = join(h.base, `machine-${name}`)
@@ -698,6 +702,7 @@ try {
     const planned = await h.worktrees.plannedCheckout(randomUUID(), folder, "Both sides")
     assert.ok(planned && !existsSync(planned.folder), "named, with nothing made")
     assert.equal(planned.project && join(planned.project, "api"), planned.folder, "the project worktree, around the first repository's, where its Sessions would work")
+    assert.equal(planned.projectFrom, realpathSync(folder), "mirroring the project folder its Sessions work in here")
     assert.equal(planned.repository, realpathSync(join(folder, "api")), "the first repository by its worktree's path")
     assert.deepEqual(planned.repositories.map((each) => each.root).sort(), [realpathSync(join(folder, "api")), realpathSync(join(folder, "web"))], "both repositories, for each one's own checkpoint")
     assert.ok(planned.repositories.every((each) => each.folder.startsWith(dirname(planned.folder))), "each with the folder its worktree would have")

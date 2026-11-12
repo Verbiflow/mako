@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { test } from "node:test"
 import { OwnerAnswerSchema, OwnerAskSchema, ParkedTurnSchema, QuietAnswerSchema, QuietNoteSchema, autoContinueOp } from "../dist/handoff.js"
 import { continueCloudThread } from "../dist/continues.js"
-import { QUIET_OTHERS_LINK_VERSION, QUIET_PROJECT_LINK_VERSION } from "../dist/version.js"
+import { QUIET_OTHERS_LINK_VERSION, QUIET_PROJECT_FROM_LINK_VERSION, QUIET_PROJECT_LINK_VERSION } from "../dist/version.js"
 
 const session = randomUUID()
 const note = () => ({ note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", sessions: [{ session, generation: 4 }], checkpoint: { version: 1, sha256: "a".repeat(64), bytes: 409, head: "b".repeat(40), branch: "mako/fix", index: "c".repeat(40), work: "d".repeat(40), standby: "t-standby" } }] })
@@ -109,4 +109,10 @@ test("a project folder's Thread names its project worktree, absolute and at most
   const longest = note()
   longest.threads[0].project = `/${"a".repeat(4_095)}`
   assert.equal(QuietNoteSchema.safeParse(longest).success, true)
+  // The device folder it mirrors, by which each Session is placed: absolute too, and sent at 26.
+  const from = note()
+  Object.assign(from.threads[0], { project: "/Users/ada/.mako/worktrees/shop-1a2b/fix", projectFrom: "/Users/ada/shop" })
+  assert.equal(QuietNoteSchema.safeParse(from).success, true)
+  assert.equal(QuietNoteSchema.safeParse({ ...from, threads: [{ ...from.threads[0], projectFrom: "shop" }] }).success, false, "absolute")
+  assert.equal(QUIET_PROJECT_FROM_LINK_VERSION, 26)
 })

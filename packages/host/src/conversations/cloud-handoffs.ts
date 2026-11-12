@@ -48,6 +48,8 @@ export type CloudHandOffsOptions = {
      * leaves it out for a gateway that doesn't take it (`CloudAccount.quiet`).
      */
     project?(thread: string): Promise<string | undefined>
+    /** With `project`: the folder of this Mac's it mirrors, by which the account places each Session there (`CloudReadiness.noteProjectFrom`). */
+    projectFrom?(thread: string): Promise<string | undefined>
     /**
      * The note as it will go, recorded before it does (`CloudReadiness.noted`): which checkpoints each Thread's names,
      * after anything the gateway doesn't take is left out. The way back takes a Thread's changes out of the project
@@ -202,8 +204,9 @@ export class CloudHandOffs {
       // The others only beside the first's: their arrival is laid over the first's, all or nothing.
       const others = checkpoint ? ((await goingAway.others?.(each.gone.thread)) ?? []).slice(0, QUIET_OTHERS_MAX) : []
       const project = checkpoint && (await goingAway.project?.(each.gone.thread))
+      const projectFrom = project && (await goingAway.projectFrom?.(each.gone.thread))
       const parked = each.gone.parked.slice(0, PARKED_PER_THREAD_MAX).map(({ stopped, ...turn }) => ({ ...turn, ...stopped.length && { stopped } }))
-      threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint }, ...others.length && { others }, ...project && { project } })
+      threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint }, ...others.length && { others }, ...project && { project }, ...projectFrom && { projectFrom } })
     }
     const note: QuietNote = { note: handOff, reason: why, at: Date.now(), threads: threads.slice(0, QUIET_THREADS_MAX) }
     let heard: NoteHeard
