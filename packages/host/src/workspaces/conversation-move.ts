@@ -2,7 +2,7 @@ import { existsSync, realpathSync } from "node:fs"
 import { isAbsolute, join, relative } from "node:path"
 import type { ForkInput } from "../contracts/conversation-control.js"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
-import type { MoveOutcome } from "../contracts/workspace-moves.js"
+import type { MoveHaste, MoveOutcome } from "../contracts/workspace-moves.js"
 import type { WorkspaceConversations } from "./conversations.js"
 import type { ThreadWorktreeService } from "./thread-worktrees.js"
 
@@ -37,7 +37,7 @@ export interface MovedConversation {
  * conversation, under `owner`'s id, in the folder it gets; when it gives
  * nothing back, a worktree made for it is taken back and nothing moves.
  */
-async function intoWorktree<T>(deps: ConversationMoveDeps, id: string, owner: string, project: string | undefined, bring: boolean, enter: (cwd: string) => T | undefined | Promise<T | undefined>): Promise<{ entered: T; moved: number; outcome?: MoveOutcome } | undefined> {
+async function intoWorktree<T>(deps: ConversationMoveDeps, id: string, owner: string, project: string | undefined, bring: boolean, enter: (cwd: string) => T | undefined | Promise<T | undefined>, haste?: MoveHaste): Promise<{ entered: T; moved: number; outcome?: MoveOutcome } | undefined> {
   const source = deps.conversations.snapshot(id)
   if (!source) throw new Error("Open the conversation before moving it into a worktree.")
   // A Thread has one worktree: a Session moving in once it exists joins it, and nothing moves with it.
@@ -63,7 +63,7 @@ async function intoWorktree<T>(deps: ConversationMoveDeps, id: string, owner: st
   }
   // The conversation is there before anything moves, so a refused one leaves the checkout untouched.
   const thread = deps.threadOf?.(id)
-  const outcome = await deps.worktrees.moveChanges(owner, thread ? { thread, bring } : { bring })
+  const outcome = await deps.worktrees.moveChanges(owner, { ...thread && { thread }, bring, ...haste && { haste } })
   await deps.worktrees.attach(owner)
   return { entered, moved: outcome.came.files, outcome }
 }
@@ -79,12 +79,12 @@ async function intoWorktree<T>(deps: ConversationMoveDeps, id: string, owner: st
  * left as it was in its own folder. With no `input`, as when it has no answer
  * of its own yet, it moves only as itself.
  */
-export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, input: ForkInput | undefined, project?: string, bring = false): Promise<MovedConversation> {
+export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, input: ForkInput | undefined, project?: string, bring = false, haste?: MoveHaste): Promise<MovedConversation> {
   /** Fork it into the worktree instead, since it couldn't go as itself because it `why`. */
   const fork = async (why: string, project?: string) => {
     if (!input) throw new Error(`It has no answer of its own to fork from, and it ${why}.`)
     await deps.conversations.historyReady(id)
-    const forked = await intoWorktree(deps, id, input.id, project, bring, (cwd) => deps.conversations.fork(id, input, cwd))
+    const forked = await intoWorktree(deps, id, input.id, project, bring, (cwd) => deps.conversations.fork(id, input, cwd), haste)
     if (!forked) throw new Error("The conversation couldn't be forked into the worktree.")
     return forked
   }
@@ -101,13 +101,15 @@ export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, i
   const placed = await intoWorktree(deps, id, id, project, bring, async (cwd) => {
     const from = await deps.conversations.relocate(id, cwd)
     return from === undefined ? undefined : { from }
-  })
+  }, haste)
   if (!placed) {
     deps.warn("the conversation got busy while its worktree was made, so it was forked there", { conversation: id, reason: "busy before it moved" })
     const forked = await fork("got busy while its worktree was made", project)
     return { conversation: forked.entered, moved: forked.moved, outcome: forked.outcome, relocated: false }
   }
-  const refused = await deps.conversations.resumeMoved(id, placed.entered.from)
+  // Made in haste as the Mac goes off, it isn't resumed here to prove it: the cloud resumes it where it goes, and if
+  // the Thread stays, its next start here does.
+  const refused = haste ? undefined : await deps.conversations.resumeMoved(id, placed.entered.from)
   const conversation = deps.conversations.snapshot(id)
   if (!refused && conversation) return { conversation, moved: placed.moved, outcome: placed.outcome, relocated: true }
   const reason = refused ?? "The conversation closed during the move."

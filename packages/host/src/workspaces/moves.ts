@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { z } from "zod"
-import type { MoveShares, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveRequest, WorkspaceMoves as WorkspaceMovesState } from "../contracts/workspace-moves.js"
+import type { MoveHaste, MoveShares, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveRequest, WorkspaceMoves as WorkspaceMovesState } from "../contracts/workspace-moves.js"
 
 export interface MoveSource {
   cwd: string
@@ -34,7 +34,8 @@ interface Deps {
    * conversation the move began with as it goes on there; `told` when its
    * agent had asked to move too, so it hears where it is.
    */
-  follow(conversationId: string, told: boolean, lead: string): Promise<void>
+  /** `haste`: a handoff's, carried from the Session the move began with (`MoveHaste`). */
+  follow(conversationId: string, told: boolean, lead: string, haste?: MoveHaste): Promise<void>
   announce(state: WorkspaceMovesState): void
   failed(conversationId: string, message: string): void
   /** How long the person's move waits for what its Sessions are finishing; 15 s unless a test says otherwise. */
@@ -168,7 +169,7 @@ export class WorkspaceMoves {
    * moves. `carry` moves this Session, `told` when its agent had asked to
    * move; the Thread's other Sessions here follow it, as `following`.
    */
-  async moveNow<T extends { session: { id: string } }>(conversationId: string, carry: (told: boolean) => Promise<T>): Promise<{ moved: T; following: Promise<void> }> {
+  async moveNow<T extends { session: { id: string } }>(conversationId: string, carry: (told: boolean) => Promise<T>, haste?: MoveHaste): Promise<{ moved: T; following: Promise<void> }> {
     const all = () => [conversationId, ...this.deps.companions(conversationId)]
     const already = () => {
       if (all().some((id) => this.moving.has(id))) throw new Error("Mako is already moving this Thread onto its own branch.")
@@ -186,7 +187,7 @@ export class WorkspaceMoves {
       this.release([conversationId, ...companions])
       throw error
     }
-    return { moved, following: this.follow(conversationId, moved.session.id, companions, told) }
+    return { moved, following: this.follow(conversationId, moved.session.id, companions, told, haste) }
   }
 
   /**
@@ -296,10 +297,10 @@ export class WorkspaceMoves {
   }
 
   /** The companions follow the Session the move began with, one at a time; one that can't is reported, and the rest still go. */
-  private async follow(from: string, lead: string, companions: readonly string[], told: ReadonlySet<string>): Promise<void> {
+  private async follow(from: string, lead: string, companions: readonly string[], told: ReadonlySet<string>, haste?: MoveHaste): Promise<void> {
     try {
       for (const id of companions)
-        await this.deps.follow(id, told.has(id), lead).catch((error) => this.deps.failed(id, error instanceof Error ? error.message : String(error)))
+        await this.deps.follow(id, told.has(id), lead, haste).catch((error) => this.deps.failed(id, error instanceof Error ? error.message : String(error)))
     } finally {
       this.release([from, ...companions])
     }
