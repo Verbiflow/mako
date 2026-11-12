@@ -331,6 +331,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
         return { note: note.note, threads: note.threads.map((each) => (each.checkpoint ? { thread: each.thread, accepted: true as const } : { thread: each.thread, accepted: false as const, why: "no-checkpoint" as const })) }
       },
       accepted: (note, sessions) => awayNotes.noted(note, sessions),
+      goneQuiet: (why) => void order.push(`gone quiet ${why}`),
     },
     changed: () => {},
   })
@@ -478,6 +479,7 @@ try {
     const ready = await keptReady(h, work)
     const began = Date.now()
     await sleeps(h, 20_000)
+    assert.deepEqual(h.order.filter((each) => each !== "rows"), ["note", "gone quiet sleep"], "sleep: the account heard the note, then the Mac go quiet, without the desktop's suspend")
     await wentAway(h, "sleep", work, ready, began)
     // Back, offline: the account took the note, so its Sessions wait for its word whatever the owner check does.
     const before = h.world.prompts.length
@@ -502,7 +504,7 @@ try {
     const ready = await keptReady(h, work)
     const began = Date.now()
     await machineLeaving("shutdown", { handOffs: h.handOffs, enabled: async () => true, quiet: (why) => void h.order.push(`quiet ${why}`) })
-    assert.deepEqual(h.order.filter((each) => each !== "rows"), ["note", "quiet quit"], "the account heard the note before the Mac went quiet")
+    assert.deepEqual(h.order.filter((each) => each !== "rows"), ["note", "gone quiet quit", "quiet quit"], "the account heard the note, then the Mac go quiet")
     assert.ok(h.rowReads() >= 2 && h.order.lastIndexOf("rows") < h.order.indexOf("note"), "the note waited for the account to list the paused turns idle")
     await wentAway(h, "shutdown", work, ready, began)
     await h.close()
