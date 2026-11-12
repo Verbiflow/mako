@@ -2,7 +2,7 @@
 name: loop-phone-remainder
 on:
   push:
-    branches: [mako/loop-phone-remainder]
+    branches: [mako/loop-phone-remainder2]
 permissions:
   contents: read
 jobs:
