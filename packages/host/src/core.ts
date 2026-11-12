@@ -644,9 +644,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   if (config.machineAgentFd === undefined) shell.jobs.every(REPORT_WORK, 1_000, () => late.cloud?.reportSessions?.())
   // The heap, watched so a host filling up says who with while it still can: an out-of-memory report has no
   // JavaScript stack. The line names what memory holds and who read it in; the whole readout goes beside the log.
+  const mb = (bytes: number | undefined) => Math.round((bytes ?? 0) / 1_048_576)
   const heap = new HeapWatch(readHeap, (change, level, reading) => {
     const memory = late.conversations?.live.residency().memory
-    const mb = (bytes: number | undefined) => Math.round((bytes ?? 0) / 1_048_576)
     const fields = {
       level, usedMB: mb(reading.used), limitMB: mb(reading.limit), rssMB: mb(reading.rss),
       conversations: memory?.loaded ?? 0, conversationMB: mb(memory?.bytes), pinnedMB: mb(memory?.pinnedBytes),
@@ -658,6 +658,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const readout = { at: new Date().toISOString(), change, level, heap: reading, memory, jobs: shell.jobs.list() }
     void writeFile(join(logsRoot(environment.dataRoot), "memory-pressure.json"), JSON.stringify(readout, null, 2)).catch((error: Error) =>
       hostWarn("memory", "the memory readout couldn't be written", { error: error.message }))
+  }, (reading) => {
+    // Every few minutes at any level: what V8 holds against its limit and of the process, and what conversations hold.
+    const memory = late.conversations?.live.residency().memory
+    hostLog("memory", "the heap", { usedMB: mb(reading.used), limitMB: mb(reading.limit), rssMB: mb(reading.rss), conversations: memory?.loaded ?? 0, conversationMB: mb(memory?.bytes) })
   })
   shell.jobs.every("watch the heap", 10_000, () => void heap.tick(), { runsWhileHeld: true })
   // This Mac's Sessions in the sync window, kept in step in the account, the ones at work first: as Mako draws each, so
