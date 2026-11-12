@@ -27,6 +27,7 @@ const PROGRAMS = new Map([
   ["attribution/journal-reader-worker.ts", "the record of changes' reader worker (attribution/journal-reader.ts)"],
   ["attribution/journal-collect-worker.ts", "the record of changes' collection worker (attribution/journal-reader.ts)"],
   ["workspaces/watcher-child-main.ts", "the file watcher's child process (workspaces/watcher-child.ts)"],
+  ["git/git-helper-main.ts", "the host's Git helper child (git/git-helper.ts)"],
   ["terminals/daemon.ts", "the terminal daemon's process (terminals/index.ts)"],
   ["harnesses/opencode/resume-worker.ts", "OpenCode's resume worker (harnesses/opencode/resume.ts)"],
   ["harnesses/opencode/agent-worker.ts", "OpenCode's agent reader (harnesses/opencode/agents.ts)"],

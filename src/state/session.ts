@@ -13,7 +13,7 @@ import { applyThreadPurposes, loadThreadPurposes } from "@/state/thread-purposes
 import { applyStoreFormats, loadStoreFormats } from "@/state/store-formats"
 import { applyFileEvents, loadFileEvents } from "@/state/file-events"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
-import { refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
+import { applyWorktreeSummaries, refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
@@ -250,6 +250,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "checkout-heads") {
     applyCheckoutHeads(event.heads)
+    return
+  }
+  if (event.type === "worktree-summaries") {
+    applyWorktreeSummaries(event.summaries)
     return
   }
   if (event.type === "worktree-ready") {

@@ -2066,8 +2066,10 @@ export class LiveConversations {
     this.dependencies.emit({ type: "live-batch", batch, compact, ...(rostered && { rostered }) })
     this.relocations.changed(resident)
     // A turn that ended, as it ended, failed included: what its record holds is all it will.
-    if (previous.session.status === "running" && settled(snapshot.session.status))
+    if (previous.session.status === "running" && settled(snapshot.session.status)) {
       void this.sources.checkpointIdle(resident)
+      this.dependencies.turnEnded?.(snapshot.session.id, snapshot.session.cwd)
+    }
   }
 
   /**
