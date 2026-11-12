@@ -5,6 +5,11 @@ import { locateGitDir } from "../base/checkout-location.js"
 
 /** What moves on every commit, add, reset or checkout, and nothing else does. */
 const MARKERS = ["index", join("logs", "HEAD")]
+/**
+ * What moves only when a checkout's HEAD does: a commit, checkout, reset, merge or rebase. The index also moves when
+ * any `git status` refreshes its stat cache, as a Changes panel's does on every edit.
+ */
+export const HEAD_MARKER = [join("logs", "HEAD")]
 
 export interface GitDirWatch {
   /** Settles once the markers are watched, or once it's clear there's nothing to watch. */
@@ -48,10 +53,11 @@ export function watchOutsideGitDir(folder: string, changed: () => void): GitDirW
 }
 
 /**
- * A Git directory's two markers (`MARKERS`) watched as files, wherever the directory is: each event that changed one
- * moves the watch to the file now there, then says so. A read that only touched the index's access time says nothing.
+ * A Git directory's markers (`MARKERS`, or those given) watched as files, wherever the directory is: each event that
+ * changed one moves the watch to the file now there, then says so. A read that only touched the index's access time
+ * says nothing.
  */
-export function watchGitMarkers(gitDir: string, changed: () => void): GitDirWatch {
+export function watchGitMarkers(gitDir: string, changed: () => void, markers: readonly string[] = MARKERS): GitDirWatch {
   let closed = false
   const watchers = new Map<string, FSWatcher>()
   const arm = (path: string) => {
@@ -76,7 +82,7 @@ export function watchGitMarkers(gitDir: string, changed: () => void): GitDirWatc
       // left: the tree watch and explicit refreshes still cover it.
     }
   }
-  for (const marker of MARKERS) arm(join(gitDir, marker))
+  for (const marker of markers) arm(join(gitDir, marker))
   return {
     ready: Promise.resolve(),
     close() {

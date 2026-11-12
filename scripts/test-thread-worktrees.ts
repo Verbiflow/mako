@@ -966,21 +966,21 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     assert.equal(await passes(2), 2, "and one in the project folder around it")
     at = []
     await passes(2)
-    // Nobody asks: the index's own event reads it, and the windows hear the new count.
+    // An edit and a `git add`, and nothing more, read it not at all: a `git status` refreshing the index (a Changes
+    // panel's, as an agent edits) moved it on every edit, so only HEAD and the turn's end count.
     const said = pushed.length
     // A worktree is read from its events at most every five seconds.
     now += 6_000
+    const quietReads = reads
     writeFileSync(join(made.path, "new.txt"), "new\n")
     git(made.path, "add", "new.txt")
-    await heard("the new index's summary", () => pushed.slice(said).some((summaries) => summaries.find((summary) => summary.path === made.path)?.changes === 1))
-    assert.equal(await changes(), 1, "and an ask after it answers what was heard")
-    // A turn that ended there reads it again, unasked.
-    const turnRead = reads
-    now += 6_000
+    git(made.path, "status", "--porcelain")
+    await new Promise((resolve) => setTimeout(resolve, 2_500))
+    assert.equal(reads, quietReads, "an index moved alone reads nothing")
+    // The turn that made them ends there: read again unasked, and the windows hear the new count.
     watched.turnEnded(join(made.path, "packages"))
-    await heard("a read after the turn's end", () => reads > turnRead)
-    // That read ends before the next event, as a turn's end does before its commit.
-    await watched.summaries()
+    await heard("the turn's end's summary", () => pushed.slice(said).some((summaries) => summaries.find((summary) => summary.path === made.path)?.changes === 1))
+    assert.equal(await changes(), 1, "and an ask after it answers what was heard")
     // A commit moves its HEAD: heard the same way.
     const committed = pushed.length
     now += 6_000
