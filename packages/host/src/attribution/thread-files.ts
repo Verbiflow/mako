@@ -4,6 +4,8 @@ import { basename, isAbsolute, join, relative, sep } from "node:path"
 import type { Git } from "@mako/git"
 import { inSlices, type Steps } from "@mako/sessions/slices"
 import type { CarriedEffect, CarriedName } from "@mako/protocol"
+import { homedir } from "node:os"
+import { otherAppsData } from "../base/other-apps-data.js"
 import { QUIET_FOLDERS } from "../base/quiet-folders.js"
 import type { FileResolution, MovedPaths, Touch, TouchKind } from "../contracts/file-references.js"
 import { candidatesOf, RENAME_LOG, RenameHistory, resolveSpelling, spellingLine, SuffixIndex, type Place, type ReferenceContext } from "../files/index.js"
@@ -563,11 +565,16 @@ function renamedInGit(histories: ReadonlyMap<string, RenameHistory>, path: strin
 
 const within = (path: string, root: string) => path === root || path.startsWith(root + sep)
 
-/** Which of `paths` are files now, `PARALLEL` `stat`s at a time. */
+/**
+ * Which of `paths` are files now, `PARALLEL` `stat`s at a time. A path in another app's container is never one: a
+ * stat there makes macOS ask the person to let Mako read that app's data, for a link nobody clicked.
+ */
 async function existing(paths: readonly string[]): Promise<Set<string>> {
   const files = new Set<string>()
+  const home = homedir()
   for (let i = 0; i < paths.length; i += PARALLEL)
     await Promise.all(paths.slice(i, i + PARALLEL).map(async (path) => {
+      if (otherAppsData(path, home)) return
       if ((await stat(path).catch(() => undefined))?.isFile()) files.add(path)
     }))
   return files
