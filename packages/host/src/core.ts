@@ -1174,7 +1174,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const unpark = () => void cloudMoves.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
     late.awayNotes = new AwayNotes({
       file: join(environment.dataRoot, "cloud", "away.json"),
-      owner: () => late.cloud && ((ask) => late.cloud!.owner(ask)),
+      owner: () => {
+        const cloud = late.cloud
+        return cloud?.owner && ((ask) => cloud.owner!(ask))
+      },
       deviceId: async () => late.cloud?.deviceId(),
       join: (session, listed) => cloudMoves.joinContinue(session, listed),
       released: unpark,
@@ -1340,7 +1343,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       flush: async (working, by) => late.readiness?.flush(working, by),
       checkpoint: async (thread) => late.readiness?.noteCheckpoint(thread),
       quiet: async (note) => {
-        if (!late.cloud) throw new Error("This Mac isn't signed in to Mako Cloud.")
+        if (!late.cloud?.quiet) throw new Error("This Mac isn't signed in to Mako Cloud.")
         return late.cloud.quiet(note)
       },
       accepted: async (note, sessions) => late.awayNotes?.noted(note, sessions),
