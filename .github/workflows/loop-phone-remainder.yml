@@ -1,0 +1,34 @@
+# Throwaway: the phone scroll suite with the page's CPU slowed 4x and its flick profiled, 15 times on the macOS runner.
+name: loop-phone-remainder
+on:
+  push:
+    branches: [mako/loop-phone-remainder]
+permissions:
+  contents: read
+jobs:
+  loop:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run build:control-runtime
+      - name: loop
+        run: |
+          set +e
+          for i in $(seq 1 15); do
+            out=$(THROTTLE=4 MAKO_TEST_EVIDENCE="$RUNNER_TEMP/ev/run-$i" node scripts/test-phone-scroll-ui.mjs 2>&1); code=$?
+            echo "RUN $i exit $code | $(echo "$out" | grep -E 'Flick up|long tasks:|Error' | head -1)"
+          done
+          exit 0
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phone-remainder
+          path: ${{ runner.temp }}/ev

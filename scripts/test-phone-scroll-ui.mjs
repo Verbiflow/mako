@@ -269,6 +269,7 @@ async function checkScroll() {
     await until(`document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length >= 2`, "the phone's transcript")
     await evaluate("document.fonts.ready.then(() => true)")
     await evaluate(INSTRUMENT)
+    if (process.env.THROTTLE) await send("Emulation.setCPUThrottlingRate", { rate: Number(process.env.THROTTLE) })
     await rest()
   }
   /** At the end and following it, as the way back leaves the reader. */
@@ -395,12 +396,14 @@ async function checkScroll() {
       unavailable = setup.status !== "completed" || setup.value !== true
     }
     if (!unavailable) try {
+      await send("Profiler.enable"); await send("Profiler.setSamplingInterval", { interval: 200 }); await send("Profiler.start")
       since = await now()
       await flick(400, 2_500)
       await rest()
       const flung = await fromEnd()
       assert.ok(flung > 600, `a flick of 400 px glided ${Math.round(flung)} px from the end`)
       const tasks = await longTasks(since)
+      { const { profile } = await send("Profiler.stop"); await writeFile(join(evidence, `profile-${Date.now()}.json`), JSON.stringify({ since, tasks, profile })) }
       if (diagnostic) packet.oracle = { status: "observed", since, tasks: tasks.slice(0, 64), droppedTasks: Math.max(0, tasks.length - 64) }
       assert.deepEqual(tasks, [], `a flick while streaming made long tasks: ${tasks.join(", ")} ms`)
       held = await holds("after a flick")
