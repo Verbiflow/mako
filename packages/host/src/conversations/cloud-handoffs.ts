@@ -42,6 +42,12 @@ export type CloudHandOffsOptions = {
     checkpoint(thread: string): Promise<AcknowledgedCheckpoint | undefined>
     /** A project folder's other repositories, each with its acknowledged checkpoint (`CloudReadiness.noteOthers`). */
     others?(thread: string): Promise<QuietRepository[]>
+    /**
+     * Where the Thread's Sessions open on the machine when that isn't its standby's folder (`CloudReadiness.noteProject`):
+     * a project folder's project worktree. Named only beside the checkpoint, whose standby it's around; the account
+     * leaves it out for a gateway that doesn't take it (`CloudAccount.quiet`).
+     */
+    project?(thread: string): Promise<string | undefined>
     quiet(note: QuietNote): Promise<QuietAnswer | "unserved">
     /**
      * These Sessions wait for the account's word from now (`AwayNotes.noted`): every one paused, as soon as it is, so no
@@ -189,8 +195,9 @@ export class CloudHandOffs {
       const checkpoint = await goingAway.checkpoint(each.gone.thread)
       // The others only beside the first's: their arrival is laid over the first's, all or nothing.
       const others = checkpoint ? ((await goingAway.others?.(each.gone.thread)) ?? []).slice(0, QUIET_OTHERS_MAX) : []
+      const project = checkpoint && (await goingAway.project?.(each.gone.thread))
       const parked = each.gone.parked.slice(0, PARKED_PER_THREAD_MAX).map(({ stopped, ...turn }) => ({ ...turn, ...stopped.length && { stopped } }))
-      threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint }, ...others.length && { others } })
+      threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint }, ...others.length && { others }, ...project && { project } })
     }
     const note: QuietNote = { note: handOff, reason: why, at: Date.now(), threads: threads.slice(0, QUIET_THREADS_MAX) }
     let heard: NoteHeard

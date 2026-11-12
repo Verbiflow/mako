@@ -48,6 +48,7 @@ import {
   SILENT_WHILE_WORKING_MS,
   CLOUD_ENTITLEMENT,
   servesDeviceRuntime,
+  QUIET_PROJECT_LINK_VERSION,
 } from "@mako/protocol"
 import {
   CloudBrowserSessionSchema,
@@ -381,6 +382,11 @@ export class CloudAccounts {
   #runtimeLink: CloudLink | undefined
   /** The Threads this Mac's runtime ran when its link last ended, claimed again when it comes back. */
   #claims: RuntimeClaim[] = []
+  /**
+   * The link version this Mac's runtime link last agreed with the gateway, kept after the link drops (a Mac going away
+   * often has none by then); none before its first enrolment, and again once signed out.
+   */
+  #agreed: number | undefined
   /** The runtime link this Mac serves on now, and what serves there: where its Sessions are reported. */
   #served: { link: RuntimeLink; served: ServedRuntime } | undefined
   readonly #sessions = new Set<ClientSessionOverSockets>()
@@ -1030,14 +1036,29 @@ export class CloudAccounts {
    * This Mac is going away (`QuietNote`): each of its Threads with a turn parked, the Sessions it holds at their
    * generations, and the checkpoint the cloud acknowledged, which the account may continue it from while this Mac is
    * quiet. It releases nothing. The same note again is the same note. A gateway that takes no notes yet answers 404:
-   * `unserved`, and nothing is continued.
+   * `unserved`, and nothing is continued. A Thread's `project` goes only to a gateway whose link last agreed
+   * `QUIET_PROJECT_LINK_VERSION`: one before refuses the whole note, so to any other the Thread goes without it.
    */
   async quiet(note: QuietNote): Promise<QuietAnswer | "unserved"> {
     const deviceId = await this.deviceId()
     if (!deviceId) throw new CloudAccountError("This Mac isn't signed in to Mako.")
-    const response = await this.#call("devices.quiet", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/quiet`, QuietNoteSchema.parse(note), false, [404])
+    const response = await this.#call("devices.quiet", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/quiet`, QuietNoteSchema.parse(this.#noteFor(note)), false, [404])
     if (response.status === 404) return "unserved"
     return QuietAnswerSchema.parse(await response.json())
+  }
+
+  /** The note as this gateway takes it: a Thread's `project` only where its link agreed the version that carries it. */
+  #noteFor(note: QuietNote): QuietNote {
+    if ((this.#agreed ?? 0) >= QUIET_PROJECT_LINK_VERSION || !note.threads.some((thread) => thread.project !== undefined)) return note
+    this.#options.log?.("a quiet note's project folders left out: the gateway's link hasn't agreed them", { agreed: this.#agreed ?? "none" })
+    return {
+      ...note,
+      threads: note.threads.map((thread) => {
+        const without = { ...thread }
+        delete without.project
+        return without
+      }),
+    }
   }
 
   /**
@@ -1627,6 +1648,7 @@ export class CloudAccounts {
         (started) => {
           served = started
           if (closed) return started.close()
+          this.#agreed = started.version
           this.#served = { link, served: started }
           this.#options.sessions?.linked(this.#served)
           const advertisement = this.#options.lending?.advertisement()
@@ -1683,6 +1705,7 @@ export class CloudAccounts {
     this.#runtimeLink?.stop()
     this.#runtimeLink = undefined
     this.#claims = []
+    this.#agreed = undefined
     for (const session of this.#sessions) session.close()
     this.#sessions.clear()
   }

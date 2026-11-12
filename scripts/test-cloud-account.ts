@@ -27,6 +27,7 @@ import {
   PONG,
   PROTOCOL_VERSION,
   Payload,
+  QUIET_PROJECT_LINK_VERSION,
   QUIET_VERSION,
   type RuntimeFrame,
   SUBPROTOCOL,
@@ -41,6 +42,7 @@ import {
   SILENT_WHILE_WORKING_MS,
 } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { QuietNoteSchema, type QuietNote } from "@mako/protocol/handoff"
 import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
 import { HandoffSchema, type Handoff } from "@mako/host/contracts/thread-execution"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
@@ -115,6 +117,8 @@ async function fakeCloud({ runtimeEnrolled }: { runtimeEnrolled?: Promise<void> 
   const enrolments: Extract<RuntimeFrame, { type: "enroll" }>[] = []
   /** Why each runtime link said it was going quiet, in order. */
   const quiets: string[] = []
+  /** Each going-away note a device sent, as it came. */
+  const notes: unknown[] = []
   const token = (deviceId: string) => {
     const iat = Math.floor(Date.now() / 1000) + options.clockSkewSeconds
     const exp = iat + options.tokenSeconds
@@ -224,6 +228,11 @@ async function fakeCloud({ runtimeEnrolled }: { runtimeEnrolled?: Promise<void> 
       // A private repository the cloud's GitHub App isn't on, and one whose link would lead anywhere but GitHub.
       const standing = (url: string) => ({ state: "waiting", message: "could not read Username", reason: "no-access", install: url.endsWith("/shop") ? "https://github.com/apps/mako/installations/new" : "https://elsewhere.example/install" })
       return send(200, JSON.stringify({ bases: repositories.map((repository) => ({ repository, standing: standing(repository.url) })) }))
+    }
+    if (request.method === "POST" && /^\/v1\/devices\/[\w-]+\/quiet$/.test(url.pathname)) {
+      const body = await json(request)
+      notes.push(body)
+      return send(200, JSON.stringify({ note: body.note, threads: body.threads.map((each: { thread: string }) => ({ thread: each.thread, accepted: true })) }))
     }
     if (request.method === "POST" && url.pathname === "/v1/threads") {
       const body = await json(request)
@@ -404,6 +413,7 @@ async function fakeCloud({ runtimeEnrolled }: { runtimeEnrolled?: Promise<void> 
     gateway,
     enrolments,
     quiets,
+    notes,
     /** The account connections; `runtimes` are the devices' runtime links. */
     sockets: () => [...sockets].filter(([, held]) => held.kind === "account").map(([socket]) => socket),
     runtimes: () => [...sockets].filter(([, held]) => held.kind === "runtime").map(([socket]) => socket),
@@ -1254,6 +1264,44 @@ test("a Mac on a gateway older than the frame closes its runtime's link for the 
   assert.deepEqual(cloud.quiets, [], "no frame it doesn't know")
   mac.accounts.wake()
   await waitFor(() => linked === 2 && cloud.enrolments.length === 2, "back at the wake")
+})
+
+test("a quiet note names a project folder's project worktree only to a gateway whose link agreed it", async () => {
+  const note = (project: string): QuietNote => ({ note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", project, sessions: [{ session: randomUUID(), generation: 1 }] }] })
+  const project = "/Users/ada/.mako/worktrees/shop/both-sides"
+  const cloud = await fakeCloud()
+  /** The last note the gateway took, as its schema reads it. */
+  const last = () => QuietNoteSchema.parse(cloud.notes.at(-1)).threads[0]!
+  // Before any runtime link has agreed a version, nothing says the gateway takes it.
+  const unlinked = await signedIn(cloud)
+  await unlinked.accounts.quiet(note(project))
+  assert.equal(cloud.notes.length, 1)
+  assert.equal(last().project, undefined, "never sent blind")
+  unlinked.accounts.close()
+  // A gateway whose link agrees one before it: left out, and the rest of the note goes as it was.
+  const before: CloudRuntime = {
+    serve: (link, { runtimeId, credential, threads }) =>
+      serveRuntime(link, { runtimeId, build: "test", credential, threads, versions: { min: 1, max: QUIET_PROJECT_LINK_VERSION - 1 }, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true }) }),
+  }
+  let linked = 0
+  const older = await signedIn(cloud, { runtime: before, onRuntimeLinked: () => { linked += 1 } })
+  await waitFor(() => linked === 1, "the older link enrolled")
+  const sent = note(project)
+  await older.accounts.quiet(sent)
+  const { project: _left, ...rest } = sent.threads[0]!
+  assert.deepEqual(cloud.notes.at(-1), { ...sent, threads: [rest] }, "only the project left out")
+  older.accounts.close()
+  // A gateway whose link agreed it: named, and still once the link has dropped (a Mac going away often has none).
+  let agreed = 0
+  const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { agreed += 1 } })
+  await waitFor(() => agreed === 1, "the link enrolled")
+  await mac.accounts.quiet(note(project))
+  assert.equal(last().project, project)
+  mac.accounts.leaving("sleep")
+  await waitFor(() => cloud.runtimes().length === 0, "the link closed for the sleep")
+  await mac.accounts.quiet(note(project))
+  assert.equal(last().project, project, "the version its link last agreed")
+  mac.accounts.close()
 })
 
 /** Another device's call to `runtimeId` through its session, as that device. */

@@ -71,7 +71,7 @@ const script: Script = async (turn) => {
 /** What the stand-in cloud saw of each move: the hand-over's calls, in order, and its answer. */
 type Moved = { cloudThread: string; channels: string[]; continued: string[]; answer?: MoveAnswer }
 
-async function host(name: string, options: { readyNever?: boolean; unserved?: boolean; unanswered?: boolean; queueDuringNote?: boolean; repositories?: string[] } = {}) {
+async function host(name: string, options: { readyNever?: boolean; unserved?: boolean; unanswered?: boolean; queueDuringNote?: boolean; repositories?: string[]; project?: string } = {}) {
   const base = join(root, name)
   const project = join(base, "project")
   const remote = join(base, "remote.git")
@@ -302,7 +302,11 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     enabled: async () => true,
     working,
     leaving: (thread) => cloudMoves.leaving(thread),
-    plan: (id) => cloudMoves.readyPlan(id),
+    // `project`: the Thread in the project folder is kept ready as a project folder's is, its project worktree around the first one's.
+    plan: async (id) => {
+      const plan = await cloudMoves.readyPlan(id)
+      return options.project && plan.planned ? { ...plan, project: options.project } : plan
+    },
     sendRecords: async (_link, paths) => paths.map(() => ({ harness: "claude", nativeId: "n", versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1, holdings: {} })),
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
     // As the host's: the journal heard, never its full settle; the partition read as the journal holds it.
@@ -317,6 +321,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
       flush: (working, by) => readiness.flush(working, by),
       checkpoint: (thread) => readiness.noteCheckpoint(thread),
       others: (thread) => readiness.noteOthers(thread),
+      project: (thread) => readiness.noteProject(thread),
       rows: async () => {
         rowReads += 1
         order.push("rows")
@@ -399,6 +404,7 @@ async function keptReady(h: Host, work: Awaited<ReturnType<typeof atWork>>) {
   const branches = sh(h.project, "branch", "--list", "mako/*")
   const planned = await h.threadMoves.planned(work.inProject)
   assert.ok(planned, "the project folder's Thread names the worktree its move would make")
+  assert.equal(planned.project, undefined, "a folder of one repository is its own project worktree: none named apart")
   await h.readiness.refresh()
   assert.equal(sh(h.project, "branch", "--list", "mako/*"), branches, "naming it made no branch")
   assert.ok(!existsSync(planned.folder), "and no folder")
@@ -415,7 +421,7 @@ async function keptReady(h: Host, work: Awaited<ReturnType<typeof atWork>>) {
  * folder as it was; and the account heard one note naming each, its Sessions at their generations, and the checkpoint
  * the cloud acknowledged on the cloud Thread standing by for it.
  */
-async function wentAway(h: Host, way: string, work: Awaited<ReturnType<typeof atWork>>, ready: Awaited<ReturnType<typeof keptReady>>, began: number): Promise<void> {
+async function wentAway(h: Host, way: string, work: Awaited<ReturnType<typeof atWork>>, ready: Awaited<ReturnType<typeof keptReady>>, began: number, project?: string): Promise<void> {
   assert.ok(Date.now() - began < 8_000, `${way}: done in ${Date.now() - began} ms, far inside the hold`)
   assert.equal(h.moved.size, 0, `${way}: no move, no hand-over`)
   for (const id of conversations(work)) {
@@ -441,6 +447,8 @@ async function wentAway(h: Host, way: string, work: Awaited<ReturnType<typeof at
     assert.ok(named.checkpoint && ready.standing.includes(named.checkpoint.standby), `${way}: on the cloud Thread kept ready for it`)
     assert.ok(h.acknowledged.some((each) => each.threadId === named.checkpoint!.standby && each.sha256 === named.checkpoint!.sha256), `${way}: a checkpoint the cloud acknowledged`)
     assert.ok(named.checkpoint.head && named.checkpoint.work, `${way}: the whole checkpoint, as the arrival applies it`)
+    // Where its Sessions open on the machine: a project folder's project worktree; a repository's own needs none.
+    assert.equal(named.project, id === work.inProject ? project : undefined, `${way}: ${id === work.inProject && project ? "names the project worktree it was kept ready at" : "names no project"}`)
     // Its parked turn, under the very request this Mac's join would send it on under.
     const parkedOnDisk = z.object({ turns: z.array(z.object({ move: z.string(), conversationId: z.string(), requestId: z.string() }).loose()) }).loose().parse(JSON.parse(readFileSync(join(h.base, "cloud", "moves", "parked-turns"), "utf8"))).turns.filter((turn) => turn.conversationId === id)
     assert.equal(parkedOnDisk.length, 1, `${way}: its turn parked here`)
@@ -509,16 +517,18 @@ try {
     await h.close()
   }
 
-  // As this Mac shuts down, within the shutdown's own hold: the note goes before the Mac goes quiet.
+  // As this Mac shuts down, within the shutdown's own hold: the note goes before the Mac goes quiet. Its Thread in the
+  // project folder is kept ready as a project folder of several repositories' is: the note says its project worktree.
   {
-    const h = await host("shutdown")
+    const project = join(root, "worktrees", "shop", "both-sides")
+    const h = await host("shutdown", { project })
     const work = await atWork(h)
     const ready = await keptReady(h, work)
     const began = Date.now()
     await machineLeaving("shutdown", { handOffs: h.handOffs, enabled: async () => true, quiet: (why) => void h.order.push(`quiet ${why}`) })
     assert.deepEqual(h.order.filter((each) => each !== "rows"), ["note", "gone quiet quit", "quiet quit"], "the account heard the note, then the Mac go quiet")
     assert.ok(h.rowReads() >= 2 && h.order.lastIndexOf("rows") < h.order.indexOf("note"), "the note waited for the account to list the paused turns idle")
-    await wentAway(h, "shutdown", work, ready, began)
+    await wentAway(h, "shutdown", work, ready, began, project)
     await h.close()
   }
 
@@ -584,6 +594,10 @@ try {
     const other = named.others![0]!
     assert.equal(other.url, "https://github.com/acme/web")
     assert.ok(other.path.endsWith("/web") && !other.path.startsWith(h.project), "laid out where its worktree would be, not the project folder")
+    // Its Sessions open in the project worktree, around both repositories' worktrees, from the plan readiness kept.
+    assert.ok(named.project && !named.project.startsWith(h.project), "names the project worktree a move would make")
+    assert.equal(join(named.project, "web"), other.path, "around the other's")
+    assert.equal(join(named.project, "api"), h.made.find((each) => each.threadId === named.checkpoint!.standby)?.folder, "and the first's, its standby's folder")
     /** A checkpoint laid over a fresh clone of its repository's remote, as a machine's arrival does. */
     const laid = async (bare: string, checkpoint: MoveCheckpoint, name: string) => {
       const clone = join(h.base, `machine-${name}`)
@@ -662,6 +676,7 @@ try {
     }
     const planned = await h.worktrees.plannedCheckout(randomUUID(), folder, "Both sides")
     assert.ok(planned && !existsSync(planned.folder), "named, with nothing made")
+    assert.equal(planned.project && join(planned.project, "api"), planned.folder, "the project worktree, around the first repository's, where its Sessions would work")
     assert.equal(planned.repository, realpathSync(join(folder, "api")), "the first repository by its worktree's path")
     assert.deepEqual(planned.repositories.map((each) => each.root).sort(), [realpathSync(join(folder, "api")), realpathSync(join(folder, "web"))], "both repositories, for each one's own checkpoint")
     assert.ok(planned.repositories.every((each) => each.folder.startsWith(dirname(planned.folder))), "each with the folder its worktree would have")

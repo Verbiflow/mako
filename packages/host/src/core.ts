@@ -478,7 +478,26 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // moves on every write, which threw it away at each), and at most `CATALOGUED_FRESH_MS`, for what moves without
   // either (a worktree's origin). Placed again at each read, it was a tenth of the host's allocation.
   let catalogued: { rows: ThreadRef[]; stores: readonly string[] | undefined; version: string | undefined; at: number } | undefined
-  if (!fixtureDesk) catalog.subscribe(() => { catalogued = undefined })
+  // A row the catalog says moved is placed again alone and put in its place: a Fin writing its transcript moves its row
+  // many times a minute, and each threw the whole list away. Activity isn't in the rows; anything else lists anew.
+  if (!fixtureDesk) catalog.subscribe((event) => {
+    if (!catalogued || event.type === "thread-activity") return
+    if (event.type !== "thread-ref") {
+      catalogued = undefined
+      return
+    }
+    const held = catalogued
+    const fresh = catalog.thread({ path: event.ref.path })
+    const at = held.rows.findIndex((row) => row.path === event.ref.path)
+    if (fresh && at >= 0) held.rows = held.rows.map((row, index) => index === at ? fresh : row)
+    else if (fresh) {
+      held.rows = [...held.rows, fresh]
+      held.stores = undefined
+    } else if (at >= 0) {
+      held.rows = held.rows.filter((_, index) => index !== at)
+      held.stores = undefined
+    }
+  })
   const cataloguedRows = () => {
     if (!catalogued || catalogued.version !== store?.placementVersion() || Date.now() - catalogued.at > CATALOGUED_FRESH_MS) {
       const rows = catalog.list()
@@ -1409,6 +1428,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       flush: async (working, by) => late.readiness?.flush(working, by),
       checkpoint: async (thread) => late.readiness?.noteCheckpoint(thread),
       others: async (thread) => (await late.readiness?.noteOthers(thread)) ?? [],
+      project: async (thread) => late.readiness?.noteProject(thread),
       quiet: async (note) => {
         if (!late.cloud?.quiet) throw new Error("This Mac isn't signed in to Mako Cloud.")
         return late.cloud.quiet(note)

@@ -71,8 +71,17 @@ export const QuietRepositorySchema = z.object({
 }).strict()
 export type QuietRepository = z.infer<typeof QuietRepositorySchema>
 
+/**
+ * Where a Thread's Sessions open on the machine, when it isn't the folder its standby holds: the project worktree a move
+ * of it would make, around the worktree of the project's first repository (the standby's folder). Absolute. Sent only to
+ * a gateway whose link agreed `QUIET_PROJECT_LINK_VERSION`: one before it refuses the whole note.
+ */
+export const QUIET_PROJECT_MAX = 4_096
+export const QuietProjectSchema = z.string().min(1).max(QUIET_PROJECT_MAX).regex(/^\//)
+
 export const QuietThreadSchema = z.object({
   thread: ThreadIdSchema,
+  project: QuietProjectSchema.optional(),
   sessions: z.array(SessionAt).min(1).max(OWNER_SESSIONS_MAX),
   checkpoint: AcknowledgedCheckpointSchema.optional(),
   /** The Thread's turns parked as the device went away, for the continue to send on; absent from devices before it. */
