@@ -4,6 +4,7 @@ import { Git, type GitTrace } from "@mako/git"
 import { belowAgents } from "../base/background-priority.js"
 import { hostLog } from "../base/host-log.js"
 import { workspaceWrites } from "../base/workspace-writes.js"
+import { GitHelper } from "./git-helper.js"
 
 /** A Git process slower than this is logged. */
 const GIT_SLOW_MS = 2_000
@@ -29,11 +30,18 @@ function reportWrite(run: GitTrace): void {
  * and those stopped for time are logged under `git` to explain a stall, or
  * every process with `traceAll` (`MAKO_GIT_TRACE=1`). Failures alone are
  * routine: probes such as `rev-parse --verify` fail by design.
+ *
+ * Its processes start in the Git helper (`GitHelper`), off the host's thread, and directly while the helper is down;
+ * `MAKO_GIT_HELPER=0` starts them all directly.
  */
 export function hostGit(traceAll: boolean): Git {
+  const direct = { spawn: hostSpawn, close: closeHostChild }
+  const stopping = hostStopping()?.signal
+  const helper = process.env.MAKO_GIT_HELPER === "0" ? undefined : new GitHelper(direct)
+  if (helper) stopping?.addEventListener("abort", () => { void helper.stop() }, { once: true })
   return new Git({
-    processes: { spawn: hostSpawn, close: closeHostChild },
-    signal: hostStopping()?.signal,
+    processes: helper?.runner() ?? direct,
+    signal: stopping,
     background: belowAgents,
     trace: (run) => {
       reportWrite(run)

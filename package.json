@@ -315,6 +315,7 @@
     "test:orch-front-door": "tsx scripts/test-orch-front-door.ts && tsx --tsconfig tsconfig.app.json scripts/test-routed-transcript.ts",
     "test:orch-answer": "tsx scripts/test-orch-answer.ts",
     "test:fin-resume": "tsx scripts/test-fin-resume.ts",
+    "test:git-helper": "tsx scripts/test-git-helper.ts",
     "test:fin-reopen": "tsx scripts/test-fin-reopen.ts",
     "test:resume-holds": "node scripts/test-loop-hold.mjs && tsx scripts/test-resume-holds.ts",
     "test:trace-history-holds": "tsx scripts/test-trace-history-holds.ts",
