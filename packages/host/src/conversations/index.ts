@@ -85,6 +85,7 @@ export { CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, turnOnOf, t
 export { SessionUploads, declareSyncMethods, readBackfill, syncStatusOf, uploadScope, type UploadSources } from "./session-uploads.js"
 export { SYNC_WINDOW_MS, syncTier, windowStart } from "./sync-window.js"
 export { CloudReadiness, READY_EVERY_MS } from "./cloud-readiness.js"
+export { AwayNotes } from "./away-notes.js"
 export { SleepHandOff, sleepWatchHelper } from "./sleep-handoff.js"
 export { KeepAwake, recountsWork } from "./keep-awake.js"
 export { ownerHold } from "./owner-check.js"
@@ -763,6 +764,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:handoff-settings", () => noHandOffs)
   const setNoHandOffs: (onSleep: boolean) => HandOffSettings = () => noHandOffs
   methods.handle("mako:handoff-settings-set", setNoHandOffs)
+  const runNothingHere: (thread: string) => number = () => 0
+  methods.handle("mako:handoff-run-here", runNothingHere)
   /** Keeping this Mac awake while agents work: on a person's Mac `KeepAwake` answers first; elsewhere there's no Mac to keep. */
   const noKeepAwake: KeepAwakeState = { settings: { on: false, lidClosed: false }, hold: { kind: "rest" }, unavailable: "This Mako doesn't keep a Mac awake." }
   methods.handle("mako:keep-awake", () => noKeepAwake)

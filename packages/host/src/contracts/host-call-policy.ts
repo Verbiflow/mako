@@ -349,6 +349,8 @@ const replays = [
   "mako:handoff",
   /** Setting the same choice again leaves the same choice. */
   "mako:handoff-settings-set",
+  /** Sessions let go once are let go: a repeat lets go of none. */
+  "mako:handoff-run-here",
   /** The same settings saved twice are one choice. */
   "mako:conversation-settings-set",
   /** The same choice saved twice is one choice. */

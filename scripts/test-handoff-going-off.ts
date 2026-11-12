@@ -16,10 +16,11 @@ import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { fromHostOperation } from "@mako/host/contracts/host-operations"
 import { encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
+import { AwayNotes } from "@mako/host/conversations/away-notes"
 import { CloudHandOffs, machineLeaving, workingThreads } from "@mako/host/conversations/cloud-handoffs"
 import { CloudMoves, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
 import { CloudReadiness } from "@mako/host/conversations/cloud-readiness"
-import { QuietNoteSchema, type QuietNote } from "@mako/protocol/handoff"
+import { QuietNoteSchema, type OwnerAnswer, type OwnerAsk, type QuietNote } from "@mako/protocol/handoff"
 import { SleepHandOff } from "@mako/host/conversations/sleep-handoff"
 import { WorkspaceMoves } from "@mako/host/workspaces/moves"
 import { moveSource, ThreadWorktreeMoves } from "@mako/host/workspaces/thread-worktree-moves"
@@ -168,6 +169,9 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
   /** Each going-away note the account heard, and in what order against the Mac going quiet. */
   const notes: QuietNote[] = []
   const order: string[] = []
+  /** What the account says of whose each Session is, once this Mac is back; offline until a test sets it. */
+  let ownerSays: ((ask: OwnerAsk) => OwnerAnswer) | undefined
+  const joined: string[] = []
   const steps: Array<{ conversation: string; kind: string }> = []
   const account: ReturnType<CloudMovesOptions["account"]> = {
     token: async () => "token",
@@ -214,7 +218,11 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     wake: () => undefined,
     stop: () => undefined,
   }
+  // The Sessions the account took a note for: created once the moves are, which it joins continues through.
+  let away: AwayNotes | undefined
   const cloudMoves = new CloudMoves({
+    // A Session the account says a continue took is held by the join (`CloudMoves.joining`), stood in for here by the record of it.
+    awayHeld: (session) => away?.holds(session) ?? (joined.includes(session) ? Date.now() : undefined),
     folder: join(base, "cloud", "moves"),
     git,
     account: () => account,
@@ -250,6 +258,17 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     step: (conversation, _move, step) => void steps.push({ conversation, kind: step.kind }),
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
   })
+  away = new AwayNotes({
+    file: join(base, "cloud", "away.json"),
+    owner: () => async (ask) => {
+      if (!ownerSays) throw new Error("this Mac can't reach its account")
+      return ownerSays(ask)
+    },
+    deviceId: async () => randomUUID(),
+    join: (session) => void joined.push(session),
+    released: () => void cloudMoves.unpark(),
+  })
+  const awayNotes = away
   // Threads at work kept ready, as the host keeps them while handing off on sleep is on: a round runs when a test asks.
   const working = () => workingThreads({ live: world.live, threads: world.store, cloud: () => false })
   const readiness: CloudReadiness = new CloudReadiness({
@@ -280,6 +299,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
         if (options.unserved) return "unserved"
         return { note: note.note, threads: note.threads.map((each) => (each.checkpoint ? { thread: each.thread, accepted: true as const } : { thread: each.thread, accepted: false as const, why: "no-checkpoint" as const })) }
       },
+      accepted: (note, sessions) => awayNotes.noted(note, sessions),
     },
     changed: () => {},
   })
@@ -302,7 +322,8 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     await world.close()
     await tracker.close?.()
   }
-  return { base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
+  const owner = (says: (ask: OwnerAsk) => OwnerAnswer) => (ownerSays = says)
+  return { base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, awayNotes, owner, joined, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
 }
 
 type Host = Awaited<ReturnType<typeof host>>
@@ -420,6 +441,19 @@ try {
     const began = Date.now()
     await sleeps(h, 20_000)
     await wentAway(h, "sleep", work, ready, began)
+    // Back, offline: the account took the note, so its Sessions wait for its word whatever the owner check does.
+    const before = h.world.prompts.length
+    await h.cloudMoves.unpark()
+    await h.awayNotes.ask()
+    await pause(300)
+    assert.equal(h.world.prompts.slice(before).filter((prompt) => conversations(work).includes(prompt.conversation)).length, 0, "sleep: back but unheard, nothing goes on here")
+    // The account answers: the one in its own worktree was continued in the cloud, and is joined; the other is this Mac's.
+    const worktreeSession = h.world.store.journalPlacement(work.inWorktree)!.session
+    h.owner((ask) => ({ sessions: ask.sessions.map((each) => (each.session === worktreeSession ? { session: each.session, answer: "departed" as const, generation: each.generation + 1, cloudThread: ready.standing[1]!, op: randomUUID(), phase: "continued" as const } : { session: each.session, answer: "yours" as const, generation: each.generation })) }))
+    await h.awayNotes.ask()
+    assert.deepEqual(h.joined, [worktreeSession], "sleep: the continued one is joined")
+    await until("sleep: the Thread still this Mac's goes on here", () => h.world.prompts.slice(before).some((prompt) => prompt.conversation === work.inProject))
+    assert.ok(!h.world.prompts.slice(before).some((prompt) => prompt.conversation === work.inWorktree), "sleep: the one the cloud continued never goes on here")
     await h.close()
   }
 
@@ -476,7 +510,7 @@ try {
     assert.equal(await h.worktrees.plannedCheckout(randomUUID(), join(h.base, "one"), "Alone"), undefined)
     await h.close()
   }
-  console.log("PASS: as this Mac sleeps and as it shuts down, each Thread at work, in the project folder or its own worktree, is paused and parked here with nothing moved, its own changes in the cloud already, and the account told before the Mac goes quiet, naming each Thread, its Sessions at their generations and the checkpoint the cloud acknowledged; with a gateway that takes no notes yet, both wait parked and go on here once the Mac is back")
+  console.log("PASS: as this Mac sleeps and as it shuts down, each Thread at work, in the project folder or its own worktree, is paused and parked here with nothing moved, its own changes in the cloud already, and the account told before the Mac goes quiet, naming each Thread, its Sessions at their generations and the checkpoint the cloud acknowledged; back, the Sessions the account took wait for its word with no timer, the one a continue took is joined and the other goes on here; with a gateway that takes no notes yet, both wait parked and go on here once the Mac is back")
 } finally {
   git.close()
   rmSync(root, { recursive: true, force: true })

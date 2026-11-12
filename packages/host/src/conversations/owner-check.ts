@@ -22,10 +22,15 @@ export function ownerHold(parts: {
   account(): { ownerCheck(turn: boolean): number | undefined } | undefined
   moves(): { joinsAny(): boolean; joining(session: string): boolean } | undefined
   session(conversationId: string): string | undefined
+  /** Since when a Session waits for the account's word after a going-away the account took, with no timer (`AwayNotes.holds`). */
+  away?(session: string): number | undefined
 }): (conversationId: string, createdAt: number, turn: boolean) => number | undefined {
   return (conversationId, createdAt, turn) => {
     const since = parts.account()?.ownerCheck(turn)
     if (since !== undefined && createdAt < since) return since
+    const held = parts.away ? parts.session(conversationId) : undefined
+    const away = held === undefined ? undefined : parts.away?.(held)
+    if (away !== undefined) return away
     const moves = parts.moves()
     if (!moves?.joinsAny()) return undefined
     const session = parts.session(conversationId)

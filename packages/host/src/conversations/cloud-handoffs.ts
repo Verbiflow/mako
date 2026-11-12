@@ -41,6 +41,8 @@ export type CloudHandOffsOptions = {
     flush(working: WorkingThread[], by: number): Promise<void>
     checkpoint(thread: string): Promise<AcknowledgedCheckpoint | undefined>
     quiet(note: QuietNote): Promise<QuietAnswer | "unserved">
+    /** The account took the note for these Sessions: they wait for its word once this Mac is back (`AwayNotes.noted`). */
+    accepted(note: string, sessions: QuietThread["sessions"]): Promise<void>
   }
   /** Why this Mac can't hand off now (signed out of the cloud); undefined when it can. */
   unavailable(): Promise<string | undefined>
@@ -169,7 +171,13 @@ export class CloudHandOffs {
       const word = heard.kind === "answered" ? heard.answer.threads.find((known) => known.thread === each.gone.thread) : undefined
       return { conversationId: each.conversationId, outcome: { kind: "kept-here", reason: goingAwayWords(heard, word) } }
     })
-    const accepted = heard.kind === "answered" ? heard.answer.threads.filter((each) => each.accepted).length : 0
+    const taken = heard.kind === "answered" ? new Set(heard.answer.threads.filter((each) => each.accepted).map((each) => each.thread)) : new Set<string>()
+    try {
+      await goingAway.accepted(note.note, note.threads.filter((each) => taken.has(each.thread)).flatMap((each) => each.sessions))
+    } catch (error) {
+      hostWarn("handoff", "the Sessions the account may continue couldn't be kept; they go on here when this Mac is back", { error: errorMessage({ error }) })
+    }
+    const accepted = taken.size
     hostLog("handoff", "agents at work paused as this Mac went away", {
       why,
       threads: working.length,
