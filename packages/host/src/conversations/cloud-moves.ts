@@ -192,6 +192,8 @@ export const MovePlanSchema = z.object({
 })
 const PlanSchema = MovePlanSchema
 type Plan = z.infer<typeof PlanSchema>
+/** A Thread weighed for a move before its checkout is: what a Thread in the main checkout has before its own branch. */
+type Weighed = Pick<Plan, "thread" | "sessions">
 /** A turn a handoff paused: what to continue where the Thread lands, with the background work it stopped. */
 type Paused = NonNullable<Plan["handingOff"]>["paused"][number]
 
@@ -250,6 +252,11 @@ export type CloudMovesOptions = {
    * same session or nothing, never a fork, as a handoff's paused turn needs.
    */
   ownBranch?(conversationId: string, options?: { asItself?: boolean }): Promise<string>
+  /**
+   * The worktree `ownBranch` would put the Thread of a conversation in the main checkout in now, with nothing made
+   * (`ThreadWorktreeMoves.planned`): its folder, and the repository there it's a worktree of.
+   */
+  planned?(conversationId: string): Promise<{ folder: string; repository: string } | undefined>
   /** The Thread's paths outside its folder that its journal ties to it (`Attribution.changes`' footprint, with evidence). */
   outside?(thread: ThreadId): OutsideCandidate[]
   /** The Thread's file history (`Attribution.threadHistory`), carried so the side it lands on resolves its files alike. */
@@ -455,6 +462,16 @@ export class CloudMoves {
 
   /** What a move of the Thread of `conversationId` would carry, for keeping it ready; throws, saying why, when it couldn't move. */
   async readyPlan(conversationId: string): Promise<ReadyPlan> {
+    // A Thread in the main checkout is kept ready where its move would put it: the worktree it goes onto first, as named
+    // now, which its move makes unless something takes the name meanwhile. Nothing is there yet, so no checkout goes
+    // ahead; the move sends its own. That worktree's branch is new, with no upstream, so the cloud clones the default.
+    if (this.#options.ownBranch && this.#options.planned && !this.#options.checkout(conversationId)) {
+      const weighed = await this.#plan(conversationId, MoveIdSchema.parse(randomUUID()), { why: "asked" }, true, "later")
+      const planned = await this.#options.planned(conversationId)
+      if (!planned) throw new Error("The worktree its own branch would have can't be named now, so it isn't kept ready.")
+      const { url } = await this.#options.repositoryOf(planned.repository)
+      return { thread: weighed.thread, folder: planned.folder, repository: { url }, paths: weighed.sessions.map((session) => session.path), harness: weighed.sessions[0]?.harness ?? "", planned: true }
+    }
     const plan = await this.#plan(conversationId, MoveIdSchema.parse(randomUUID()), { why: "asked" })
     return { thread: plan.thread, folder: plan.folder, repository: plan.repository, paths: plan.sessions.map((session) => session.path), harness: plan.sessions[0]?.harness ?? "" }
   }
@@ -638,8 +655,8 @@ export class CloudMoves {
    * and nothing is planned.
    */
   async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses?: boolean, checkout?: "now"): Promise<Plan>
-  async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses: boolean, checkout: "later"): Promise<undefined>
-  async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses = true, checkout: "now" | "later" = "now"): Promise<Plan | undefined> {
+  async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses: boolean, checkout: "later"): Promise<Weighed>
+  async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses = true, checkout: "now" | "later" = "now"): Promise<Plan | Weighed> {
     const account = this.#options.account()
     if (!account || !(await account.id())) throw new Error("Moving to the cloud needs this Mac signed in to Mako Cloud.")
     const threads = this.#options.threads()
@@ -698,7 +715,8 @@ export class CloudMoves {
     }
     const check = weighHarnesses ? await this.#options.harnesses?.check(sessions) : undefined
     if (check?.kind === "known" && check.refusal) throw new Error(check.refusal)
-    if (checkout === "later" || !repository) return undefined
+    if (checkout === "later") return { thread: placed.thread, sessions }
+    if (!repository) throw new Error("A Thread moves to the cloud from its own worktree. Move it into one first; the main checkout stays here.")
     const plan: Plan = { move, thread: placed.thread, asked: conversationId, cloudThread: this.#options.newCloudThread(), folder, repository, others, sessions, phase: "preparing", began: Date.now(), timings: {} }
     if (project) plan.project = project
     if (handOff) plan.handingOff = { why: handOff.why, ...handOff.releaseBy !== undefined && { releaseBy: handOff.releaseBy }, paused: [] }

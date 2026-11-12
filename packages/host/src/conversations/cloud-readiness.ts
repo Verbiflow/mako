@@ -53,7 +53,8 @@ const sameRepository = (left: CloudRepository, right: CloudRepository) => left.u
 export type TakenReady = { cloudThread: string; checkpoint?: string }
 
 /** What a move of a Thread would carry, read as its plan reads it: refused when it couldn't move. */
-export type ReadyPlan = { thread: string; folder: string; repository: CloudRepository; paths: string[]; harness: string }
+/** `planned`: a Thread in the main checkout, kept ready at the worktree its move would make, which isn't there yet. */
+export type ReadyPlan = { thread: string; folder: string; repository: CloudRepository; paths: string[]; harness: string; planned?: true }
 
 export type CloudReadinessOptions = {
   /** Where each local Thread's cloud Thread standing by is remembered: `<data root>/cloud/ready.json`. */
@@ -81,7 +82,9 @@ export type CloudReadinessOptions = {
  * to the cloud, a cloud Thread stands by for it (made with `standby`: no machine until a move's first call), and its
  * checkout and its sessions' records are sent there as they change, every `READY_EVERY_MS`, only what changed. A move
  * then takes that cloud Thread (`take`) and sends only the last seconds, so a handoff as the lid closes fits in the
- * moments macOS gives. A cloud Thread a move took isn't kept ready again: the next Thread to stand by is a new one.
+ * moments macOS gives. A cloud Thread a move took isn't kept ready again: the next Thread to stand by is a new one. A
+ * Thread in the main checkout stands by at the worktree its move would make (`ReadyPlan.planned`), its checkout sent by
+ * the move once that's there.
  * Only while the person lets agents be handed off as this Mac sleeps: nothing of a Thread goes to the cloud otherwise.
  */
 export class CloudReadiness {
@@ -169,7 +172,7 @@ export class CloudReadiness {
     try {
       plan = await this.#options.plan(working.conversationId)
     } catch (error) {
-      // A Thread that couldn't move (the main checkout, say) isn't kept ready; said once.
+      // A Thread that couldn't move (a tab outside its worktree, say) isn't kept ready; said once.
       this.#sayOnce(working.thread, "a Thread at work isn't kept ready to move", errorMessage({ error }))
       return
     }
@@ -193,7 +196,8 @@ export class CloudReadiness {
         await account.createThread(ready.cloudThread, ready.repository, { folder: ready.folder, harness: plan.harness, standby: true })
       }
       const [checkpoint, sent] = await Promise.all([
-        this.#sendCheckpoint(account, ready),
+        // A worktree not made yet has no checkout to send; the move sends its own once it's there.
+        plan.planned ? Promise.resolve(undefined) : this.#sendCheckpoint(account, ready),
         withFreshLink(() => account.threadRecords(ready.cloudThread), (link) => this.#options.sendRecords(link, plan.paths)),
       ])
       ready.at = Date.now()

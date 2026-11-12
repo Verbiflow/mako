@@ -413,6 +413,32 @@ export class ThreadWorktreeService {
   }
 
   /**
+   * The worktree a move of this conversation's Thread onto its own branch would make from `cwd` as `name` now, with
+   * nothing made of it: its folder (the first repository's, by path, in a project folder of several) and the repository
+   * it's a worktree of. A move makes this one so long as nothing takes the name first: the first of the same names
+   * (`reserveSlug`) with no branch of its name and no folder. Undefined when the Thread has its worktree already, the
+   * folder holds no repository or one alone inside it, or every name is taken.
+   */
+  async plannedCheckout(conversationId: string, cwd: string, name: string | undefined): Promise<{ folder: string; repository: string } | undefined> {
+    if (this.ofConversation(conversationId)) return undefined
+    const source = await realpath(cwd).catch(() => undefined)
+    if (!source) return undefined
+    const repoRoot = await this.git.output(source, ["rev-parse", "--show-toplevel"]).catch(() => "")
+    const found = repoRoot ? { roots: [repoRoot] } : await projectRepositories(this.git, source)
+    if ("refusal" in found || !found.roots.length || (!repoRoot && found.roots.length < 2)) return undefined
+    const parent = this.projectFolder(repoRoot || source)
+    const taken = new Set<string>()
+    for (const root of found.roots)
+      for (const branch of (await this.git.output(root, ["for-each-ref", "--format=%(refname:short)", `refs/heads/${BRANCH_PREFIX}`])).split("\n")) taken.add(branch)
+    // The last name a start may take is a random one, which nothing can say beforehand.
+    const slug = slugCandidates(worktreeSlug(name)).slice(0, -1).find((candidate) => !taken.has(`${BRANCH_PREFIX}${candidate}`) && !existsSync(join(parent, candidate)))
+    if (!slug) return undefined
+    const path = join(parent, slug)
+    const [first] = found.roots.map((root) => ({ root, folder: repoRoot ? path : join(path, relative(source, root)) })).sort((left, right) => left.folder.localeCompare(right.folder))
+    return first && { folder: first.folder, repository: first.root }
+  }
+
+  /**
    * A worktree for a fork of `sourceId` that joins the source's Thread. A
    * Thread has one worktree per device, so a Thread that has one already is
    * refused; a repeated request finds its first worktree.
