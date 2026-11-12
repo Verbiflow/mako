@@ -198,6 +198,18 @@ function transcriptsRoot(userRoot: string): string {
 /** Beside the transcripts; one links a child as `../children/…`. */
 const CHILDREN_FOLDER = "children"
 
+/**
+ * The row a harness's session names among `rows`: the newest by `updatedAt`, as the catalog's list orders them, when
+ * one native id names two stores (two rows of one session that may differ, archived in one and not the other).
+ */
+export function newestSessionRow(rows: Iterable<ThreadRef>, session: { harness: string; nativeId: string }): ThreadRef | undefined {
+  let newest: ThreadRef | undefined
+  for (const ref of rows)
+    if (ref.harness === session.harness && ref.nativeId === session.nativeId && (!newest || (ref.updatedAt ?? "").localeCompare(newest.updatedAt ?? "") > 0))
+      newest = ref
+  return newest
+}
+
 /** Where each Thread's environment keeps the files its conversations link to; Workspaces has them. */
 export interface ThreadFileHomes {
   fileDataDir(owner: { cwd?: string; thread?: ThreadId }): Promise<string | undefined>
@@ -1352,13 +1364,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   }
 
   function catalogThread(target: { path: string } | { harness: string; nativeId: string }): ThreadRef | undefined {
-    let found: ThreadRef | undefined
-    if ("path" in target) found = catalogued(target.path)
-    else for (const ref of daemon ? mirror.values() : (catalog?.list() ?? []))
-      if (ref.harness === target.harness && ref.nativeId === target.nativeId) {
-        found = ref
-        break
-      }
+    const found = "path" in target ? catalogued(target.path) : newestSessionRow(daemon ? mirror.values() : (catalog?.list() ?? []), target)
     return found && annotate(found)
   }
 

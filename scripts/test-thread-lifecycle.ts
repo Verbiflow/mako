@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { ThreadArchives } from "@mako/host/threads/archives"
 import { ThreadLifecycle } from "@mako/host/threads/lifecycle"
+import { newestSessionRow } from "@mako/host/threads/catalog"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
@@ -135,6 +136,16 @@ try {
   assert.equal(one.archived(codex), natives.archived(codex), "one row answers as the whole catalog does")
   assert.equal(one.controls(codex).archived, natives.controls(codex).archived)
   assert.equal(one.archived({ kind: "file", path: refs[1]!.path }), natives.archived({ kind: "file", path: refs[1]!.path }))
+  // One native id naming two stores keeps two rows; the one asked about is the newest, as the catalog's list orders
+  // them, whichever was catalogued first.
+  const older: ThreadRef = { harness: "codex", nativeId: "two-stores", path: "/home/.codex/archived_sessions/rollout-two.jsonl", updatedAt: "2026-11-10T10:00:00.000Z", nativeArchived: true, nativeArchiveStamp: "7" }
+  const newer: ThreadRef = { harness: "codex", nativeId: "two-stores", path: "/home/.codex/sessions/2026/11/12/rollout-two.jsonl", updatedAt: "2026-11-12T10:00:00.000Z" }
+  assert.equal(newestSessionRow([older, newer], { harness: "codex", nativeId: "two-stores" }), newer, "the newer row, catalogued second")
+  assert.equal(newestSessionRow([newer, older], { harness: "codex", nativeId: "two-stores" }), newer, "and catalogued first")
+  assert.equal(newestSessionRow([older, newer], { harness: "claude", nativeId: "two-stores" }), undefined, "another harness's session is none of them")
+  const twoStores = new ThreadLifecycle({live:owner,archives,native:{list:()=>[],editQueued:()=>[]},threads:()=>{ throw new Error("whole catalog read") },
+    thread:(target)=>"path" in target ? undefined : newestSessionRow([older, newer], target),nativeToken:()=>null,abortNative:()=>{},external:()=>false})
+  assert.equal(twoStores.archived({ kind: "native", provider: "codex", nativeId: "two-stores" }), false, "not archived: the newest row isn't, whatever order the rows came in")
 
   // A restore holds for the harness's archive it answered, no longer.
   const shownKeys = () => archives.snapshot().keys.filter((key) => key.startsWith("shown"))
