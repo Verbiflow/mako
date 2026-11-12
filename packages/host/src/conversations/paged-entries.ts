@@ -127,6 +127,11 @@ export class EntryPager {
   private readonly rows = { blocks: new Map<number, WeakRef<Entry>>(), base: new Map<number, WeakRef<Entry>>() }
   /** One getter a field name, shared by every entry this pager pages. */
   private readonly accessors = new Map<string, PropertyDescriptor>()
+  /**
+   * What was read back last, by entry, while the journal is open (its resident holds those entries anyway). Keyed by
+   * the entries themselves, so it must hold none once the journal closed: an entry it held could never be collected,
+   * and the journal, its connection and this cache stayed for the host's life (`release`).
+   */
   private readonly cache = new Map<Entry, { value: RowEntry; chars: number }>()
   private cachedChars = 0
   private readonly collected: FinalizationRegistry<{ table: PagedTable; row: number }>
@@ -214,6 +219,8 @@ export class EntryPager {
    */
   release(rows: PagedRows): Promise<void> {
     this.rowsSource = rows
+    this.cache.clear()
+    this.cachedChars = 0
     const freed = new Promise<void>((resolve) => { this.released = resolve })
     if (this.live <= 0) this.free()
     return freed
@@ -270,6 +277,8 @@ export class EntryPager {
     const parsed = RowEntrySchema.parse(JSON.parse(text))
     if (parsed.type !== paged.type || parsed.id !== ("id" in paged ? paged.id : undefined))
       throw new Error(`Mako's journal row ${source.row} of ${source.table} holds another entry than the one paged from it`)
+    // Closed: read straight from the rows, holding nothing that would keep the entry from being collected.
+    if (this.released) return parsed
     this.cache.set(paged, { value: parsed, chars: text.length })
     this.cachedChars += text.length
     for (const [key, cached] of this.cache) {
