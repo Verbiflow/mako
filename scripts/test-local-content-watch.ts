@@ -12,7 +12,7 @@ import { encodeRuntimeEvent, decodeRuntimeEvent } from "@mako/host/contracts/run
 import { ROSTER_LIVE_FORM } from "@mako/protocol/live-form"
 import { LOCAL_CONTENT_CHANNEL, LOCAL_CONTENT_LIMIT, LocalContentReceiptSchema, withoutLiveContent } from "@mako/host/contracts/local-content-watch"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { LiveBatch, LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { LiveBatch, LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures"
 import { removeScratch } from "./lib/scratch-processes.mjs"
 
@@ -26,6 +26,7 @@ const { applyLiveSnapshot, applyLiveBatch, hydrateLive, unloadLive } = await imp
 const { localContentUnion, watchLocalContent, syncLocalContent, resetLocalContent } = await import("../src/state/local-content-watch")
 const { transcriptReaders, liveReadingSource } = await import("../src/state/transcript-reading")
 const { viewer } = await import("../src/state/viewer")
+const { installNotificationEnvironment } = await import("../src/state/notifications")
 const { AudioFeedback } = await import("../src/lib/audio-feedback")
 mock.method(AudioFeedback.prototype, "play", async () => {})
 
@@ -181,6 +182,55 @@ try {
   await syncLocalContent()
   assert.ok(!localContentUnion()?.includes(b))
 
+  // A listed Session's turn ends behind content left out: the read it sets off is a change heard, so it's announced,
+  // never taken for a quiet load (the packaged run lost a background Thread's "finished" notice to that).
+  const toasts: string[] = []
+  const unbindNotices = installNotificationEnvironment({
+    visibleSubjects: () => new Set(), focused: () => true, now: () => Date.now(), cue: () => {}, toast: (item) => void toasts.push(`${item.kind}:${item.subject.id}`),
+    dismissToast: () => {}, desktop: async () => true, dismissDesktop: () => {}, badge: () => {}, schedule: () => () => {}, open: () => {}, announces: () => true,
+  })
+  // Listed while its first prompt waits (the read a batch without content sets off), then taken through its turn by
+  // batches of metadata alone: its prompt waits no longer, so its turn's end is announced.
+  const asked: LiveRequest = { id: auditId(799), text: "Background work", attachments: [], status: "queued" }
+  const step = async (session: Partial<LiveSnapshot["session"]>, request: LiveRequest, historyChanged: boolean) => {
+    const prior = source.get(b)!
+    const revision = prior.revision! + 1
+    source.set(b, { ...prior, revision, session: { ...prior.session, ...session }, requests: [request] })
+    await sent({ type: "live-batch", batch: { id: b, epoch: prior.epoch, revision, updates: [], sessionChanges: session, requests: [request], ...(historyChanged && { historyChanged }) } })
+    assert.equal(delivered.at(-1)?.contentOmitted, true)
+    await until(`the listed Session reads ${session.status}`, () => {
+      const current = acpStore.get().conversations[b]
+      return current?.kind === "live" && current.revision === revision && !current.hydrated
+    })
+    await syncLocalContent()
+    assert.ok(!localContentUnion()?.includes(b))
+  }
+  await step({ status: "ready" }, asked, true)
+  const listed = acpStore.get().conversations[b]
+  assert.ok(listed?.kind === "live")
+  assert.equal(listed.queued.length, 1, "listed as it waits")
+  await step({ status: "running" }, { ...asked, status: "dispatching" }, false)
+  await step({ status: "ready", lastStop: "completed" }, { ...asked, status: "completed" }, false)
+  await until("its turn's end is announced", () => toasts.some((toast) => toast.startsWith("finished:")))
+  unbindNotices()
+
+  // A Session first heard while the window runs (a Fin, another device's Thread) is listed, not kept whole: kept, it
+  // joined the watch and took every later batch in full (the packaged run of 2026-11-11 withheld one batch each).
+  const late = auditId(703)
+  source.set(late, { ...auditSnapshot(0, "codex"), session: { ...auditSnapshot(0, "codex").session, id: late }, threadId: late, sessionId: late, epoch: "fixture-epoch" })
+  await sent(change(late, "first heard while the window runs"))
+  assert.equal(delivered.at(-1)?.contentOmitted, true)
+  await until("a Session first heard is listed with its metadata, its body let go", () => {
+    const current = acpStore.get().conversations[late]
+    return current?.kind === "live" && current.revision === source.get(late)?.revision && !current.hydrated
+  })
+  await syncLocalContent()
+  assert.ok(!localContentUnion()?.includes(late), "a Session only listed is outside the watch")
+  await sent(change(late, "its next batch stays without content"))
+  assert.equal(delivered.at(-1)?.contentOmitted, true)
+  await until("the listed Session follows its metadata", () => acpStore.get().conversations[late]?.revision === source.get(late)?.revision)
+  assert.equal(acpStore.get().conversations[late]?.hydrated, false)
+
   // Real disconnect/re-attach rejects an old read and requires fresh interest plus a new authoritative snapshot.
   pause = { arrived: gate(), release: gate() }
   const disconnectedRead = pause
@@ -223,7 +273,7 @@ try {
   await sent(change(b, "explicit full-delivery fallback retains unwatched content"))
   assert.equal(delivered.at(-1)?.contentOmitted, undefined)
   console.log(JSON.stringify({ passed: true, windows: 3, delivered: delivered.length, reads,
-    cases: ["listed metadata", "legacy and independent windows", "snapshot promotion with buffered content", "hidden hydrated cache", "secondary pane", "copy/detail leases", "late omitted body", "history invalidation", "reconnect stale snapshot and generation", "out-of-order watch removal", "remote unchanged", "bounded inputs and full fallback"] }))
+    cases: ["listed metadata", "legacy and independent windows", "snapshot promotion with buffered content", "hidden hydrated cache", "secondary pane", "copy/detail leases", "late omitted body", "history invalidation", "listed turn end announced", "session first heard", "reconnect stale snapshot and generation", "out-of-order watch removal", "remote unchanged", "bounded inputs and full fallback"] }))
 } finally {
   stop(); close(); closeLegacy(); closeOther()
   liveRead.mock.restore()

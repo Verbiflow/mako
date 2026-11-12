@@ -553,6 +553,12 @@ function refreshListed(id: string): void {
   void hydrateLive(id, true)
 }
 
+/** `refreshListed` for what `heard` left out, `heard` held until the read so the change it says is one observed. */
+function listAfter(heard: HeardLiveBatch): void {
+  pending.set(heard.id, [...(pending.get(heard.id) ?? []).slice(-127), heard])
+  refreshListed(heard.id)
+}
+
 /**
  * Put a loaded conversation back the way boot listed it: its session,
  * requests and status stay and keep following batches, its transcript goes
@@ -629,9 +635,10 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
   for (const action of batch.control?.actions ?? []) if (steerTaken(action)) settleMessage(action.input.id, true)
   const current = acpStore.get().conversations[batch.id]
   if (current?.kind === "live" && sameEpoch(current, batch) && batch.revision <= (current.revision ?? 0)) return
-  // Invalidation can mean metadata was missed too. Read it authoritatively, then release the temporary body again.
+  // Invalidation can mean metadata was missed too. Read it authoritatively, then release the temporary body again. The
+  // batch waits for that read, so what it says (a turn ending) is heard, never taken for a quiet load (`observedChange`).
   if (batch.contentOmitted && batch.historyChanged && current?.kind === "live" && !current.hydrated &&
-    acpStore.get().activeKey !== batch.id && !fetching.has(batch.id)) return refreshListed(batch.id)
+    acpStore.get().activeKey !== batch.id && !fetching.has(batch.id)) return listAfter(heard)
   if (
     current?.kind === "live" &&
     !current.hydrated &&
@@ -667,6 +674,9 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
       harnessTurns: batch.harnessTurns ?? current.harnessTurns,
       spentThrough: batch.spentThrough === undefined ? current.spentThrough : (batch.spentThrough ?? undefined),
       requests: requests ?? current.requests,
+      // What waits follows the requests, as a snapshot reads it: left as listed, a Session listed while its first
+      // prompt waited kept it queued, and its turns' ends never announced (`noteLiveOutcome` needs none queued).
+      queued: requests ? requests.filter((request) => request.status === "queued" || request.status === "held") : current.queued,
       promptedAt: promptedAfter(current.promptedAt, batch),
       permission: batch.permissions
         ? (batch.permissions[0] ?? null)
@@ -712,7 +722,11 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
     const buffered = pending.get(batch.id) ?? []
     pending.set(batch.id, [...buffered.slice(-127), heard])
     const failure = failed.get(batch.id)
-    if (!failure || failure.reconnecting) void hydrateLive(batch.id)
+    // A Session first heard here through a batch whose content was left out (one started while this window runs: a
+    // Fin, another device's Thread) is listed, as boot lists what it doesn't show. Read whole and kept, it would join
+    // this window's content watch and take every later batch in full.
+    if (!current && batch.contentOmitted && acpStore.get().activeKey !== batch.id) refreshListed(batch.id)
+    else if (!failure || failure.reconnecting) void hydrateLive(batch.id)
     return
   }
   if (batch.revision <= (current.revision ?? 0)) return
