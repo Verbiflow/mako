@@ -1389,6 +1389,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     goingAway: {
       flush: async (working, by) => late.readiness?.flush(working, by),
       checkpoint: async (thread) => late.readiness?.noteCheckpoint(thread),
+      project: async (thread) => late.readiness?.noteProject(thread),
       quiet: async (note) => {
         if (!late.cloud?.quiet) throw new Error("This Mac isn't signed in to Mako Cloud.")
         return late.cloud.quiet(note)
