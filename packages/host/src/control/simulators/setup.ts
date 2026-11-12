@@ -68,11 +68,23 @@ export function developerFolder(xcode: XcodeFound): string {
   return join(xcode.path, "Contents", "Developer")
 }
 
-/** Each complete Xcode in the Applications folders: a bundle whose `xcodebuild` is there, which an App Store download isn't until it's done. */
+/** Spotlight's query for every Xcode on this Mac, wherever it was put: an Xcode kept outside Applications counts too. */
+const XCODE_QUERY = "kMDItemCFBundleIdentifier == 'com.apple.dt.Xcode'"
+
+/**
+ * Each complete Xcode on this Mac: in the Applications folders, and anywhere Spotlight finds one. A bundle counts once
+ * its `xcodebuild` is there, which an App Store download's isn't until it's done. Whichever folder `xcode-select` names,
+ * Mako runs a found Xcode's tools through its own developer folder (`DEVELOPER_DIR`).
+ */
 export async function findXcodes(run: Run, folders: readonly string[]): Promise<XcodeFound[]> {
-  const bundles = (
-    await Promise.all(folders.map(async (folder) => (await readdir(folder).catch(() => [])).filter((name) => /^Xcode.*\.app$/.test(name)).map((name) => join(folder, name))))
-  ).flat()
+  const [listed, spotlight] = await Promise.all([
+    Promise.all(folders.map(async (folder) => (await readdir(folder).catch(() => [])).filter((name) => /^Xcode.*\.app$/.test(name)).map((name) => join(folder, name)))),
+    run("/usr/bin/mdfind", [XCODE_QUERY], { timeoutMs: 5_000 }).then(
+      (found) => (found.code === 0 ? found.stdout.split("\n").map((line) => line.trim()).filter((line) => line.endsWith(".app")) : []),
+      () => []
+    ),
+  ])
+  const bundles = [...new Set([...listed.flat(), ...spotlight])]
   const found = await Promise.all(
     bundles.map(async (path): Promise<XcodeFound | undefined> => {
       if (!(await stat(join(path, "Contents", "Developer", "usr", "bin", "xcodebuild")).then(() => true, () => false))) return undefined

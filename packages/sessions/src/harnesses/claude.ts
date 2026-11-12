@@ -48,7 +48,9 @@ export const CLAUDE_RECORD_TYPES: readonly string[] = [
  * (`inherited_asks_settled`). 2.1.319's are a stream's: the folder a run
  * started in, for the program that started it (`start_folder`), and the
  * writes a full disk lost as it exited (`session_writes_lost`), which the
- * live session shows as a warning.
+ * live session shows as a warning. 2.1.322's are a plugin's notification for a
+ * headless session's host and its cancel (`ui_notify`, `ui_notify_cancel`),
+ * which Claude Code drops before its own stream, so no session keeps them.
  */
 export const CLAUDE_SYSTEM_SUBTYPES: readonly string[] = [
   "agents_killed", "api_error", "api_retry", "away_summary", "background_tasks_changed",
@@ -66,6 +68,7 @@ export const CLAUDE_SYSTEM_SUBTYPES: readonly string[] = [
   "turn_preempted", "turn_starting", "ui_focus", "ui_invalidate", "ui_log",
   "ui_panes", "ui_placed", "ui_scroll", "ui_status", "ui_toast",
   "vcs_state_changed", "worker_shutting_down", "session_writes_lost", "start_folder",
+  "ui_notify", "ui_notify_cancel",
 ]
 
 /**
@@ -127,9 +130,9 @@ const CLAUDE_REFUSALS = [
 export const CLAUDE_VOCABULARY = defineVocabulary({
   harness: "claude",
   checked: {
-    version: "2.1.319",
-    on: "2026-11-07",
-    against: "the model request of the SDK's Claude Code 2.1.319, which Mako runs, in every Mako mode (scripts/fixtures/native-tools; the same tools since 2.1.283, AskUserQuestion's, Bash's and DesignSync's descriptions reworded in 2.1.314, DesignSync's again and PushNotification's status optional in 2.1.319), its print-run tools (scripts/fixtures/native-vocabulary/claude-init.json), and ~/.claude/projects through audit:tools as of 2026-10-06",
+    version: "2.1.322",
+    on: "2026-11-11",
+    against: "the model request of the SDK's Claude Code 2.1.322, which Mako runs, in every Mako mode (scripts/fixtures/native-tools; the same tools since 2.1.283, AskUserQuestion's, Bash's and DesignSync's descriptions reworded in 2.1.314, DesignSync's again and PushNotification's status optional in 2.1.319, none changed in 2.1.322), its print-run tools (scripts/fixtures/native-vocabulary/claude-init.json), and ~/.claude/projects through audit:tools as of 2026-10-06",
   },
   mcp: [],
   refusals: CLAUDE_REFUSALS,
@@ -181,9 +184,9 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "2.1.319",
-      on: "2026-11-07",
-      against: "SDK 0.3.319 types (HOOK_EVENTS, unchanged since 0.3.283; AgentDefinition unchanged since 0.3.314; Settings adds only settings for the program that starts Claude Code), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings) as read on 2026-10-06, and the build the SDK bundles through harness:self-report",
+      version: "2.1.322",
+      on: "2026-11-11",
+      against: "SDK 0.3.322 types (HOOK_EVENTS, unchanged since 0.3.283; AgentDefinition unchanged since 0.3.314; Settings unchanged since 0.3.319), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings) as read on 2026-10-06, and the build the SDK bundles through harness:self-report",
     },
     instructions: {
       files: ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude/AGENTS.md"],

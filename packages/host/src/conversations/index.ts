@@ -192,6 +192,8 @@ export interface ConversationsDeps {
   builds?(): { slots: number; holders: string[] }
   /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
   finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
+  /** Operations this device runs for another place's Threads (`LentHere`): each takes a Fin's place here. */
+  lent?: () => number
   /**
    * The Mako account this host is signed in to, through which it reaches the person's other devices: with it a Fin can
    * be placed on one, and one placed here reports to its Apex's device. Without it Fins start here only.
@@ -319,6 +321,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const continueOn = continuing({
     live,
     resolveLaunch: (provider, cwd, tuning) => harnesses.profiles.resolveLaunch(provider, cwd, tuning),
+    carried: (provider, cwd, tuning) => harnesses.profiles.carried(provider, cwd, tuning),
     resumesUnderAccount: (harness) => host.liveDrivers.get(harness)?.accountContinuation?.kind === "resumes",
     switched: (provider) => deps.telemetry.feature("harness.switched", provider),
   })
@@ -379,6 +382,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
         const saved = await deps.invoke("mako:harness-order-saved", [])
         return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))
       },
+      ...(deps.lent && { lent: deps.lent }),
       ...(deps.finCapacity && {
         finLimit: () => deps.finCapacity!.atOnce(),
         observeCapacity: (working: number, mix: Readonly<Record<string, number>>, fins?: readonly { conversation: string; harness: string }[]) => deps.finCapacity!.observe(working, mix, fins),

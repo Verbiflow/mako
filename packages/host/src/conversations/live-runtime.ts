@@ -134,6 +134,11 @@ export interface Resident {
   idleTimer?: ReturnType<typeof setTimeout>
   /** Intentional transport teardown; prompts accepted during it wake afterwards. */
   hibernating?: Promise<void>
+  /**
+   * A model, reasoning or fast its own harness's session takes from the next message on (a move to the harness it's on,
+   * `moveOn`): the process running now was started on what it had, so the next message that names none carries this.
+   */
+  retuned?: SessionSettings
   /** One coalesced resume for every prompt that arrives while hibernated. */
   waking?: Promise<void>
   /** At most one automatic account reopen for an input proven unsent. */

@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import * as version from '../dist/version.js';
+import { ReportedSessionSchema, rowsForLink } from '../dist/thread-listing.js';
+import { decodeRuntimeFrame, encodeRuntimeFrame } from '../dist/wire.js';
+import { createFakeGateway } from '../dist/fake-gateway.js';
+import { serveRuntime } from '../dist/runtime-client.js';
+import * as forms from '../dist/live-form.js';
+const row={session:'00000000-0000-4000-8000-000000000001',thread:'00000000-0000-4000-8000-000000000002',conversation:'stage312',harness:'codex',state:'idle',createdAt:'2026-11-09T00:00:00.000Z',activityAt:'2026-11-09T00:00:00.000Z',generation:1,order:0};
+test('312 stage reserves Session-order22 and advertisement23 without claiming lending',()=>{assert.equal(version.SESSION_ORDER_VERSION,22);assert.equal(version.ADVERTISE_LINK_VERSION,23);assert.equal(version.LINK_VERSION,23);assert.equal(version.LEND_LINK_VERSION,undefined);assert.equal(version.PROTOCOL_VERSION,1);});
+test('312 stage preserves and filters owner order at 22',()=>{for(const v of [20,21,22,23]){const listed=rowsForLink([row],v);assert.equal(Object.hasOwn(listed[0],'order'),v>=22);assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({type:'sessions',report:{listed,gone:[]}})).report.listed,listed);}assert.equal(row.order,0);});
+test('312 stage keeps strict report schemas and current main window-only roster exports',()=>{assert.equal(ReportedSessionSchema.safeParse({...row,unknown:true}).success,false);assert.equal(forms.WINDOW_LIVE_FORM,3);assert.equal(forms.saidWindowForm('3'),3);assert.equal(forms.saidLiveForm('3'),2);});
+test('312 actual advertisement senders emit nothing at 21/22 and emit at 23',async()=>{const gateway=createFakeGateway();try{for(const v of [21,22,23]){const runtime=await serveRuntime(await gateway.connectRuntime(),{runtimeId:'v'+v,build:'stage312',versions:{min:1,max:v},handle:async()=>assert.fail('no operations')});try{assert.equal(runtime.advertise({capabilities:[],slots:{used:0,of:1},at:1}),v>=23);await new Promise(resolve=>setImmediate(resolve));assert.equal(gateway.advertisements('v'+v).length,v>=23?1:0);assert.equal(runtime.beat,undefined);}finally{runtime.close();await runtime.done;}}}finally{await gateway.close();}});
