@@ -204,8 +204,7 @@
             "type": "turn",
             "turn": {
               "type": "delivered",
-              "inbox": "msg_0001",
-              "between": true
+              "inbox": "msg_0001"
             }
           }
         }
@@ -236,8 +235,7 @@
             "type": "turn",
             "turn": {
               "type": "delivered",
-              "inbox": "msg_0002",
-              "between": true
+              "inbox": "msg_0002"
             }
           }
         }

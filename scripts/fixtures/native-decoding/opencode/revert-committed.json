@@ -164,8 +164,7 @@
             "type": "turn",
             "turn": {
               "type": "delivered",
-              "inbox": "msg_11542a76d001Pf0lK7TMp2woyg",
-              "between": true
+              "inbox": "msg_11542a76d001Pf0lK7TMp2woyg"
             }
           }
         }
