@@ -1038,19 +1038,24 @@ export class CloudAccounts {
    * This Mac is going away (`QuietNote`): each of its Threads with a turn parked, the Sessions it holds at their
    * generations, and the checkpoint the cloud acknowledged, which the account may continue it from while this Mac is
    * quiet. It releases nothing. The same note again is the same note. A gateway that takes no notes yet answers 404:
-   * `unserved`, and nothing is continued. A Thread's `project` goes only to a gateway whose link last agreed
-   * `QUIET_PROJECT_LINK_VERSION`, and its `others` only to one that agreed `QUIET_OTHERS_LINK_VERSION`: one before
-   * refuses the whole note, so to any other the Thread goes without them.
+   * `unserved`, and nothing is continued. The note goes as given: pass `asSent`'s, the very note a going-away records
+   * (`CloudReadiness.noted`), so what's recorded is what went. Filtering it again here could leave out what the record
+   * says went, had the link agreed another version meanwhile; sent as recorded, a gateway that no longer takes a field
+   * refuses the note, nothing is continued, and nothing leaves the project folder.
    */
   async quiet(note: QuietNote): Promise<QuietAnswer | "unserved"> {
     const deviceId = await this.deviceId()
     if (!deviceId) throw new CloudAccountError("This Mac isn't signed in to Mako.")
-    const response = await this.#call("devices.quiet", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/quiet`, QuietNoteSchema.parse(this.#noteFor(note)), false, [404])
+    const response = await this.#call("devices.quiet", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/quiet`, QuietNoteSchema.parse(note), false, [404])
     if (response.status === 404) return "unserved"
     return QuietAnswerSchema.parse(await response.json())
   }
 
-  /** The note as `quiet` sends it to this gateway now: what a going-away records it named (`CloudReadiness.noted`). */
+  /**
+   * The note as this gateway takes it now (`#noteFor`): a Thread's `project` only to a gateway whose link last agreed
+   * `QUIET_PROJECT_LINK_VERSION`, its `others` and `projectFrom` only to one that agreed 26, since one before refuses the
+   * whole note. A going-away records it (`CloudReadiness.noted`) and sends it as it is (`quiet`).
+   */
   asSent(note: QuietNote): QuietNote {
     return this.#noteFor(note)
   }
