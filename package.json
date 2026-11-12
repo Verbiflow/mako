@@ -335,6 +335,7 @@
     "test:orch-comms": "tsx scripts/test-orch-comms.ts",
     "test:orch-deliver": "tsx scripts/test-orch-deliver.ts",
     "test:steer-landing": "tsx --tsconfig tsconfig.app.json scripts/test-steer-landing.ts",
+    "test:thread-stays-live": "tsx scripts/test-thread-stays-live.ts",
     "probe:steer-lands": "tsx --tsconfig tsconfig.app.json scripts/probe-steer-semantics.ts --lands",
     "test:background-work-ui": "node scripts/test-background-work-ui.mjs",
     "test:test-scratch": "node scripts/test-test-scratch.mjs",
