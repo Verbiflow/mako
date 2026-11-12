@@ -235,6 +235,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
     archives,
     native,
     threads: () => catalog.list(),
+    thread: (target) => catalog.thread(target),
     nativeToken: nativeStops.token,
     abortNative: nativeStops.abort,
     external: (path) => Boolean(catalog.activity()[path]),
