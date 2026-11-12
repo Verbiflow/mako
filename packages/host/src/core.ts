@@ -63,7 +63,7 @@ import { accountBorrowing, BorrowedSimulators, ControlResidency, controlLine, op
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
+import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, AwayNotes, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -206,6 +206,8 @@ interface LateParts {
   cloudFollow?: CloudFollow
   /** Keeps Threads at work ready to move, and takes their checkpoints as they write (`CloudReadiness`). */
   readiness?: CloudReadiness
+  /** The Sessions a going-away's note the account took, waiting for its word once this Mac is back (`AwayNotes`). */
+  awayNotes?: AwayNotes
   /** This host's Sessions on the account's list: told again when one is archived here. */
   sessions?: SessionPublisher
   /** The keys of the account's archived cloud Threads' Sessions, told to every window (`ThreadArchives.account`). */
@@ -888,6 +890,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         continued: (session, listed) => late.cloudMoves?.joinContinue(session, listed),
         ownerChecked: () => {
           late.conversations?.live.moves.ownerChecked()
+          // Sessions a going-away named, which the account may have continued: whose they are is asked now, never given up on.
+          void late.awayNotes?.ask()
           // Turns paused as this Mac went off, for a Thread still here, go on now (`CloudMoves.unpark`).
           void late.cloudMoves?.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
         },
@@ -993,7 +997,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     opened: () => late.sessions?.showsChanged(),
     // Back from away, a conversation begun before then runs nothing until the account says its Session is still this
     // Mac's; one whose continue this Mac joins runs nothing until the join ends.
-    ownerCheck: ownerHold({ account: () => cloudConversations, moves: () => late.cloudMoves, session: (conversationId) => threads.store?.journalPlacement(conversationId)?.session }),
+    ownerCheck: ownerHold({ account: () => cloudConversations, moves: () => late.cloudMoves, session: (conversationId) => threads.store?.journalPlacement(conversationId)?.session, away: (session) => late.awayNotes?.holds(session) }),
     // A cloud machine's harnesses run on the account's sign-ins: nobody is there to sign one in.
     unattended: config.machineAgentFd !== undefined,
     environment,
@@ -1139,6 +1143,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   // A person's Mac moves its Threads to the cloud (`mako:thread-move`); a machine takes them (`mako:move-arrive`).
   const cloudMoves = cloudConversations && new CloudMoves({
+    awayHeld: (session) => late.awayNotes?.holds(session),
     folder: join(environment.dataRoot, "cloud", "moves"),
     git,
     account: () => late.cloud,
@@ -1190,6 +1195,23 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     harnesses: harnessCheck,
   })
   late.cloudMoves = cloudMoves || undefined
+  if (cloudMoves) {
+    const unpark = () => void cloudMoves.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
+    late.awayNotes = new AwayNotes({
+      file: join(environment.dataRoot, "cloud", "away.json"),
+      owner: () => {
+        const cloud = late.cloud
+        return cloud?.owner && ((ask) => cloud.owner!(ask))
+      },
+      deviceId: async () => late.cloud?.deviceId(),
+      join: (session, listed) => cloudMoves.joinContinue(session, listed),
+      released: unpark,
+    })
+    // Asked again while any waits and the account couldn't answer: on the account's next link too, through the owner check.
+    shell.jobs.every("ask the account whose the Sessions held as this Mac went away are", 30_000, async () => {
+      if (late.awayNotes?.any() && !cloudConversations?.ownerCheck(false)) await late.awayNotes.ask()
+    })
+  }
   void cloudMoves?.settle().catch((error: Error) => hostWarn("moves", "moves a stopped host left couldn't be settled", { error: error.message }))
   // The one owner of each cloud Thread's worktree here: the way back and the follow both write it through this.
   const cloudWorktrees = new CloudWorktrees()
@@ -1349,6 +1371,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         if (!late.cloud?.quiet) throw new Error("This Mac isn't signed in to Mako Cloud.")
         return late.cloud.quiet(note)
       },
+      accepted: async (note, sessions) => late.awayNotes?.noted(note, sessions),
+      goneQuiet: (why) => late.cloud?.leaving?.(why),
       // The account takes a note only for Sessions it lists as this Mac's and idle: read here until the paused turns are.
       rows: async () => {
         const cloud = late.cloud
@@ -1885,6 +1909,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           // SAFETY: the dispatcher parsed this call's arguments with `mako:handoff-settings-set`'s schema before routing it.
           const [onSleep] = args as [boolean]
           return { handled: true, value: encodeRuntimeValue(await cloudHandOffs.setOnSleep(onSleep)) }
+        }
+        if (channel === "mako:handoff-run-here") {
+          // SAFETY: the dispatcher parsed this call's arguments with `mako:handoff-run-here`'s schema before routing it.
+          const [thread] = args as [string]
+          const id = ThreadIdSchema.safeParse(thread)
+          const sessions = id.success ? (threads.store?.threadSessions(id.data) ?? []).map((each) => each.session) : []
+          return { handled: true, value: encodeRuntimeValue((await late.awayNotes?.runHere(sessions)) ?? 0) }
         }
         if (channel === "mako:handoff") {
           // SAFETY: the dispatcher parsed this call's arguments with `mako:handoff`'s schema before routing it.

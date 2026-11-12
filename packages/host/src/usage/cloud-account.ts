@@ -15,7 +15,7 @@ import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thre
 import { WaitingInputSchema, WaitingMessageSchema, type WaitingInput, type WaitingMessage } from "@mako/protocol/waiting"
 import type { SessionPublishing } from "./machine-runtime.js"
 import { ContinueStateSchema, type ContinueState } from "@mako/protocol/continues"
-import { QuietAnswerSchema, QuietNoteSchema, type QuietAnswer, type QuietNote } from "@mako/protocol/handoff"
+import { OwnerAnswerSchema, OwnerAskSchema, QuietAnswerSchema, QuietNoteSchema, type OwnerAnswer, type OwnerAsk, type QuietAnswer, type QuietNote } from "@mako/protocol/handoff"
 import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
@@ -1030,6 +1030,18 @@ export class CloudAccounts {
     const response = await this.#call("devices.quiet", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/quiet`, QuietNoteSchema.parse(note), false, [404])
     if (response.status === 404) return "unserved"
     return QuietAnswerSchema.parse(await response.json())
+  }
+
+  /**
+   * This Mac is back, and asks who owns each Session it holds before it runs any (`OwnerAsk`): `yours`, `departed` to a
+   * continue it joins, or `unknown`. Asking ends this Mac's quiet. `unserved` from a gateway that doesn't answer it yet.
+   */
+  async owner(ask: OwnerAsk): Promise<OwnerAnswer | "unserved"> {
+    const deviceId = await this.deviceId()
+    if (!deviceId) throw new CloudAccountError("This Mac isn't signed in to Mako.")
+    const response = await this.#call("devices.owner", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/owner`, OwnerAskSchema.parse(ask), false, [404])
+    if (response.status === 404) return "unserved"
+    return OwnerAnswerSchema.parse(await response.json())
   }
 
   /** This Mac's device in the account, while it's signed in. */

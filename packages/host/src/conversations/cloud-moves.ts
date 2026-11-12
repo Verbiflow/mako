@@ -238,6 +238,8 @@ export type CloudMovesOptions = {
   folder: string
   git: Git
   account(): CloudAccount | undefined
+  /** Since when a Session waits for the account's word after a going-away the account took (`AwayNotes.holds`): its parked turns don't go on here meanwhile. */
+  awayHeld?(session: string): number | undefined
   threads(): {
     journalPlacement(conversationId: string): { thread: ThreadId; session: SessionId } | undefined
     threadSessions(thread: ThreadId): Array<{ session: SessionId; journals: string[]; natives: Array<{ harness: string; nativeId: string }> }>
@@ -1220,7 +1222,7 @@ export class CloudMoves {
     const here = (thread: string) => {
       const id = ThreadIdSchema.safeParse(thread)
       return id.success && !this.leaving(thread) &&
-        threads.threadSessions(id.data).every(({ session }) => (threads.execution(session)?.state ?? "here") === "here" && !this.joining(session))
+        threads.threadSessions(id.data).every(({ session }) => (threads.execution(session)?.state ?? "here") === "here" && !this.joining(session) && this.#options.awayHeld?.(session) === undefined)
     }
     await this.#goOnHere((turn) => here(turn.thread))
   }

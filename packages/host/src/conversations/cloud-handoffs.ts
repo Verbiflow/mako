@@ -42,11 +42,23 @@ export type CloudHandOffsOptions = {
     checkpoint(thread: string): Promise<AcknowledgedCheckpoint | undefined>
     quiet(note: QuietNote): Promise<QuietAnswer | "unserved">
     /**
+     * These Sessions wait for the account's word from now (`AwayNotes.noted`): every one paused, as soon as it is, so no
+     * message queued meanwhile runs one before the note is answered; then those the account took, or every one if its
+     * answer never came. Narrowing the hold sends no parked turn on: they go on once this Mac is back and asks.
+     */
+    accepted(note: string, sessions: QuietThread["sessions"]): Promise<void>
+    /**
      * This Mac's own rows as the account lists them now: each Session's state there. The account takes a note only for
      * Sessions it lists as this Mac's and idle, so the note waits for the paused turns to read idle. Without it, the
      * note goes once the flush is done.
      */
     rows?(): Promise<ReadonlyMap<string, string>>
+    /**
+     * The account hears this Mac go quiet at once (`CloudAccount.leaving`, its runtime's `going-quiet`), once the note is
+     * out: the account continues a noted Thread only once its device is quiet, and a sleep's own word of it (the desktop's
+     * `suspend`) may come after the network is gone, or not at all.
+     */
+    goneQuiet?(why: "sleep" | "quit"): void
   }
   /** Why this Mac can't hand off now (signed out of the cloud); undefined when it can. */
   unavailable(): Promise<string | undefined>
@@ -153,6 +165,12 @@ export class CloudHandOffs {
         return { ...each, error: errorMessage({ error }) }
       }
     }))
+    // Held from the moment they're paused: a message queued before the note is answered (a Fin's report) waits too.
+    try {
+      await goingAway.accepted(handOff, parked.flatMap((each) => ("gone" in each && each.gone.parked.length ? each.gone.sessions : [])))
+    } catch (error) {
+      hostWarn("handoff", "the Sessions paused as this Mac went away couldn't be held; a message queued meanwhile may run", { error: errorMessage({ error }) })
+    }
     const pausedMs = performance.now() - began
     const sessions = parked.flatMap((each) => ("gone" in each ? each.gone.sessions.map((session) => session.session) : []))
     const [, rows] = await Promise.all([
@@ -183,7 +201,17 @@ export class CloudHandOffs {
       const word = heard.kind === "answered" ? heard.answer.threads.find((known) => known.thread === each.gone.thread) : undefined
       return { conversationId: each.conversationId, outcome: { kind: "kept-here", reason: goingAwayWords(heard, word) } }
     })
-    const accepted = heard.kind === "answered" ? heard.answer.threads.filter((each) => each.accepted).length : 0
+    // A note whose answer didn't come may have been taken all the same: its Sessions wait for the account's word as if it
+    // had, and an owner ask lets them go if it wasn't. Only a gateway that takes no notes (`unserved`) took none.
+    const taken = heard.kind === "answered" ? new Set(heard.answer.threads.filter((each) => each.accepted).map((each) => each.thread))
+      : heard.kind === "unanswered" ? new Set(note.threads.map((each) => each.thread)) : new Set<string>()
+    try {
+      await goingAway.accepted(note.note, note.threads.filter((each) => taken.has(each.thread)).flatMap((each) => each.sessions))
+    } catch (error) {
+      hostWarn("handoff", "the Sessions the account may continue couldn't be kept; they go on here when this Mac is back", { error: errorMessage({ error }) })
+    }
+    goingAway.goneQuiet?.(why === "sleep" ? "sleep" : "quit")
+    const accepted = taken.size
     hostLog("handoff", "agents at work paused as this Mac went away", {
       why,
       threads: working.length,
