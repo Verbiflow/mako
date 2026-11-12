@@ -3,6 +3,8 @@ import { parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
 import { decompress } from "./content.js"
 import { JournalReadSchema } from "./journal-reader.js"
+import { JournalStore } from "./journal-store.js"
+import { partition, storedView } from "./queries.js"
 
 /*
  * Reads of the record of changes too big for the host's thread, on a connection of their own (`JournalReader`).
@@ -12,6 +14,7 @@ const { path } = z.object({ path: z.string() }).parse(workerData)
 const BlobRow = z.object({ data: z.instanceof(Uint8Array) })
 
 let db: DatabaseSync | undefined
+let store: JournalStore | undefined
 const open = () => {
   if (db?.isOpen) return db
   db = new DatabaseSync(path, { readOnly: true })
@@ -24,6 +27,12 @@ parentPort?.on("message", (message) => {
   if (!request.success) return
   const { id } = request.data
   try {
+    if (request.data.kind === "partition") {
+      // A view of what's committed now: the files' states and their writers, read on this thread.
+      store ??= JournalStore.open(path, { device: "", readOnly: true })
+      parentPort?.postMessage({ id, ok: true, partition: partition(storedView(store), request.data.checkout, request.data.thread) })
+      return
+    }
     if (request.data.kind === "activity-overlapping") {
       const rows = open().prepare("SELECT * FROM activity WHERE started_at <= ? AND (ended_at IS NULL OR ended_at >= ?)").all(request.data.to, request.data.from)
       parentPort?.postMessage({ id, ok: true, rows })

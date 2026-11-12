@@ -9,6 +9,7 @@ import { Git } from "@mako/git"
 import type { ActivityMark, ReportedEffect } from "@mako/protocol"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
 import { contentRef } from "@mako/host/attribution/index"
+import { JournalReader } from "@mako/host/attribution/journal-reader"
 import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
 import { partition, type JournalView, type Partition } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
@@ -241,6 +242,22 @@ test("the same Thread changes make the same bundle, whatever the person does; th
   const next = await f.capture()
   assert.notEqual(next.checkpoint.sha256, first.checkpoint.sha256)
   assert.equal(f.show(next, "shared.ts"), lines(30, { 3: "line 3 by T1", 5: "line 5 by T1" }))
+})
+
+test("read on the journal's worker, the partition and the checkpoint are the same as read on the host's thread", async () => {
+  const f = await fixture("worker")
+  await edits(f)
+  const reader = new JournalReader(f.tracker.store.path)
+  try {
+    const onThread = f.ledger.partition(f.repo, "T1")
+    const onWorker = await reader.partition(f.repo, "T1")
+    assert.deepEqual(onWorker.files, onThread.files, "what the journal committed, divided the same")
+    const here = await f.capture()
+    const there = await f.capture({ ledger: { ...f.ledger, partition: (checkout, thread) => reader.partition(checkout, thread) } })
+    assert.equal(there.checkpoint.sha256, here.checkpoint.sha256)
+  } finally {
+    reader.close()
+  }
 })
 
 test("past the total the largest files are left out and named; the rest stay", async () => {

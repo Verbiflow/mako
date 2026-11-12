@@ -8,7 +8,7 @@ import { Git } from "@mako/git"
 import type { MoveCheckpoint } from "@mako/protocol/moves"
 import type { Partition } from "@mako/host/attribution/queries"
 import type { CloudRepository } from "@mako/host/contracts/cloud-threads"
-import { CloudReadiness, type ReadinessAccount } from "@mako/host/conversations/cloud-readiness"
+import { CloudReadiness, type ReadinessAccount, type ReadinessLedger } from "@mako/host/conversations/cloud-readiness"
 import type { WorkingThread } from "@mako/host/conversations/cloud-handoffs"
 import type { ThreadCheckpoint, ThreadCheckpointInput } from "@mako/host/workspaces/thread-checkpoint"
 
@@ -25,24 +25,37 @@ const EVERY_MS = 300
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const repository: CloudRepository = { url: "https://github.com/octocat/Hello-World" }
 
-function world(options: { roots?: string[]; captureMs?: number } = {}) {
+function world(options: { roots?: string[]; captureMs?: number; deaf?: boolean } = {}) {
   const roots = options.roots ?? ["/project/api"]
   const dir = mkdtempSync(join(tmpdir(), "mako-checkpoint-trigger-"))
   /** What the record of changes holds of the Thread's files, by repository: the test edits it. */
   const journal = new Map<string, string>(roots.map((root) => [root, "v0"]))
+  /** What's on disk, which a capture reads: ahead of the journal while a write isn't heard yet. */
+  const disk = new Map<string, string>(roots.map((root) => [root, "v0"]))
+  /** Writes on disk the journal hears only once something waits for it (`heard`). */
+  const unheard = new Map<string, string>()
+  let heardCalls = 0
   const working: WorkingThread[] = [{ conversationId: "c-1", thread: "local-1", harness: "codex" }]
   const captures: { root: string; at: number; content: string }[] = []
   const sent: { cloudThread: string; sha256: string }[] = []
   let failSends = 0
   let enabled = true
-  const ledger: ThreadCheckpointInput["ledger"] = {
-    settled: async () => {},
+  const hear = async () => {
+    heardCalls += 1
+    if (options.deaf) return
+    for (const [root, content] of unheard) journal.set(root, content)
+    unheard.clear()
+  }
+  const ledger: ReadinessLedger = {
+    heard: hear,
+    settled: hear,
     track: async () => {},
     head: () => "a".repeat(40),
-    partition: (root): Partition => ({ checkout: root, thread: "local-1", roots: [{ root: "r", path: root, head: null }], files: [{ root: "r", path: "a.ts", move: "lines", current: `sha256:${journal.get(root)}`, thread: { kind: "text", text: journal.get(root)! }, remaining: { kind: "absent" } }], whole: [], uncertain: [], unattributed: [], ms: 0 }),
+    partition: async (root): Promise<Partition> => ({ checkout: root, thread: "local-1", roots: [{ root: "r", path: root, head: null }], files: [{ root: "r", path: "a.ts", move: "lines", current: `sha256:${journal.get(root)}`, thread: { kind: "text", text: journal.get(root)! }, remaining: { kind: "absent" } }], whole: [], uncertain: [], unattributed: [], ms: 0 }),
   }
   const capture = async (input: ThreadCheckpointInput): Promise<ThreadCheckpoint> => {
-    const content = journal.get(input.repoRoot)!
+    // A capture reads the files: what's on disk, heard by the journal or not.
+    const content = disk.get(input.repoRoot)!
     captures.push({ root: input.repoRoot, at: Date.now(), content })
     if (options.captureMs) await sleep(options.captureMs)
     const sha256 = createHash("sha256").update(`${input.repoRoot}\0${content}`).digest("hex")
@@ -76,10 +89,17 @@ function world(options: { roots?: string[]; captureMs?: number } = {}) {
     newCloudThread: () => "t-standby",
     ledger: () => ledger,
     capture,
-    timing: { afterWriteMs: AFTER_WRITE_MS, everyMs: EVERY_MS },
+    timing: { afterWriteMs: AFTER_WRITE_MS, everyMs: EVERY_MS, retryMs: 60 },
   })
+  /** The Thread writes `content` in `root`: journaled at once, or heard only when the journal is waited for. */
+  const write = (root: string, content: string, heard = true) => {
+    disk.set(root, content)
+    if (heard) journal.set(root, content)
+    else unheard.set(root, content)
+  }
   return {
-    readiness, journal, working, captures, sent, dir,
+    readiness, journal, working, captures, sent, dir, write,
+    heardCalls: () => heardCalls,
     failNext: (count: number) => (failSends = count),
     disable: () => (enabled = false),
     /** The turn ends: the conversation no longer works, and the host says it settled. */
@@ -100,7 +120,7 @@ test("a burst of writes makes one capture a moment later, and a write soon after
   assert.equal(w.captures.length, 1)
   assert.ok(w.captures[0]!.at - started >= AFTER_WRITE_MS)
   assert.deepEqual(w.sent, [{ cloudThread: "t-standby", sha256: w.sent[0]!.sha256 }], "sent to the cloud Thread standing by")
-  w.journal.set("/project/api", "v1")
+  w.write("/project/api", "v1")
   w.readiness.wrote("c-1")
   await sleep(AFTER_WRITE_MS * 2)
   assert.equal(w.captures.length, 1, "within the interval: not yet")
@@ -114,7 +134,7 @@ test("the turn's end captures at once, the interval or not, and once", async () 
   const w = world()
   w.readiness.wrote("c-1")
   await sleep(AFTER_WRITE_MS * 2)
-  w.journal.set("/project/api", "v1")
+  w.write("/project/api", "v1")
   w.readiness.wrote("c-1")
   w.end()
   await sleep(80)
@@ -127,19 +147,22 @@ test("the turn's end captures at once, the interval or not, and once", async () 
   assert.equal(w.captures.length, 2, "a settle after the end takes nothing more")
 })
 
-test("unchanged, nothing is captured; captured the same, nothing is sent again", async () => {
+test("unchanged, a write's capture is skipped; the turn's end captures anyway; captured the same, nothing is sent again", async () => {
   const w = world()
   w.readiness.wrote("c-1")
   await sleep(AFTER_WRITE_MS * 2)
+  w.readiness.wrote("c-1")
+  await sleep(EVERY_MS + AFTER_WRITE_MS)
+  assert.equal(w.captures.length, 1, "the record of changes read as it did: no capture for the write")
   w.end()
   await sleep(100)
-  assert.equal(w.captures.length, 1, "the record of changes read as it did: no capture at the end")
-  assert.equal(w.sent.length, 1)
+  assert.equal(w.captures.length, 2, "the turn's end captures whatever the fingerprint says")
+  assert.equal(w.sent.length, 1, "the same checkpoint isn't sent again")
   // Another turn: the journal moves and comes back to what was sent; captured, but the cloud has it.
   w.working.push({ conversationId: "c-1", thread: "local-1", harness: "codex" })
-  w.journal.set("/project/api", "v1")
+  w.write("/project/api", "v1")
   w.readiness.wrote("c-1")
-  w.journal.set("/project/api", "v0")
+  w.write("/project/api", "v0")
   await sleep(EVERY_MS + AFTER_WRITE_MS)
   assert.equal(w.sent.length, 1, "the cloud keeps it already")
   const ready = JSON.parse(readFileSync(join(w.dir, "ready.json"), "utf8"))
@@ -151,7 +174,7 @@ test("one capture at a time: a write while one runs makes one more after it", as
   w.readiness.wrote("c-1")
   await sleep(AFTER_WRITE_MS + 30)
   assert.equal(w.captures.length, 1, "running")
-  w.journal.set("/project/api", "v1")
+  w.write("/project/api", "v1")
   w.end()
   w.readiness.settled("c-1")
   await sleep(20)
@@ -169,18 +192,43 @@ test("a failed send keeps the last acknowledged checkpoint; the next try replace
   const first = await w.readiness.acknowledged("local-1")
   assert.equal(first?.cloudThread, "t-standby")
   assert.equal(first?.acknowledged[0]?.unpushed, 2)
-  w.journal.set("/project/api", "v1")
+  w.write("/project/api", "v1")
   w.failNext(1)
   w.end()
-  await sleep(100)
+  await sleep(30)
   assert.equal(w.captures.length, 2)
   assert.deepEqual((await w.readiness.acknowledged("local-1"))?.acknowledged[0]?.checkpoint, first?.acknowledged[0]?.checkpoint, "the last acknowledged stands")
-  // The next turn's write tries again, though the journal hasn't moved since.
-  w.working.push({ conversationId: "c-1", thread: "local-1", harness: "codex" })
-  w.readiness.wrote("c-1")
-  await sleep(EVERY_MS + AFTER_WRITE_MS)
+  // Tried again on its own a moment later, with no write to ask.
+  await sleep(200)
   assert.equal(w.sent.length, 2)
   assert.notDeepEqual((await w.readiness.acknowledged("local-1"))?.acknowledged[0]?.checkpoint, first?.acknowledged[0]?.checkpoint, "replaced once acknowledged")
+})
+
+test("a write the journal hasn't heard as the turn ends still goes: the end waits for the journal, then captures the files", async () => {
+  const w = world()
+  w.readiness.wrote("c-1")
+  await sleep(AFTER_WRITE_MS * 2)
+  assert.equal(w.sent.length, 1)
+  // The turn's last edit lands on disk; the journal hasn't heard it when the turn ends.
+  w.write("/project/api", "v-last", false)
+  w.end()
+  await sleep(100)
+  assert.ok(w.heardCalls() >= 1, "the end waited for the journal to hear")
+  assert.equal(w.captures.at(-1)?.content, "v-last")
+  assert.equal(w.sent.length, 2, "the last edit went")
+  const acknowledged = await w.readiness.acknowledged("local-1")
+  assert.equal(acknowledged?.acknowledged[0]?.checkpoint.bytes, "v-last".length, "and is what a going-away names")
+})
+
+test("a write the journal never heard before the end: the end still captures the files on disk", async () => {
+  const w = world({ deaf: true })
+  w.readiness.wrote("c-1")
+  await sleep(AFTER_WRITE_MS * 2)
+  w.write("/project/api", "v-last", false)
+  w.end()
+  await sleep(100)
+  assert.equal(w.captures.at(-1)?.content, "v-last", "the fingerprint read as before; the end captured anyway")
+  assert.equal(w.sent.length, 2)
 })
 
 test("a project folder: each repository's own checkpoint, only the one that changed sent again", async () => {
@@ -188,11 +236,11 @@ test("a project folder: each repository's own checkpoint, only the one that chan
   w.readiness.wrote("c-1")
   await sleep(AFTER_WRITE_MS * 2)
   assert.deepEqual(w.captures.map((each) => each.root), ["/project/api", "/project/web"])
-  w.journal.set("/project/web", "v1")
+  w.write("/project/web", "v1")
   w.end()
   await sleep(100)
-  assert.deepEqual(w.captures.map((each) => each.root), ["/project/api", "/project/web", "/project/web"], "only web read differently")
-  assert.equal(w.sent.length, 3)
+  assert.deepEqual(w.captures.map((each) => each.root), ["/project/api", "/project/web", "/project/api", "/project/web"], "the end captures each repository")
+  assert.equal(w.sent.length, 3, "only web's changed, so only web's went again")
   assert.deepEqual((await w.readiness.acknowledged("local-1"))?.acknowledged.map((each) => each.root), ["/project/api", "/project/web"])
 })
 

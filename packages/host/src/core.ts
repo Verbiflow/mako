@@ -1327,7 +1327,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       plan: (conversationId) => cloudMoves.readyPlan(conversationId),
       sendRecords: (link, paths) => catalog.sendRecords(link, paths),
       newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
-      ledger: () => late.attribution,
+      // Never the journal's full settle (rescans held the loop for seconds, #583), nor a partition on this thread.
+      ledger: () => {
+        const attribution = late.attribution
+        return attribution && {
+          heard: () => attribution.heard(),
+          settled: () => attribution.heard(),
+          track: (checkout) => attribution.track(checkout),
+          head: (repository) => attribution.head(repository),
+          partition: (checkout, thread) => attribution.partitionOffLoop(checkout, thread),
+        }
+      },
     })
     readinessOnce = readiness
     late.readiness = readiness

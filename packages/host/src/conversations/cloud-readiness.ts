@@ -78,6 +78,21 @@ export type TakenReady = { cloudThread: string; checkpoint?: string }
 /** `repositories`: with `planned`, the main checkout's repositories it works in and the branch its move would make. */
 export type ReadyPlan = { thread: string; folder: string; repository: CloudRepository; paths: string[]; harness: string; planned?: true; repositories?: { root: string; branch: string }[] }
 
+/**
+ * The record of changes as readiness reads it. The host's: `heard` and `settled` are both the journal's `heard` (what
+ * a turn's count waits for, never rescans), and `partition` is read on a worker (`partitionOffLoop`).
+ */
+export type ReadinessLedger = ThreadCheckpointInput["ledger"] & {
+  /** Every change heard so far journaled. */
+  heard(): Promise<void>
+}
+
+/** How long a turn's end waits for the journal to have heard its last writes before it captures anyway. */
+const END_HEARD_MS = 3_000
+/** A round a write or a turn's end asked for that failed is tried again this long after, at most this many times. */
+const RETRY_MS = 5_000
+const RETRIES = 3
+
 /** What started a round: a write (or the next one due), its turn's end, or the job that keeps the cloud Thread fresh. */
 type RoundCause = "write" | "end" | "refresh"
 
@@ -101,11 +116,11 @@ export type CloudReadinessOptions = {
   sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
   newCloudThread(): string
   /** The record of changes, which a Thread in the main checkout's checkpoint is divided by; undefined until it opens. */
-  ledger?(): ThreadCheckpointInput["ledger"] | undefined
+  ledger?(): ReadinessLedger | undefined
   /** A Thread's checkpoint in one repository: `captureThreadCheckpoint`, which a test replaces. */
   capture?(input: ThreadCheckpointInput): ReturnType<typeof captureThreadCheckpoint>
   /** `CAPTURE_AFTER_WRITE_MS` and `CAPTURE_EVERY_MS`, shorter in a test. */
-  timing?: { afterWriteMs: number; everyMs: number }
+  timing?: { afterWriteMs: number; everyMs: number; retryMs?: number }
 }
 
 /**
@@ -146,6 +161,8 @@ export class CloudReadiness {
   readonly #due = new Map<string, ReturnType<typeof setTimeout>>()
   /** By local Thread: when its checkpoint was last captured, and what the journal read then (`threadFingerprint`). */
   readonly #captured = new Map<string, { at: number; fingerprints: Map<string, string> }>()
+  /** By local Thread: tries again of a round a write or a turn's end asked for that failed. */
+  readonly #retries = new Map<string, { count: number; timer?: ReturnType<typeof setTimeout> }>()
 
   constructor(options: CloudReadinessOptions) {
     this.#options = options
@@ -231,12 +248,34 @@ export class CloudReadiness {
     return entry?.acknowledged?.length ? { cloudThread: entry.cloudThread, acknowledged: entry.acknowledged } : undefined
   }
 
+  /** A round a write or a turn's end asked for failed: it's tried again `RETRY_MS` later, `RETRIES` times at most. */
+  #retryLater(working: WorkingThread, cause: RoundCause): void {
+    const retry = this.#retries.get(working.thread) ?? { count: 0 }
+    if (retry.count >= RETRIES || retry.timer) return
+    retry.count += 1
+    retry.timer = setTimeout(() => {
+      retry.timer = undefined
+      void this.#whenEnabled(working, cause)
+    }, this.#options.timing?.retryMs ?? RETRY_MS)
+    retry.timer.unref?.()
+    this.#retries.set(working.thread, retry)
+  }
+
+  /** A round went through: what failed before needs no more tries. */
+  #retried(thread: string): void {
+    const retry = this.#retries.get(thread)
+    if (retry?.timer) return
+    this.#retries.delete(thread)
+  }
+
   /** Lets go of a Thread's triggers: a move took it. */
   #forget(thread: string): void {
     clearTimeout(this.#due.get(thread))
     this.#due.delete(thread)
     this.#again.delete(thread)
     this.#captured.delete(thread)
+    clearTimeout(this.#retries.get(thread)?.timer)
+    this.#retries.delete(thread)
     for (const [conversationId, working] of this.#writing) if (working.thread === thread) this.#writing.delete(conversationId)
   }
 
@@ -321,8 +360,10 @@ export class CloudReadiness {
       const versions = sent.reduce((total, each) => total + each.versions, 0)
       const bytes = sent.reduce((total, each) => total + each.bytes, 0)
       if (versions || checkpoint) hostLog("readiness", "a Thread at work was brought up to date in the cloud", { thread: plan.thread, cloudThread: ready.cloudThread, versions, bytes, checkpoint: checkpoint ? "sent" : "unchanged", ms: Math.round(performance.now() - began) })
+      this.#retried(working.thread)
     } catch (error) {
       this.#sayOnce(plan.thread, "a Thread at work couldn't be brought up to date in the cloud", errorMessage({ error }))
+      if (cause !== "refresh") this.#retryLater(working, cause)
     }
   }
 
@@ -336,36 +377,45 @@ export class CloudReadiness {
     if (!ledger || !plan.repositories?.length) return undefined
     const last = this.#captured.get(thread)
     if (cause === "refresh" && last && Date.now() - last.at < STILL_KEPT_MS) return undefined
+    // A turn's end: its last writes may not be journaled yet, and a fingerprint reads only what is. Waited for, briefly,
+    // and then captured whatever the fingerprint says: the capture reads the files themselves.
+    if (cause === "end") await waitAtMost(ledger.heard(), END_HEARD_MS)
     const fingerprints = new Map<string, string>()
     let sent: string | undefined
     const acknowledged = [...entry.acknowledged ?? []]
     for (const { root, branch } of plan.repositories) {
-      const fingerprint = `${branch}\n${threadFingerprint(ledger, thread, root)}`
-      fingerprints.set(root, fingerprint)
+      const partition = await ledger.partition(root, thread)
+      const fingerprint = `${branch}\n${threadFingerprint(ledger.head(root), partition, root)}`
       const kept = acknowledged.findIndex((each) => each.root === root)
-      if (kept >= 0 && last?.fingerprints.get(root) === fingerprint) continue
+      if (cause !== "end" && kept >= 0 && last?.fingerprints.get(root) === fingerprint) {
+        fingerprints.set(root, fingerprint)
+        continue
+      }
       await mkdir(this.#options.scratch, { recursive: true })
       const scratch = await mkdtemp(join(this.#options.scratch, "thread-"))
       try {
         const capture = this.#options.capture ?? captureThreadCheckpoint
-        const taken = await capture({ git: this.#options.git, ledger, thread, repoRoot: root, branch, folder: scratch })
-        if (kept >= 0 && acknowledged[kept]!.checkpoint.sha256 === taken.checkpoint.sha256) continue
-        await account.sendCheckpoint(entry.cloudThread, taken.checkpoint, taken.file)
-        const now: Acknowledged = { root, checkpoint: taken.checkpoint, unpushed: taken.unpushed, left: taken.left, at: Date.now() }
-        if (kept >= 0) acknowledged[kept] = now
-        else acknowledged.push(now)
-        entry.acknowledged = acknowledged
-        sent ??= taken.checkpoint.sha256
-        hostLog("readiness", "a Thread's own changes went to the cloud", {
-          thread,
-          cloudThread: entry.cloudThread,
-          cause,
-          files: taken.took.length,
-          left: taken.left.length,
-          bytes: taken.checkpoint.bytes,
-          ms: Math.round(taken.ms),
-          ...taken.unpushed && { unpushed: `includes ${taken.unpushed} unpushed commit${taken.unpushed === 1 ? "" : "s"}` },
-        })
+        const taken = await capture({ git: this.#options.git, ledger, thread, repoRoot: root, branch, folder: scratch, partition })
+        if (kept < 0 || acknowledged[kept]!.checkpoint.sha256 !== taken.checkpoint.sha256) {
+          await account.sendCheckpoint(entry.cloudThread, taken.checkpoint, taken.file)
+          const now: Acknowledged = { root, checkpoint: taken.checkpoint, unpushed: taken.unpushed, left: taken.left, at: Date.now() }
+          if (kept >= 0) acknowledged[kept] = now
+          else acknowledged.push(now)
+          entry.acknowledged = acknowledged
+          sent ??= taken.checkpoint.sha256
+          hostLog("readiness", "a Thread's own changes went to the cloud", {
+            thread,
+            cloudThread: entry.cloudThread,
+            cause,
+            files: taken.took.length,
+            left: taken.left.length,
+            bytes: taken.checkpoint.bytes,
+            ms: Math.round(taken.ms),
+            ...taken.unpushed && { unpushed: `includes ${taken.unpushed} unpushed commit${taken.unpushed === 1 ? "" : "s"}` },
+          })
+        }
+        // Kept only once the cloud holds what this fingerprint names: a failure before leaves the repository to capture again.
+        fingerprints.set(root, fingerprint)
       } finally {
         await rm(scratch, { recursive: true, force: true })
       }
@@ -419,4 +469,11 @@ export class CloudReadiness {
     this.#saving = write.catch(() => {})
     return write
   }
+}
+
+/** Waits for `work`, or `ms` at most. */
+async function waitAtMost(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([work.catch(() => undefined), new Promise((resolve) => { timer = setTimeout(resolve, ms) })])
+  clearTimeout(timer)
 }
