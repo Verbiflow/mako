@@ -48,6 +48,11 @@ const SUMMARY_INDEX_GAP_MS = 30_000
 export const SUMMARY_PASS_MS = 60_000
 /** A branch delete another Git process's lock refused is tried again after each of these waits. */
 const BRANCH_DELETE_WAITS_MS = [200, 400, 800, 1600]
+/**
+ * At most this long a refused delete waits for the spares being made first: a refused start or a failed move awaits
+ * its abandon, so the person's next step waits on it.
+ */
+const SPARE_FILL_WAIT_MS = 2_000
 /** A new Thread's branch search lists this many branches, the most recently committed. */
 const LISTED_BRANCHES = 200
 const BRANCH_PULLS_EVERY_MS = 60_000
@@ -1604,14 +1609,15 @@ export class ThreadWorktreeService {
   /**
    * Deletes a branch nothing was committed on; the error that kept it, if any. Another Git process in the repository
    * (a spare being made, a worktree being removed, Git's own maintenance) can hold a ref's lock for a moment, and a
-   * delete it refuses would leave the branch behind for good: what this host has under way for the project ends
-   * first, then the delete is tried again.
+   * delete it refuses would leave the branch behind for good: the spares this host is making end first, for at most
+   * `SPARE_FILL_WAIT_MS`, then the delete is tried again, a few times over three seconds.
    */
   private async dropBranch(repoRoot: string, branch: string): Promise<string | undefined> {
     let error = ""
     for (const wait of [undefined, ...BRANCH_DELETE_WAITS_MS]) {
       if (wait !== undefined) {
-        if (wait === BRANCH_DELETE_WAITS_MS[0]) await this.spares.settled()
+        // The spares being made take the repository's ref locks; their installs after that take none, and run for minutes.
+        if (wait === BRANCH_DELETE_WAITS_MS[0]) await Promise.race([this.spares.filled(), new Promise((resolve) => setTimeout(resolve, SPARE_FILL_WAIT_MS).unref())])
         await new Promise((resolve) => setTimeout(resolve, wait))
       }
       try {

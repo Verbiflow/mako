@@ -818,6 +818,41 @@ assert.deepEqual([git(app, "branch", "--list", stuck.branch).replace(/^[*+ ]+/, 
 rmSync(lockOf(app, stuck.branch))
 await worktrees.abandon(stuckId)
 assert.equal(git(app, "branch", "--list", stuck.branch), "", "abandoned again, the branch left behind goes")
+// A spare's install under way, which runs for minutes and holds no ref lock, doesn't hold the abandon: a refused start
+// or a failed move awaits it, and the person's next step with it.
+{
+  let installsStarted = 0
+  let installing = true
+  const installed = repository("installed")
+  const own = new ThreadWorktreeService(gitRunner, join(root, "installing-worktrees"), threads, undefined, undefined, undefined, {
+    ...setup,
+    spareInstall: {
+      start: async () => {
+        installsStarted += 1
+        return { command: "npm install", inputs: ["package-lock.json"] }
+      },
+      settle: async () => (installing ? "running" : "none"),
+      stop: async () => {},
+      critical: async () => false,
+      paused: (_app, work) => work(),
+    },
+  })
+  const first = randomUUID()
+  await own.prepare(first, installed, "Starts the spares")
+  for (const deadline = Date.now() + 60_000; !installsStarted; await new Promise((resolve) => setTimeout(resolve, 50)))
+    assert.ok(Date.now() < deadline, "a spare's install started")
+  const lockedId = randomUUID()
+  const locked = await own.prepare(lockedId, installed, "Locked while installing")
+  writeFileSync(lockOf(installed, locked.branch), "")
+  const began = performance.now()
+  await assert.rejects(own.abandon(lockedId), /Couldn't delete the empty branch/)
+  const waited = performance.now() - began
+  assert.ok(waited < 10_000, `a lock refused during an install is said in seconds, not after the install: ${Math.round(waited)} ms`)
+  rmSync(lockOf(installed, locked.branch))
+  await own.abandon(lockedId)
+  installing = false
+  await own.abandon(first).catch(() => undefined)
+}
 
 // A repository added to the project since its spares were made: they mirror what it was, so the next Thread checks out fresh, and they go.
 await worktrees.settled()
