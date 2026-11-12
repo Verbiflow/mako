@@ -45,6 +45,41 @@ await test("readOutput shares the six read slots and keeps a command's failure",
   reads.close()
 })
 
+await test("an idle read leaves two slots to reads someone waits on, and never goes ahead of one", async () => {
+  const { PassThrough } = await import("node:stream")
+  const reads = new Git()
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 50))
+  // A read that holds its slot until its stdin ends.
+  const held = (idle) => {
+    const input = new PassThrough()
+    const done = reads.run({ cwd: scratch, args: ["hash-object", "--stdin"], input, read: true, idle })
+    return { done, end: () => input.end("x") }
+  }
+  // A pass of summaries: many idle reads at once take four slots, no more.
+  const pass = Array.from({ length: 10 }, () => held(true))
+  await settle()
+  assert.equal(reads.activity().running.length, 4)
+  // A send's checkpoint reads at once, past the whole pass.
+  const began = performance.now()
+  assert.match(await reads.readOutput(scratch, ["version"]), /^git version /)
+  assert.ok(performance.now() - began < 5_000)
+  // With every slot full, a read someone waits on takes the next free slot before any idle one.
+  const busy = [held(false), held(false)]
+  await settle()
+  assert.equal(reads.activity().running.length, 6)
+  const waiting = held(false)
+  await settle()
+  pass[0].end()
+  await pass[0].done
+  await settle()
+  assert.equal(reads.activity().running.length, 6, "the waiting read took the freed slot")
+  assert.equal(reads.activity().queued, 6, "the six idle reads that waited still wait")
+  for (const read of [...pass.slice(1), ...busy, waiting]) read.end()
+  await Promise.all([...pass, ...busy, waiting].map((read) => read.done))
+  assert.equal(reads.activity().queued, 0)
+  reads.close()
+})
+
 async function repository(name) {
   const root = join(scratch, name)
   await mkdir(root, { recursive: true })

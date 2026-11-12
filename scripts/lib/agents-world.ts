@@ -23,6 +23,7 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import type { ProcessReads } from "@mako/host/conversations/agent-runs"
 import { Agents, ROOM_WATCH_JOB, type AgentsDeps } from "@mako/host/conversations/agents"
 import { continueOn, type ContinueOn } from "@mako/host/conversations/continue-on"
+import { carriedTuning } from "@mako/host/harnesses/harness-models"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { AdmittedLiveDriver, ProviderLiveDriver, ProviderSteerResult, SteerCapability } from "@mako/host/harnesses/live-driver"
 import { handOff } from "@mako/host/harnesses/prompt-dispatch"
@@ -147,6 +148,8 @@ export interface WorldOptions {
   defaults?: Partial<Record<string, SessionSettings>>
   /** Each harness's catalog, as its profile lists it; a harness without one has none read. */
   catalogs?: Partial<Record<string, readonly SessionModel[]>>
+  /** Harnesses whose driver never names where its session's records are: a binding of theirs has no path to resume. */
+  unlocated?: readonly string[]
   /** The person's Settings › Fins and what they last used, by harness. */
   fins?: { chosen?: Partial<Record<string, SessionSettings>>; used?: Partial<Record<string, SessionSettings>> }
   /** Harnesses whose account in use is at its limit, as `HarnessAccounts.limited` reads them. */
@@ -176,6 +179,8 @@ export interface WorldOptions {
   launchedOn?: (harness: string, account: string | undefined) => void
   /** The harnesses whose session goes on under another account (`ProviderLiveDriver.accountContinuation`). */
   resumesUnderAccount?: readonly string[]
+  /** Every harness goes on in its own session in another folder (`resume.elsewhere`), as the six do: a Thread moves onto its own branch as itself. */
+  elsewhere?: boolean
   /** The conversations an `@` picker offers and their transcripts (`AgentsDeps.references`). */
   references?: AgentsDeps["references"]
   /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
@@ -228,7 +233,9 @@ export class AgentsWorld {
   readonly root: string
   readonly options: WorldOptions
   /** Every prompt a driver was sent, in order: a turn lost or run twice shows here. */
-  readonly prompts: { conversation: string; harness: string; text: string; at: number }[] = []
+  readonly prompts: { conversation: string; harness: string; text: string; at: number; settings?: SessionSettings }[] = []
+  /** Every session a driver started or resumed, with the selection it was started on. */
+  readonly starts: { conversation: string; harness: string; resume?: string; tuning?: SessionSettings }[] = []
   readonly steers: { conversation: string; text: string; at: number }[] = []
   /** Conversations whose Threads the person archived (`AgentsDeps.archived`). */
   readonly archived = new Set<string>()
@@ -303,7 +310,7 @@ export class AgentsWorld {
       resumeVerdict: this.options.resumeVerdict ?? (async () => ({ kind: "resumable", record: "same" })),
     })
     this.live = live
-    const continuing = continueOn({ live, resolveLaunch: async (_provider, _cwd, tuning) => tuning, switched: () => {}, resumesUnderAccount: (harness) => this.options.resumesUnderAccount?.includes(harness) ?? (this.options.continuation?.[harness]?.kind ?? "resumes") === "resumes"})
+    const continuing = continueOn({ live, resolveLaunch: async (_provider, _cwd, tuning) => tuning, carried: async (provider, _cwd, tuning) => tuning && carriedTuning(this.options.catalogs?.[provider], tuning), switched: () => {}, resumesUnderAccount: (harness) => this.options.resumesUnderAccount?.includes(harness) ?? (this.options.continuation?.[harness]?.kind ?? "resumes") === "resumes"})
     this.continueOn = (id, continuation, actor, stillDecided) => {
       const to = continuation.kind === "words" ? continuation.input.provider : continuation.kind === "move" ? continuation.move.to.harness : continuation.reply.provider
       this.continued.push({ conversation: id, to, kind: continuation.kind, by: actor?.kind ?? "person" })
@@ -434,6 +441,18 @@ export class AgentsWorld {
     await this.resumed
   }
 
+  /** A new host after one that ended without closing its conversations (a crash, a kill): they reopen as they were left. */
+  async crashed(): Promise<void> {
+    this.holds.clear()
+    this.running.clear()
+    await this.live.stop()
+    this.agents.dispose()
+    this.jobs.stop()
+    this.store.close()
+    this.open()
+    await this.resumed
+  }
+
   /** A top-level conversation on `harness` at `access`, on `tuning`'s model: an Apex once it starts a child. */
   async apex(harness: string, access: AccessTier = "auto", tuning?: SessionSettings): Promise<{ conversation: string; caller: AgentCaller }> {
     await this.resumed
@@ -515,7 +534,7 @@ export class AgentsWorld {
   private driver(harness: string): ProviderLiveDriver {
     const modes = this.options.ladders?.[harness] ?? MODES
     const state = (id: string, patch: Partial<LiveSessionState> = {}): LiveSessionState => ({
-      id, nativeId: `native-${id}`, nativePath: join(this.root, "native", id), harness, cwd: this.root,
+      id, nativeId: `native-${id}`, ...!this.options.unlocated?.includes(harness) && { nativePath: join(this.root, "native", id) }, harness, cwd: this.root,
       status: "ready", connection: "connected", modes: [...modes], currentMode: null, configOptions: [], ...patch,
     })
     return {
@@ -529,7 +548,7 @@ export class AgentsWorld {
       planning: { via: "setting", option: "plan", proposal: "Scripted model", feedback: { kind: "next-message", reason: "Scripted model" } },
       backgroundStop: { kind: "ends-with-turn", evidence: "Scripted model" },
       turnRecovery: { kind: "manual", reason: "Scripted model" },
-      resume: fixtureResume(),
+      resume: fixtureResume(this.options.elsewhere ? { elsewhere: { via: "Scripted model", verified: "Scripted model" } } : {}),
       ...((STEERS_AT_STEP.has(harness) || this.options.steering?.[harness]) && {
         steering: {
           kind: "supported" as const,
@@ -555,13 +574,17 @@ export class AgentsWorld {
         // Admission hands every launch its account; a world without accounts runs none through it.
         const launched = this.options.accounts ? options.accountLaunch : undefined
         if (launched) this.launches.push({ conversation: this.live.ownerOf(options.conversationId), harness, account: launched.account.name, ...(options.resume && { resume: options.resume }) })
+        this.starts.push({ conversation: this.live.ownerOf(options.conversationId), harness, ...(options.resume && { resume: options.resume }), ...(options.tuning && { tuning: options.tuning }) })
         await this.options.starting?.(options.conversationId, harness)
         this.options.launchedOn?.(harness, options.pinnedAccount?.())
         // What the harness says goes through the callback its start was given, fenced as a real driver's is (`driverEvents`).
         this.emits.set(options.conversationId, options.emit)
-        return state(options.conversationId, options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {})
+        const started: Partial<LiveSessionState> = options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {}
+        // A harness that goes on in another folder says the folder it was started in.
+        if (this.options.elsewhere) started.cwd = _cwd
+        return state(options.conversationId, started)
       },
-      prompt: async (binding, text, _attachments, _settings, dispatch) => {
+      prompt: async (binding, text, _attachments, settings, dispatch) => {
         const id = this.live.ownerOf(binding)
         const refused = await this.options.refusePrompt?.(id, harness)
         if (refused) {
@@ -569,13 +592,13 @@ export class AgentsWorld {
           throw new Error(refused)
         }
         handOff(dispatch, { kind: "submitted", source: "transport-call" })
-        const path = this.live.snapshot(id)?.session.nativePath ?? state(id).nativePath!
+        const path = this.live.snapshot(id)?.session.nativePath ?? state(id).nativePath ?? ""
         // A session another program runs (a linked CLI's) keeps its own transcript, which the catalog reads.
         if (this.options.transcripts && path.startsWith(this.root)) {
           mkdirSync(dirname(path), { recursive: true })
           appendFileSync(path, `${JSON.stringify({ type: "user", text, messageId: dispatch.attemptId } satisfies Entry)}\n`)
         }
-        this.prompts.push({ conversation: id, harness, text, at: Date.now() })
+        this.prompts.push({ conversation: id, harness, text, at: Date.now(), ...(settings && { settings }) })
         this.options.heard?.({ kind: "prompt", conversation: id, harness, text })
         // A hand-off's new session reports under its own binding, through the callback its start was given, fenced as a real driver's is.
         const session = { ...(this.live.snapshot(id)?.session ?? state(binding)), id: binding }

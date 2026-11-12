@@ -63,7 +63,7 @@ import { accountBorrowing, BorrowedSimulators, ControlResidency, controlLine, op
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
+import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -545,43 +545,49 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const agents = late.conversations?.agents
     return backgroundWork(held.session, agents ? withChildren(held.nativeAgents, agents.roster(id)) : held.nativeAgents)?.count
   }
+  // The account's rows of this Mac's Sessions: every one, or (`only`) those of a few conversations whose batches came, with
+  // no native row, which no batch moves.
+  const reportedRows = (only?: ReadonlySet<string>) => {
+    const live = late.conversations?.live
+    const store = threads.store
+    // Until the catalog's first discovery is in, its rows would say this Mac has no sessions but Mako's own.
+    if (!live || !store || !catalog.ready()) return undefined
+    const activity = catalog.activity()
+    const made = store.worktrees()
+    const make = () => ownedSessions({
+      summaries: () => live.summaries(only),
+      native: () => only ? [] : (windowRows ??= catalog.recent(windowStart(Date.now()))),
+      activity: (path) => activity[path],
+      work: () => application.lifecycle.snapshot().work,
+      waitingOn: (id) => live.waitingOn(id),
+      hidden: () => new Set(threads.archives.snapshot().keys),
+      lastMoved: (id, revision) => live.lastMoved(id, revision),
+      placement: (id) => store.journalPlacement(id),
+      sessionOrder: (placed) => sessionOrderIn(store.thread(placed.thread)?.sessions, placed.session),
+      childThread: (thread) => listedUnderApex(store.edges().of(thread)),
+      executions: (ids) => store.executionsOf(ids),
+      titles: (ids) => store.titlesOf(ids),
+      forks: (ids) => store.forksOf(ids),
+      moving: (thread) => movesUnderWay.of(thread),
+      worktree: (folder) => {
+        const found = worktreeAt(made, folder)
+        const project = found && projectFolder(made, folder)
+        return found && project ? { project, branch: found.worktree.branch } : undefined
+      },
+      head: listedHead,
+      repository: (folder) => repositories.of(folder),
+      background: heldWork,
+      asking: (id) => finAsking(late.conversations?.agents?.personAsk(id)),
+      asked: (id) => live.askWaiting(id),
+      fins: (id) => listedFins(late.conversations?.agents?.roster(id)),
+      now: Date.now,
+    })
+    // The folders a whole making asks for are the ones read again (`listing`); a few rows' making leaves them as they are.
+    return only ? make() : repositories.listing(make)
+  }
   const sessions = new SessionPublisher({
-    rows: () => {
-      const live = late.conversations?.live
-      const store = threads.store
-      // Until the catalog's first discovery is in, its rows would say this Mac has no sessions but Mako's own.
-      if (!live || !store || !catalog.ready()) return undefined
-      const activity = catalog.activity()
-      const made = store.worktrees()
-      return repositories.listing(() => ownedSessions({
-        summaries: () => live.summaries(),
-        native: () => (windowRows ??= catalog.recent(windowStart(Date.now()))),
-        activity: (path) => activity[path],
-        work: () => application.lifecycle.snapshot().work,
-        waitingOn: (id) => live.waitingOn(id),
-        hidden: () => new Set(threads.archives.snapshot().keys),
-        lastMoved: (id, revision) => live.lastMoved(id, revision),
-        placement: (id) => store.journalPlacement(id),
-        sessionOrder: (placed) => sessionOrderIn(store.thread(placed.thread)?.sessions, placed.session),
-        childThread: (thread) => listedUnderApex(store.edges().of(thread)),
-        executions: (ids) => store.executionsOf(ids),
-        titles: (ids) => store.titlesOf(ids),
-        forks: (ids) => store.forksOf(ids),
-        moving: (thread) => movesUnderWay.of(thread),
-        worktree: (folder) => {
-          const found = worktreeAt(made, folder)
-          const project = found && projectFolder(made, folder)
-          return found && project ? { project, branch: found.worktree.branch } : undefined
-        },
-        head: listedHead,
-        repository: (folder) => repositories.of(folder),
-        background: heldWork,
-        asking: (id) => finAsking(late.conversations?.agents?.personAsk(id)),
-        asked: (id) => live.askWaiting(id),
-        fins: (id) => listedFins(late.conversations?.agents?.roster(id)),
-        now: Date.now,
-      }))
-    },
+    rows: () => reportedRows(),
+    rowsOf: (conversations) => reportedRows(conversations),
     // What a list shows of one conversation, read as each of its batches comes, by the rule its row is made with: a
     // batch that moved it is reported at once. It reads only what memory holds.
     shown: (id) => {
@@ -851,7 +857,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         // A message that waited in the account for one of this Mac's Sessions while it was off: sent here now, under
         // its own ID, through the same call a window's send makes, so it runs once however often it's heard.
         continued: (session, listed) => late.cloudMoves?.joinContinue(session, listed),
-        ownerChecked: () => late.conversations?.live.moves.ownerChecked(),
+        ownerChecked: () => {
+          late.conversations?.live.moves.ownerChecked()
+          // Turns paused as this Mac went off, for a Thread still here, go on now (`CloudMoves.unpark`).
+          void late.cloudMoves?.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
+        },
         takeWaiting: async (message, claim) => {
           const store = threads.store
           const live = late.conversations?.live
@@ -1004,7 +1014,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const attribution = late.attribution
       return attribution && {
         placement: (conversation) => threads.store?.journalPlacement(conversation),
-        flushed: () => attribution.settled(),
+        // A turn's count waits only for what was heard: never for checkouts rescanned whole after lost events.
+        flushed: () => attribution.heard(),
         countTurn: (thread, turn, state) => attribution.countTurn(thread, turn, state),
         settledThrough: (at) => attribution.settledThrough(at),
         counted: (summary, session) => attribution.counted(summary, session),
@@ -1105,11 +1116,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     checkout: (id) => workspaces.worktrees?.threadCheckout(id),
     // A Thread in the main checkout goes onto its own branch first, as the person's "Move to its own branch" does, its
     // companions following; its agent isn't told, since nothing starts a turn on the way to the cloud.
-    ownBranch: async (id) => {
+    ownBranch: async (id, options) => {
       const movers = late.movers
       const worktreeMoves = movers?.worktreeMoves
       if (!movers || !worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")
-      const { moved, following } = await movers.moves.moveNow(id, () => worktreeMoves.carry(id, { lead: true, tell: false }))
+      const { moved, following } = await movers.moves.moveNow(id, () => worktreeMoves.carry(id, { lead: true, tell: false, ...options?.asItself && { asItself: true } }))
       await following
       return moved.session.id
     },
@@ -1314,6 +1325,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       account: () => late.cloud,
       enabled: async () => (await cloudHandOffs.onSleep()) && !(await handOffUnavailable()),
       working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations?.has(id) ?? false }),
+      revision: (conversationId) => live.held(conversationId)?.revision,
       leaving: (thread) => cloudMoves.leaving(thread),
       plan: (conversationId) => cloudMoves.readyPlan(conversationId),
       sendRecords: (link, paths) => catalog.sendRecords(link, paths),
@@ -1674,7 +1686,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     wake,
     leaving: (source) => {
       hostLog("host", "leaving", { source })
-      late.cloud?.leaving?.(source === "suspend" ? "sleep" : "quit")
+      return machineLeaving(source, {
+        handOffs: cloudHandOffs || undefined,
+        enabled: async () => cloudHandOffs ? (await cloudHandOffs.onSleep()) && !(await handOffUnavailable()) : false,
+        quiet: (why) => late.cloud?.leaving?.(why),
+      })
     },
     jobs: shell.jobs,
     subscribed: shell.subscribed,
@@ -1887,7 +1903,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     lifecycleBlocked: () => application.lifecycle.blocked,
     async stop() {
       // A stop that runs long says where it is and what it waits on, so a host killed for it leaves the reason logged.
-      let step = "closing the record of changes"
+      let step = "waiting for a handoff under way"
+      // A shutdown's handoff goes on as the system stops the host: what it still sends to the cloud, its hold at most.
+      await cloudHandOffs?.underWay(Date.now() + SHUTDOWN_HOLD_MS)
+      step = "closing the record of changes"
       const slow = STOP_SLOW_MS.map((ms) => setTimeout(() => hostWarn("lifecycle", "stopping is slow", { ms, step, on: shell.work.openWork?.().join(", ") || "no named work" }), ms))
       try {
         jobs.stop()

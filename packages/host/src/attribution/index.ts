@@ -226,6 +226,8 @@ export interface Attribution {
   shares(checkout: string, thread: string): CheckoutShares
   /** Every change heard so far journaled. */
   settled(): Promise<void>
+  /** Every change heard so far journaled, without waiting on rescans for lost events: what a turn's count waits for. */
+  heard(): Promise<void>
   /**
    * Track each repository of `checkout` if nothing has yet, so a move can
    * divide it; what it holds uncommitted then is journaled as before tracking.
@@ -648,7 +650,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       // This host's own sessions are in its catalog; a follower's come through `followers()`.
       sessions: () => undefined,
       track: trackRoot,
-      settled: () => tracker.settled(),
+      settled: (options) => tracker.settled(options),
       readBack: async (where, budgetMs) => {
         await tracker.settled()
         return readBack(where, budgetMs)
@@ -819,6 +821,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     partition: (checkout, thread, options) => partition(view(), checkout, thread, options),
     shares: (checkout, thread) => shares(view(), checkout, thread),
     settled: () => journal.writes.settled(),
+    heard: () => journal.writes.settled({ rescans: false }),
     async track(checkout) {
       const found = await locate(deps.git, checkout).catch(() => null)
       const roots = found ? [found.root] : await projectRepositories(deps.git, checkout).then((result) => ("roots" in result ? result.roots : []), () => [])

@@ -268,6 +268,7 @@ jobs:
       # A Fin waiting on a pull request is woken once per outcome, never its Apex, across restarts; GitHub is a stub.
       - run: npm run test:fin-pull-waits
       - run: npm run test:fin-resume
+      - run: npm run test:fin-reopen
       # A host starting reads each Fin's journal in slices as it resumes them, never all of them at once.
       - run: npm run test:resume-holds
         id: resume_holds
@@ -334,6 +335,8 @@ jobs:
       # The person's steer lands within a second on each landing, on a cloud Thread too, and the case of 2026-11-03.
       - run: npm run test:steer-landing
       - run: npm run test:agents-doors
+      # An Apex of 57 Fins streams without its row's check of them holding the loop (2026-11-12's holds of 0.3-0.6 s a batch).
+      - run: npm run bench:person-ask
       - run: npm run test:agents-cli
       - run: npm run test:thread-move-tool
       - run: npm run test:thread-act-tool

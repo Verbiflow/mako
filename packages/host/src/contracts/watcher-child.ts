@@ -22,9 +22,11 @@ export const WatcherRequestSchema = z.discriminatedUnion("t", [
    * Paths in or under an `ignore` folder are counted per folder and left
    * out, so a busy machine's churn stays in the child. `exclude` folders
    * inside a root are left out by fseventsd itself, before they're sent,
-   * stat-ed or counted: at most `MAX_EXCLUDED` of them per root.
+   * stat-ed or counted: at most `MAX_EXCLUDED` of them per root. With
+   * `perFolder`, each folder one level into a root sends at most that many
+   * paths, and one that had more is named in the reply's `capped`.
    */
-  z.object({ t: z.literal("since"), id: z.number().int(), mark: HistoryMarkSchema, roots: z.array(z.string()), ignore: z.array(z.string()), exclude: z.array(z.string()).optional() }),
+  z.object({ t: z.literal("since"), id: z.number().int(), mark: HistoryMarkSchema, roots: z.array(z.string()), ignore: z.array(z.string()), exclude: z.array(z.string()).optional(), perFolder: z.number().int().positive().optional() }),
   /** How late a folder of the child's own hears `beats` writes, one after another: delivery measured now, not over the last minute. */
   z.object({ t: z.literal("probe"), id: z.number().int(), beats: z.number().int().positive().max(20) }),
 ])
@@ -70,6 +72,8 @@ export const WatcherReplySchema = z.discriminatedUnion("t", [
    */
   z.object({
     t: z.literal("history"), id: z.number().int(), paths: z.array(z.string()), lost: z.array(z.string()), ignored: z.array(z.number().int()),
+    /** Folders past `perFolder`, and how many paths they left unsent. */
+    capped: z.array(z.string()).optional(), unsent: z.number().int().nonnegative().optional(),
     caughtUpMs: z.number().nonnegative().optional(), readMs: z.number().nonnegative().optional(),
   }),
 ])

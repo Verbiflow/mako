@@ -796,6 +796,51 @@ test("while losses keep coming, a root is rescanned at most every ten minutes, a
   await w.tracker.close()
 })
 
+test("a turn's count journals what was heard and never forces or waits on a rescan for lost events", async () => {
+  // On 2026-11-12 the person's host lost events in worktrees of 7,754 and 5,300 files every minute or so. Each turn's end
+  // asked the journal to settle, which rescanned every such root at once with no rest between them and waited until
+  // none was left: the shared journal's caller gave up after 15 s about once a minute, and the walks held the host's loop.
+  const rescans: number[] = []
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { log: (message) => message === "rescan" && rescans.push(Date.now()) })
+  w.events.restore()
+  await w.tracker.settled()
+  assert.equal(rescans.length, 1)
+  // Another loss right after: its rescan waits out its spacing.
+  w.events.restore()
+  w.clock.advance(1_000)
+  w.write("src/a.ts", "export const a = 2\n")
+  await w.tracker.settled({ rescans: false })
+  assert.equal(rescans.length, 1, "a turn's count leaves the rescan waiting")
+  assert.equal(w.last().path, "src/a.ts", "what the watch heard is journaled")
+  assert.equal(w.last().observed, "event")
+  // A rescan running now isn't waited for.
+  w.clock.advance(20 * 60_000)
+  let release: (() => void) | undefined
+  const walk = nodeFileSystem().walk
+  let held = false
+  const slow: TrackerFileSystem = {
+    ...nodeFileSystem(),
+    walk: async (root, skip) => {
+      if (held) await new Promise<void>((resolve) => (release = resolve))
+      return walk(root, skip)
+    },
+  }
+  const v = await world({ "src/b.ts": "export const b = 1\n" }, { fs: slow })
+  await v.tracker.settled()
+  held = true
+  v.events.restore()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.ok(release, "the rescan is walking")
+  const started = performance.now()
+  await v.tracker.settled({ rescans: false })
+  assert.ok(performance.now() - started < 1_000, "a turn's count doesn't wait for a rescan under way")
+  held = false
+  release!()
+  await v.tracker.settled()
+  await v.tracker.close()
+  await w.tracker.close()
+})
+
 test("a watch polling because delivery went quiet is rescanned once, when it listens again", async () => {
   const heard: string[] = []
   let says: ((why: "dropped" | "polling" | "listening") => void) | undefined

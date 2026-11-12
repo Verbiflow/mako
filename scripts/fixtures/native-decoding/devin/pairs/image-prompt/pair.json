@@ -1,13 +1,13 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.12.28"
+    "version": "3000.12.43"
   },
   "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#fluttering-sock",
+      "path": ".local/share/devin/cli/sessions.db#sedate-spark",
       "known": [
         {
           "side": "-",
@@ -23,7 +23,7 @@
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/6b976579-f36a-40d3-b7b4-ee2209cc8f54.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/ac4193e4-538a-4ab6-953a-46e606631741.db",
       "known": [
         {
           "side": "-",

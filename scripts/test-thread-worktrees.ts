@@ -908,13 +908,18 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   const made = await worktrees.prepare(id, quiet, "Quiet work")
   let now = Date.now()
   let at: string[] = []
-  const real = { now: Date.now, readOutput: gitRunner.readOutput }
+  const real = { now: Date.now, readOutput: gitRunner.readOutput, idleOutput: gitRunner.idleOutput }
   let reads = 0
   let closing = () => {}
   Date.now = () => now
+  // A summaries pass reads in the idle lane; a summary someone waits on, in the other.
   gitRunner.readOutput = function (this: typeof gitRunner, cwd, args) {
     if (args[0] === "status" && cwd === made.path) reads++
     return real.readOutput.call(this, cwd, args)
+  }
+  gitRunner.idleOutput = function (this: typeof gitRunner, cwd, args) {
+    if (args[0] === "status" && cwd === made.path) reads++
+    return real.idleOutput.call(this, cwd, args)
   }
   try {
     // As the host makes it: what's at work reaches the worktrees only through this.
@@ -965,6 +970,7 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   } finally {
     Date.now = real.now
     gitRunner.readOutput = real.readOutput
+    gitRunner.idleOutput = real.idleOutput
     closing()
   }
   await worktrees.abandon(id).catch(() => undefined)

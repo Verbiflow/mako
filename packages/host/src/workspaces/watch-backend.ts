@@ -253,6 +253,21 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
 }
 
 /** What changed on disk in a stretch of time, from the file system's own history. */
+export interface HistoryOptions {
+  ignore?: readonly string[]
+  exclude?: readonly string[]
+  /** At most this many paths of each folder one level into a root; a folder that had more is named in `capped`. */
+  perFolder?: number
+}
+
+export interface HistoryRead {
+  paths: string[]
+  lost: string[]
+  ignored: number[]
+  /** With `perFolder`: the folders that had more paths than were sent. */
+  capped?: string[]
+}
+
 export interface FileHistory {
   /** Where the history stands now. */
   mark(): Promise<HistoryMark>
@@ -263,7 +278,7 @@ export interface FileHistory {
    * folder are left out in the reader and counted per folder in `ignored`;
    * paths under an `exclude` folder inside a root are never read at all.
    */
-  since(mark: HistoryMark, roots: readonly string[], options?: { ignore?: readonly string[]; exclude?: readonly string[] }): Promise<{ paths: string[]; lost: string[]; ignored: number[] }>
+  since(mark: HistoryMark, roots: readonly string[], options?: HistoryOptions): Promise<HistoryRead>
   /** fseventsd started over: reads under way end, reported as failed, and the next starts a reader afresh. */
   recover?(): void
 }
@@ -380,13 +395,13 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
     async since(mark, roots, options) {
       const asked = performance.now()
       const reply = await ask(
-        { t: "since", id: nextId++, mark, roots: [...roots], ignore: [...(options?.ignore ?? [])], exclude: [...(options?.exclude ?? [])] },
+        { t: "since", id: nextId++, mark, roots: [...roots], ignore: [...(options?.ignore ?? [])], exclude: [...(options?.exclude ?? [])], ...(options?.perFolder !== undefined && { perFolder: options.perFolder }) },
         HISTORY_MS,
       )
       if (reply.t !== "history") throw failed(reply)
-      readings.historyRead(performance.now() - asked, reply.paths.length + reply.ignored.reduce((sum, count) => sum + count, 0), { caughtUpMs: reply.caughtUpMs, readMs: reply.readMs })
+      readings.historyRead(performance.now() - asked, reply.paths.length + (reply.unsent ?? 0) + reply.ignored.reduce((sum, count) => sum + count, 0), { caughtUpMs: reply.caughtUpMs, readMs: reply.readMs })
       const crossed = daemon ? await daemon.restartedSince(markMs(mark)).catch(() => false) : false
-      return { paths: reply.paths, lost: crossed ? roots.filter((root) => existsSync(root)) : reply.lost, ignored: reply.ignored }
+      return { paths: reply.paths, lost: crossed ? roots.filter((root) => existsSync(root)) : reply.lost, ignored: reply.ignored, ...(reply.capped && { capped: reply.capped }) }
     },
     recover() {
       if (child) end(child, new Error("macOS's file-change service started over during the read"))
