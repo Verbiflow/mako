@@ -599,6 +599,11 @@ export class LiveJournal {
   private closing?: Promise<void>
   /** `keepFile`: the tidying `closing` waits to do is no longer this journal's. */
   private untidy = false
+  /** The journal's database file. */
+  get file(): string {
+    return this.path
+  }
+
   constructor(root: string, id: string) {
     z.string().uuid().parse(id)
     mkdirSync(root, { recursive: true })
