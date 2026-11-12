@@ -438,8 +438,13 @@ for await (const line of createInterface({ input: process.stdin })) {
       }
       const request = randomUUID()
       await call("mako:live-prompt", [conversation, request, `Reply with the single word ${word}.`, []])
-      for (const deadline = Date.now() + 2 * 60_000; !heard.includes(word); await new Promise((resolve) => setTimeout(resolve, 200)))
+      for (const deadline = Date.now() + 2 * 60_000; !heard.includes(word); await new Promise((resolve) => setTimeout(resolve, 200))) {
         if (Date.now() > deadline) throw new Error(`the held turn never reached the model: ${JSON.stringify(await read(conversation))}`)
+        // Below full access the harness asks before its agent writes its file: the person allows it, as for a move.
+        const asked = PermissionsSchema.parse(await call("mako:live-snapshot", [conversation])).permissions[0]
+        const allow = asked?.options.find((option) => option.kind === "allow_once") ?? asked?.options[0]
+        if (asked && allow) await call("mako:live-permission", [conversation, asked.id, { kind: "choice", optionId: allow.optionId }]).catch(() => undefined)
+      }
       say("HOLDING", JSON.stringify({ request, ...await read(conversation) }))
     } else if (command === "person") {
       const [file, ...text] = rest
