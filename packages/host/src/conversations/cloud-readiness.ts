@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { dirname, join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
-import { MoveCheckpointSchema } from "@mako/protocol/moves"
+import { MoveCheckpointSchema, type MoveCheckpoint } from "@mako/protocol/moves"
 import { withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -57,6 +57,8 @@ const ReadyEntrySchema = z.object({
   repository: CloudRepositorySchema,
   /** The checkout as last sent, by its checkpoint's hash: sent again only when it changed. */
   checkpoint: z.string().optional(),
+  /** That checkpoint whole, as a going-away names it for the cloud to apply (`noteCheckpoint`). */
+  sent: MoveCheckpointSchema.optional(),
   /** A Thread in the main checkout: its own changes, one per repository, as the cloud last acknowledged them. */
   acknowledged: z.array(AcknowledgedSchema).optional(),
   at: z.number(),
@@ -260,11 +262,12 @@ export class CloudReadiness {
    * The checkpoint a going-away names for `thread`: the last the cloud acknowledged, on the cloud Thread standing by
    * where it went. A Thread in the main checkout names its first repository's, which its cloud Thread is made for.
    */
-  async noteCheckpoint(thread: string): Promise<{ sha256: string; standby: string } | undefined> {
+  async noteCheckpoint(thread: string): Promise<(MoveCheckpoint & { standby: string }) | undefined> {
     const entry = (await this.#load())[thread]
     if (!entry) return undefined
-    const sha256 = entry.acknowledged?.[0]?.checkpoint.sha256 ?? entry.checkpoint
-    return sha256 ? { sha256, standby: entry.cloudThread } : undefined
+    // A worktree's whole checkout, or a Thread in the main checkout's own changes in its first repository.
+    const whole = entry.acknowledged?.[0]?.checkpoint ?? (entry.sent?.sha256 === entry.checkpoint ? entry.sent : undefined)
+    return whole && { ...whole, standby: entry.cloudThread }
   }
 
   /** What the cloud acknowledged of a Thread in the main checkout, by repository, for its going-away to name. */
@@ -459,13 +462,24 @@ export class CloudReadiness {
 
   /** The checkout's checkpoint, sent when it changed since the last; answers its hash when it went. */
   async #sendCheckpoint(account: ReadinessAccount, entry: ReadyEntry): Promise<string | undefined> {
+    const sent = await this.#sendWorktreeCheckpoint(account, entry)
+    if (sent) entry.sent = sent
+    return sent?.sha256
+  }
+
+  /** The worktree's checkpoint, sent when it changed since the last; answers it whole when it went. */
+  async #sendWorktreeCheckpoint(account: ReadinessAccount, entry: ReadyEntry): Promise<MoveCheckpoint | undefined> {
     await mkdir(this.#options.scratch, { recursive: true })
     const scratch = await mkdtemp(join(this.#options.scratch, "ready-"))
     try {
       const { checkpoint, file } = await captureMoveCheckpoint(this.#options.git, entry.folder, scratch)
-      if (checkpoint.sha256 === entry.checkpoint) return undefined
+      // Unchanged, the cloud has it already; kept whole if it wasn't yet (an entry from before it was).
+      if (checkpoint.sha256 === entry.checkpoint) {
+        entry.sent ??= checkpoint
+        return undefined
+      }
       await account.sendCheckpoint(entry.cloudThread, checkpoint, file)
-      return checkpoint.sha256
+      return checkpoint
     } finally {
       await rm(scratch, { recursive: true, force: true })
     }

@@ -18,7 +18,7 @@ import { encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { AwayNotes } from "@mako/host/conversations/away-notes"
 import { CloudHandOffs, machineLeaving, workingThreads } from "@mako/host/conversations/cloud-handoffs"
-import { CloudMoves, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
+import { CloudMoves, parkedContinuation, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
 import { CloudReadiness } from "@mako/host/conversations/cloud-readiness"
 import { QuietNoteSchema, type OwnerAnswer, type OwnerAsk, type QuietNote } from "@mako/protocol/handoff"
 import { SleepHandOff } from "@mako/host/conversations/sleep-handoff"
@@ -411,6 +411,11 @@ async function wentAway(h: Host, way: string, work: Awaited<ReturnType<typeof at
     assert.ok(named.sessions.some((each) => each.session === placed.session && each.generation === execution.generation), `${way}: its Session at its generation`)
     assert.ok(named.checkpoint && ready.standing.includes(named.checkpoint.standby), `${way}: on the cloud Thread kept ready for it`)
     assert.ok(h.acknowledged.some((each) => each.threadId === named.checkpoint!.standby && each.sha256 === named.checkpoint!.sha256), `${way}: a checkpoint the cloud acknowledged`)
+    assert.ok(named.checkpoint.head && named.checkpoint.work, `${way}: the whole checkpoint, as the arrival applies it`)
+    // Its parked turn, under the very request this Mac's join would send it on under.
+    const parkedOnDisk = z.object({ turns: z.array(z.object({ move: z.string(), conversationId: z.string(), requestId: z.string() }).loose()) }).loose().parse(JSON.parse(readFileSync(join(h.base, "cloud", "moves", "parked-turns"), "utf8"))).turns.filter((turn) => turn.conversationId === id)
+    assert.equal(parkedOnDisk.length, 1, `${way}: its turn parked here`)
+    assert.deepEqual(named.parked?.map((turn) => ({ conversation: turn.conversation, request: turn.request, continuation: turn.continuation })), parkedOnDisk.map((turn) => ({ conversation: turn.conversationId, request: turn.requestId, continuation: parkedContinuation(turn.move, turn.requestId) })), `${way}: the note names it with the join's own continuation`)
   }
 }
 
@@ -484,6 +489,26 @@ try {
     assert.deepEqual(h.order.filter((each) => each !== "rows"), ["note", "quiet quit"], "the account heard the note before the Mac went quiet")
     assert.ok(h.rowReads() >= 2 && h.order.lastIndexOf("rows") < h.order.indexOf("note"), "the note waited for the account to list the paused turns idle")
     await wentAway(h, "shutdown", work, ready, began)
+    await h.close()
+  }
+
+  // Both the account's continue and this Mac's join send the parked turn on, under the note's continuation: it runs once.
+  {
+    const h = await host("once")
+    const work = await atWork(h)
+    await keptReady(h, work)
+    await sleeps(h, 20_000)
+    const id = work.inProject
+    const placed = h.world.store.journalPlacement(id)!
+    const turn = h.notes[0]!.threads.find((each) => each.thread === placed.thread)!.parked![0]!
+    const send = () => h.world.live.continueTurn(id, { requestId: turn.continuation, reason: "handed-off", continues: turn.request, actor: { kind: "service", name: "handoff" } })
+    const before = h.world.prompts.length
+    send() // the account's continue, from the note
+    send() // this Mac's join, `#sendParked`, under `parkedContinuation` of the same parked record
+    await until("the turn to go on", () => h.world.prompts.slice(before).some((prompt) => prompt.conversation === id))
+    await pause(300)
+    assert.equal(h.world.prompts.slice(before).filter((prompt) => prompt.conversation === id).length, 1, "it ran once")
+    assert.equal(h.world.live.snapshot(id)!.requests.filter((request) => request.id === turn.continuation).length, 1, "one continuation request")
     await h.close()
   }
 

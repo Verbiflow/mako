@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { namedUuid } from "./continues.js"
 import { ThreadIdSchema } from "./ids.js"
+import { MoveCheckpointSchema } from "./moves.js"
 
 /**
  * A device going away and coming back, as its account hears it, so a Thread at work there goes on in the cloud with
@@ -26,15 +27,38 @@ export const OWNER_SESSIONS_MAX = 256
 const SessionAt = z.object({ session: z.uuid(), generation: z.number().int().nonnegative() }).strict()
 export type SessionAt = z.infer<typeof SessionAt>
 
-/** A checkpoint the cloud acknowledged: its bundle's SHA-256, on the standby cloud Thread it was sent to. */
-export const AcknowledgedCheckpointSchema = z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), standby: ThreadIdSchema }).strict()
+/**
+ * A checkpoint the cloud acknowledged, whole (`MoveCheckpointSchema`: its bundle's hash and size, HEAD, the branch, the
+ * index and work commits), with the standby cloud Thread it was sent to. The arrival applies it as a move's own: its
+ * bundle read by the hash from what the account keeps, nothing copied.
+ */
+export const AcknowledgedCheckpointSchema = MoveCheckpointSchema.extend({ standby: ThreadIdSchema }).strict()
 export type AcknowledgedCheckpoint = z.infer<typeof AcknowledgedCheckpointSchema>
 
 /** A Thread with a parked turn, as its device goes away: what the account may continue, and from what. */
+/** At most this many turns parked in one Thread of a note. */
+export const PARKED_PER_THREAD_MAX = 16
+
+/**
+ * A turn the device paused as it went away. The account's continue sends it on in the cloud Thread once the machine
+ * has arrived, as Mako's continuation of `request` in `conversation`: `mako:live-continue-turn` under `continuation`,
+ * naming the tool calls the pause cut (`stopped`). The device names `continuation` and uses the same one if it joins
+ * that continue later and sends its parked turns there itself, so a turn goes on once whoever sends it first.
+ */
+export const ParkedTurnSchema = z.object({
+  conversation: z.uuid(),
+  request: z.uuid(),
+  continuation: z.uuid(),
+  stopped: z.array(z.string().min(1).max(200)).max(64).optional(),
+}).strict()
+export type ParkedTurn = z.infer<typeof ParkedTurnSchema>
+
 export const QuietThreadSchema = z.object({
   thread: ThreadIdSchema,
   sessions: z.array(SessionAt).min(1).max(OWNER_SESSIONS_MAX),
   checkpoint: AcknowledgedCheckpointSchema.optional(),
+  /** The Thread's turns parked as the device went away, for the continue to send on; absent from devices before it. */
+  parked: z.array(ParkedTurnSchema).max(PARKED_PER_THREAD_MAX).optional(),
 }).strict()
 export type QuietThread = z.infer<typeof QuietThreadSchema>
 
