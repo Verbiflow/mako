@@ -2,7 +2,7 @@ import "./lib/scratch-git.mjs"
 import { execFile, execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
-import { appendFile, copyFile, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises"
+import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
 import { request as httpsRequest } from "node:https"
 import { createRequire } from "node:module"
@@ -78,6 +78,8 @@ import { ACCESS_TIER_NAMES, accessModeId } from "@mako/host/contracts/access"
  *   uncommitted files. `STATUS {project, folder, branch, changed}`
  * - `sleep` (with `--sleep-watch`): the stand-in sleep watch says the Mac is about to sleep, as macOS tells the real
  *   one, and the host hands off before it lets the Mac sleep. `SLEPT {ms}` once it let it.
+ * - `ready <conversation>`: waits for the host to keep that conversation's Thread ready to move, its cloud Thread
+ *   standing by, as its log says (`CloudReadiness`). `READY-TO-MOVE {thread, ms}`
  * - `shutdown`: the desktop app's word that the Mac is shutting down (`mako:machine-leaving`), answered once the host's
  *   handoff did, its hold at most. `SHUTDOWN {ms}`
  * - `quit` (or stdin's end): signs out, stops the host (and the window), removes the root unless `--keep`. The host's
@@ -448,6 +450,14 @@ for await (const line of createInterface({ input: process.stdin })) {
         if (Date.now() > deadline) throw new Error("the host never let the Mac sleep")
       }
       say("SLEPT", JSON.stringify({ ms: Date.now() - began }))
+    } else if (command === "ready") {
+      // The host keeps a Thread at work ready to move every half minute (`CloudReadiness`); its log says each round.
+      const thread = (await snapshot(rest[0]!)).threadId
+      const began = Date.now()
+      const brought = (text: string) => text.split("\n").some((entry) => entry.includes("a Thread at work was brought up to date in the cloud") && Boolean(thread) && entry.includes(`thread=${thread}`))
+      for (const deadline = began + 3 * 60_000; !brought(await readFile(join(dataRoot, "logs", "host.log"), "utf8").catch(() => "")); await new Promise((resolve) => setTimeout(resolve, 1_000)))
+        if (Date.now() > deadline) throw new Error(`the host never kept the Thread ${thread ?? "(none)"} ready`)
+      say("READY-TO-MOVE", JSON.stringify({ thread, ms: Date.now() - began }))
     } else if (command === "shutdown") {
       const began = Date.now()
       await call("mako:machine-leaving", ["shutdown"])
