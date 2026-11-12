@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import { execFile, execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, renameSync } from "node:fs"
 import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
 import { request as httpsRequest } from "node:https"
@@ -227,17 +227,31 @@ await listen()
 
 // With `--sleep-watch`, the host's sleep watch is a stand-in for the native helper, where a checkout's host looks for it:
 // `sleep` has it say the Mac is about to sleep, as macOS tells the real one, and it lets the Mac sleep once the host
-// says so. The checkout's own helper goes back as the run ends.
+// says so. The checkout's own helper goes back as the run ends, however it ends: on its exit and on a signal, and, for
+// a run killed where nothing can answer, by the stand-in itself, which runs the real helper once its run is gone.
 const sleepHelper = join(process.cwd(), "build", "mako-sleep-watch")
 const realHelper = `${sleepHelper}.proof-real`
 const sleepWatch = join(root, "sleep-watch")
 if (values["sleep-watch"]) {
   await mkdir(sleepWatch, { recursive: true })
   if (existsSync(sleepHelper) && !existsSync(realHelper)) await rename(sleepHelper, realHelper)
+  const putBack = () => {
+    if (existsSync(realHelper)) renameSync(realHelper, sleepHelper)
+  }
+  process.once("exit", putBack)
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => process.exit(1))
   // Built-in modules by `process.getBuiltinModule`, which a script reads alike as a module or not. It's the keep-awake
   // helper too (`--keep-awake`), which it answers without holding anything.
   await writeFile(sleepHelper, `#!${process.execPath}
 const fs = process.getBuiltinModule("fs"), path = process.getBuiltinModule("path"), readline = process.getBuiltinModule("readline")
+// The run it stands in for is gone (killed where nothing could put the real one back): the real helper answers.
+const run = ${process.pid}, real = ${JSON.stringify(realHelper)}
+let alive = true
+try { process.kill(run, 0) } catch (error) { alive = error.code !== "ESRCH" }
+if (!alive && fs.existsSync(real)) {
+  const child = process.getBuiltinModule("child_process").spawn(real, process.argv.slice(2), { stdio: "inherit" })
+  child.on("exit", (code) => process.exit(code ?? 0))
+} else {
 if (process.argv.includes("--keep-awake")) {
   console.log("ready")
   console.log("power ac")
@@ -266,6 +280,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   console.log("slept " + n + " answer")
 })
 process.stdin.on("end", () => process.exit(0))
+}
 }
 `, { mode: 0o755 })
 }
