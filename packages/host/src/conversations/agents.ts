@@ -142,7 +142,7 @@ import type { LiveRequest, LiveSnapshot, LiveStartOptions } from "../contracts/l
 import type { LivePermissionResponse, LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../contracts/thread-identity.js"
 import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTART_CHAIN, STRANDED_AFTER_MS, strandedTurn } from "../contracts/turn-continuation.js"
-import { uniqueName, type KeptAnswer, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
+import { uniqueName, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
 import { holdOf, keepsLine } from "../contracts/request-hold.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
@@ -655,7 +655,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   private seen: unknown
   /** The store's `moved` when `sync` last took it in, and where its reports and answers were read to. */
   private syncedAt: number | undefined
-  private keptMark = { reports: 0, answers: 0 }
+  private keptMark: KeptMark = { reports: 0, answers: 0, titles: 0, journals: 0 }
   private draining = false
   private drainAgain = false
   /**
@@ -6120,7 +6120,18 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const since = store.keptSince(this.keptMark)
     this.keptMark = since.mark
-    const changed = new Set<string>()
+    if (since.lost) {
+      // Title changes were pruned past this mark before they were read: what any Fin shows may have changed.
+      this.latest = store.latestReports()
+      this.answersHeld = store.latestAnswers()
+      this.entries.clear()
+      this.rosters.clear()
+      return
+    }
+    // A Fin renamed, or its Session given another journal, shows that in its entry: read again, with the rosters above,
+    // and the conversation it's read from found again.
+    const changed = new Set<string>(since.threads)
+    for (const thread of since.threads) this.conversations.delete(thread)
     for (const report of since.reports) {
       this.latest.set(report.child, report)
       changed.add(report.child)

@@ -269,6 +269,7 @@ jobs:
       - run: npm run test:fin-pull-waits
       - run: npm run test:fin-resume
       - run: npm run test:fin-reopen
+      - run: npm run test:roster-refresh
       # A host starting reads each Fin's journal in slices as it resumes them, never all of them at once.
       - run: npm run test:resume-holds
         id: resume_holds

@@ -371,18 +371,28 @@ const SessionExecutionRowSchema = ExecutionRowSchema.extend({
   generation: z.number().int().positive().nullable(),
 })
 const ForkRowSchema = z.object({ id: z.string(), parent_session: z.string() })
-/** Where a reader of reports and answers read them to, by the store's order of taking them (`rowid`). */
+/**
+ * Where a reader of reports, answers, title changes and journals read them to, by the store's order of taking them
+ * (`rowid`, a title change's `seq`).
+ */
 export interface KeptMark {
   reports: number
   answers: number
+  titles: number
+  journals: number
 }
-/** Reports and answers kept after a mark, oldest first, and the mark they leave off at (`keptSince`). */
+/** What was kept after a mark, oldest first, and the mark it leaves off at (`keptSince`). */
 export interface KeptSince {
   reports: Report[]
   answers: KeptAnswer[]
+  /** Threads whose title changed or whose Sessions gained a journal. */
+  threads: string[]
+  /** The title changes since the mark were pruned before they were read: anything may have changed. */
+  lost: boolean
   mark: KeptMark
 }
 const SeqRowSchema = z.object({ seq: z.number() })
+const JournalThreadRowSchema = z.object({ seq: z.number(), thread_id: z.string() })
 const SeqRecordRowSchema = z.object({ seq: z.number(), record: z.string() })
 const ThreadConversationRowSchema = z.object({ thread: z.string(), session: z.string(), merged: z.string().nullable(), conversation: z.string().nullable() })
 const ThreadTitleRowSchema = z.object({ id: z.string(), title: z.string().nullable(), title_source: z.enum(["user", "frozen", "auto"]).nullable(), merged_into: z.string().nullable() })
@@ -1492,7 +1502,14 @@ export class ThreadStore {
       mark.answers = Math.max(mark.answers, SeqRecordRowSchema.parse(row).seq)
       return keptAnswer(row)
     })
-    return { reports, answers, mark }
+    const titles = this.sql("SELECT seq, thread_id FROM title_changes WHERE seq > ? ORDER BY seq").all(after.titles).map((row) => TitleChangeRowSchema.parse(row))
+    const lost = titles.length > 0 && titles[0]!.seq !== after.titles + 1 && after.titles > 0
+    mark.titles = titles.at(-1)?.seq ?? mark.titles
+    const journals = this.sql("SELECT j.rowid AS seq, m.thread_id FROM journals j JOIN memberships m ON m.session_id = j.session_id WHERE j.rowid > ? ORDER BY j.rowid").all(after.journals)
+      .map((row) => JournalThreadRowSchema.parse(row))
+    mark.journals = Math.max(mark.journals, ...journals.map((row) => row.seq))
+    const threads = [...new Set([...titles.map((row) => row.thread_id), ...journals.map((row) => row.thread_id)])]
+    return { reports, answers, threads, lost, mark }
   }
 
   /** A number that moves with every commit to the store, this host's or another's: what a reader's cache is good for. */
@@ -1506,7 +1523,9 @@ export class ThreadStore {
     this.syncVersion()
     const reports = SeqRowSchema.parse(this.sql("SELECT coalesce(max(rowid), 0) AS seq FROM thread_reports").get()).seq
     const answers = SeqRowSchema.parse(this.sql("SELECT coalesce(max(rowid), 0) AS seq FROM agent_answers").get()).seq
-    return { reports, answers }
+    const titles = SeqRowSchema.parse(this.sql("SELECT coalesce(max(seq), 0) AS seq FROM title_changes").get()).seq
+    const journals = SeqRowSchema.parse(this.sql("SELECT coalesce(max(rowid), 0) AS seq FROM journals").get()).seq
+    return { reports, answers, titles, journals }
   }
 
   /** Reports no parent has heard yet, oldest first: the outbox a starting host sends again under their ids. */
