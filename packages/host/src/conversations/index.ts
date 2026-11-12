@@ -224,6 +224,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   let agents: Agents | undefined
   const live = new LiveConversations({
     agents: () => agents,
+    heldModels: (harness) => harnesses.profiles.held(harness)?.models,
     ...(deps.stopping && { stopping: deps.stopping }),
     ...(deps.builds && { builds: deps.builds }),
     unattended: deps.unattended,

@@ -1428,7 +1428,26 @@ added. While the journal keeps no copy its rows stay, written ahead between
 other work (`stageBase`, `writeAhead`), so the next turn names them without
 writing them; the compaction drops them once the journal closes.
 `npm run bench:live-read` fails if reading a huge conversation holds the
-event loop.
+event loop. A journal read in a slice at a time (`LiveRecords.loadSliced`, as a
+window or a notice reads a conversation not in memory) has its rows read
+and parsed on a reader (`JournalReaders`: up to four worker threads, each
+opening the file read-only, its rows handed over a part at a time,
+`journalRowSteps`) and its snapshot made on the loop from them; a reader
+that fails leaves the journal read on the loop as before. On a 60MB
+journal it held the loop 42–91 ms in all against 108–477 ms read on it
+(`bench:live-read`'s `journalRead*`). A history read from its session whose
+merge was overtaken is merged again on the next drain, not read again
+(`LiveSources.pagesRead`). `agents_report` never reads a journal: a
+notice for an Apex not in memory reads it in first (`readIn`), and the
+wake's queue reads memory before it would load one. The roster and the
+list read the Thread store's per-Fin rows in one query per commit
+(`ThreadStore.threadConversations`, `thread`, `openReportAsks`,
+`answerOf`, each kept until the store moves), `edges()` keeps its object
+through a commit that changed no edge, and `Agents.sync` takes reports and
+answers since its last mark rather than rebuilding every Fin
+(`keptSince`). `npm run bench:agents-report -- --foreign-writes` runs the
+person's day (226 Fins, 3,400 reports, another Mako committing between
+reports) on a scratch host.
 
 The host doesn't hold a conversation's history whole, running or not: its
 finished entries are paged (`packages/host/src/conversations/paged-entries.ts`).

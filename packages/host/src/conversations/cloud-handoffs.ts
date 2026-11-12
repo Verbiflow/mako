@@ -41,7 +41,11 @@ export type CloudHandOffsOptions = {
     flush(working: WorkingThread[], by: number): Promise<void>
     checkpoint(thread: string): Promise<AcknowledgedCheckpoint | undefined>
     quiet(note: QuietNote): Promise<QuietAnswer | "unserved">
-    /** The account took the note for these Sessions: they wait for its word once this Mac is back (`AwayNotes.noted`). */
+    /**
+     * These Sessions wait for the account's word from now (`AwayNotes.noted`): every one paused, as soon as it is, so no
+     * message queued meanwhile runs one before the note is answered; then those the account took, or every one if its
+     * answer never came. Narrowing the hold sends no parked turn on: they go on once this Mac is back and asks.
+     */
     accepted(note: string, sessions: QuietThread["sessions"]): Promise<void>
     /**
      * This Mac's own rows as the account lists them now: each Session's state there. The account takes a note only for
@@ -155,6 +159,12 @@ export class CloudHandOffs {
         return { ...each, error: errorMessage({ error }) }
       }
     }))
+    // Held from the moment they're paused: a message queued before the note is answered (a Fin's report) waits too.
+    try {
+      await goingAway.accepted(handOff, parked.flatMap((each) => ("gone" in each && each.gone.parked.length ? each.gone.sessions : [])))
+    } catch (error) {
+      hostWarn("handoff", "the Sessions paused as this Mac went away couldn't be held; a message queued meanwhile may run", { error: errorMessage({ error }) })
+    }
     const pausedMs = performance.now() - began
     const sessions = parked.flatMap((each) => ("gone" in each ? each.gone.sessions.map((session) => session.session) : []))
     const [, rows] = await Promise.all([

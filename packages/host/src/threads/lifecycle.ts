@@ -13,6 +13,11 @@ export type TargetIdentity = { conversationId?: string; sessionId?: string }
 export interface LiveThreads {
   /** Every conversation, loaded or not: all a lifecycle reads of one, so archiving never reads a journal in. */
   summaries(): LiveSummary[]
+  /**
+   * Every conversation as listed, without what `summaries` adds to each (its Fins' rollup, its place): enough for the
+   * keys an archive knows it by, which a Fin's ask reads on every batch of its Apex.
+   */
+  listed?(): LiveSummary[]
   activeRequest(id: string): string | null
   setArchived(id: string, archived: boolean): void
   stopRequest(id: string, requestId: string): Promise<boolean>
@@ -29,6 +34,11 @@ interface ThreadLifecycleDependencies {
   archives: ThreadArchives
   native: NativeQueue
   threads(): ThreadRef[]
+  /**
+   * The one row a target names, placed as `threads` places every row: by path, or by harness and native id. Without
+   * it every look at a target annotates the whole catalog, which at a Fin's every batch was half the host's allocation.
+   */
+  thread?(target: { path: string } | { harness: string; nativeId: string }): ThreadRef | undefined
   nativeToken(path: string): string | null
   abortNative(path: string, token: string): void
   external(path: string): boolean
@@ -40,14 +50,18 @@ export class ThreadLifecycle {
   private readonly dependencies: ThreadLifecycleDependencies
   constructor(dependencies: ThreadLifecycleDependencies) { this.dependencies = dependencies }
 
-  private owner(target: ThreadTarget) {
-    return this.dependencies.live.summaries().find((summary) => target.kind === "live"
+  private owner(target: ThreadTarget, listed = false) {
+    const live = this.dependencies.live
+    return (listed && live.listed ? live.listed() : live.summaries()).find((summary) => target.kind === "live"
       ? summary.session.id === target.id
       : target.kind === "file" ? summary.threadPath === target.path || summary.nativePaths?.includes(target.path)
       : summary.session.harness === target.provider && summary.session.nativeId === target.nativeId)
   }
 
   private ref(target: ThreadTarget): ThreadRef | undefined {
+    if (target.kind === "live") return undefined
+    const one = this.dependencies.thread
+    if (one) return one(target.kind === "file" ? { path: target.path } : { harness: target.provider, nativeId: target.nativeId })
     return this.dependencies.threads().find((ref) => target.kind === "file" ? ref.path === target.path : target.kind === "native" && ref.harness === target.provider && ref.nativeId === target.nativeId)
   }
 
@@ -59,7 +73,7 @@ export class ThreadLifecycle {
     }
     // The conversation's own keys come from its listing (`liveArchiveKeys`), the same rule the Sessions report reads,
     // so neither reads the journal in: the report once loaded every conversation this host had, every second.
-    const owner = this.owner(target)
+    const owner = this.owner(target, true)
     if (owner) keys.push(...liveArchiveKeys(owner))
     return [...new Set(keys)]
   }
@@ -87,7 +101,10 @@ export class ThreadLifecycle {
     const requestId = owner && this.dependencies.live.activeRequest(owner.session.id)
     if (owner && requestId) return { archived, stop: { kind: "live", id: owner.session.id, requestId }, external: false }
     const identity = target.kind === "native" ? target : { provider: owner?.session.harness, nativeId: owner?.session.nativeId }
-    const ref = this.dependencies.threads().find((ref) => target.kind === "file" ? ref.path === target.path : ref.harness === identity.provider && ref.nativeId === identity.nativeId)
+    const one = this.dependencies.thread
+    const ref = one
+      ? (target.kind === "file" ? one({ path: target.path }) : identity.provider && identity.nativeId ? one({ harness: identity.provider, nativeId: identity.nativeId }) : undefined)
+      : this.dependencies.threads().find((ref) => target.kind === "file" ? ref.path === target.path : ref.harness === identity.provider && ref.nativeId === identity.nativeId)
     const token = ref && this.dependencies.nativeToken(ref.path)
     return { archived, stop: ref && token ? { kind: "native", path: ref.path, token } : null, external: Boolean(owner?.session.connection === "disconnected" && ref && (ref.locked || ref.active || this.dependencies.external(ref.path))) }
   }
