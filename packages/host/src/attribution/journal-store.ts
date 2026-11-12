@@ -846,6 +846,11 @@ export class JournalStore {
     return out
   }
 
+  /** Whether the stat cache knows a path of a root, for a root whose cache isn't in memory (one asleep). */
+  hasStat(root: string, path: string): boolean {
+    return this.statement("SELECT 1 FROM stats WHERE root=? AND path=?").get(root, path) !== undefined
+  }
+
   saveStat(root: string, path: string, row: StatRow): void {
     if (row.ref) this.touched?.add(row.ref)
     this.statement("INSERT OR REPLACE INTO stats (root, path, dev, ino, size, mode, mtime_ns, ctime_ns, ref, checked_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")

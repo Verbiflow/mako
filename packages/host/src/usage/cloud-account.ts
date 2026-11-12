@@ -267,6 +267,13 @@ export interface CloudThreadMaking {
   folder?: string
   /** Kept ready for a Thread of this Mac's that may move: records and checkpoints go to it, and its machine starts only with the move. */
   standby?: boolean
+  /**
+   * With `standby`: the Thread of this Mac's it stands by for (its local `ThreadId`, as a going-away's note names it), so
+   * the account continuing that Thread while this Mac is quiet trusts this cloud Thread, at its own folder and
+   * repository, even where the Thread's Sessions list neither (a project folder's main checkout). A gateway before it
+   * ignores it.
+   */
+  standsByFor?: string
 }
 
 export type CloudAccountOptions = {
@@ -829,6 +836,7 @@ export class CloudAccounts {
     if (options.harness) body.harness = options.harness
     if (options.folder) body.folder = options.folder
     if (options.standby) body.standby = true
+    if (options.standby && options.standsByFor) body.standsByFor = options.standsByFor
     const response = await this.#call(options.prepare ? "threads.prepare" : options.standby ? "threads.standby" : "threads.create", "POST", "/v1/threads", body)
     const answer = CreatedThreadSchema.safeParse(await response.json().catch(() => undefined))
     return { ready: answer.success && answer.data.ready === true, ...answer.success && answer.data.ended === true && { ended: true as const } }
