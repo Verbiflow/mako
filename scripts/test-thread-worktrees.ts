@@ -798,6 +798,62 @@ await worktrees.abandon(droppedId)
 assert.equal(existsSync(dropped.path), false)
 assert.deepEqual([git(app, "branch", "--list", dropped.branch), git(api, "branch", "--list", dropped.branch)], ["", ""])
 
+// Another Git process holding the branch's lock (a spare being made, a worktree being removed, Git's maintenance) refuses
+// the delete for a moment: abandon waits it out rather than leave the branch behind, as CI saw on 2026-11-11.
+const lockOf = (repo: string, branch: string) => join(repo, ".git", "refs", "heads", `${branch}.lock`)
+const heldId = randomUUID()
+const held = await worktrees.prepare(heldId, suite, "Held a moment")
+writeFileSync(lockOf(app, held.branch), "")
+const freed = setTimeout(() => rmSync(lockOf(app, held.branch), { force: true }), 300)
+await worktrees.abandon(heldId)
+clearTimeout(freed)
+assert.deepEqual([git(app, "branch", "--list", held.branch), git(api, "branch", "--list", held.branch)], ["", ""], "a lock let go in a moment holds the delete, not the branch")
+// One that stays held is said, never hidden, and the next abandon deletes what's left.
+const stuckId = randomUUID()
+const stuck = await worktrees.prepare(stuckId, suite, "Held for good")
+writeFileSync(lockOf(app, stuck.branch), "")
+await assert.rejects(worktrees.abandon(stuckId), new RegExp(`Couldn't delete the empty branch ${stuck.branch} in app: .*lock`))
+assert.equal(existsSync(stuck.path), false, "its worktrees are given back all the same")
+assert.deepEqual([git(app, "branch", "--list", stuck.branch).replace(/^[*+ ]+/, ""), git(api, "branch", "--list", stuck.branch)], [stuck.branch, ""])
+rmSync(lockOf(app, stuck.branch))
+await worktrees.abandon(stuckId)
+assert.equal(git(app, "branch", "--list", stuck.branch), "", "abandoned again, the branch left behind goes")
+// A spare's install under way, which runs for minutes and holds no ref lock, doesn't hold the abandon: a refused start
+// or a failed move awaits it, and the person's next step with it.
+{
+  let installsStarted = 0
+  let installing = true
+  const installed = repository("installed")
+  const own = new ThreadWorktreeService(gitRunner, join(root, "installing-worktrees"), threads, undefined, undefined, undefined, {
+    ...setup,
+    spareInstall: {
+      start: async () => {
+        installsStarted += 1
+        return { command: "npm install", inputs: ["package-lock.json"] }
+      },
+      settle: async () => (installing ? "running" : "none"),
+      stop: async () => {},
+      critical: async () => false,
+      paused: (_app, work) => work(),
+    },
+  })
+  const first = randomUUID()
+  await own.prepare(first, installed, "Starts the spares")
+  for (const deadline = Date.now() + 60_000; !installsStarted; await new Promise((resolve) => setTimeout(resolve, 50)))
+    assert.ok(Date.now() < deadline, "a spare's install started")
+  const lockedId = randomUUID()
+  const locked = await own.prepare(lockedId, installed, "Locked while installing")
+  writeFileSync(lockOf(installed, locked.branch), "")
+  const began = performance.now()
+  await assert.rejects(own.abandon(lockedId), /Couldn't delete the empty branch/)
+  const waited = performance.now() - began
+  assert.ok(waited < 10_000, `a lock refused during an install is said in seconds, not after the install: ${Math.round(waited)} ms`)
+  rmSync(lockOf(installed, locked.branch))
+  await own.abandon(lockedId)
+  installing = false
+  await own.abandon(first).catch(() => undefined)
+}
+
 // A repository added to the project since its spares were made: they mirror what it was, so the next Thread checks out fresh, and they go.
 await worktrees.settled()
 const docs = repository("suite/docs")
