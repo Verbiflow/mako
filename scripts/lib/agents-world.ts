@@ -177,6 +177,8 @@ export interface WorldOptions {
   launchedOn?: (harness: string, account: string | undefined) => void
   /** The harnesses whose session goes on under another account (`ProviderLiveDriver.accountContinuation`). */
   resumesUnderAccount?: readonly string[]
+  /** Every harness goes on in its own session in another folder (`resume.elsewhere`), as the six do: a Thread moves onto its own branch as itself. */
+  elsewhere?: boolean
   /** The conversations an `@` picker offers and their transcripts (`AgentsDeps.references`). */
   references?: AgentsDeps["references"]
   /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
@@ -543,7 +545,7 @@ export class AgentsWorld {
       planning: { via: "setting", option: "plan", proposal: "Scripted model", feedback: { kind: "next-message", reason: "Scripted model" } },
       backgroundStop: { kind: "ends-with-turn", evidence: "Scripted model" },
       turnRecovery: { kind: "manual", reason: "Scripted model" },
-      resume: fixtureResume(),
+      resume: fixtureResume(this.options.elsewhere ? { elsewhere: { via: "Scripted model", verified: "Scripted model" } } : {}),
       ...((STEERS_AT_STEP.has(harness) || this.options.steering?.[harness]) && {
         steering: {
           kind: "supported" as const,
@@ -574,7 +576,10 @@ export class AgentsWorld {
         this.options.launchedOn?.(harness, options.pinnedAccount?.())
         // What the harness says goes through the callback its start was given, fenced as a real driver's is (`driverEvents`).
         this.emits.set(options.conversationId, options.emit)
-        return state(options.conversationId, options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {})
+        const started: Partial<LiveSessionState> = options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {}
+        // A harness that goes on in another folder says the folder it was started in.
+        if (this.options.elsewhere) started.cwd = _cwd
+        return state(options.conversationId, started)
       },
       prompt: async (binding, text, _attachments, settings, dispatch) => {
         const id = this.live.ownerOf(binding)

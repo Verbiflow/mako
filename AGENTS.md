@@ -4068,7 +4068,24 @@ going to sleep, shutting down, quitting or signing out says so on its runtime's
 link first (`going-quiet`, link version 8; `mako:machine-leaving` from the
 desktop app's `suspend` and `shutdown`), and the link stays closed until the
 wake (`CloudLink.quiet`), so its device is quiet at once rather than after
-missed heartbeats; `test-cloud-account.ts` covers it. A Thread's name is the
+missed heartbeats; `test-cloud-account.ts` covers it. The cloud hears it only once
+the handoff under way answered (`machineLeaving`): agents at work go to the
+cloud as a Mac goes off, as it sleeps (the sleep watch holds the sleep,
+`SleepHandOff`), as it shuts down (the desktop app tells the host on
+`powerMonitor`'s `shutdown`, prevented until Mako quits, and the host hands
+off within `SHUTDOWN_HOLD_MS`, its own stop waiting for what's still under
+way as long again; a quit's Apple event fires no `shutdown`, and isn't held,
+since a quit held during a shutdown reads as refusing it) and from the quit
+sheet (`CloudHandOffs`). A Thread
+in the project folder is paused first and goes onto its own branch as the
+same session with only its own changes (`ownBranch`'s `asItself`), then to
+the cloud. One a Mac going off couldn't release in time stays with its turns
+paused (`goesOff`, `parked-turns` beside the moves' plans), so it reads idle
+for Continue in the cloud from another device; a continue this Mac joins
+carries those turns there, and otherwise they go on here once the Mac hears
+its account (`CloudMoves.unpark`, on `ownerChecked`).
+`test-handoff-going-off.ts` runs it on the host's own parts with scripted
+harnesses and a stand-in cloud. A Thread's name is the
 list's to say too: no batch carries it, and a followed conversation once kept
 its old one on a second Mac while the phone showed the rename. The
 account's archived cloud Threads are said only from a list the account

@@ -58,7 +58,7 @@ import { ControlResidency, controlLine, openControl, declareControlMethods, cont
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
+import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -781,7 +781,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         // A message that waited in the account for one of this Mac's Sessions while it was off: sent here now, under
         // its own ID, through the same call a window's send makes, so it runs once however often it's heard.
         continued: (session, listed) => late.cloudMoves?.joinContinue(session, listed),
-        ownerChecked: () => late.conversations?.live.moves.ownerChecked(),
+        ownerChecked: () => {
+          late.conversations?.live.moves.ownerChecked()
+          // Turns paused as this Mac went off, for a Thread still here, go on now (`CloudMoves.unpark`).
+          void late.cloudMoves?.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
+        },
         takeWaiting: async (message, claim) => {
           const store = threads.store
           const live = late.conversations?.live
@@ -988,11 +992,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     checkout: (id) => workspaces.worktrees?.threadCheckout(id),
     // A Thread in the main checkout goes onto its own branch first, as the person's "Move to its own branch" does, its
     // companions following; its agent isn't told, since nothing starts a turn on the way to the cloud.
-    ownBranch: async (id) => {
+    ownBranch: async (id, options) => {
       const movers = late.movers
       const worktreeMoves = movers?.worktreeMoves
       if (!movers || !worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")
-      const { moved, following } = await movers.moves.moveNow(id, () => worktreeMoves.carry(id, { lead: true, tell: false }))
+      const { moved, following } = await movers.moves.moveNow(id, () => worktreeMoves.carry(id, { lead: true, tell: false, ...options?.asItself && { asItself: true } }))
       await following
       return moved.session.id
     },
@@ -1554,7 +1558,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     wake,
     leaving: (source) => {
       hostLog("host", "leaving", { source })
-      late.cloud?.leaving?.(source === "suspend" ? "sleep" : "quit")
+      return machineLeaving(source, {
+        handOffs: cloudHandOffs || undefined,
+        enabled: async () => cloudHandOffs ? (await cloudHandOffs.onSleep()) && !(await handOffUnavailable()) : false,
+        quiet: (why) => late.cloud?.leaving?.(why),
+      })
     },
     jobs: shell.jobs,
     subscribed: shell.subscribed,
@@ -1767,7 +1775,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     lifecycleBlocked: () => application.lifecycle.blocked,
     async stop() {
       // A stop that runs long says where it is and what it waits on, so a host killed for it leaves the reason logged.
-      let step = "closing the record of changes"
+      let step = "waiting for a handoff under way"
+      // A shutdown's handoff goes on as the system stops the host: what it still sends to the cloud, its hold at most.
+      await cloudHandOffs?.underWay(Date.now() + SHUTDOWN_HOLD_MS)
+      step = "closing the record of changes"
       const slow = STOP_SLOW_MS.map((ms) => setTimeout(() => hostWarn("lifecycle", "stopping is slow", { ms, step, on: shell.work.openWork?.().join(", ") || "no named work" }), ms))
       try {
         jobs.stop()
