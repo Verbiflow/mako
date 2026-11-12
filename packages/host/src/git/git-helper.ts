@@ -2,6 +2,7 @@ import { ChildProcess, type SpawnOptions, type spawn } from "node:child_process"
 import { existsSync } from "node:fs"
 import { Readable, Writable } from "node:stream"
 import { fileURLToPath } from "node:url"
+import { GitError } from "@mako/git"
 import type { ProcessRunner } from "@mako/git/process-runner"
 import { sendToChild } from "@mako/sessions/child-input"
 import { errorMessage } from "../base/error-message.js"
@@ -18,6 +19,12 @@ type ChildField = Readable | Writable | null | readonly (Readable | Writable | n
 /** After the helper ends, Git spawns directly for this long, doubling to `RETRY_MAX_MS` while it keeps ending. */
 const RETRY_MS = 5_000
 const RETRY_MAX_MS = 5 * 60_000
+/** A helper that hasn't said a `git` started this long after it was asked is wedged (stopped, blocked, its IPC jammed). */
+const SPAWN_WATCH_MS = 5_000
+/** Nor one that hasn't said a `git` ended this long after a stop was asked: the runner's own stop takes at most 5 s. */
+const CLOSE_WATCH_MS = 8_000
+/** A `git` the helper started, lost with it, is waited for this long before its result is said unknown. */
+const ORPHAN_WAIT_MS = 60_000
 
 /**
  * One `git` process the helper runs, as the host's `Git` sees a child of its own: `stdout` and `stderr` say `data`,
@@ -27,6 +34,16 @@ const RETRY_MAX_MS = 5 * 60_000
  */
 class HelperChild extends ChildProcess {
   closed = false
+  /** `Git.run` asked it stopped (a timeout, a cancel, too much output). */
+  stopAsked = false
+  /** Its helper was lost while it ran, under this pid: it's followed from here. */
+  orphan = false
+  /** A watch on the helper for this process (`GitHelper.#watch`). */
+  watch: ReturnType<typeof setTimeout> | undefined
+  /** The subcommand, for what's said of it. */
+  readonly command: string
+  /** The helper that runs it: only that helper's loss is its. */
+  readonly owner: ChildProcess
   readonly #out = new Readable({ read() {} })
   readonly #err = new Readable({ read() {} })
   readonly #ended: Promise<void>
@@ -36,9 +53,11 @@ class HelperChild extends ChildProcess {
 
   readonly id: number
 
-  constructor(id: number, send: (ask: HelperAsk) => void, piped: boolean) {
+  constructor(id: number, command: string, owner: ChildProcess, send: (ask: HelperAsk) => void, piped: boolean) {
     super()
     this.id = id
+    this.command = command
+    this.owner = owner
     this.#ended = new Promise((resolve) => { this.#end = resolve })
     const stdin = piped ? new Writable({
       write: (chunk: Buffer, _encoding, done) => { send({ t: "stdin", id, chunk }); done() },
@@ -94,6 +113,13 @@ class HelperChild extends ChildProcess {
   abandon(): void {
     this.#stopping?.settle()
   }
+
+  /** It ends as `error` says, which `Git.run` passes on as it is. */
+  fail(error: GitError): void {
+    if (this.closed) return
+    this.emit("error", error)
+    this.finish(null, null)
+  }
 }
 
 /**
@@ -115,6 +141,8 @@ export class GitHelper {
   #retryAt = 0
   #retryMs = RETRY_MS
   #stopped = false
+  /** Why a helper let go of was lost, said when it closes. */
+  readonly #lostWhy = new WeakMap<ChildProcess, string>()
 
   constructor(direct: Runner, entry = defaultEntry()) {
     this.#direct = direct
@@ -129,6 +157,11 @@ export class GitHelper {
     return { spawn: launch, close: (child, first) => this.close(child, first) }
   }
 
+  /** The helper's process while it runs, for diagnostics and tests. */
+  pid(): number | undefined {
+    return this.#child?.pid
+  }
+
   /** Ends the helper and everything it runs. */
   async stop(): Promise<void> {
     this.#stopped = true
@@ -139,8 +172,8 @@ export class GitHelper {
       // git it runs first (`git-helper-main.ts`); a disconnect first left Node never saying the child closed.
       child.ref()
       await this.#direct.close(child).catch(() => {})
+      this.#lost(child, "Mako's Git helper stopped")
     }
-    this.#lost("Mako's Git helper stopped")
   }
 
   private spawn(file: string, args: readonly string[], options: SpawnOptions): ChildProcess {
@@ -153,23 +186,33 @@ export class GitHelper {
     if (!helper || cwd === undefined || cwd instanceof URL) return this.#direct.spawn(file, args, options)
     const id = (this.#next += 1)
     const send = (ask: HelperAsk) => { sendToChild(helper, ask).catch(() => {}) }
-    const child = new HelperChild(id, send, stdin === "pipe")
+    const command = args.find((arg) => !arg.startsWith("-") && !arg.includes("=")) ?? ""
+    const child = new HelperChild(id, command, helper, send, stdin === "pipe")
     this.#running.set(id, child)
     this.#busy(helper)
     const env: Record<string, string> = {}
     for (const [key, value] of Object.entries(options.env ?? process.env)) if (value !== undefined) env[key] = value
     send({ t: "spawn", id, file, args: [...args], cwd, env, stdin: stdin === "pipe" ? "pipe" : "ignore" })
+    this.#watch(child, "that it started", SPAWN_WATCH_MS)
     return child
   }
 
   private close(child: ChildProcess, first?: NodeJS.Signals | number): Promise<void> {
     if (!(child instanceof HelperChild)) return this.#direct.close(child, first)
     if (child.closed) return Promise.resolve()
+    child.stopAsked = true
+    // Lost with its helper: stopped from here, as the host's runner stops a child of its own.
+    if (child.orphan) {
+      void this.#stopOrphan(child)
+      return child.ended()
+    }
     const helper = this.#child
     const signal: Signal = first === "SIGKILL" || first === "SIGINT" || first === "SIGHUP" ? first : undefined
     const stopped = child.stopping()
-    if (helper) sendToChild(helper, { t: "close", id: child.id, ...(signal && { signal }) } satisfies HelperAsk).catch(() => child.abandon())
-    else child.abandon()
+    if (helper) {
+      sendToChild(helper, { t: "close", id: child.id, ...(signal && { signal }) } satisfies HelperAsk).catch(() => child.abandon())
+      this.#watch(child, "that it stopped", CLOSE_WATCH_MS)
+    } else child.abandon()
     return stopped
   }
 
@@ -200,6 +243,10 @@ export class GitHelper {
       if (!said.success) return
       const running = this.#running.get(said.data.id)
       if (!running) return
+      if (said.data.t === "spawned" || said.data.t === "close" || said.data.t === "closed") {
+        clearTimeout(running.watch)
+        running.watch = undefined
+      }
       running.hear(said.data)
       if (said.data.t === "close") {
         this.#running.delete(said.data.id)
@@ -208,16 +255,23 @@ export class GitHelper {
         if (!this.#running.size) child.channel?.unref()
       }
     })
-    child.once("exit", (code, signal) => {
-      if (this.#child !== child) return
-      this.#child = undefined
-      this.#down(`it ended (${signal ?? `code ${code}`})`)
+    // What it ran is settled once it's closed: after its exit, what it had said before it went has all been read, so
+    // a `git` it started and said so of is followed, never taken for one that didn't start.
+    child.once("close", (code, signal) => {
+      const why = this.#lostWhy.get(child) ?? `it ended (${signal ?? `code ${code}`})`
+      this.#lostWhy.delete(child)
+      if (this.#child === child) {
+        this.#child = undefined
+        this.#down(why)
+      }
+      this.#lost(child, why)
     })
     child.once("error", (error) => {
       if (this.#child !== child) return
       this.#child = undefined
-      void this.#direct.close(child).catch(() => {})
+      this.#lostWhy.set(child, `it failed: ${error.message}`)
       this.#down(`it failed: ${error.message}`)
+      void this.#direct.close(child).catch(() => {})
     })
     hostLog("git", "helper started", { pid: child.pid ?? 0 })
     return child
@@ -227,28 +281,106 @@ export class GitHelper {
     helper.channel?.ref()
   }
 
-  /** The helper is gone: what it ran ends as killed, and Git spawns directly until it's tried again. */
-  #down(why: string): void {
-    if (!this.#stopped) {
-      this.#retryAt = Date.now() + this.#retryMs
-      hostWarn("git", "helper down; Git spawns directly for now", { why, retryInMs: this.#retryMs, running: this.#running.size })
-      this.#retryMs = Math.min(this.#retryMs * 2, RETRY_MAX_MS)
-    }
-    this.#lost(why)
+  /** Waits `ms` for the helper to say `what` of `child`; a helper that doesn't is wedged. */
+  #watch(child: HelperChild, what: string, ms: number): void {
+    clearTimeout(child.watch)
+    child.watch = setTimeout(() => this.#wedged(`it didn't say ${what} of git ${child.command} within ${ms} ms`), ms)
+    child.watch.unref?.()
   }
 
-  /** Every `git` the helper ran ends as one killed: its group, which the helper made, is killed from here too. */
-  #lost(why: string): void {
+  /**
+   * The helper is alive and says nothing (stopped, blocked, its IPC jammed): every `git` sent to it would wait for
+   * good, and the read slots with them. It's killed, its own group only (each `git` it started has one of its own and
+   * is followed as one lost with it), and Git spawns directly.
+   */
+  #wedged(why: string): void {
+    const helper = this.#child
+    if (!helper) return
+    this.#child = undefined
+    this.#lostWhy.set(helper, `it stopped answering: ${why}`)
+    this.#down(`it stopped answering: ${why}`)
+    // What it ran is settled when it has closed (its `close` above), once what it had said before is read.
+    if (helper.pid) {
+      try { process.kill(-helper.pid, "SIGKILL") } catch { /* gone already */ }
+    }
+    void this.#direct.close(helper, "SIGKILL").catch(() => {})
+  }
+
+  /** The helper is gone: Git spawns directly until it's tried again. What it ran is settled as it closes (`#lost`). */
+  #down(why: string): void {
+    if (this.#stopped) return
+    this.#retryAt = Date.now() + this.#retryMs
+    hostWarn("git", "helper down; Git spawns directly for now", { why, retryInMs: this.#retryMs, running: this.#running.size })
+    this.#retryMs = Math.min(this.#retryMs * 2, RETRY_MAX_MS)
+  }
+
+  /**
+   * What the helper ran when it was lost. A `git` it never started fails, nothing having run, and may be tried again.
+   * One it started is never killed for it, since a write cut short leaves its work half done (and `index.lock`
+   * behind): it's waited for, its group followed by its pid, and its result said unknown once that's gone or after
+   * `ORPHAN_WAIT_MS`, so nobody takes a write that landed for one that failed. A stop `Git.run` asks of it, then or
+   * later, stops it from here, as the host's runner stops a child of its own.
+   */
+  #lost(helper: ChildProcess, why: string): void {
     for (const [id, child] of this.#running) {
+      if (child.owner !== helper) continue
       this.#running.delete(id)
-      if (child.pid) {
-        try { process.kill(-child.pid, "SIGKILL") } catch { /* gone already */ }
-      }
-      hostLog("git", "a git the helper ran ended with it", { id, pid: child.pid ?? 0, why })
-      child.finish(null, "SIGKILL")
+      clearTimeout(child.watch)
+      child.watch = undefined
       child.abandon()
+      if (!child.pid) {
+        hostLog("git", "a git the helper was lost before starting failed", { id, command: child.command, why })
+        child.fail(new GitError({ kind: "failed", command: child.command, message: `git ${child.command} didn't start: Mako's Git helper was lost first (${why}). Nothing ran.` }))
+        continue
+      }
+      child.orphan = true
+      hostLog("git", "a git the helper started is followed without it", { id, command: child.command, pid: child.pid, why })
+      void (child.stopAsked ? this.#stopOrphan(child) : this.#awaitOrphan(child, why))
     }
   }
+
+  /** A `git` lost with its helper, left to end on its own: its result is said unknown once it's gone, or after the wait. */
+  async #awaitOrphan(child: HelperChild, why: string): Promise<void> {
+    const pid = child.pid!
+    const deadline = Date.now() + ORPHAN_WAIT_MS
+    while (groupAlive(pid) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      if (child.stopAsked || child.closed) return
+    }
+    const ended = !groupAlive(pid)
+    hostLog("git", "a git the helper started ended without it; its result isn't known", { command: child.command, pid, ended, why })
+    child.fail(new GitError({
+      kind: "unknown",
+      command: child.command,
+      message: `Mako's Git helper was lost while git ${child.command} ran (${why}). It ${ended ? "ended on its own" : `was still running after ${ORPHAN_WAIT_MS / 1000} s`}, and whether it did what it was asked isn't known: read the repository before trying it again.`,
+    }))
+  }
+
+  /** Stops a `git` lost with its helper as the host's runner stops its own: its group signalled, then killed, then gone. */
+  async #stopOrphan(child: HelperChild): Promise<void> {
+    const pid = child.pid!
+    signalGroup(pid, "SIGTERM")
+    const began = Date.now()
+    while (groupAlive(pid) && Date.now() - began < 5_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      if (Date.now() - began >= 100) signalGroup(pid, "SIGKILL")
+    }
+    child.finish(null, "SIGTERM")
+  }
+}
+
+/** Whether any process of group `pid` is left. */
+function groupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM"
+  }
+}
+
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+  try { process.kill(-pid, signal) } catch { /* gone already */ }
 }
 
 function defaultEntry(): string {
