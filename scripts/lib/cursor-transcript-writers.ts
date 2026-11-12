@@ -14,8 +14,8 @@ export const BUILDS: readonly Build[] = ["esm", "cjs"]
 
 /** The bundle's own names for what the streamed writer calls, which differ between the two builds. */
 const HELPERS = {
-  esm: { ctx: "i", archive: "S$", visit: "C$", line: "O$", merge: "b$", keep: "v$" },
-  cjs: { ctx: "c", archive: "C$", visit: "P$", line: "j$", merge: "_$", keep: "k$" },
+  esm: { ctx: "i", archive: "nM", visit: "iM", line: "wM", merge: "rM", keep: "tM" },
+  cjs: { ctx: "c", archive: "iM", visit: "lM", line: "bM", merge: "sM", keep: "oM" },
 } as const
 
 export interface Row { role: string; id: string; text: string }
@@ -64,7 +64,7 @@ function extract(bundle: string, head: string): string {
 /** `platform` stands in for `process.platform`, which the folder sync reads. */
 export function loadWriters(build: Build, fs: BundleFs, platform: NodeJS.Platform = process.platform): Writers {
   const names = TRANSCRIPT_BUILDS[build]
-  const bundle = readFileSync(path.join(sdk, build, "336.js"), "utf8")
+  const bundle = readFileSync(path.join(sdk, "..", names.target), "utf8")
   const write = extract(bundle, `async function ${names.write}(e,t){`)
   const lock = extract(bundle, "function makoLock(p,w){")
   const syncDir = extract(bundle, "async function makoSyncDir(p){")
