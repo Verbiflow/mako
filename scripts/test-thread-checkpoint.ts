@@ -69,7 +69,7 @@ async function fixture(name: string) {
     settled: () => tracker.settled(),
     track: async () => {},
     head: (repository) => [...tracker.rootStates().values()].find((state) => state.root.path === repository)?.root.head,
-    partition: (checkout, thread, options) => partition(view, checkout, thread, options),
+    partition: (checkout, thread) => partition(view, checkout, thread),
   }
   const abs = (path: string) => join(repo, path)
   const write = (path: string, content: string | Buffer) => {
@@ -249,7 +249,7 @@ test("read on the journal's worker, the partition and the checkpoint are the sam
   await edits(f)
   const reader = new JournalReader(f.tracker.store.path)
   try {
-    const onThread = f.ledger.partition(f.repo, "T1")
+    const onThread = await f.ledger.partition(f.repo, "T1")
     const onWorker = await reader.partition(f.repo, "T1")
     assert.deepEqual(onWorker.files, onThread.files, "what the journal committed, divided the same")
     const here = await f.capture()
