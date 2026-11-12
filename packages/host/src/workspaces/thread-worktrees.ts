@@ -289,6 +289,17 @@ export interface CheckoutConversations {
   leave(from: string, to: string): Promise<string[]>
 }
 
+/** The worktree a move onto the Thread's own branch would make now, with nothing made: its first repository's folder. */
+export interface PlannedCheckout {
+  folder: string
+  /** The main checkout's repository that folder is made from. */
+  repository: string
+  /** The branch the worktree would be on, in every repository. */
+  branch: string
+  /** Every repository of the main checkout the Thread works in: one, or a project folder's. */
+  repositories: string[]
+}
+
 export class ThreadWorktreeService {
   readonly root: string
   private readonly git: Git
@@ -419,7 +430,7 @@ export class ThreadWorktreeService {
    * (`reserveSlug`) with no branch of its name and no folder. Undefined when the Thread has its worktree already, the
    * folder holds no repository or one alone inside it, or every name is taken.
    */
-  async plannedCheckout(conversationId: string, cwd: string, name: string | undefined): Promise<{ folder: string; repository: string } | undefined> {
+  async plannedCheckout(conversationId: string, cwd: string, name: string | undefined): Promise<PlannedCheckout | undefined> {
     if (this.ofConversation(conversationId)) return undefined
     const source = await realpath(cwd).catch(() => undefined)
     if (!source) return undefined
@@ -434,8 +445,9 @@ export class ThreadWorktreeService {
     const slug = slugCandidates(worktreeSlug(name)).slice(0, -1).find((candidate) => !taken.has(`${BRANCH_PREFIX}${candidate}`) && !existsSync(join(parent, candidate)))
     if (!slug) return undefined
     const path = join(parent, slug)
-    const [first] = found.roots.map((root) => ({ root, folder: repoRoot ? path : join(path, relative(source, root)) })).sort((left, right) => left.folder.localeCompare(right.folder))
-    return first && { folder: first.folder, repository: first.root }
+    const roots = found.roots.map((root) => ({ root, folder: repoRoot ? path : join(path, relative(source, root)) })).sort((left, right) => left.folder.localeCompare(right.folder))
+    const [first] = roots
+    return first && { folder: first.folder, repository: first.root, branch: `${BRANCH_PREFIX}${slug}`, repositories: roots.map((each) => each.root) }
   }
 
   /**

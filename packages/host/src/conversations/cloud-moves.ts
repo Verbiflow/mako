@@ -18,7 +18,7 @@ import type { PromptAttachment } from "../contracts/providers-acp.js"
 import { executionRefusal, HandoffSchema, MoveIdSchema, RuntimeIdSchema, type ClaimReceipt, type ExecutionOwner, type Handoff, type MoveId, type Refusal, type RuntimeId, type SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type ThreadId } from "../contracts/thread-identity.js"
 import type { CloudAccount } from "../usage/index.js"
-import { captureCarry, captureMoveCheckpoint, readOutside, type OutsideCandidate } from "../workspaces/index.js"
+import { captureCarry, captureMoveCheckpoint, readOutside, type OutsideCandidate, type PlannedCheckout } from "../workspaces/index.js"
 import type { ReadyPlan, TakenReady } from "./cloud-readiness.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 import type { CheckedSession } from "./harness-check.js"
@@ -256,7 +256,7 @@ export type CloudMovesOptions = {
    * The worktree `ownBranch` would put the Thread of a conversation in the main checkout in now, with nothing made
    * (`ThreadWorktreeMoves.planned`): its folder, and the repository there it's a worktree of.
    */
-  planned?(conversationId: string): Promise<{ folder: string; repository: string } | undefined>
+  planned?(conversationId: string): Promise<PlannedCheckout | undefined>
   /** The Thread's paths outside its folder that its journal ties to it (`Attribution.changes`' footprint, with evidence). */
   outside?(thread: ThreadId): OutsideCandidate[]
   /** The Thread's file history (`Attribution.threadHistory`), carried so the side it lands on resolves its files alike. */
@@ -470,7 +470,8 @@ export class CloudMoves {
       const planned = await this.#options.planned(conversationId)
       if (!planned) throw new Error("The worktree its own branch would have can't be named now, so it isn't kept ready.")
       const { url } = await this.#options.repositoryOf(planned.repository)
-      return { thread: weighed.thread, folder: planned.folder, repository: { url }, paths: weighed.sessions.map((session) => session.path), harness: weighed.sessions[0]?.harness ?? "", planned: true }
+      const repositories = planned.repositories.map((root) => ({ root, branch: planned.branch }))
+      return { thread: weighed.thread, folder: planned.folder, repository: { url }, paths: weighed.sessions.map((session) => session.path), harness: weighed.sessions[0]?.harness ?? "", planned: true, repositories }
     }
     const plan = await this.#plan(conversationId, MoveIdSchema.parse(randomUUID()), { why: "asked" })
     return { thread: plan.thread, folder: plan.folder, repository: plan.repository, paths: plan.sessions.map((session) => session.path), harness: plan.sessions[0]?.harness ?? "" }

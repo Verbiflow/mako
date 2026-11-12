@@ -2,12 +2,13 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { dirname, join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
+import { MoveCheckpointSchema } from "@mako/protocol/moves"
 import { withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { CloudRepositorySchema, type CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudAccount } from "../usage/index.js"
-import { captureMoveCheckpoint } from "../workspaces/index.js"
+import { captureMoveCheckpoint, captureThreadCheckpoint, threadFingerprint, type ThreadCheckpointInput } from "../workspaces/index.js"
 import type { WorkingThread } from "./cloud-handoffs.js"
 
 /** How often a Thread at work is brought up to date in its cloud Thread standing by. */
@@ -31,6 +32,24 @@ const READY_FRESH_MS = 20 * 60_000
  * from outside the conversation is sent within it. A move still sends its own last seconds.
  */
 const STILL_KEPT_MS = 5 * 60_000
+/** A Thread's checkpoint is taken this long after a tool call of its that wrote, so a burst of edits makes one. */
+export const CAPTURE_AFTER_WRITE_MS = 5_000
+/** While its turn runs, a Thread's checkpoint is taken at most this often; its turn's end takes one at once. */
+export const CAPTURE_EVERY_MS = 30_000
+
+/**
+ * A Thread's changes in one repository of the main checkout, as the cloud acknowledged them: the cloud keeps the
+ * bundle by its hash on the cloud Thread standing by, and this is what a going-away names for the cloud to continue
+ * from. `unpushed` commits ride in the bundle, and whatever shows it to the person says how many.
+ */
+const AcknowledgedSchema = z.object({
+  root: z.string(),
+  checkpoint: MoveCheckpointSchema,
+  unpushed: z.number().int().nonnegative(),
+  left: z.array(z.object({ path: z.string(), why: z.string() })),
+  at: z.number(),
+})
+export type Acknowledged = z.infer<typeof AcknowledgedSchema>
 
 const ReadyEntrySchema = z.object({
   cloudThread: z.string(),
@@ -38,6 +57,8 @@ const ReadyEntrySchema = z.object({
   repository: CloudRepositorySchema,
   /** The checkout as last sent, by its checkpoint's hash: sent again only when it changed. */
   checkpoint: z.string().optional(),
+  /** A Thread in the main checkout: its own changes, one per repository, as the cloud last acknowledged them. */
+  acknowledged: z.array(AcknowledgedSchema).optional(),
   at: z.number(),
 })
 type ReadyEntry = z.infer<typeof ReadyEntrySchema>
@@ -54,7 +75,11 @@ export type TakenReady = { cloudThread: string; checkpoint?: string }
 
 /** What a move of a Thread would carry, read as its plan reads it: refused when it couldn't move. */
 /** `planned`: a Thread in the main checkout, kept ready at the worktree its move would make, which isn't there yet. */
-export type ReadyPlan = { thread: string; folder: string; repository: CloudRepository; paths: string[]; harness: string; planned?: true }
+/** `repositories`: with `planned`, the main checkout's repositories it works in and the branch its move would make. */
+export type ReadyPlan = { thread: string; folder: string; repository: CloudRepository; paths: string[]; harness: string; planned?: true; repositories?: { root: string; branch: string }[] }
+
+/** What started a round: a write (or the next one due), its turn's end, or the job that keeps the cloud Thread fresh. */
+type RoundCause = "write" | "end" | "refresh"
 
 export type CloudReadinessOptions = {
   /** Where each local Thread's cloud Thread standing by is remembered: `<data root>/cloud/ready.json`. */
@@ -75,6 +100,12 @@ export type CloudReadinessOptions = {
   plan(conversationId: string): Promise<ReadyPlan>
   sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
   newCloudThread(): string
+  /** The record of changes, which a Thread in the main checkout's checkpoint is divided by; undefined until it opens. */
+  ledger?(): ThreadCheckpointInput["ledger"] | undefined
+  /** A Thread's checkpoint in one repository: `captureThreadCheckpoint`, which a test replaces. */
+  capture?(input: ThreadCheckpointInput): ReturnType<typeof captureThreadCheckpoint>
+  /** `CAPTURE_AFTER_WRITE_MS` and `CAPTURE_EVERY_MS`, shorter in a test. */
+  timing?: { afterWriteMs: number; everyMs: number }
 }
 
 /**
@@ -86,12 +117,19 @@ export type CloudReadinessOptions = {
  * Thread in the main checkout stands by at the worktree its move would make (`ReadyPlan.planned`), its checkout sent by
  * the move once that's there.
  * Only while the person lets agents be handed off as this Mac sleeps: nothing of a Thread goes to the cloud otherwise.
+ *
+ * A Thread in the main checkout also sends its own changes as they're made (`captureThreadCheckpoint`, one per
+ * repository): `CAPTURE_AFTER_WRITE_MS` after a tool call of its that wrote (`wrote`), at most every
+ * `CAPTURE_EVERY_MS` while its turn runs, and at once at its turn's end (`settled`). One round runs at a time per
+ * Thread, and a change while it runs makes one more after it. A capture whose `threadFingerprint` matches the last is
+ * skipped, and one whose checkpoint the cloud acknowledged already isn't sent again. What the cloud acknowledged is kept
+ * (`acknowledged`); a failed send leaves the last acknowledged one, and the next write or end tries again.
  */
 export class CloudReadiness {
   readonly #options: CloudReadinessOptions
   #entries: Record<string, ReadyEntry> | undefined
   /** Writes, one at a time: rounds for several Threads save as they finish. */
-  #writing: Promise<void> = Promise.resolve()
+  #saving: Promise<void> = Promise.resolve()
   /** By local Thread: a round bringing it up to date, which `take` waits for. */
   readonly #rounds = new Map<string, Promise<void>>()
   /** By local Thread: why it couldn't be kept ready, said once until it changes. */
@@ -100,6 +138,14 @@ export class CloudReadiness {
   readonly #taken = new Map<string, number>()
   /** By local Thread: the conversation and its revision its last round brought up, and when. */
   readonly #broughtUp = new Map<string, { conversationId: string; revision: number; at: number }>()
+  /** By local Thread: a round asked for while one ran, run once it ends (the strongest cause asked). */
+  readonly #again = new Map<string, { working: WorkingThread; cause: RoundCause }>()
+  /** By conversation: a Thread whose turn wrote, until its turn's end takes its last checkpoint. */
+  readonly #writing = new Map<string, WorkingThread>()
+  /** By local Thread: the capture due after a write. */
+  readonly #due = new Map<string, ReturnType<typeof setTimeout>>()
+  /** By local Thread: when its checkpoint was last captured, and what the journal read then (`threadFingerprint`). */
+  readonly #captured = new Map<string, { at: number; fingerprints: Map<string, string> }>()
 
   constructor(options: CloudReadinessOptions) {
     this.#options = options
@@ -113,7 +159,7 @@ export class CloudReadiness {
     // through the sync daemon: with every Thread at work at once, a Mac of many Fins ran hundreds of them together.
     const due = this.#options.working().filter((working) => !resting(working.thread) && this.#moved(working)).values()
     await Promise.all(Array.from({ length: ROUNDS_AT_ONCE }, async () => {
-      for (const working of due) await this.#round(working)
+      for (const working of due) await this.#round(working, "refresh")
     }))
     await this.#prune()
   }
@@ -141,10 +187,65 @@ export class CloudReadiness {
     }
     this.#taken.set(thread, Date.now())
     this.#broughtUp.delete(thread)
+    this.#forget(thread)
     delete entries[thread]
     await this.#save()
     hostLog("readiness", "a move takes the cloud Thread kept ready for it", { thread, cloudThread: entry.cloudThread, readyForMs: Date.now() - entry.at })
     return { cloudThread: entry.cloudThread, ...entry.checkpoint && { checkpoint: entry.checkpoint } }
+  }
+
+  /**
+   * A tool call of `conversationId`'s that may have written finished: its Thread's checkpoint is taken
+   * `CAPTURE_AFTER_WRITE_MS` from now, or `CAPTURE_EVERY_MS` after its last, whichever is later. One already due stays.
+   */
+  wrote(conversationId: string): void {
+    const working = this.#options.working().find((each) => each.conversationId === conversationId)
+    if (!working || this.#options.leaving(working.thread)) return
+    this.#writing.set(conversationId, working)
+    if (this.#due.has(working.thread)) return
+    const { afterWriteMs, everyMs } = this.#options.timing ?? { afterWriteMs: CAPTURE_AFTER_WRITE_MS, everyMs: CAPTURE_EVERY_MS }
+    const last = this.#captured.get(working.thread)?.at ?? Number.NEGATIVE_INFINITY
+    const wait = Math.max(afterWriteMs, last + everyMs - Date.now())
+    const timer = setTimeout(() => {
+      this.#due.delete(working.thread)
+      void this.#whenEnabled(working, "write")
+    }, wait)
+    timer.unref?.()
+    this.#due.set(working.thread, timer)
+  }
+
+  /** A conversation changed (its turn may have ended): a Thread whose turn wrote and no longer works takes its checkpoint now. */
+  settled(conversationId: string): void {
+    const working = this.#writing.get(conversationId)
+    if (!working || this.#options.working().some((each) => each.conversationId === conversationId)) return
+    this.#writing.delete(conversationId)
+    clearTimeout(this.#due.get(working.thread))
+    this.#due.delete(working.thread)
+    void this.#whenEnabled(working, "end")
+  }
+
+  /** What the cloud acknowledged of a Thread in the main checkout, by repository, for its going-away to name. */
+  async acknowledged(thread: string): Promise<{ cloudThread: string; acknowledged: Acknowledged[] } | undefined> {
+    await this.#rounds.get(thread)?.catch(() => undefined)
+    const entry = (await this.#load())[thread]
+    return entry?.acknowledged?.length ? { cloudThread: entry.cloudThread, acknowledged: entry.acknowledged } : undefined
+  }
+
+  /** Lets go of a Thread's triggers: a move took it. */
+  #forget(thread: string): void {
+    clearTimeout(this.#due.get(thread))
+    this.#due.delete(thread)
+    this.#again.delete(thread)
+    this.#captured.delete(thread)
+    for (const [conversationId, working] of this.#writing) if (working.thread === thread) this.#writing.delete(conversationId)
+  }
+
+  async #whenEnabled(working: WorkingThread, cause: RoundCause): Promise<void> {
+    try {
+      if (await this.#options.enabled()) await this.#round(working, cause)
+    } catch (error) {
+      this.#sayOnce(working.thread, "a Thread at work couldn't be brought up to date in the cloud", errorMessage({ error }))
+    }
   }
 
   /** Whether a Thread's conversation moved since its last round, or that round is `STILL_KEPT_MS` old. */
@@ -155,15 +256,27 @@ export class CloudReadiness {
       Date.now() - last.at >= STILL_KEPT_MS
   }
 
-  #round(working: WorkingThread): Promise<void> {
+  #round(working: WorkingThread, cause: RoundCause): Promise<void> {
     const running = this.#rounds.get(working.thread)
-    if (running) return running
-    const round = this.#bringUp(working).finally(() => this.#rounds.delete(working.thread))
+    if (running) {
+      // Superseded: what changed while this round ran goes in one round after it.
+      if (cause !== "refresh") {
+        const asked = this.#again.get(working.thread)
+        this.#again.set(working.thread, { working, cause: asked?.cause === "end" ? "end" : cause })
+      }
+      return running
+    }
+    const round = this.#bringUp(working, cause).finally(() => {
+      this.#rounds.delete(working.thread)
+      const again = this.#again.get(working.thread)
+      this.#again.delete(working.thread)
+      if (again) void this.#round(again.working, again.cause)
+    })
     this.#rounds.set(working.thread, round)
     return round
   }
 
-  async #bringUp(working: WorkingThread): Promise<void> {
+  async #bringUp(working: WorkingThread, cause: RoundCause): Promise<void> {
     const account = this.#options.account()
     if (!account) return
     // Read before the round, so a change while it runs is a move the next refresh brings up.
@@ -196,8 +309,8 @@ export class CloudReadiness {
         await account.createThread(ready.cloudThread, ready.repository, { folder: ready.folder, harness: plan.harness, standby: true })
       }
       const [checkpoint, sent] = await Promise.all([
-        // A worktree not made yet has no checkout to send; the move sends its own once it's there.
-        plan.planned ? Promise.resolve(undefined) : this.#sendCheckpoint(account, ready),
+        // A Thread in the main checkout sends its own changes, when a write or its turn's end asks; a worktree Thread its checkout.
+        plan.planned ? this.#sendThreadCheckpoints(account, ready, plan, working.thread, cause) : this.#sendCheckpoint(account, ready),
         withFreshLink(() => account.threadRecords(ready.cloudThread), (link) => this.#options.sendRecords(link, plan.paths)),
       ])
       ready.at = Date.now()
@@ -211,6 +324,54 @@ export class CloudReadiness {
     } catch (error) {
       this.#sayOnce(plan.thread, "a Thread at work couldn't be brought up to date in the cloud", errorMessage({ error }))
     }
+  }
+
+  /**
+   * A Thread in the main checkout's own changes, one checkpoint per repository, each sent when it changed since the
+   * last the cloud acknowledged; the acknowledged ones are kept on `entry`. A refresh takes them only once nothing has
+   * for `STILL_KEPT_MS`, for changes made outside a turn. Answers the first repository's hash when anything went.
+   */
+  async #sendThreadCheckpoints(account: ReadinessAccount, entry: ReadyEntry, plan: ReadyPlan, thread: string, cause: RoundCause): Promise<string | undefined> {
+    const ledger = this.#options.ledger?.()
+    if (!ledger || !plan.repositories?.length) return undefined
+    const last = this.#captured.get(thread)
+    if (cause === "refresh" && last && Date.now() - last.at < STILL_KEPT_MS) return undefined
+    const fingerprints = new Map<string, string>()
+    let sent: string | undefined
+    const acknowledged = [...entry.acknowledged ?? []]
+    for (const { root, branch } of plan.repositories) {
+      const fingerprint = `${branch}\n${threadFingerprint(ledger, thread, root)}`
+      fingerprints.set(root, fingerprint)
+      const kept = acknowledged.findIndex((each) => each.root === root)
+      if (kept >= 0 && last?.fingerprints.get(root) === fingerprint) continue
+      await mkdir(this.#options.scratch, { recursive: true })
+      const scratch = await mkdtemp(join(this.#options.scratch, "thread-"))
+      try {
+        const capture = this.#options.capture ?? captureThreadCheckpoint
+        const taken = await capture({ git: this.#options.git, ledger, thread, repoRoot: root, branch, folder: scratch })
+        if (kept >= 0 && acknowledged[kept]!.checkpoint.sha256 === taken.checkpoint.sha256) continue
+        await account.sendCheckpoint(entry.cloudThread, taken.checkpoint, taken.file)
+        const now: Acknowledged = { root, checkpoint: taken.checkpoint, unpushed: taken.unpushed, left: taken.left, at: Date.now() }
+        if (kept >= 0) acknowledged[kept] = now
+        else acknowledged.push(now)
+        entry.acknowledged = acknowledged
+        sent ??= taken.checkpoint.sha256
+        hostLog("readiness", "a Thread's own changes went to the cloud", {
+          thread,
+          cloudThread: entry.cloudThread,
+          cause,
+          files: taken.took.length,
+          left: taken.left.length,
+          bytes: taken.checkpoint.bytes,
+          ms: Math.round(taken.ms),
+          ...taken.unpushed && { unpushed: `includes ${taken.unpushed} unpushed commit${taken.unpushed === 1 ? "" : "s"}` },
+        })
+      } finally {
+        await rm(scratch, { recursive: true, force: true })
+      }
+    }
+    this.#captured.set(thread, { at: Date.now(), fingerprints })
+    return sent
   }
 
   /** The checkout's checkpoint, sent when it changed since the last; answers its hash when it went. */
@@ -249,13 +410,13 @@ export class CloudReadiness {
   }
 
   #save(): Promise<void> {
-    const write = this.#writing.then(async () => {
+    const write = this.#saving.then(async () => {
       const threads = await this.#load()
       await mkdir(dirname(this.#options.file), { recursive: true })
       await writeFile(`${this.#options.file}.tmp`, JSON.stringify(ReadyFileSchema.parse({ version: 1, threads })), { mode: 0o600 })
       await rename(`${this.#options.file}.tmp`, this.#options.file)
     })
-    this.#writing = write.catch(() => {})
+    this.#saving = write.catch(() => {})
     return write
   }
 }

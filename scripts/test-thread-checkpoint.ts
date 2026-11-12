@@ -168,8 +168,16 @@ test("only the Thread's lines and files are in its checkpoint, over HEAD, and th
   const status = f.git("status", "--porcelain=v1", "--untracked-files=all")
   const index = readFileSync(join(f.repo, ".git", "index"))
   const before = files(f.repo)
+  // The person's repository splits its index: a scratch index must still write no shared index into their `.git`.
+  f.git("config", "core.splitIndex", "true")
+  f.git("update-index", "--split-index")
+  const shared = () => readdirSync(join(f.repo, ".git")).filter((name) => name.startsWith("sharedindex.")).sort()
+  const sharedBefore = shared()
+  const indexSplit = readFileSync(join(f.repo, ".git", "index"))
 
   const taken = await f.capture()
+  assert.deepEqual(shared(), sharedBefore, "no sharedindex.* written into the person's .git")
+  assert.equal(taken.unpushed, 1, "the commit the remote lacks is counted, to be named")
   const { checkpoint } = taken
   assert.equal(checkpoint.head, f.git("rev-parse", "HEAD"))
   assert.equal(checkpoint.branch, "mako/t1")
@@ -180,7 +188,8 @@ test("only the Thread's lines and files are in its checkpoint, over HEAD, and th
   // Capture wrote nothing into the checkout.
   assert.equal(f.git("count-objects", "-v"), objects, "no objects")
   assert.equal(f.git("for-each-ref"), refs, "no refs")
-  assert.deepEqual(readFileSync(join(f.repo, ".git", "index")), index, "the index as it was")
+  assert.deepEqual(readFileSync(join(f.repo, ".git", "index")), indexSplit, "the index as it was")
+  assert.ok(index.length > 0)
   assert.equal(f.git("status", "--porcelain=v1", "--untracked-files=all"), status)
   assert.deepEqual(files(f.repo), before, "the files as they were")
 
