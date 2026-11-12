@@ -11,6 +11,7 @@ import { heldBy, slices } from "./lib/cpu-slices.ts"
 import { readResident, unmeasured, type ResidentMemory } from "./lib/host-load-memory.ts"
 import { claudeSessionPath, makeWorld, TODAY, type WorldScale } from "./lib/host-load-world.ts"
 import { removeScratch } from "./lib/scratch-processes.mjs"
+import { scriptedModel } from "./scripted-model.ts"
 
 /**
  * Whether the host keeps answering while many Fins work: `npm run bench:host-load`.
@@ -56,6 +57,8 @@ const { values } = parseArgs({
     root: { type: "string" },
     out: { type: "string" },
     keep: { type: "boolean", default: false },
+    send: { type: "boolean", default: false },
+    fins: { type: "string", default: "0" },
   },
 })
 const say = (line: string) => process.stderr.write(`${line}\n`)
@@ -103,8 +106,26 @@ let host: ChildProcess | undefined
 const finish = async (code: number) => {
   for (const child of children) child.kill("SIGKILL")
   world.release()
+  await model?.close()
   if (!values.keep) await removeScratch(root).catch((error: Error) => say(`scratch left: ${error.message}`))
   process.exit(code)
+}
+
+/** With `--send`: when the stand-in model first heard each `BENCH-S<n>` message, by its tag. */
+const heardAt = new Map<string, number>()
+/** With `--fins <n>` (and `--send`): the Apex the sends go to starts this many Fins, each a Codex turn, before the probe. */
+const finCount = Number(values.fins)
+const model = values.send || finCount > 0 ? await scriptedModel({
+  reply: (heard) => {
+    for (const match of heard.matchAll(/BENCH-([SF]\d+)/g)) if (!heardAt.has(match[1]!)) heardAt.set(match[1]!, performance.now())
+    return { text: "Done." }
+  },
+}) : undefined
+if (model) {
+  // A sealed Codex in the scratch home, answered by the stand-in: a real send's way through the host, no account.
+  mkdirSync(join(world.home, ".codex"), { recursive: true })
+  writeFileSync(join(world.home, ".codex", "config.toml"), `openai_base_url = "${model.url}/v1"\nchatgpt_base_url = "${model.url}/backend-api"\n\n[features]\nplugins = false\n`)
+  writeFileSync(join(world.home, ".codex", "auth.json"), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "mako-host-load" }), { mode: 0o600 })
 }
 
 try {
@@ -114,7 +135,7 @@ try {
   const profileDir = values["cpu-prof"] && resolve(values["cpu-prof"])
   if (profileDir) mkdirSync(profileDir, { recursive: true })
   host = spawn("nice", ["-n", "5", process.execPath, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
-    env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off" },
+    env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" } },
     stdio: ["ignore", "ignore", "inherit"],
   })
   const exited = new Promise<number | null>((done) => host!.once("exit", (code) => done(code)))
@@ -167,6 +188,32 @@ try {
   // Focus moving between windows: each focus refreshes that window's summaries.
   timers.push(setInterval(() => ask("mako:worktree-summaries"), 10_000))
 
+  // A message the person sends, timed from the call until its harness asks the model: what waits behind the load
+  // (its checkpoint's Git reads, the loop) is in it, the harness's own start isn't (it's running already).
+  const sends: [number, number | null][] = []
+  let conversation: string | undefined
+  if (values.send || finCount > 0) {
+    conversation = randomUUID()
+    const cwd = world.checkouts[0]!.path
+    await call("mako:live-start", "codex", cwd, { conversationId: conversation, modeId: "access:ask", title: "Host load send", initialRequest: { id: randomUUID(), text: "BENCH-S0 start", attachments: [] } })
+    for (const deadline = Date.now() + 180_000; !heardAt.has("S0"); await delay(100))
+      if (Date.now() > deadline) throw new Error("the bench's Codex never asked the stand-in model")
+    if (finCount > 0) {
+      // The person's tree of 2026-11-12: an Apex of many Fins, each of which every batch of the Apex's row reads.
+      const session = z.object({ sessionId: z.string() }).loose().parse(await call("mako:live-snapshot", conversation)).sessionId
+      const caller = { kind: "agent", session }
+      for (let i = 0; i < finCount; i += 1) {
+        const started = z.object({ refused: z.string().optional() }).loose().parse(await call("mako:agents-start", caller, {
+          brief: { objective: `BENCH-F${i} review part ${i}.` }, harness: "codex", name: `part-${i}`, clientKey: `part-${i}`, cwd, mode: "background", wake: "never", queue: true,
+        }))
+        if (started.refused) throw new Error(`Fin ${i} was refused: ${JSON.stringify(started)}`)
+      }
+      say(`${finCount} Fins started; waiting for each to ask the model`)
+      for (const deadline = Date.now() + 15 * 60_000; [...heardAt.keys()].filter((tag) => tag.startsWith("F")).length < finCount; await delay(500))
+        if (Date.now() > deadline) throw new Error(`only ${[...heardAt.keys()].filter((tag) => tag.startsWith("F")).length} of ${finCount} Fins asked the model in 15 minutes`)
+      await delay(5_000)
+    }
+  }
   say(`warming up for ${values.warmup} s with ${fins.length} Fins at work`)
   await delay(Number(values.warmup) * 1000)
   const yardstickOut = join(root, "yardstick.json")
@@ -177,8 +224,35 @@ try {
     stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, TSX_TSCONFIG_PATH: join(import.meta.dirname, "../tsconfig.scripts.json") },
   })
   children.push(prober)
+  // A read someone waits on, as a window's Changes panel or a send's checkpoint asks, one at a time while the windows'
+  // summaries passes run: it must never queue behind a pass of every worktree.
+  const reviewed = z.object({ worktrees: z.array(z.object({ path: z.string() }).loose()) }).loose().parse(await call("mako:worktrees")).worktrees.map((worktree) => worktree.path)
+  const checkoutReads: [number, number | null][] = []
+  let probing = true
+  const reading = (async () => {
+    for (let at = 0; probing && reviewed.length; at += 1) {
+      const began = performance.now()
+      const ms = await call("mako:worktree-review", reviewed[at % reviewed.length]).then(() => performance.now() - began, () => null)
+      checkoutReads.push([Date.now(), ms === null ? null : Math.round(ms * 10) / 10])
+      await delay(500)
+    }
+  })()
+  const sending = (async () => {
+    for (let n = 1; probing && conversation; n += 1) {
+      await delay(3_000)
+      const tag = `S${n}`
+      const began = performance.now()
+      await call("mako:live-prompt", conversation, randomUUID(), `BENCH-${tag} next`, []).catch(() => undefined)
+      for (const deadline = Date.now() + 60_000; !heardAt.has(tag) && Date.now() < deadline; ) await delay(10)
+      const heard = heardAt.get(tag)
+      sends.push([Date.now(), heard === undefined ? null : Math.round((heard - began) * 10) / 10])
+    }
+  })()
   say(`probing for ${values.seconds} s`)
   await delay(Number(values.seconds) * 1000)
+  probing = false
+  await reading
+  await sending
   const proberDone = new Promise((done) => prober.once("exit", done))
   const yardstickDone = new Promise((done) => yardstick.once("exit", done))
   prober.kill("SIGTERM")
@@ -205,7 +279,7 @@ try {
   // One profile per thread: the main thread's is numbered 0 (`CPU.<date>.<time>.<pid>.0.<n>.cpuprofile`).
   const profile = profileDir && readdirSync(profileDir).filter((name) => /\.\d+\.0\.\d+\.cpuprofile$/.test(name)).map((name) => join(profileDir, name)).sort().at(-1)
   const found = profile ? slices(profile, 50) : []
-  const answers = { health: summary(probed.health), reads: summary(probed.reads) }
+  const answers = { health: summary(probed.health), reads: summary(probed.reads), checkoutReads: summary(checkoutReads), ...model && { sends: summary(sends) } }
   const peakMb = Math.round(memory.peakKb / 1024)
   const unread = unmeasured(memory, sampled)
   const report = {
@@ -243,6 +317,8 @@ try {
     "|---|---|---|---|---|",
     row("host health check", answers.health, `p99 > ${healthLimit}, max >= ${heldLimit}`),
     row("host read (`mako:worktrees`)", answers.reads, `p99 > ${readLimit}`),
+    row("a checkout's Git read (`mako:worktree-review`)", answers.checkoutReads, "-"),
+    ...answers.sends ? [row("a message sent, until its harness asks the model (`--send`)", answers.sends, "-")] : [],
     row("yardstick's own loop (calibration)", measured.late, "-"),
     row("yardstick's spawn of git", measured.spawn, "-"),
     row("yardstick's 2,000-row JSON round trip", measured.chunk, "-"),
