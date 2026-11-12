@@ -16,7 +16,7 @@ import { GitError, numstatEntries, PARALLEL_CHECKOUT, untrackedLines, type Git }
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, type AdjustHooks, type MoveLedger, type MovePlan } from "./worktree-move.js"
-import type { MoveOutcome, MoveShares } from "../contracts/workspace-moves.js"
+import type { MoveHaste, MoveOutcome, MoveShares } from "../contracts/workspace-moves.js"
 import { hostLog } from "../base/host-log.js"
 import { githubRepositoryUrl } from "../contracts/cloud-threads.js"
 import { ProjectMissingError, reattachWorktree, workingCheckout } from "./worktree-reattach.js"
@@ -1179,7 +1179,7 @@ export class ThreadWorktreeService {
    * (`worktree-move.ts`). The main checkout keeps everyone else's. A
    * repeated request answers the same.
    */
-  async moveChanges(conversationId: string, options: { thread?: string; bring?: boolean } = {}): Promise<MoveOutcome> {
+  async moveChanges(conversationId: string, options: { thread?: string; bring?: boolean; haste?: MoveHaste } = {}): Promise<MoveOutcome> {
     const receipt = await this.receipt(conversationId)
     if (receipt?.state !== "ready") throw new Error("This conversation has no worktree to move changes into.")
     if (receipt.moved) {
@@ -1211,6 +1211,7 @@ export class ThreadWorktreeService {
         project: receipt.repoRoot,
         members: membersOf(receipt),
         bring: options.bring ?? false,
+        ...options.haste && { by: options.haste.by },
         save: (plan) => (plan ? this.savePlan(plan) : this.dropPlan(id)),
         log: (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }),
         stepped: this.stepped,

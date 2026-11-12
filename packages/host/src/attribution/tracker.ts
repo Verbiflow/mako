@@ -31,6 +31,7 @@ import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
 import { attribute, authorOf, claim, Evidence, LEAD_MS, reaches as reachesChange, TRAIL_MS, type Interval, type ObservedChange, type Reach } from "./evidence.js"
 import { WorkingSets } from "./working-set.js"
+import { StatCache } from "./stat-cache.js"
 import { collectPlanOffThread, JournalReader } from "./journal-reader.js"
 import { JournalStore, wholeChange, type FileState, type Recency, type StatRow, type ActivityKey, type Collected, type Row, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
 import { diffLines, splitLines } from "./line-diff.js"
@@ -181,7 +182,7 @@ interface Flush {
 interface RootState {
   root: StoredRoot
   repo: TrackerRepository | null
-  stats: Map<string, StatRow>
+  stats: StatCache
   files: Map<string, FileState>
   /** Paths Git tracked when tracking began, the only ones kept in build folders. */
   tracked: Set<string>
@@ -438,7 +439,7 @@ export class LaptopTracker implements AttributionTracker {
     const mark = await this.ports.events.mark().catch(() => null)
     const head = repo ? await repo.head() : null
     const stored: StoredRoot = { ...root, repository: Boolean(repo), head, mark, seenAt: this.now(), trackedAt: this.now(), active: true }
-    const state = this.state(stored, repo, new Map(), new Map())
+    const state = this.state(stored, repo, new StatCache(), new Map())
     await this.listen(state)
     await this.queue(state, () => this.baseline(state))
   }
@@ -454,7 +455,7 @@ export class LaptopTracker implements AttributionTracker {
     this.store.forgetRoot(id)
   }
 
-  private state(root: StoredRoot, repo: TrackerRepository | null, stats: Map<string, StatRow>, files: Map<string, FileState>): RootState {
+  private state(root: StoredRoot, repo: TrackerRepository | null, stats: StatCache, files: Map<string, FileState>): RootState {
     const state: RootState = {
       root, repo, stats, files, tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false, recent: [], headSeq: this.seq,
       ignoreMoves: 0, rescanQueued: false, rescanning: false, rescanAgain: false, rescannedAt: -Infinity, rescanEvery: 0, losses: new HourCounts(),

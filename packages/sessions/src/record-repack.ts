@@ -111,7 +111,16 @@ export interface RepackOptions {
   sweep?: boolean
   /** How long a chunk a sweep found unnamed stays so before it's dropped (`GRACE_MS`). */
   graceMs?: number
+  /**
+   * Lay out and compact at most this often (`LAYOUT_EVERY_MS` for the backfill's pass), unless chunks were dropped since:
+   * each reads every version and every chunk of the store, which on a 31 GB store held a whole core 30 s every pass for
+   * a layout that barely moves. Every repack by default, as `records.ts repack` asks.
+   */
+  layoutEveryMs?: number
 }
+
+/** How often the backfill's pass lays the store out again and compacts its packs (`RepackOptions.layoutEveryMs`). */
+export const LAYOUT_EVERY_MS = 6 * 60 * 60_000
 
 /** What the drop found no version naming, and what it did with it. */
 export interface OrphanCounts {
@@ -168,7 +177,7 @@ export interface RepackReport {
   skipped: { group: boolean; compact: boolean }
 }
 
-const SettledSchema = z.object({ dropped: z.string(), units: z.string(), packs: z.string().nullable(), options: z.string(), quietAt: z.number().nullable() })
+const SettledSchema = z.object({ dropped: z.string(), units: z.string(), packs: z.string().nullable(), options: z.string(), quietAt: z.number().nullable(), laidOutAt: z.number().optional() })
 type Settled = z.infer<typeof SettledSchema>
 
 /** How a session's chunks lie: how many there are, and in how many contiguous runs a read in order takes them. */
@@ -251,11 +260,18 @@ class Repack {
     const last = this.settled()
     const now: Settled = { dropped: this.meta(DROPPED) ?? "0", units: this.units(), packs: null, options: `${this.options.quietMs ?? QUIET_MS}:${this.options.liveRatio ?? LIVE_RATIO}`, quietAt: null }
     const same = last?.dropped === now.dropped && last.options === now.options
-    const grouped = same && last.units === now.units && (last.quietAt === null || Date.now() < last.quietAt)
+    // Laid out lately and nothing dropped since: what was captured meanwhile waits for the next layout.
+    const every = this.options.layoutEveryMs ?? 0
+    const lately = same && last.laidOutAt !== undefined && Date.now() - last.laidOutAt < every
+    const grouped = lately || (same && last.units === now.units && (last.quietAt === null || Date.now() < last.quietAt))
     this.report.skipped.group = grouped
-    now.quietAt = grouped ? last.quietAt : await this.group()
+    now.quietAt = grouped ? last?.quietAt ?? null : await this.group()
     const packs = this.parts.packs.numbers().join(",")
-    this.report.skipped.compact = same && last.packs === packs && !this.report.copied
+    this.report.skipped.compact = lately || (same && last.packs === packs && !this.report.copied)
+    if (lately && last) {
+      now.units = last.units
+      now.laidOutAt = last.laidOutAt
+    } else now.laidOutAt = Date.now()
     if (!this.report.skipped.compact) await this.compact()
     // A repack that copied changed the packs it would judge: the next one judges them again.
     if (!this.report.copied) now.packs = packs

@@ -21,6 +21,7 @@ import type { CloudAccount } from "../usage/index.js"
 import { captureCarry, captureMoveCheckpoint, readOutside, type OutsideCandidate, type PlannedCheckout } from "../workspaces/index.js"
 import type { ReadyPlan, TakenReady } from "./cloud-readiness.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
+import type { MoveHaste } from "../contracts/workspace-moves.js"
 import type { CheckedSession } from "./harness-check.js"
 import { MoveNotQuietError } from "./live-moves.js"
 import { logMoveDiagnostic, moveDiagnosticReason } from "./move-diagnostics.js"
@@ -75,6 +76,8 @@ const ReadyAnswerSchema = z.object({ folder: z.string(), carry: z.boolean().opti
 
 /** What a sleeping Mac's handoff must leave for the release and the hand-over after the pause. */
 const RELEASE_TAKES_MS = 4_000
+/** How long a handoff with a deadline waits for the attribution journal as its Thread goes onto its own branch. */
+const HASTE_SETTLE_MS = 1_500
 /** Why a Mac going off kept a Thread it couldn't release in time. */
 const TOO_LATE = "There wasn't time to hand it off before this Mac went off. It waits, paused: Continue in the cloud from another device takes it, or it goes on here when this Mac is back."
 /**
@@ -251,7 +254,7 @@ export type CloudMovesOptions = {
    * taking only its own changes; answers the conversation that goes on there (itself, or its fork). `asItself`: the
    * same session or nothing, never a fork, as a handoff's paused turn needs.
    */
-  ownBranch?(conversationId: string, options?: { asItself?: boolean }): Promise<string>
+  ownBranch?(conversationId: string, options?: { asItself?: boolean; haste?: MoveHaste }): Promise<string>
   /**
    * The worktree `ownBranch` would put the Thread of a conversation in the main checkout in now, with nothing made
    * (`ThreadWorktreeMoves.planned`): its folder, and the repository there it's a worktree of.
@@ -618,7 +621,9 @@ export class CloudMoves {
         }
         this.#options.step(conversationId, move, { kind: "own-branch" })
         stage = "own-branch"
-        const going = await this.#options.ownBranch(conversationId, { asItself: handOff !== undefined })
+        // A Mac going off moves in haste: the journal is waited for briefly, and the moved Sessions aren't resumed here.
+        const haste = handOff?.releaseBy !== undefined ? { by: Math.min(Date.now() + HASTE_SETTLE_MS, handOff.releaseBy - RELEASE_TAKES_MS) } : undefined
+        const going = await this.#options.ownBranch(conversationId, { asItself: handOff !== undefined, ...haste && { haste } })
         if (going !== conversationId) this.#options.step(conversationId, move, { kind: "own-branch", to: going })
         conversationId = going
         // A fork has no session of its harness's until its first turn, so there's nothing of it to carry yet.

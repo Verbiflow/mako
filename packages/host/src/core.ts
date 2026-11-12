@@ -1111,10 +1111,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     // A Thread in the main checkout goes onto its own branch first, as the person's "Move to its own branch" does, its
     // companions following; its agent isn't told, since nothing starts a turn on the way to the cloud.
     ownBranch: async (id, options) => {
+      const haste = options?.haste
       const movers = late.movers
       const worktreeMoves = movers?.worktreeMoves
       if (!movers || !worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")
-      const { moved, following } = await movers.moves.moveNow(id, () => worktreeMoves.carry(id, { lead: true, tell: false, ...options?.asItself && { asItself: true } }))
+      const { moved, following } = await movers.moves.moveNow(id, () => worktreeMoves.carry(id, { lead: true, tell: false, ...options?.asItself && { asItself: true }, ...haste && { haste } }), haste)
       await following
       return moved.session.id
     },
