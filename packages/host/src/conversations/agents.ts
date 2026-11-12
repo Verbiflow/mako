@@ -164,6 +164,8 @@ import type { PullTarget as ReadTarget } from "../git/index.js"
 const NONE: readonly NativeAgent[] = []
 /** How long `agents_move` holds its answer for the switch to settle: within the door's window, and a failure later reports. */
 const MOVE_WAIT_MS = 20_000
+/** At most this long `personAsk` answers from its kept walk of a tree, should a change reach it no other way. */
+const ASKS_KEPT_MS = 1_000
 /** Conversations `agents_list` with `scope: threads` answers with. */
 const THREADS_LISTED = 20
 /** How long a start waits to read whether a harness's account is at its limit before taking it as having room. */
@@ -596,6 +598,9 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly generation: number
   private readonly entries = new Map<string, NativeAgent>()
   private readonly rosters = new Map<string, readonly NativeAgent[]>()
+  /** `personAsk`'s walk of a Thread's tree, kept until the store commits, a Fin moves (`askEpoch`) or `ASKS_KEPT_MS` passes. */
+  private readonly asksKept = new Map<string, { edges: ReturnType<ThreadStore["edges"]>; epoch: number; at: number; found: ReturnType<Agents["personAsk"]> }>()
+  private askEpoch = 0
   private readonly conversations = new Map<string, string>()
   private readonly childOf = new Map<string, string>()
   private readonly starting = new Set<string>()
@@ -2368,6 +2373,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.frontOf(placed.thread, placed.session) !== conversation) return undefined
     const notice = placed.thread === this.rootOf(placed.thread) ? this.standingNotice(placed.thread) : undefined
     if (notice) return { fin: ThreadIdSchema.parse(notice.fin), name: "Usage", line: notice.line, ask: { kind: "report", id: notice.id, options: SEEN_OPTIONS }, more: 0 }
+    // Asked on every batch of the Apex's conversation and every report of its row: the walk of its tree is kept until
+    // the store commits or a Fin of it moves. Worked out afresh each time, with 57 Fins it held the loop 0.3-0.6 s a batch.
+    const edges = store.edges()
+    const kept = this.asksKept.get(placed.thread)
+    if (kept && kept.edges === edges && kept.epoch === this.askEpoch && this.now() - kept.at < ASKS_KEPT_MS) return kept.found
+    const found = this.walkAsks(store, placed.thread)
+    this.asksKept.set(placed.thread, { edges, epoch: this.askEpoch, at: this.now(), found })
+    return found
+  }
+
+  private walkAsks(store: ThreadStore, top: string): ReturnType<Agents["personAsk"]> {
     const asks: { edge: ThreadParent; question: string; ask: FinAsk }[] = []
     const look = (thread: string, depth: number) => {
       for (const edge of store.edges().children(thread)) {
@@ -2381,7 +2397,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         if (depth < 64) look(edge.child, depth + 1)
       }
     }
-    look(placed.thread, 0)
+    look(top, 0)
     const first = asks[0]
     if (!first) return undefined
     // A harness's own ask in its words; the reason it's the person's is the Agents panel's to say.
@@ -3858,6 +3874,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** The notice on `edge`'s entry came or went: every surface reads the entry again. */
   private noticeChanged(edge: ThreadParent | undefined): void {
+    this.askEpoch += 1
     if (!edge) return
     this.entries.delete(edge.child)
     this.forget(edge.parent)
@@ -4420,6 +4437,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** A Fin's entry moved: its Apex's conversations hear it, and a decision it waits on reaches its Apex once. */
   private childMoved(edge: ThreadParent, progressOnly: boolean): void {
+    this.askEpoch += 1
     if (this.stopped) return
     this.sync()
     if (this.store()?.edges().internalRuns.some((internal) => internal.child === edge.child)) {
