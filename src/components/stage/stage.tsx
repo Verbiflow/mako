@@ -1,11 +1,11 @@
-import { memo, useEffect, useRef, useState } from "react"
+import { memo, useContext, useEffect, useRef, useState } from "react"
 import { Composer } from "@/components/composer/composer"
 import { Transcript } from "@/components/transcript/transcript"
 import { ThreadViewer } from "@/components/viewer/thread-viewer"
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { FileViewer, type AgentSurfaceProps } from "@/components/viewer/file-viewer"
 import { ConversationScopeContext, TranscriptPaneContext, useConversationScope, type ConversationScope } from "@/state/conversation-scope"
-import { usePaneScope } from "@/state/session-panes"
+import { closeWorkbenchPane, usePaneScope } from "@/state/session-panes"
 import { PaneComposer } from "@/components/composer/pane-composer"
 import { SearchView } from "@/components/search/search-view"
 import { InboxView } from "@/components/inbox/inbox-view"
@@ -29,10 +29,11 @@ import {
 import { cn } from "@/lib/utils"
 import { ArrowLeftIcon, MoonIcon } from "lucide-react"
 import { QUIET_WORDS } from "@/lib/quiet-device"
-import { Blank } from "@/components/ui/kit"
+import { Action, Blank } from "@/components/ui/kit"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { ChildBreadcrumb } from "@/components/stage/child-view"
 import { SideRail } from "@/components/stage/side-rail"
+import { useStageLayoutWatch } from "@/components/stage/stage-layout-watch"
 import type { TabStage } from "@/state/stage"
 
 /** Identity-stable fallback so the selector never allocates per render. */
@@ -97,6 +98,7 @@ export function Stage() {
     return () => observer.disconnect()
   }, [])
 
+  useStageLayoutWatch(stageRef)
   const companionRef = useRef<HTMLDivElement>(null)
   const dockRef = useRef<HTMLDivElement>(null)
   const workbenchRef = useRef<HTMLDivElement>(null)
@@ -264,11 +266,19 @@ const AgentSurface = memo(function AgentSurface({ session, composer, paneId }: A
 
 /** A chat without focus whose Session has no transcript to stream. */
 function PaneNotice({ scope }: { scope: Extract<ConversationScope, { kind: "draft" | "missing" }> }) {
+  const paneId = useContext(TranscriptPaneContext)
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-ui text-faint">
-      {scope.kind === "draft"
-        ? `New session${scope.title ? ` in “${scope.title}”` : ""}, not sent yet. Click to write it here.`
-        : "This session isn't in its thread any more. Close the pane or open another tab."}
+    <div data-pane-notice={scope.kind} className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-ui text-faint">
+      <p>
+        {scope.kind === "draft"
+          ? `New session${scope.title ? ` in “${scope.title}”` : ""}, not sent yet. Click to write it here.`
+          : "This session isn't in its thread any more. Close the pane or open another tab."}
+      </p>
+      {scope.kind === "missing" && paneId ? (
+        <Action tone="outline" size="md" onClick={() => closeWorkbenchPane(paneId)}>
+          Close pane
+        </Action>
+      ) : null}
     </div>
   )
 }

@@ -66,7 +66,7 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-const VERSION = "1.2.0"
+const VERSION = "1.3.1"
 const MARKER = "/*mako:patched:11*/"
 const ANY_MARKER = "/*mako:patched"
 
@@ -87,7 +87,7 @@ const appendTranscript = writer => [
 
 const STORE_LOCK_WAIT = [["PRAGMA busy_timeout = 5000;", "PRAGMA busy_timeout = 60000;"]]
 
-/** The same in the esm and cjs builds: the module's names don't differ between them in 1.2.0. */
+/** The same in the esm and cjs builds: the module's names don't differ between them in 1.2.0 or 1.3.1. */
 const BLOB_STORE = [
   [
     "class I{constructor(t){this.persistBlob=t,this.blobs=new Map}",
@@ -230,17 +230,17 @@ const resumeAccount = proto => [
     `if("userMessageAction"===g.action.case){const e=g.action.value;return u({...e,userMessage:new ${proto}.RGk({...e.userMessage,text:(e.userMessage?.text??"")+"\\n\\n"+t.text})})}return g})():g,`,
 ]
 
-/** The names `transcripts` takes, in each build of 1.2.0's local executor. */
+/** The names `transcripts` takes, in each build of 1.3.1's local executor (1.2.0's `336.js` is `305.js` here, its code the same but for the minifier's names). */
 export const TRANSCRIPT_BUILDS = {
-  esm: { target: "dist/esm/336.js", writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n", chunks: "a" },
-  cjs: { target: "dist/cjs/336.js", writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n", chunks: "i" },
+  esm: { target: "dist/esm/305.js", writer: "ZO", store: "yM", write: "JO", fs: "Ys", child: "n", chunks: "a" },
+  cjs: { target: "dist/cjs/305.js", writer: "YO", store: "SM", write: "QO", fs: "ti", child: "n", chunks: "i" },
 }
 
 export const CURSOR_SDK_PATCHES = [
   { target: "dist/esm/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
   { target: "dist/cjs/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
-  { target: "dist/esm/336.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.esm), runLog("BF"), resumeAccount("jr")], change: "incremental transcripts, the run log and the resume account" },
-  { target: "dist/cjs/336.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.cjs), runLog("qF"), resumeAccount("Ur")], change: "incremental transcripts, the run log and the resume account" },
+  { target: "dist/esm/305.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.esm), runLog("EN"), resumeAccount("qr")], change: "incremental transcripts, the run log and the resume account" },
+  { target: "dist/cjs/305.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.cjs), runLog("IN"), resumeAccount("Gr")], change: "incremental transcripts, the run log and the resume account" },
   { target: "dist/esm/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
   { target: "dist/cjs/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
 ]

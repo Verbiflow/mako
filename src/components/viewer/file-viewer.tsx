@@ -21,7 +21,7 @@ import { GitLoading } from "@/components/inspector/git-loading"
 import { StageStrip } from "@/components/stage/stage-strip"
 import { PlanDocumentView } from "@/components/viewer/plan-view"
 import { TranscriptControls } from "@/components/viewer/transcript-controls"
-import { engageWorkbenchPane, focusWorkbenchPane } from "@/state/session-panes"
+import { closeWorkbenchPane, engageWorkbenchPane, focusWorkbenchPane } from "@/state/session-panes"
 import { useTabDrag, type DropSide } from "@/state/tab-drag"
 import { desktop } from "@/state/desktop"
 import { prefsStore } from "@/state/prefs"
@@ -159,6 +159,7 @@ export function FileViewer({
   return (
     <div
       ref={workspaceRef}
+      data-workbench
       style={style}
       className={cn(
         "relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-surface",
@@ -282,10 +283,25 @@ const FilePane = memo(function FilePane({
         </div>
       ) : null}
       {!agent && document ? <DocumentView document={document} /> : null}
+      {!agent && !document ? <EmptyPane paneId={pane.id} canClose={canClosePane} /> : null}
       <PaneDropOverlay paneId={pane.id} />
     </section>
   )
 })
+
+/** A pane with nothing of its own to show says so, and closes: never a blank half of the window. */
+function EmptyPane({ paneId, canClose }: { paneId: string; canClose: boolean }) {
+  return (
+    <div data-pane-empty className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-ui text-faint">
+      <p>Nothing is open in this pane.</p>
+      {canClose ? (
+        <Action tone="outline" size="md" onClick={() => closeWorkbenchPane(paneId)}>
+          Close pane
+        </Action>
+      ) : null}
+    </div>
+  )
+}
 
 const DROP_LABELS = {
   left: "Open on the left",

@@ -13,6 +13,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ThreadStore, ThreadLifecycle } from "../threads/index.js"
 import { portListening, ThreadEnvironments } from "./thread-environment.js"
 import { ThreadProcesses } from "./thread-processes.js"
+import { SAMPLER_TICK_MS, ThreadAppSampler } from "./app-sampler.js"
 import type { MoveLedger } from "./worktree-move.js"
 import { ThreadWorktreeService, type CheckoutConversations } from "./thread-worktrees.js"
 import { moveHold, moveSource, ThreadWorktreeMoves } from "./thread-worktree-moves.js"
@@ -24,8 +25,8 @@ export { BuildSlots } from "./build-slots.js"
 export { RecipeAccounts } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
-import { beginTrace, SAMPLE_EVERY_MS, TraceRefresh } from "./app-probe.js"
-import { childHistory, type DaemonRestarts } from "./watch-backend.js"
+import { beginTrace, TraceRefresh } from "./app-probe.js"
+import { childHistory, childProcessTable, type DaemonRestarts } from "./watch-backend.js"
 import type { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
@@ -173,6 +174,8 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
         listening: portListening,
         whose: whoseApp,
         cameUp: (folder, at) => beginTrace(folder, at, fileHistory),
+        // `ps` in a child of its own, for the sampler's looks (`ThreadAppSampler`), so its spawn leaves the loop.
+        readTable: childProcessTable(),
       })
     : null
   if (processes) {
@@ -181,8 +184,6 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
         const stopped = await processes.stopIdle(THREAD_APP_IDLE_MS)
         if (stopped.length) hostLog("threads", "stopped apps unused for six hours", { threads: stopped.join(", ") })
       })
-    /** Each running copy's peak counts toward its project's "about N at once"; with nothing running a look reads no process table. */
-    deps.jobs.every("measure thread apps' memory", 30_000, async () => { await processes.memory() })
   }
   const borrowing = shared ? CheckoutBorrowing.open(git, deps.readOnly ? undefined : join(shared, "borrowing")) : undefined
   if (borrowing && !deps.readOnly) deps.jobs.every("keep what worktrees borrowed", 60 * 60_000, () => borrowing.keep())
@@ -239,6 +240,8 @@ export interface WorkspaceMovers {
   moves: WorkspaceMoves
   leaves: WorktreeLeaves
   appTools: EnvironmentTools | undefined
+  /** The apps' marks, looked at once for every window and pushed when they change. */
+  sampler: ThreadAppSampler | undefined
   /** The `mako` server's tools: the Thread's worktree, its app and recipe, and its pull request. */
   agentTools: MakoTools[]
 }
@@ -310,8 +313,11 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     removed: () => worktreesChanged(worktrees, emit),
     failed: (message) => emit({ type: "notice", level: "error", message }),
   })
+  // The sampler is made from the tools, which tell it when the line for memory moves.
+  const sampling: SamplerSlot = {}
   const appTools = environments && processes ? environmentTools({
     git,
+    changed: () => sampling.sampler?.changed(),
     borrowing: worktrees?.borrowing,
     cwd: (id) => live.session(id)?.cwd,
     environment: (id, cwd) => environments.forConversation(id, live.session(id)?.title, cwd),
@@ -337,8 +343,25 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     history: workspaces.fileHistory,
     owner: workspaces.appOwner,
   }) : undefined
-  if (appTools) deps.jobs.every("trace running thread apps", SAMPLE_EVERY_MS, appTools.traceApps)
-  return { worktreeMoves, moves, leaves, appTools, agentTools: agentTools(deps, moves, leaves, appTools) }
+  // One look at every app for every window, pushed when it changes, with the trace and each running copy's memory peak
+  // (toward its project's "about N at once") on the same looks.
+  const sampler = appTools && processes ? new ThreadAppSampler({
+    look: () => appTools.look(),
+    trace: appTools.traceApps,
+    memory: async () => { await processes.memory() },
+    publish: (marks) => emit({ type: "thread-app-marks", marks }),
+  }) : undefined
+  if (sampler) sampling.sampler = sampler
+  if (sampler && processes) {
+    processes.onChange(() => sampler.changed())
+    deps.jobs.every("sample thread apps", SAMPLER_TICK_MS, sampler.tick)
+  }
+  return { worktreeMoves, moves, leaves, appTools, sampler, agentTools: agentTools(deps, moves, leaves, appTools) }
+}
+
+/** Where the apps' sampler is kept once made, for the tools made before it. */
+interface SamplerSlot {
+  sampler?: ThreadAppSampler
 }
 
 /** An agent's tool changed a branch or its pull request, or a worktree went: windows read both again at once. */
@@ -421,6 +444,6 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)
-  declareThreadAppMethods(methods, movers.appTools?.desk)
+  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler)
   return files
 }

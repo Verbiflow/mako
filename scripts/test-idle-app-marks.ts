@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AppKeySchema } from "@mako/host/contracts/thread-environments"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
+import { childProcessTable } from "@mako/host/workspaces/watch-backend"
 
 /**
  * An idle host's app marks read no process table. Every window asks for the marks every few seconds, and each look
@@ -19,10 +20,12 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-idle-marks-")))
 const bin = join(root, "bin")
 const calls = join(root, "ps-calls")
 mkdirSync(bin)
-writeFileSync(join(bin, "ps"), `#!/bin/sh\necho x >> '${calls}'\nexec /bin/ps "$@"\n`)
+writeFileSync(join(bin, "ps"), `#!/bin/sh\necho $PPID >> '${calls}'\nexec /bin/ps "$@"\n`)
 chmodSync(join(bin, "ps"), 0o755)
 process.env.PATH = `${bin}:${process.env.PATH ?? ""}`
-const spawned = () => (existsSync(calls) ? readFileSync(calls, "utf8").split("\n").filter(Boolean).length : 0)
+/** Who ran each `ps`, by its parent's pid. */
+const parents = () => (existsSync(calls) ? readFileSync(calls, "utf8").split("\n").filter(Boolean).map(Number) : [])
+const spawned = () => parents().length
 
 const records = join(root, "records")
 const processes = new ThreadProcesses({ root: records, listening: async () => false })
@@ -57,6 +60,15 @@ try {
   const busy = await processes.active()
   assert.ok(spawned() >= 1, "a look with a run alive reads the table")
   assert.equal(busy.length, 1, "the live run is seen")
+
+  // Read through the watcher child (`childProcessTable`): the same run is seen, and `ps` ran in the child, not here.
+  const viaChild = new ThreadProcesses({ root: records, listening: async () => false, readTable: childProcessTable() })
+  const spawnedBefore = spawned()
+  const seen = await viaChild.active()
+  assert.equal(seen.length, 1, "the live run is seen through the child's table")
+  const fresh = parents().slice(spawnedBefore)
+  assert.ok(fresh.length >= 1, "ps ran")
+  assert.ok(fresh.every((parent) => parent !== process.pid), "ps ran in the child, not in this process")
   console.log("idle app marks: a look with every run ended spawns no ps and still lists the app; one with a run alive reads the table and finds it")
 } finally {
   if (alive?.pid) process.kill(alive.pid, "SIGKILL")

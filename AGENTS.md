@@ -1901,6 +1901,17 @@ registerToolView("bash", { summary, body, icon }) // transcript rows
 registerSurface({ id, label, icon, render, minWidth, reading, useOffered }) // stage companions
 ```
 
+No pane is left blank on the stage. The viewer's panes hold only the chat and
+documents they can draw (`shownPanes`, on every write to the store), so a pane
+left with neither goes; a chat pane beside the focused one whose Session left its
+Thread goes too (`watchSessionPanes`), and one whose Thread the window doesn't
+list says so with Close. A pane with nothing to show says so with Close
+(`EmptyPane`). When the stage stays laid out wrong for 3 s (panes short of the
+workbench, a composer above its pane's bottom, a pane showing nothing) the desk
+logs `Stage layout off` once with the window's, workbench's and each pane's size
+and what each shows (`stage-layout-watch.ts`), carried to the host's log as
+row-check's warnings are. `test:stage-panes-ui` holds both.
+
 The stage's surfaces — Changes, Files, Terminal, Control, Agents —
 are all registered through `registerSurface` on exactly the same footing as
 anything a plugin would add. One reading surface opens in the right rail at
