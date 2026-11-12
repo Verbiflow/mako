@@ -168,6 +168,9 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
   /** Each going-away note the account heard, and in what order against the Mac going quiet. */
   const notes: QuietNote[] = []
   const order: string[] = []
+  /** The conversations the account lists as this Mac's; its first read of them is before it heard their turns pause. */
+  const listed = new Set<string>()
+  let rowReads = 0
   const steps: Array<{ conversation: string; kind: string }> = []
   const account: ReturnType<CloudMovesOptions["account"]> = {
     token: async () => "token",
@@ -274,6 +277,16 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     goingAway: {
       flush: (working, by) => readiness.flush(working, by),
       checkpoint: (thread) => readiness.noteCheckpoint(thread),
+      rows: async () => {
+        rowReads += 1
+        order.push("rows")
+        const rows = new Map<string, string>()
+        for (const id of listed) {
+          const placed = world.store.journalPlacement(id)
+          if (placed) rows.set(placed.session, rowReads < 2 || world.live.snapshot(id)?.session.status === "running" ? "working" : "idle")
+        }
+        return rows
+      },
       quiet: async (note) => {
         notes.push(QuietNoteSchema.parse(note))
         order.push("note")
@@ -302,7 +315,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     await world.close()
     await tracker.close?.()
   }
-  return { base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
+  return { listed, rowReads: () => rowReads, base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
 }
 
 type Host = Awaited<ReturnType<typeof host>>
@@ -319,6 +332,8 @@ async function atWork(h: Host) {
   const inProject = await h.thread("codex", "Project")
   await h.personWrites(join(h.project, "person.ts"), "export const person = 2 // the person's, uncommitted\n")
   const turns = { inProject: await h.working(inProject), inWorktree: await h.working(inWorktree) }
+  h.listed.add(inProject)
+  h.listed.add(inWorktree)
   await h.agentWrites(inProject, turns.inProject, join(h.project, "own.ts"), "export const own = 1 // the agent's\n")
   return { inProject, inWorktree, turns }
 }
@@ -430,8 +445,21 @@ try {
     const ready = await keptReady(h, work)
     const began = Date.now()
     await machineLeaving("shutdown", { handOffs: h.handOffs, enabled: async () => true, quiet: (why) => void h.order.push(`quiet ${why}`) })
-    assert.deepEqual(h.order, ["note", "quiet quit"], "the account heard the note before the Mac went quiet")
+    assert.deepEqual(h.order.filter((each) => each !== "rows"), ["note", "quiet quit"], "the account heard the note before the Mac went quiet")
+    assert.ok(h.rowReads() >= 2 && h.order.lastIndexOf("rows") < h.order.indexOf("note"), "the note waited for the account to list the paused turns idle")
     await wentAway(h, "shutdown", work, ready, began)
+    await h.close()
+  }
+
+  // A Session the account doesn't list as this Mac's: its Thread is left out of the note, not refused whole.
+  {
+    const h = await host("unlisted")
+    const work = await atWork(h)
+    await keptReady(h, work)
+    h.listed.delete(work.inWorktree)
+    await sleeps(h, 20_000)
+    assert.equal(h.notes.length, 1)
+    assert.deepEqual(h.notes[0]!.threads.map((each) => each.thread), [h.world.store.journalPlacement(work.inProject)!.thread], "only the Thread whose Sessions the account lists")
     await h.close()
   }
 

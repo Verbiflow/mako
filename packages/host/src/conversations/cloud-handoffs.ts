@@ -41,6 +41,12 @@ export type CloudHandOffsOptions = {
     flush(working: WorkingThread[], by: number): Promise<void>
     checkpoint(thread: string): Promise<AcknowledgedCheckpoint | undefined>
     quiet(note: QuietNote): Promise<QuietAnswer | "unserved">
+    /**
+     * This Mac's own rows as the account lists them now: each Session's state there. The account takes a note only for
+     * Sessions it lists as this Mac's and idle, so the note waits for the paused turns to read idle. Without it, the
+     * note goes once the flush is done.
+     */
+    rows?(): Promise<ReadonlyMap<string, string>>
   }
   /** Why this Mac can't hand off now (signed out of the cloud); undefined when it can. */
   unavailable(): Promise<string | undefined>
@@ -148,13 +154,20 @@ export class CloudHandOffs {
       }
     }))
     const pausedMs = performance.now() - began
-    await goingAway.flush(working, Math.min(Date.now() + FLUSH_MS, deadline))
+    const sessions = parked.flatMap((each) => ("gone" in each ? each.gone.sessions.map((session) => session.session) : []))
+    const [, rows] = await Promise.all([
+      goingAway.flush(working, Math.min(Date.now() + FLUSH_MS, deadline)),
+      idleRows(goingAway, sessions, Math.min(Date.now() + IDLE_WAIT_MS, deadline)),
+    ])
     const flushedMs = performance.now() - began - pausedMs
     const threads: QuietThread[] = []
     for (const each of parked) {
-      if (!("gone" in each) || !each.gone.parked || !each.gone.sessions.length) continue
+      if (!("gone" in each) || !each.gone.parked) continue
+      // Only the Sessions the account lists as this Mac's: one it has no row of would have it refuse the whole Thread.
+      const listed = rows ? each.gone.sessions.filter((session) => rows.has(session.session)) : each.gone.sessions
+      if (!listed.length) continue
       const checkpoint = await goingAway.checkpoint(each.gone.thread)
-      threads.push({ thread: each.gone.thread, sessions: each.gone.sessions, ...checkpoint && { checkpoint } })
+      threads.push({ thread: each.gone.thread, sessions: listed, ...checkpoint && { checkpoint } })
     }
     const note: QuietNote = { note: handOff, reason: why, at: Date.now(), threads: threads.slice(0, QUIET_THREADS_MAX) }
     let heard: NoteHeard
@@ -175,6 +188,7 @@ export class CloudHandOffs {
       threads: working.length,
       noted: threads.length,
       withCheckpoint: threads.filter((each) => each.checkpoint).length,
+      ...rows && { notIdle: sessions.filter((session) => rows.has(session) && rows.get(session) !== "idle").length },
       accepted,
       answer: heard.kind,
       pausedMs: Math.round(pausedMs),
@@ -216,6 +230,29 @@ export class CloudHandOffs {
 
 /** What going away waits for a Thread's last changes to reach the cloud, at most. */
 const FLUSH_MS = 5_000
+/** And for the account to list its paused turns idle, which it takes a note for only then. */
+const IDLE_WAIT_MS = 4_000
+const IDLE_LOOK_MS = 250
+
+/**
+ * This Mac's rows as the account lists them, read until every one of `sessions` it lists reads idle, or `until`: the
+ * last read, or undefined when none could be read (the note goes naming every Session, as without rows).
+ */
+async function idleRows(goingAway: { rows?(): Promise<ReadonlyMap<string, string>> }, sessions: readonly string[], until: number): Promise<ReadonlyMap<string, string> | undefined> {
+  if (!goingAway.rows || !sessions.length) return undefined
+  let last: ReadonlyMap<string, string> | undefined
+  for (;;) {
+    try {
+      last = await goingAway.rows()
+      const rows = last
+      if (sessions.every((session) => !rows.has(session) || rows.get(session) === "idle")) return last
+    } catch {
+      // Unread this time: looked at again until `until`.
+    }
+    if (Date.now() + IDLE_LOOK_MS >= until) return last
+    await new Promise((resolve) => setTimeout(resolve, IDLE_LOOK_MS))
+  }
+}
 
 /** What became of a going-away's note: the account's answer, a gateway that takes none yet, or none by the deadline. */
 type NoteHeard = { kind: "answered"; answer: QuietAnswer } | { kind: "unserved" } | { kind: "unanswered" }
