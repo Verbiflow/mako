@@ -122,8 +122,12 @@ export const FIXTURE_RUNS = join(tmpdir(), "mako-host-load-runs")
 
 const FixtureRunSchema = z.object({ owner: z.number().int(), groups: z.array(z.number().int()) })
 
-/** A label every fixture's command line carries, so a sweep only ever ends one of them. */
-const FIXTURE_LABEL = /^\/bin\/sh -c .*\bwait mako-load-(app|busy)-\d+ /
+/**
+ * A label every fixture's command line carries, so the reaper and a sweep only ever end one of them: a POSIX extended
+ * expression, which `grep -E` reads in the reaper as this reads it here.
+ */
+const FIXTURE_PATTERN = "^/bin/sh -c .* wait mako-load-(app|busy)-[0-9]+ "
+const FIXTURE_LABEL = new RegExp(FIXTURE_PATTERN)
 
 /** A process group that lives until the world is released: `sh` holding `sleep`s, its command line as long as a dev server's. */
 function idleGroup(label: string, cwd: string, sleeps = 2) {
@@ -214,15 +218,33 @@ export async function makeWorld(root: string, scale: WorldScale): Promise<World>
 }
 
 /**
+ * A reaper (one `sh`, in a group of its own) that watches `owner` and, once it's gone, kills each of `pgids` whose
+ * leader is still its own group's and still a fixture (`FIXTURE_PATTERN`), so another program's group, one that took a
+ * fixture's ID since, is never touched. It gives up after `seconds`, when the fixtures' sleeps have ended anyway.
+ */
+export function reapWhenGone(owner: number, pgids: readonly number[], seconds = FIXTURE_SECONDS) {
+  const script = [
+    'owner=$1; pattern=$2; until=$(( $(date +%s) + $3 )); shift 3',
+    'while kill -0 "$owner" 2>/dev/null; do [ "$(date +%s)" -ge "$until" ] && exit 0; sleep 2; done',
+    'for g in "$@"; do',
+    '  [ "$(ps -o pgid= -p "$g" 2>/dev/null | tr -d " ")" = "$g" ] || continue',
+    '  ps -o command= -p "$g" 2>/dev/null | grep -Eq "$pattern" && kill -KILL -- "-$g" 2>/dev/null',
+    'done',
+  ].join("\n")
+  const reaper = spawn("/bin/sh", ["-c", script, "mako-load-reaper", String(owner), FIXTURE_PATTERN, String(seconds), ...pgids.map(String)], { detached: true, stdio: "ignore" })
+  reaper.unref()
+  return reaper
+}
+
+/**
  * The fixtures end with this bench however it ends. `release`, the process's exit (an uncaught error's too) and a
- * signal stop them here; a reaper of their own (one `sh`, in a group of its own) watches this process and stops them when it
- * dies, killed included; the run's record lets the next run sweep them should the reaper be killed too; and their
- * sleeps end after `FIXTURE_SECONDS` whatever happens.
+ * signal stop them here; a reaper (`reapWhenGone`) stops them when this process dies, killed included; the run's record
+ * lets the next run sweep them should the reaper be killed too; and their sleeps end after `FIXTURE_SECONDS` whatever
+ * happens.
  */
 function holdFixtures(groups: { pid: number; stop(): void }[]): () => void {
   const pgids = groups.map((group) => group.pid)
-  const reaper = spawn("/bin/sh", ["-c", 'owner=$1; shift; while kill -0 "$owner" 2>/dev/null; do sleep 2; done; for g in "$@"; do kill -KILL -- "-$g" 2>/dev/null; done', "mako-load-reaper", String(process.pid), ...pgids.map(String)], { detached: true, stdio: "ignore" })
-  reaper.unref()
+  const reaper = reapWhenGone(process.pid, pgids)
   mkdirSync(FIXTURE_RUNS, { recursive: true })
   const record = join(FIXTURE_RUNS, `${process.pid}-${randomUUID()}.json`)
   writeFileSync(record, JSON.stringify({ owner: process.pid, groups: pgids }))
@@ -272,9 +294,10 @@ export function sweepLeftFixtures(records = FIXTURE_RUNS): number {
     }
   })
   if (!left.length) return 0
-  const leaders = new Map(execFileSync("/bin/ps", ["-axo", "pid=,command="], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).split("\n").map((line) => {
-    const match = /^\s*(\d+)\s+(.*)$/.exec(line)
-    return match ? ([Number(match[1]), match[2]!] as const) : ([0, ""] as const)
+  // Each group's leader: a process whose ID is its group's.
+  const leaders = new Map(execFileSync("/bin/ps", ["-axo", "pid=,pgid=,command="], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    return match && match[1] === match[2] ? [[Number(match[1]), match[3]!] as const] : []
   }))
   let ended = 0
   for (const { name, groups } of left) {

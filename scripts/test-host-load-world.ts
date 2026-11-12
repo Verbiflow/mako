@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { makeWorld, sweepLeftFixtures, type WorldScale } from "./lib/host-load-world.ts"
+import { makeWorld, reapWhenGone, sweepLeftFixtures, type WorldScale } from "./lib/host-load-world.ts"
 
 /**
  * bench:host-load's fixtures (a running app's `sh` and its `sleep`s, the busy Mac's) end with the bench however it
@@ -60,25 +60,67 @@ await benchEnding("killed")
 await benchEnding("exited")
 await benchEnding("signalled")
 
-// A run whose reaper was killed too: the next run's sweep ends its fixtures by its record, and nothing else.
-{
-  const records = mkdtempSync(join(tmpdir(), "mako-host-load-runs-"))
+const settle = () => new Promise((resolve) => setTimeout(resolve, 200))
+/** A process group as a fixture is, and one of another program's, each its own leader. */
+const groupsOfBoth = async () => {
   const fixture = spawn("/bin/sh", ["-c", "sleep 60 & wait", "mako-load-busy-99", "--port", "3000", "--watch", "--config", "vite.config.ts"], { detached: true, stdio: "ignore" })
   const stranger = spawn("/bin/sleep", ["60"], { detached: true, stdio: "ignore" })
   fixture.unref()
   stranger.unref()
-  await new Promise((resolve) => setTimeout(resolve, 200))
+  await settle()
+  return { fixture: fixture.pid!, stranger: stranger.pid! }
+}
+const end = (...pgids: number[]) => {
+  for (const pgid of pgids) {
+    try {
+      process.kill(-pgid, "SIGKILL")
+    } catch { /* gone */ }
+  }
+}
+const until = async (what: () => boolean, ms: number) => {
+  for (const deadline = Date.now() + ms; !what() && Date.now() < deadline; ) await settle()
+  return what()
+}
+
+// The reaper kills only a group whose leader is still a fixture, whatever IDs it was handed.
+{
+  const { fixture, stranger } = await groupsOfBoth()
+  const owner = spawn("/bin/sleep", ["60"], { stdio: "ignore" })
+  const reaper = reapWhenGone(owner.pid!, [fixture, stranger])
+  owner.kill("SIGKILL")
+  assert.ok(await until(() => !alive(fixture), 10_000), "the reaper ends the fixture once its owner is gone")
+  assert.ok(await until(() => !alive(reaper.pid!), 5_000), "and then exits")
+  assert.equal(alive(stranger), true, "a group that isn't a fixture, whatever the reaper was told, is left alone")
+  end(stranger)
+}
+
+// The reaper gives up after its time with its owner still there, when the fixtures' sleeps have ended anyway.
+{
+  const { fixture, stranger } = await groupsOfBoth()
+  const owner = spawn("/bin/sleep", ["60"], { stdio: "ignore" })
+  const reaper = reapWhenGone(owner.pid!, [fixture], 1)
+  assert.ok(await until(() => !alive(reaper.pid!), 6_000), "the reaper exits after its time")
+  owner.kill("SIGKILL")
+  await settle()
+  assert.equal(alive(fixture), true, "and kills nothing then")
+  end(fixture, stranger)
+}
+
+// A run whose reaper was killed too: the next run's sweep ends its fixtures by its record, and nothing else.
+{
+  const records = mkdtempSync(join(tmpdir(), "mako-host-load-runs-"))
+  const { fixture, stranger } = await groupsOfBoth()
   // An owner that's gone: a process that already exited.
   const gone = spawn("/usr/bin/true")
   await new Promise((resolve) => gone.once("exit", resolve))
   mkdirSync(records, { recursive: true })
-  writeFileSync(join(records, "left.json"), JSON.stringify({ owner: gone.pid, groups: [fixture.pid, stranger.pid] }))
+  writeFileSync(join(records, "left.json"), JSON.stringify({ owner: gone.pid, groups: [fixture, stranger] }))
   assert.equal(sweepLeftFixtures(records), 1, "the left fixture's group is ended")
-  await new Promise((resolve) => setTimeout(resolve, 200))
-  assert.equal(alive(fixture.pid!), false, "the fixture is gone")
-  assert.equal(alive(stranger.pid!), true, "a process that isn't a fixture, whatever the record says, is left alone")
-  process.kill(-stranger.pid!, "SIGKILL")
+  await settle()
+  assert.equal(alive(fixture), false, "the fixture is gone")
+  assert.equal(alive(stranger), true, "a process that isn't a fixture, whatever the record says, is left alone")
+  end(stranger)
   rmSync(records, { recursive: true, force: true })
 }
 
-console.log("host-load world: its fixtures end with the bench, killed, exited or signalled, and a left run is swept by its record alone")
+console.log("host-load world: its fixtures end with the bench, killed, exited or signalled; the reaper and the sweep end fixtures alone, and the reaper gives up after its time")
