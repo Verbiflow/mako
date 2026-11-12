@@ -46,6 +46,12 @@ export type CloudHandOffsOptions = {
      * leaves it out for a gateway that doesn't take it (`CloudAccount.quiet`).
      */
     project?(thread: string): Promise<string | undefined>
+    /**
+     * The note as it will go, recorded before it does (`CloudReadiness.noted`): which checkpoints each Thread's names,
+     * after anything the gateway doesn't take is left out. The way back takes a Thread's changes out of the project
+     * folder only where the note carried them. Without it, the note goes as it was made and nothing is recorded.
+     */
+    sending?(note: QuietNote): Promise<QuietNote>
     quiet(note: QuietNote): Promise<QuietAnswer | "unserved">
     /**
      * These Sessions wait for the account's word from now (`AwayNotes.noted`): every one paused, as soon as it is, so no
@@ -198,7 +204,8 @@ export class CloudHandOffs {
     const note: QuietNote = { note: handOff, reason: why, at: Date.now(), threads: threads.slice(0, QUIET_THREADS_MAX) }
     let heard: NoteHeard
     try {
-      heard = await answeredBy(goingAway.quiet(note), deadline)
+      const sent = goingAway.sending ? await goingAway.sending(note) : note
+      heard = await answeredBy(goingAway.quiet(sent), deadline)
     } catch (error) {
       hostWarn("handoff", "the account didn't hear this Mac go away; its Threads wait here, paused", { why, error: errorMessage({ error }) })
       heard = { kind: "unanswered" }

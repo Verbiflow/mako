@@ -14,7 +14,7 @@ import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
 import { partition, type JournalView, type Partition } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { applyMoveCheckpoint } from "@mako/host/workspaces/move-checkpoint"
-import { CheckoutLeave } from "@mako/host/workspaces/leave-checkout"
+import { CheckoutLeave, cloudHasAll } from "@mako/host/workspaces/leave-checkout"
 import { captureThreadCheckpoint, type ThreadCheckpointInput } from "@mako/host/workspaces/thread-checkpoint"
 
 /*
@@ -374,3 +374,17 @@ test("a change of the Thread's the cloud never got (left out of its checkpoint):
   assert.equal(readFileSync(f.abs("shared.ts"), "utf8"), lines(30, { 3: "line 3 by T1", 15: "line 15 by T2", 30: "line 30 by the person" }))
 })
 
+
+test("a Thread's changes leave the project folder only where the cloud has them all: the first's checkpoint it went on from, and every one the note carried", () => {
+  const [a, b, b2] = ["a".repeat(64), "b".repeat(64), "c".repeat(64)]
+  const one = [{ root: "/p/api", sha256: a, changes: 2 }]
+  const two = [...one, { root: "/p/web", sha256: b, changes: 1 }]
+  assert.equal(cloudHasAll(one, [a], a), undefined, "one repository, its checkpoint noted and gone on from: it leaves")
+  assert.match(cloudHasAll(two, [a], a) ?? "", /\/p\/web/, "two, the continue went on from the first's alone: the second's change stays, and so does the first's")
+  assert.equal(cloudHasAll([...one, { root: "/p/web", sha256: b, changes: 0 }], [a], a), undefined, "a second with no change of the Thread's has nothing to lose")
+  assert.match(cloudHasAll(two, [a, b], a.replace("a", "f")) ?? "", /another checkpoint/, "the cloud went on from another")
+  assert.match(cloudHasAll(two, [a, b], undefined) ?? "", /didn't say/, "a continue that names no start")
+  assert.match(cloudHasAll(two, undefined, a) ?? "", /no going-away note/, "no note recorded here")
+  assert.match(cloudHasAll([...one, { root: "/p/web", sha256: b2, changes: 1 }], [a, b], a) ?? "", /\/p\/web/, "the second acknowledged anew after the note went: that one isn't on the machine")
+  assert.match(cloudHasAll([], [a], a) ?? "", /nothing/)
+})

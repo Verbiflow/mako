@@ -309,6 +309,11 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     goingAway: {
       flush: (working, by) => readiness.flush(working, by),
       checkpoint: (thread) => readiness.noteCheckpoint(thread),
+      // As the host's: the note as it goes, recorded first, which alone may leave the project folder later.
+      sending: async (note) => {
+        await readiness.noted(note)
+        return note
+      },
       project: (thread) => readiness.noteProject(thread),
       rows: async () => {
         rowReads += 1
@@ -435,6 +440,8 @@ async function wentAway(h: Host, way: string, work: Awaited<ReturnType<typeof at
     assert.ok(named.checkpoint && ready.standing.includes(named.checkpoint.standby), `${way}: on the cloud Thread kept ready for it`)
     assert.ok(h.acknowledged.some((each) => each.threadId === named.checkpoint!.standby && each.sha256 === named.checkpoint!.sha256), `${way}: a checkpoint the cloud acknowledged`)
     assert.ok(named.checkpoint.head && named.checkpoint.work, `${way}: the whole checkpoint, as the arrival applies it`)
+    // What the note carried is recorded with the Thread kept ready: the way back takes out only that.
+    if (id === work.inProject) assert.deepEqual((await h.readiness.acknowledged(placed.thread))?.noted, [named.checkpoint.sha256], `${way}: the checkpoint the note carried, recorded`)
     // Where its Sessions open on the machine: a project folder's project worktree; a repository's own needs none.
     assert.equal(named.project, id === work.inProject ? project : undefined, `${way}: ${id === work.inProject && project ? "names the project worktree it was kept ready at" : "names no project"}`)
     // Its parked turn, under the very request this Mac's join would send it on under.

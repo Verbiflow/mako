@@ -21,6 +21,24 @@ import { MovePlanSchema, onDisk, resumeMove, rewriteInPlace, sidesOf, type InPla
 /** One repository's part of what the cloud acknowledged: the files of the Thread's it holds, by content address. */
 export type LeftRepository = { root: string; versions: ReadonlyArray<{ path: string; ref: string | null }> }
 
+/**
+ * Whether the cloud has every change of the Thread's that would leave the project folder, by what's known here: why not,
+ * or undefined when it has. The continue went on from `start`, which must be the first repository's acknowledged
+ * checkpoint (its cloud Thread is made for that one); and the going-away note carried (`sent`) that checkpoint and every
+ * other repository's holding a change of the Thread's. A repository the note left out (a gateway that doesn't take the
+ * others, one with nowhere to be laid out) or acknowledged anew after it went isn't on the machine: its changes would be
+ * lost, so nothing leaves, all or nothing as `leave` is.
+ */
+export function cloudHasAll(repositories: ReadonlyArray<{ root: string; sha256: string; changes: number }>, sent: readonly string[] | undefined, start: string | undefined): string | undefined {
+  const [first] = repositories
+  if (!first) return "nothing was acknowledged"
+  if (start === undefined) return "the continue didn't say what it went on from"
+  if (first.sha256 !== start) return "the cloud went on from another checkpoint than the one acknowledged"
+  if (!sent) return "no going-away note named its checkpoints"
+  const missing = repositories.filter((each, index) => (index === 0 || each.changes > 0) && !sent.includes(each.sha256))
+  return missing.length ? `the going-away note didn't carry ${missing.map((each) => each.root).join(", ")} as acknowledged` : undefined
+}
+
 export type LeaveLedger = Pick<MoveLedger, "mako"> & {
   heard(): Promise<void>
   partition(checkout: string, thread: string): Partition | Promise<Partition>
