@@ -883,6 +883,49 @@ test("a quiet root sleeps, and what changed while it slept is attributed when a 
   await reopened.close()
 })
 
+test("a turn that starts on a root while it's falling asleep keeps it awake, and what changed then is found", async () => {
+  // pr-review on #620: \`sleep\` closes the watch, then waits for the root's queue. A \`track\` in that wait found the
+  // root awake and returned; the sleep then went ahead, and the turn's edits went unheard until the next wake.
+  const HOUR = 3_600_000
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
+  // The watch's close is where the sleep's wait begins: a turn starts there and writes, unheard.
+  let closing: (() => void) | undefined
+  const watch = w.events.watch.bind(w.events)
+  w.events.watch = async (root, listener) => {
+    const handle = await watch(root, listener)
+    return {
+      close: () => {
+        handle.close()
+        const once = closing
+        closing = undefined
+        once?.()
+      },
+    }
+  }
+  await w.tracker.untrack("repo")
+  await w.tracker.track({ id: "repo", path: w.repo, kind: "workspace" })
+  await w.tracker.settled()
+  w.clock.advance(2 * HOUR)
+  let tracked: Promise<void> | undefined
+  closing = () => {
+    tracked = w.tracker.track({ id: "repo", path: w.repo, kind: "workspace" })
+    w.clock.advance(1_000)
+    w.write("src/a.ts", "export const a = 2\n")
+  }
+  assert.deepEqual(await w.tracker.sleepIdle(), [], "it doesn't sleep")
+  await tracked
+  assert.ok(!w.tracker.asleep(w.repo))
+  await w.tracker.settled()
+  assert.deepEqual(w.tracker.changes(0).map((entry) => entry.path), ["src/a.ts"], "the write made while the watch was closed is found")
+  // Its watch is open again: the next write is heard as it lands.
+  w.clock.advance(1_000)
+  w.write("src/b.ts", "export const b = 1\n")
+  await w.tracker.settled({ rescans: false })
+  assert.equal(w.last().path, "src/b.ts")
+  assert.equal(w.last().observed, "event")
+  await w.tracker.close()
+})
+
 test("a root a Thread works in or around never sleeps", async () => {
   const HOUR = 3_600_000
   const w = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
