@@ -5,7 +5,7 @@ import { OwnerAnswerSchema, OwnerAskSchema, ParkedTurnSchema, QuietAnswerSchema,
 import { continueCloudThread } from "../dist/continues.js"
 
 const session = randomUUID()
-const note = () => ({ note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", sessions: [{ session, generation: 4 }], checkpoint: { sha256: "a".repeat(64), standby: "t-standby" } }] })
+const note = () => ({ note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", sessions: [{ session, generation: 4 }], checkpoint: { version: 1, sha256: "a".repeat(64), bytes: 409, head: "b".repeat(40), branch: "mako/fix", index: "c".repeat(40), work: "d".repeat(40), standby: "t-standby" } }] })
 
 test("a quiet note names each parked Thread, its Sessions at their generations and its acknowledged checkpoint, and nothing else", () => {
   assert.equal(QuietNoteSchema.safeParse(note()).success, true)
@@ -59,5 +59,17 @@ test("a Thread of a note names its parked turns, each with the continuation it g
   const many = note()
   many.threads[0].parked = Array.from({ length: 17 }, turn)
   assert.equal(QuietNoteSchema.safeParse(many).success, false, "at most 16 a Thread")
+})
+
+test("the note's checkpoint is the whole checkpoint the arrival applies, with its standby", () => {
+  const hashOnly = note()
+  hashOnly.threads[0].checkpoint = { sha256: "a".repeat(64), standby: "t-standby" }
+  assert.equal(QuietNoteSchema.safeParse(hashOnly).success, false, "a hash alone can't be applied")
+  const detached = note()
+  delete detached.threads[0].checkpoint.branch
+  assert.equal(QuietNoteSchema.safeParse(detached).success, true, "a detached HEAD names no branch")
+  const noStandby = note()
+  delete noStandby.threads[0].checkpoint.standby
+  assert.equal(QuietNoteSchema.safeParse(noStandby).success, false, "where it was sent is named")
 })
 

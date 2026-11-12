@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { namedUuid } from "./continues.js"
 import { ThreadIdSchema } from "./ids.js"
+import { MoveCheckpointSchema } from "./moves.js"
 
 /**
  * A device going away and coming back, as its account hears it, so a Thread at work there goes on in the cloud with
@@ -26,8 +27,12 @@ export const OWNER_SESSIONS_MAX = 256
 const SessionAt = z.object({ session: z.uuid(), generation: z.number().int().nonnegative() }).strict()
 export type SessionAt = z.infer<typeof SessionAt>
 
-/** A checkpoint the cloud acknowledged: its bundle's SHA-256, on the standby cloud Thread it was sent to. */
-export const AcknowledgedCheckpointSchema = z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), standby: ThreadIdSchema }).strict()
+/**
+ * A checkpoint the cloud acknowledged, whole (`MoveCheckpointSchema`: its bundle's hash and size, HEAD, the branch, the
+ * index and work commits), with the standby cloud Thread it was sent to. The arrival applies it as a move's own: its
+ * bundle read by the hash from what the account keeps, nothing copied.
+ */
+export const AcknowledgedCheckpointSchema = MoveCheckpointSchema.extend({ standby: ThreadIdSchema }).strict()
 export type AcknowledgedCheckpoint = z.infer<typeof AcknowledgedCheckpointSchema>
 
 /** A Thread with a parked turn, as its device goes away: what the account may continue, and from what. */
