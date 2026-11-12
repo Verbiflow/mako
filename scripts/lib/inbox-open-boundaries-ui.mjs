@@ -1,13 +1,16 @@
 import assert from "node:assert/strict"
+import { withInboxBoundaryEvidence } from "./inbox-boundary-evidence.mjs"
 
 /** Production open actions with delayed mock bridge replies; no provider or real profile. */
-export async function checkInboxOpenBoundaries({ window, base, evaluate, until, frames, click }) {
+export async function checkInboxOpenBoundaries({ window, base, evaluate, until, frames, click, recordBoundary, boundaryDeadline }) {
   const failures = []
   const load = async () => {
     await window.loadURL(`${base}?mock&app=apex`)
     await until(`Boolean(document.querySelector('.thread-jump-scope [data-apex-row]'))`, "open boundary fixture")
-    await click('.thread-jump-scope [data-apex-row]')
-    await until(`Boolean(document.querySelector('[data-session-tab][aria-selected="true"]'))`, "open boundary Session")
+    await withInboxBoundaryEvidence(evaluate, recordBoundary, async () => {
+      await click('.thread-jump-scope [data-apex-row]', true)
+      await until(`Boolean(document.querySelector('[data-session-tab][aria-selected="true"]'))`, "open boundary Session")
+    }, boundaryDeadline)
   }
   const startRelated = async () => {
     await load()

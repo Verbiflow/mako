@@ -16,6 +16,7 @@ import type { SideQuestionCommand } from "../contracts/live-side-questions.js"
 import { makoReviewPrompt, reviewDisplayText, ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews.js"
 import {
   LIVE_FRAME_MS,
+  turnReplyOf,
   requestsDelta,
   compactLiveBatch,
   rosteredLiveBatch,
@@ -2024,6 +2025,7 @@ export class LiveConversations {
             ? (snapshot.threadPath ?? null)
             : undefined,
         ...sessionDelta(previous.session, snapshot.session),
+        ...previous.session.status === "running" && snapshot.session.status !== "running" && { turnReply: turnReplyOf(snapshot.blocks) },
         permissions:
           previous.permissions !== snapshot.permissions
             ? snapshot.permissions

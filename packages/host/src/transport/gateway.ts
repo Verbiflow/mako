@@ -94,11 +94,13 @@ const LiveBatchIdentity = z.object({ batch: z.object({ id: z.string(), revision:
 /**
  * The notice that a live batch's conversation changed, at its revision, in place of the batch: what a reader that
  * can't take the batch whole gets, and answers by reading the conversation again. Null for anything but a live batch.
+ * Only the opted local socket marks omitted content; default and remote notices keep their existing shape.
  */
-export function historyChangedNotice(event: RuntimeEvent): RuntimeEvent | null {
+export function historyChangedNotice(event: RuntimeEvent, contentOmitted = false): RuntimeEvent | null {
   if (runtimeEventRouting(event).type !== "live-batch") return null
   const live = LiveBatchIdentity.safeParse(JSON.parse(event.payload))
-  return live.success ? encodeRuntimeEvent({ type: "live-batch", batch: { ...live.data.batch, updates: [], historyChanged: true } }) : null
+  return live.success ? encodeRuntimeEvent({ type: "live-batch", batch: { ...live.data.batch, updates: [], historyChanged: true,
+    ...(contentOmitted && { contentOmitted: true }) } }) : null
 }
 
 /**

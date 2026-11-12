@@ -14,6 +14,10 @@ declare const location: { readonly href: string }
 const clientId = process.argv.find((argument) => argument.startsWith("--mako-client="))?.slice("--mako-client=".length)
 const api = createMakoBridge({
   nativeWindowVideo: true,
+  // The channel is transport-owned, not a host domain method. No zod in the sandboxed preload.
+  ...(process.argv.includes("--mako-local-content") && {
+    watchLiveContent: (conversations: string[] | null): Promise<string | null> => ipcRenderer.invoke("mako:local-content-watch", conversations),
+  }),
   // Main sends each answer as the host encoded it (`answerCrossesEncoded`); this decodes it, once.
   invoke: async (channel, ...args) => {
     const answer = await ipcRenderer.invoke(channel, ...args)

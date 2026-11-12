@@ -24,6 +24,7 @@ import { watchThreadSessions } from "@/state/thread-sessions"
 import { watchApexView } from "@/state/apex-fins"
 import { watchSessionPanes } from "@/state/session-panes"
 import { watchLiveResidency } from "@/state/live-residency"
+import { resetLocalContent, watchLocalContent } from "@/state/local-content-watch"
 import { receiveControlActivity } from "@/state/control-preview"
 import { hostConnectionStore } from "@/state/host-connection"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
@@ -349,6 +350,7 @@ function apply(event: HostEvent) {
     return
   }
   if (event.type === "host-reconnected") {
+    resetLocalContent()
     // The stream attached, so the host is there. The boot brings the window up to date; on a busy host that took 18 s,
     // and it isn't an outage. One that fails says so itself.
     hostConnectionStore.set({ kind: "connected" })
@@ -356,6 +358,7 @@ function apply(event: HostEvent) {
     return
   }
   if (event.type === "host-disconnected") {
+    resetLocalContent()
     connectionEpoch++
     hostConnectionStore.set({ kind: "disconnected", message: event.message })
     return
@@ -726,6 +729,7 @@ let stopThreadWatch: (() => void) | undefined
 let stopLeadWatch: (() => void) | undefined
 let stopPaneWatch: (() => void) | undefined
 let stopResidencyWatch: (() => void) | undefined
+let stopContentWatch: (() => void) | undefined
 function adoptBoot(boot: BootPayload) {
   const active = boot.tabs.find((tab) => tab.id === boot.activeTabId) ?? boot.tabs[0]
   if (!active) throw new Error("The host started without a conversation")
@@ -737,6 +741,7 @@ function adoptBoot(boot: BootPayload) {
   stopLeadWatch ??= watchApexView()
   stopPaneWatch ??= watchSessionPanes()
   stopResidencyWatch ??= watchLiveResidency()
+  stopContentWatch ??= watchLocalContent()
   void restorePendingMessages()
   store.set({
     phase: "ready",

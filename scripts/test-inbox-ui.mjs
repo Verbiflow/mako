@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
@@ -8,6 +8,7 @@ import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
 import { atSize, withMotion } from "./lib/test-window.mjs"
 import { checkInboxNavigation } from "./lib/inbox-navigation-ui.mjs"
+import { literal } from "./lib/page-code.mjs"
 
 /**
  * The rail's top rows and the Inbox, against the production components on the Apex scene (`?mock&app=apex`, "Mobile
@@ -29,6 +30,13 @@ if (process.versions.electron) {
   const portAt = process.argv.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(process.argv[portAt + 1])
   const root = testScratch("mako-inbox-ui-")
+  // Normal CI uploads this configured root; testScratch intentionally retains media only, not metadata JSON.
+  let boundaryEvidence = root
+  if (process.env.MAKO_TEST_EVIDENCE) {
+    const parent = resolve(process.env.MAKO_TEST_EVIDENCE)
+    await mkdir(parent, { recursive: true })
+    boundaryEvidence = await mkdtemp(join(parent, "inbox-boundary-"))
+  }
   const server = await createServer({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
@@ -37,7 +45,7 @@ if (process.versions.electron) {
   })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-inbox-check", main: fileURLToPath(import.meta.url) }))
-  const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0] }
+  const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0], MAKO_INBOX_BOUNDARY_EVIDENCE: boundaryEvidence }
   delete env.ELECTRON_RUN_AS_NODE
   try {
     const child = spawn(resolve("node_modules/.bin/electron"), [root], { stdio: "inherit", env })
@@ -74,6 +82,7 @@ async function checkWindow() {
   atSize(window, 1440, 900)
   const page = window.webContents
   page.debugger.attach("1.3")
+  const boundaryDeadline = Date.now() + 120_000
   const guard = guardElectronCheck({ app, page, name: "The Inbox UI check", ms: 120_000 })
   const errors = []
   page.on("console-message", (details) => {
@@ -99,9 +108,46 @@ async function checkWindow() {
     }
   }
   const move = (x, y) => page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x, y })
-  const click = async (selector) => {
-    const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target ' + ${JSON.stringify(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
-    await move(point.x, point.y)
+  const click = async (selector, boundary = false) => {
+    if (!boundary) {
+      const point = await evaluate(`(() => { const node = document.querySelector(${literal(selector)}); if (!node) throw new Error('Missing click target ' + ${literal(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
+      await move(point.x, point.y)
+      await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
+      await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
+      return
+    }
+    if (!Number.isFinite(boundaryDeadline)) throw new Error("INPUT precondition: unknown overall clock; no press")
+    // Settle the exact row before choosing one point/hover; keep both phases within the original input cap.
+    const inputDeadline = Math.min(boundaryDeadline - 1100, Date.now() + 1000)
+    const check = () => { if (!Number.isFinite(inputDeadline) || Date.now() >= inputDeadline) throw new Error("INPUT precondition: preparation clock exhausted; outcome UNKNOWN, no press") }
+    const prepare = async () => {
+      try {
+        check()
+        const chosen = await evaluate(`(() => { if (Date.now() >= ${literal(inputDeadline)}) throw new Error('INPUT precondition: expired target evaluation; no press'); const node = document.querySelector(${literal(selector)}); if (!node) throw new Error('INPUT precondition: missing click target'); const chosen = window.inboxBoundaryProbe.target(node, ${literal(inputDeadline)}); node.scrollIntoView({ block: 'nearest' }); return chosen })()`)
+        check()
+        const sample = async point => {
+          check()
+          const lease = { owner: chosen.owner, key: chosen.key, deadline: inputDeadline }
+          const receipt = await evaluate(`(() => { if (Date.now() >= ${literal(inputDeadline)}) throw new Error('INPUT precondition: expired frame evaluation; no press'); return new Promise((resolve, reject) => requestAnimationFrame(frame => { try { const lease = ${literal(lease)}; const probe = window.inboxBoundaryProbe; if (probe?.id !== lease.owner) throw new Error('INPUT precondition: probe ownership changed; no press'); resolve(probe.point(${literal(point)}, {...lease, frame})) } catch (error) { reject(error) } })) })()`)
+          check()
+          if (receipt?.owner !== chosen.owner || receipt?.key !== chosen.key || (point !== null && (receipt?.point?.x !== point.x || receipt?.point?.y !== point.y))) throw new Error("INPUT precondition: foreign/malformed readiness receipt; no press")
+          if (receipt.ready !== true && receipt.ready !== false) throw new Error("INPUT precondition: unknown readiness; no press")
+          return receipt
+        }
+        let settled
+        do { settled = await sample(null) } while (!settled.ready)
+        const point = settled.point
+        if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) throw new Error("INPUT precondition: nonfinite point; no press")
+        await move(point.x, point.y)
+        while (!(await sample(point)).ready) { /* The chosen point is never resampled after hover. */ }
+        return point
+      } catch (error) { throw new Error("INPUT precondition: preparation refused; no press", { cause: error }) }
+    }
+    let timer, point
+    try {
+      point = await Promise.race([prepare(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("INPUT precondition: preparation did not converge; outcome/cleanup UNKNOWN, no press")), Math.max(0, inputDeadline - Date.now())) })])
+    } finally { clearTimeout(timer) }
+    check()
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
   }
@@ -147,7 +193,7 @@ async function checkWindow() {
   const searchFailures = []
   const replaceInput = async (selector, text) => {
     await click(selector)
-    await evaluate(`document.querySelector(${JSON.stringify(selector)}).select()`)
+    await evaluate(`document.querySelector(${literal(selector)}).select()`)
     await page.debugger.sendCommand("Input.insertText", { text })
     await until(`document.querySelector(${JSON.stringify(selector)})?.value === ${JSON.stringify(text)}`, `typed ${text}`)
     await frames()
@@ -179,7 +225,7 @@ async function checkWindow() {
     if (term === "Drive" && !(await evaluate(`document.querySelector('[role="dialog"] main').textContent.includes('Choose a project to see its files')`))) searchFailures.push("Settings Drive picker loses Setup intent")
     await click('[data-app-project="mako"]')
     await until(`Boolean(document.querySelector('[data-project-tab]'))`, `${term} chosen project`)
-    if (!(await evaluate(`Boolean(document.querySelector('[data-project-tab="${tab}"][aria-selected="true"]'))`))) searchFailures.push(`Settings ${term} opens the wrong project tab`)
+    if (!(await evaluate(`Boolean(document.querySelector(${literal(`[data-project-tab="${tab}"][aria-selected="true"]`)}))`))) searchFailures.push(`Settings ${term} opens the wrong project tab`)
     if (term === "Drive") {
       await replaceInput('[aria-label="Search settings"]', "run")
       if (!(await evaluate(`Boolean(document.querySelector('[data-project-tab="recipe"][aria-selected="true"]'))`))) searchFailures.push("Settings run does not return the open project to Recipe")
@@ -229,14 +275,14 @@ async function checkWindow() {
   await click('[data-rail-top-row="inbox"]')
   await until(`document.querySelector('[data-inbox]') !== null`)
   const target = items.find((item) => item.kind === "fin")
-  const answer = await evaluate(`(() => { const card = document.querySelector('[data-inbox-item=${JSON.stringify(target.key)}]'); const button = card.querySelector('[data-inbox-answer="allow"], [data-inbox-answer="0"]'); button.setAttribute('data-inbox-test', 'answer'); return button.dataset.inboxAnswer })()`)
+  const answer = await evaluate(`(() => { const card = document.querySelector('[data-inbox-item=${literal(target.key)}]'); const button = card.querySelector('[data-inbox-answer="allow"], [data-inbox-answer="0"]'); button.setAttribute('data-inbox-test', 'answer'); return button.dataset.inboxAnswer })()`)
   const before = await rollup()
   await click('[data-inbox-test="answer"]')
   await until("window.apexScene.responds().length === 1", "the answer reaching the Apex's host")
   assert.equal((await evaluate("window.apexScene.responds()[0]")).fin, target.fin)
   await until(`document.querySelector('[data-inbox-item=${JSON.stringify(target.key)}]') === null`, "the answered Fin leaves the Inbox")
   await until(`Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${expected - 1}`, "the Inbox row counts one fewer")
-  const working = await evaluate(`import('/src/state/acp-state.ts').then(({acpStore}) => import('/src/state/apex-fins.ts').then(({threadChildren}) => import('/packages/host/src/contracts/children.ts').then(({childStateOf}) => { const acp = acpStore.get(); const thread = Object.values(acp.conversations).find((c) => c.kind === 'live' && threadChildren(acp, c.threadId).some((agent) => agent.child?.thread === ${JSON.stringify(target.fin)})).threadId; return childStateOf(threadChildren(acp, thread).find((agent) => agent.child?.thread === ${JSON.stringify(target.fin)})).kind })))`)
+  const working = await evaluate(`import('/src/state/acp-state.ts').then(({acpStore}) => import('/src/state/apex-fins.ts').then(({threadChildren}) => import('/packages/host/src/contracts/children.ts').then(({childStateOf}) => { const acp = acpStore.get(); const thread = Object.values(acp.conversations).find((c) => c.kind === 'live' && threadChildren(acp, c.threadId).some((agent) => agent.child?.thread === ${literal(target.fin)})).threadId; return childStateOf(threadChildren(acp, thread).find((agent) => agent.child?.thread === ${literal(target.fin)})).kind })))`)
   assert.equal(working, "working", "the answered Fin is working")
   await until(`(document.querySelector('.thread-jump-scope [data-apex-row] [data-fin-pips]')?.getAttribute('aria-label') ?? '') !== ${JSON.stringify(before)}`, "the rail's rollup moves with it")
   assert.match(await rollup(), new RegExp(`${facts.fins.length - 1} needs? you`))
@@ -244,7 +290,18 @@ async function checkWindow() {
   console.log(`PASS: answering ${answer === "allow" ? "Allow once" : "the first option"} in the Inbox moves the Fin to working everywhere (${await rollup()})`)
   await capture("desktop-inbox-answered.png")
 
-  await checkInboxNavigation({ window, page, base, evaluate, until, frames, click, capture })
+  let boundaryRecords = 0
+  const recordBoundary = async (evidence, { signal, deadline }) => {
+    signal.throwIfAborted()
+    if (Date.now() >= deadline) throw new Error("Inbox evidence write not started: diagnostic deadline exhausted")
+    const text = JSON.stringify(evidence, null, 2)
+    const bytes = Buffer.byteLength(text) + 1, attemptedRecord = ++boundaryRecords
+    if (bytes > 1024 * 1024 || attemptedRecord > 16) throw new Error(`Inbox boundary evidence incomplete: bytes=${bytes}/1048576, record=${attemptedRecord}/16; nothing written`)
+    const file = join(process.env.MAKO_INBOX_BOUNDARY_EVIDENCE ?? root, `open-boundary-${boundaryRecords}.json`)
+    await writeFile(file, text + "\n", { flag: "wx", mode: 0o600, signal })
+    console.log(`Inbox boundary metadata: ${file}`)
+  }
+  await checkInboxNavigation({ window, page, base, evaluate, until, frames, click, capture, recordBoundary, boundaryDeadline })
 
   // 5. The phone: the Inbox chip with its count, Needs you / Working / Recent, the asking Fins as rows of their own.
   window.setContentSize(390, 844)

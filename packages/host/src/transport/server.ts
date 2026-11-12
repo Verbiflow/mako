@@ -18,6 +18,7 @@ import { historyChangedNotice } from "./gateway.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { filePolicyHeaders } from "../base/file-policy.js"
 import type { SecretKeyHandover } from "../base/host-secrets.js"
+import { LOCAL_CONTENT_CHANNEL, LOCAL_CONTENT_HEADER, LocalContentWatchSchema, withoutLiveContent } from "../contracts/local-content-watch.js"
 import { HostJobs, type JobDemand } from "../base/host-jobs.js"
 import { DESKTOP_PATH } from "../contracts/desktop-channel.js"
 import { CONTROL_VIDEO_BATCH_TYPE, PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
@@ -44,6 +45,7 @@ type EventStream = {
   eventLimit: number
   live: WindowLiveForm
   openedAt: number
+  content?: { generation: string; sequence: number; conversations: Set<string> | null }
   /**
    * Past `STREAM_BEHIND_BYTES`, until it catches up: the notice to read each conversation again, at the latest revision
    * it missed. Never the batch itself: a stream's memory is only what `heldBy` counts.
@@ -111,7 +113,10 @@ export async function startWebHost(
   /** A preview's live video for one viewer (`mako:control-video`), as the bytes of a `ControlVideoBatch`. */
   video?: (args: unknown[], client: string) => Promise<Uint8Array>
 ) {
-  const info = () => (runtime instanceof Function ? runtime() : runtime)
+  const info = () => {
+    const current = runtime instanceof Function ? runtime() : runtime
+    return current && { ...current, localContentWatch: true as const }
+  }
   /** Each subscriber, and the live form it reads (`x-mako-live`, `live-form.ts`): one that says none reads form 1. */
   const streams = new Map<ServerResponse, EventStream>()
   // A cloud machine's Thread hears every event through the outlet, so the work done for subscribers runs for it too.
@@ -242,14 +247,21 @@ export async function startWebHost(
       const stream: EventStream = { client: clientId, observer: request.headers["x-mako-observer"] === "1",
         history: request.headers["x-mako-history"] === "1", eventLimit,
         live: saidWindowForm(request.headers[LIVE_FORM_HEADER]?.toString()), openedAt: Date.now(), missedBytes: 0 }
+      const generation = z.uuid().safeParse(request.headers[LOCAL_CONTENT_HEADER])
+      if (generation.success && !stream.observer)
+        stream.content = { generation: generation.data, sequence: 0, conversations: null }
       streams.set(response, stream)
       subscribersChanged()
+      // What it sent, framing included, read at its end: the socket's count outlives the response's hold of it.
+      const socket = response.socket
+      const sentBefore = socket?.bytesWritten ?? 0
       response.once("close", () => {
         streams.delete(response)
         // After the host's close it's the host leaving, which every client hears; any other end is a window re-attaching.
         const said = { client: clientId, observer: stream.observer, livedMs: Date.now() - stream.openedAt,
           why: stream.ending?.why ?? (closed ? "the host closed" : "the client left"),
-          queuedBytes: stream.ending?.queuedBytes ?? response.writableLength, ...stream.missed && { missedConversations: stream.missed.size } }
+          queuedBytes: stream.ending?.queuedBytes ?? response.writableLength, ...stream.missed && { missedConversations: stream.missed.size },
+          ...socket && { sentBytes: socket.bytesWritten - sentBefore }, ...stream.content && { contentWatch: true } }
         if (stream.ending) hostWarn("stream", "a client's event stream ended", said)
         else hostLog("stream", "a client's event stream ended", said)
         subscribersChanged()
@@ -275,6 +287,17 @@ export async function startWebHost(
       .then(async (call) => {
         const { channel, attempt } = call
         const args = decodeRuntimeArgs(call.args)
+        if (channel === LOCAL_CONTENT_CHANNEL) {
+          const [watch] = z.tuple([LocalContentWatchSchema]).parse(args)
+          const owned = [...streams.values()].find(entry => entry.client === clientId && entry.content?.generation === watch.generation)?.content
+          if (!owned) throw new Error("The local content stream changed; read again after reconnecting")
+          if (watch.sequence > owned.sequence) {
+            owned.sequence = watch.sequence
+            owned.conversations = watch.conversations === null ? null : new Set(watch.conversations)
+          }
+          response.writeHead(200, { "content-type": "application/json" }).end(runtimeSuccessBody(JSON.stringify({ generation: owned.generation, sequence: owned.sequence })))
+          return
+        }
         if (channel === "mako:control-preview" && request.headers.accept === PREVIEW_MEDIA_TYPE) {
           if (!preview) throw new Error("Preview delivery requires a newer Mako host. Existing agents have not been restarted.")
           if (media.size >= 16 || [...media.values()].filter(owner => owner === clientId).length >= 2)
@@ -341,8 +364,8 @@ export async function startWebHost(
     for (const stream of streams.keys()) stream.write("\n")
   }, { needs: [subscribed] })
   /** A live batch too large for a history-paging subscriber, as the notice that its history changed. */
-  const invalidated = (event: RuntimeEvent) => {
-    const notice = historyChangedNotice(event)
+  const invalidated = (event: RuntimeEvent, contentOmitted: boolean) => {
+    const notice = historyChangedNotice(event, contentOmitted)
     return notice ? runtimeEventLine("event", notice) : null
   }
   /**
@@ -371,7 +394,7 @@ export async function startWebHost(
     response.destroy(new Error("Web client stopped consuming host events"))
     return false
   }
-  const send = (channel: RuntimeEventChannel, event: RuntimeEvent, client?: string) => {
+  const send = (channel: RuntimeEventChannel, event: RuntimeEvent, client?: string, listed?: () => RuntimeEvent) => {
     if (!client) outlet?.(channel, event)
     // Each subscriber gets the event in the newest live form it reads, each line encoded once.
     const lines = new Map<string, { line: string; bytes: number }>()
@@ -383,15 +406,21 @@ export async function startWebHost(
       }
       return held
     }
-    let invalidation: string | null | undefined
-    const notice = () => (invalidation === undefined ? (invalidation = invalidated(event)) : invalidation)
+    const invalidations = new Map<boolean, string | null>()
+    const notice = (contentOmitted: boolean) => {
+      if (!invalidations.has(contentOmitted)) invalidations.set(contentOmitted, invalidated(event, contentOmitted))
+      return invalidations.get(contentOmitted) ?? null
+    }
     for (const [stream, owner] of streams) {
       if (client && client !== owner.client) continue
       if (stream.destroyed) continue
+      // All fallbacks on an opted local stream omit content, even if it was watched when sent. The reader may have
+      // released that body by arrival; remote, legacy and explicit full-mode streams keep their existing notice.
+      const contentOmitted = Boolean(listed && owner.content && owner.content.conversations !== null)
       if (stream.writableLength > STREAM_BEHIND_BYTES && !owner.missed) fallBehind(stream, owner)
       if (owner.missed) {
         const { type, conversation } = runtimeEventRouting(event)
-        const line = type === "live-batch" && conversation ? notice() : null
+        const line = type === "live-batch" && conversation ? notice(contentOmitted) : null
         if (line && conversation) {
           const grown = Buffer.byteLength(line) - Buffer.byteLength(owner.missed.get(conversation) ?? "")
           if (!holds(stream, owner, grown)) continue
@@ -400,16 +429,18 @@ export async function startWebHost(
           continue
         }
       }
-      const payload = payloadFor(event, owner.live)
+      const delivered = listed && owner.content?.conversations && event.conversation && !owner.content.conversations.has(event.conversation)
+        ? listed() : event
+      const payload = payloadFor(delivered, owner.live)
       // Heard in a form this subscriber doesn't read: it reads the conversation again instead.
       if (payload === undefined) {
-        const line = notice()
+        const line = notice(contentOmitted)
         if (line && holds(stream, owner, Buffer.byteLength(line))) stream.write(line)
         continue
       }
       const { line, bytes } = lineOf(payload)
-      if (owner.history && channel === "event" && bytes > owner.eventLimit && notice()) {
-        if (holds(stream, owner, Buffer.byteLength(notice()!))) stream.write(notice()!)
+      if (owner.history && channel === "event" && bytes > owner.eventLimit && notice(contentOmitted)) {
+        if (holds(stream, owner, Buffer.byteLength(notice(contentOmitted)!))) stream.write(notice(contentOmitted)!)
         continue
       }
       if (holds(stream, owner, bytes)) stream.write(line)
@@ -417,7 +448,11 @@ export async function startWebHost(
   }
   return {
     clients: () => [...new Set([...streams.values()].filter((entry) => !entry.observer).map((entry) => entry.client))],
-    event: (event: HostEvent, client?: string) => send("event", encodeRuntimeEvent(event), client),
+    event: (event: HostEvent, client?: string) => {
+      let metadata: RuntimeEvent | undefined
+      send("event", encodeRuntimeEvent(event), client, event.type === "live-batch"
+        ? () => metadata ??= encodeRuntimeEvent(withoutLiveContent(event)) : undefined)
+    },
     /** Another host's conversation event, as that host encoded it. */
     conversationEvent: (event: RuntimeEvent) => send("event", event),
     terminal: (event: TerminalEvent, client?: string) => send("terminal", encodeRuntimeEvent(event), client),

@@ -84,6 +84,8 @@ interface AcpConversationBase {
   requests?: LiveSnapshot["requests"]
   harnessTurns?: LiveSnapshot["harnessTurns"]
   spentThrough?: LiveSnapshot["spentThrough"]
+  /** The last turn's reply as its end said it (`LiveBatch.turnReply`), for a notice when no block of it is held. */
+  turnReply?: string
   base?: LiveSnapshot["base"]
   /** While `base` is null on a hydrated conversation, the host is reading it from this session. */
   baseSource?: LiveSnapshot["baseSource"]

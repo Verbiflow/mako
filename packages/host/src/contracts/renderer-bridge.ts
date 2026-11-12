@@ -110,6 +110,8 @@ import type { AccountHarness, AccountLogin, AccountLoginResult, AccountProvider,
 
 export interface BridgeTransport {
   nativeWindowVideo?: boolean
+  /** Desktop private-socket opt-in. Absent on phone, remote and older clients. */
+  watchLiveContent?: (conversations: string[] | null) => Promise<string | null>
   invoke<Result>(channel: string, ...args: unknown[]): Promise<Result>
   onEvent(listener: (event: HostEvent) => void): () => void
   onTerminalEvent(listener: (event: TerminalEvent) => void): () => void
@@ -163,6 +165,7 @@ export function createMakoBridge(transport: BridgeTransport) {
 
   const api = {
     nativeWindowVideo: transport.nativeWindowVideo === true,
+    ...(transport.watchLiveContent && { watchLiveContent: transport.watchLiveContent }),
     boot: () => invokeTrustedHost<BootPayload>("mako:boot"),
     threadArchives: () =>
       invokeTrustedHost<ThreadArchiveSnapshot>("mako:thread-archives"),

@@ -11,10 +11,15 @@ import { EntrySchema, type Entry } from "@mako/sessions/entries"
 import { locateShown, type ShownEntry } from "@/lib/entry-messages"
 import type { EntryOriginal } from "@mako/sessions/record-original"
 import { originalReading, type OriginalReading } from "@/state/thread-viewing"
+import { withLocalContent } from "@/state/local-content-watch"
 
 /** Reassemble one explicitly requested value, validating part identity/order.
  * JSON is produced by the same typed host contract as the ordinary bridge. */
 export async function readLiveValue<T>(id: string, input: LiveHistoryRead): Promise<T> {
+  return withLocalContent(id, () => readLiveValueParts<T>(id, input))
+}
+
+async function readLiveValueParts<T>(id: string, input: LiveHistoryRead): Promise<T> {
   const bridge = getMako()
   let chunk = await bridge.liveRead(id, input)
   const record = chunk.record
@@ -54,7 +59,7 @@ export async function readLiveSnapshot(id: string, conditional = false): Promise
       if (!(error instanceof Error) || !/Unknown Mako host method|requires a newer shared host/.test(error.message)) throw error
     }
   }
-  return bridge.liveSnapshot(id)
+  return withLocalContent(id, () => bridge.liveSnapshot(id))
 }
 
 const loading = new Map<string, Promise<void>>()

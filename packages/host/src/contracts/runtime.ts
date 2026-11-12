@@ -89,6 +89,8 @@ export const RuntimeInfoSchema = z.object({
   fixture: z.literal(true).optional(),
   /** Preview reads accept the viewers' device-pixel box; older hosts refuse a fourth argument. */
   previewSizing: z.literal(true).optional(),
+  /** The private event socket accepts generation-scoped local content interest. */
+  localContentWatch: z.literal(true).optional(),
   methods: z.array(z.string()),
   /** Each domain's state, in `/health` only; a call to one still loading waits for it. */
   domains: z.array(HostDomainSchema).optional(),

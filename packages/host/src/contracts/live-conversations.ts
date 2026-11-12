@@ -673,6 +673,8 @@ export interface LiveBatch {
   blockCount?: number
   /** The event is an invalidation; reread through the bounded history protocol. */
   historyChanged?: boolean
+  /** Local opted-in stream omitted transcript bodies. Never advances a hydrated content view. */
+  contentOmitted?: true
   nativeAgents?: NativeAgentRoster
   /** `null` when the goal went away; absent when it did not change. */
   goal?: import("./live-goals.js").ConversationGoal | null
@@ -699,6 +701,11 @@ export interface LiveBatch {
   sessionChanges?: Partial<LiveSessionState>
   /** The session fields that went away. */
   sessionCleared?: (keyof LiveSessionState)[]
+  /**
+   * On the batch a turn's running ends in: its reply's first paragraph, at most `TURN_REPLY_CHARS` (empty when it wrote
+   * none). A window that holds none of the conversation's content (`contentOmitted`) still quotes it in its notice.
+   */
+  turnReply?: string
   /**
    * New current values for the option list the receiver holds, by option id;
    * `null` where one no longer has a value. A harness's list can carry
@@ -1138,6 +1145,21 @@ export type LiveDriverEvent =
  * its model wrote it at the median, 72 at p95; on the paint's own frame each batch paints as it lands, 30 and 52.
  */
 export const LIVE_FRAME_MS = 50
+
+/** How much of a turn's reply its end carries (`LiveBatch.turnReply`): a notice shows 200 plain characters of it. */
+export const TURN_REPLY_CHARS = 400
+
+/** A turn's reply's first paragraph, at most `TURN_REPLY_CHARS`: the text entries since its prompt, newest last. */
+export function turnReplyOf(blocks: readonly { type: string; text?: string }[]): string {
+  const parts: string[] = []
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]!
+    if (block.type === "user" || block.type === "provider-turn") break
+    if (block.type === "text" && block.text) parts.push(block.text)
+  }
+  const paragraph = parts.reverse().join("\n\n").split(/\n\s*\n/).map((part) => part.trim()).find(Boolean) ?? ""
+  return paragraph.slice(0, TURN_REPLY_CHARS)
+}
 
 /** One batch in this many of a conversation is traced, besides each that changes its status, approvals or requests. */
 export const TRACE_EVERY = 25

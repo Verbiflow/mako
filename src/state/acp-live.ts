@@ -177,7 +177,8 @@ function noteLiveOutcome(
       kind: "finished",
       subject,
       marker: `turn:${conversation.revision ?? conversation.updatedAt}`,
-      detail: lastReplyText(conversation.blocks),
+      // A conversation this window only lists holds none of the reply: its end said it (`turnReply`).
+      detail: lastReplyText(conversation.blocks) || conversation.turnReply,
       quiet,
     })
 }
