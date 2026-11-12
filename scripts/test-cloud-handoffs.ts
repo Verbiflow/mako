@@ -262,14 +262,14 @@ try {
     writeFileSync(join(folder, "a.txt"), "one\n")
     sh(folder, "add", ".")
     sh(folder, "commit", "--quiet", "-m", "base")
-    const made: Array<{ threadId: string; standby?: boolean }> = []
+    const made: Array<{ threadId: string; standby?: boolean; standsByFor?: string }> = []
     const checkpoints: string[] = []
     const records: string[][] = []
     /** Cloud Threads the cloud ended unused, as it says when one is made again. */
     const ended = new Set<string>()
     const account: ReadinessAccount = {
-      createThread: async (threadId: string, _repository: CloudRepository, making?: { standby?: boolean }) => {
-        made.push({ threadId, ...making?.standby && { standby: true } })
+      createThread: async (threadId: string, _repository: CloudRepository, making?: { standby?: boolean; standsByFor?: string }) => {
+        made.push({ threadId, ...making?.standby && { standby: true }, ...making?.standsByFor && { standsByFor: making.standsByFor } })
         return ended.has(threadId) ? { ready: false, ended: true as const } : { ready: false }
       },
       sendCheckpoint: async (_threadId: string, checkpoint: MoveCheckpoint) => {
@@ -304,6 +304,7 @@ try {
     await readiness.refresh()
     await readiness.refresh()
     assert.equal(new Set(made.map((each) => each.threadId)).size, 1, "one cloud Thread stands by")
+    assert.ok(made.every((each) => each.standsByFor === "local-1"), "made naming the Thread of this Mac's it stands by for, so the account can trust it")
     assert.ok(made.every((each) => each.standby), "standing by: no machine until a move")
     assert.equal(checkpoints.length, 1, "the checkout goes once while it's unchanged")
     assert.equal(records.length, 2, "records each round, only what's new")
@@ -328,6 +329,14 @@ try {
     writeFileSync(join(root, "stale.json"), JSON.stringify({ version: 1, threads: { "local-1": { ...kept.threads["local-1"], at: Date.now() - 25 * 60_000 } } }))
     assert.equal(await stale.take("local-1", folder, repository), undefined, "not taken: the move makes its own")
     assert.equal(JSON.parse(readFileSync(join(root, "stale.json"), "utf8")).threads["local-1"], undefined, "and forgotten here")
+    // A cloud Thread a build before `standsByFor` made stands by unnamed: the next round, a host's first included, names
+    // that same one, rather than making another in its place.
+    writeFileSync(join(root, "unnamed.json"), JSON.stringify({ version: 1, threads: { "local-1": { ...kept.threads["local-1"], cloudThread: "t-unnamed", at: Date.now() } } }))
+    const unnamed = new CloudReadiness({ file: join(root, "unnamed.json"), git, scratch: join(root, "unnamed-scratch"), account: () => account, enabled: async () => true, working: () => [{ conversationId: "c-1", thread: "local-1", harness: "codex" }], leaving: () => false, plan: async () => ({ thread: "local-1", folder, repository, paths: [], harness: "codex" }), sendRecords: async () => [], newCloudThread: () => "t-minted" })
+    const asked = made.length
+    await unnamed.refresh()
+    assert.deepEqual(made.slice(asked), [{ threadId: "t-unnamed", standby: true, standsByFor: "local-1" }], "the standby there is named, and no other made")
+    assert.equal(JSON.parse(readFileSync(join(root, "unnamed.json"), "utf8")).threads["local-1"].cloudThread, "t-unnamed")
     assert.deepEqual(await readiness.take("local-1", folder, repository), { cloudThread: standing, checkpoint: checkpoints.at(-1) }, "the move takes the cloud Thread standing by, with the checkpoint last sent, which the cloud keeps")
     assert.equal(await readiness.take("local-1", folder, repository), undefined, "once")
     const before = made.length
