@@ -805,6 +805,27 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     })
     if (collected?.dropped) hostLog("attribution", "content collected", { ...collected })
   })
+  /**
+   * Wake the roots of `checkout` that sleep (`LaptopTracker.sleepIdle`), as a turn there would: its status, a move's
+   * division or a tree read of it asks, so what changed there while it slept is read before the next answer. The
+   * answer under way reads what the journal holds now.
+   */
+  const wakeFor = (checkout: string): Promise<void>[] => {
+    const tracker = local?.tracker
+    if (!tracker) return []
+    const waking: Promise<void>[] = []
+    for (const { root } of tracker.rootStates().values()) {
+      if (!(within(checkout, root.path) || within(root.path, checkout)) || !tracker.asleep(root.path)) continue
+      waking.push(journal.writes.track(root.path).catch((error: Error) => {
+        hostWarn("attribution", "a checkout could not be tracked", { root: root.path, error: error.message })
+      }))
+    }
+    return waking
+  }
+  // Roots nobody changed or worked around for hours let go of their stat caches; a turn there wakes them.
+  deps.jobs.every("let quiet attribution roots sleep", 60 * 60_000, async () => {
+    for (const root of (await local?.tracker.sleepIdle()) ?? []) asked.delete(root)
+  }, { firstAfterMs: 15 * 60_000 })
   deps.jobs.every("let go of idle attribution roots", 6 * 60 * 60_000, async () => {
     // A repository let go is tracked again on the next turn there.
     for (const root of (await local?.tracker.letGoIdle()) ?? []) asked.delete(root)
@@ -836,10 +857,17 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       return { end: () => journal.writes.makoEnd(id, Date.now()) }
     },
     rewindWriters: (paths, since) => writersSince(view(), paths, since),
-    hunks: (checkout) => hunks(view(), checkout),
+    hunks: (checkout) => {
+      wakeFor(checkout)
+      return hunks(view(), checkout)
+    },
     changes: (thread) => changes(view(), thread),
-    partition: (checkout, thread, options) => partition(view(), checkout, thread, options),
+    partition: (checkout, thread, options) => {
+      wakeFor(checkout)
+      return partition(view(), checkout, thread, options)
+    },
     partitionOffLoop: (checkout, thread) => {
+      wakeFor(checkout)
       const path = local ? local.tracker.store.path : journalFile
       if (offLoop?.path !== path) {
         offLoop?.reader.close()
@@ -847,7 +875,10 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       }
       return offLoop.reader.partition(checkout, thread)
     },
-    shares: (checkout, thread) => shares(view(), checkout, thread),
+    shares: (checkout, thread) => {
+      wakeFor(checkout)
+      return shares(view(), checkout, thread)
+    },
     settled: () => journal.writes.settled(),
     heard: () => journal.writes.settled({ rescans: false }),
     async track(checkout) {
@@ -862,6 +893,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     head: (repository) => [...view().roots()].find((state) => state.root.path === repository)?.root.head,
     blob: (ref) => view().store.blob(ref),
     threadTrees: async (checkout, thread) => {
+      await Promise.all(wakeFor(checkout))
       await journal.writes.settled()
       return threadTrees(deps.git, view(), partition(view(), checkout, thread))
     },
