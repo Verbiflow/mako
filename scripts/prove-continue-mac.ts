@@ -1,11 +1,13 @@
 import "./lib/scratch-git.mjs"
-import { execFile, spawn } from "node:child_process"
+import { execFile, execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { copyFile, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
 import { request as httpsRequest } from "node:https"
 import { createRequire } from "node:module"
 import type { Duplex } from "node:stream"
+import { homedir } from "node:os"
 import { delimiter, join } from "node:path"
 import { createInterface } from "node:readline"
 import { connect as tlsConnect } from "node:tls"
@@ -36,6 +38,10 @@ import { scriptedModel } from "./scripted-model.ts"
  * `shot` can take its window; else the host alone, screenless. Either way its host opens no browser on this Mac: its
  * sign-in page is printed for the driver to open.
  *
+ * With `--other <repository>`, the project folder holds two repositories, the first and that one beside it, each
+ * cloned as the host clones one (`--filter=blob:none`); with `--private`, Git here reaches a private one through the
+ * person's own `gh` sign-in, read where it is for each call and never copied (as `prove-cloud-moves.ts --private`).
+ *
  * Lines on stdin drive it; each answers with one line on stdout, JSON after its word:
  * - (at start) `SIGN IN <url>`, then once signed in with the cloud, `READY {dataRoot, project, opencode}`.
  * - `start <title> <word>`: a Thread on OpenCode in its own worktree of the project, its first turn that word, waited
@@ -53,6 +59,18 @@ import { scriptedModel } from "./scripted-model.ts"
  * - `offline`, `online`: the relay cut, or listening again on the same port. `OFFLINE {at}`, `ONLINE {at}`
  * - `return <conversation>`: the Thread brought back from the cloud, as Bring back does. `RETURNED {outcome, ms}`
  * - `shot <path> [title]`: the window's screenshot, the Thread named by its title selected first. `SHOT <path>`
+ * - `start-here <title> <word>`: as `start`, in the project folder itself (the main checkout), no worktree.
+ * - `join <conversation> <folder> <word>`: another Session of that conversation's Thread, as a `+` tab makes one, in
+ *   `<folder>` of the project folder, its first turn that word, waited for. `JOINED {conversation}`
+ * - `hold <conversation> <word>`: a turn the scripted model holds mid-way (it answers after a quarter of an hour), sent
+ *   and waited for until it runs. `HOLDING {request}`
+ * - `person <file> <text>`: the person's own uncommitted edit of a file in the project folder. `PERSON {path}`
+ * - `status <conversation>`: the project folder's uncommitted files, and the conversation's folder, branch and
+ *   uncommitted files. `STATUS {project, folder, branch, changed}`
+ * - `sleep` (with `--sleep-watch`): the stand-in sleep watch says the Mac is about to sleep, as macOS tells the real
+ *   one, and the host hands off before it lets the Mac sleep. `SLEPT {ms}` once it let it.
+ * - `shutdown`: the desktop app's word that the Mac is shutting down (`mako:machine-leaving`), answered once the host's
+ *   handoff did, its hold at most. `SHUTDOWN {ms}`
  * - `quit` (or stdin's end): signs out, stops the host (and the window), removes the root unless `--keep`. The host's
  *   log is kept beside it, as `<root>.host.log`.
  *
@@ -70,6 +88,9 @@ const { values } = parseArgs({
     opencode: { type: "string" },
     window: { type: "boolean", default: false },
     keep: { type: "boolean", default: false },
+    "sleep-watch": { type: "boolean", default: false },
+    other: { type: "string" },
+    private: { type: "boolean", default: false },
   },
 })
 if (!values.root || !values.cloud || !values["relay-port"]) throw new Error("--root, --cloud and --relay-port are required")
@@ -87,24 +108,39 @@ scratchKeychain(scratch.home)
 const home = scratch.home
 const heard: string[] = []
 const ONE_WORD = /Reply with the single word ([A-Za-z0-9-]+)\./g
+/** A word `hold` asks for: its turn stays mid-way here, the model answering only after this long. */
+const HELD = "HOLD"
+const HELD_MS = 15 * 60_000
 const model = await scriptedModel({
   reply: (text) => {
     const word = [...text.matchAll(ONE_WORD)].at(-1)?.[1]
     if (!word) return { text: "OK" }
     heard.push(word)
+    if (word.startsWith(HELD)) return new Promise((resolve) => setTimeout(() => resolve({ text: word }), HELD_MS).unref())
     return { text: word }
   },
   aside: "Continue proof",
 })
 await mkdir(join(home, ".config", "opencode"), { recursive: true })
 await writeFile(join(home, ".config", "opencode", "opencode.json"), JSON.stringify({ $schema: "https://opencode.ai/config.json", enabled_providers: ["anthropic"], provider: { anthropic: { options: { baseURL: `${model.url}/v1`, apiKey: "continue-proof" } } } }, null, 2))
-const project = join(home, "projects", new URL(values.repository).pathname.split("/").at(-1) ?? "project")
-await mkdir(join(home, "projects"), { recursive: true })
-await run("git", ["clone", "-q", values.repository, project], { env: { ...scratch.env } })
+/** Git reaching a private repository as the person's does, through their own `gh` sign-in, read for each call. */
+function privateGit(): NodeJS.ProcessEnv {
+  const gh = execFileSync("/usr/bin/which", ["gh"], { encoding: "utf8" }).trim()
+  const config = process.env.GH_CONFIG_DIR ?? join(homedir(), ".config", "gh")
+  return { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.https://github.com.helper", GIT_CONFIG_VALUE_0: `!GH_CONFIG_DIR='${config}' '${gh}' auth git-credential` }
+}
+const gitEnv: NodeJS.ProcessEnv = { ...scratch.env, ...values.private && privateGit() }
+const named = (url: string) => new URL(url).pathname.split("/").at(-1) ?? "project"
+// The project folder: the repository itself, or with `--other` a folder holding it and the other beside it.
+const project = join(home, "projects", values.other ? "project" : named(values.repository))
+const first = values.other ? join(project, named(values.repository)) : project
+await mkdir(values.other ? project : join(home, "projects"), { recursive: true })
+await run("git", ["clone", "-q", ...values.other ? ["--filter=blob:none"] : [], values.repository, first], { env: gitEnv })
+if (values.other) await run("git", ["clone", "-q", "--filter=blob:none", values.other, join(project, named(values.other))], { env: gitEnv })
 // With `--branch`, a branch of the repository's own on GitHub besides its default, which the project folder has
 // checked out, so the Thread's worktree can have it by the same name.
-const defaultBranch = (await run("git", ["-C", project, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).stdout.trim()
-const remoteBranches = (await run("git", ["-C", project, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"])).stdout.split("\n").filter((name) => name.startsWith("origin/") && name !== "origin/HEAD" && name !== defaultBranch)
+const defaultBranch = (await run("git", ["-C", first, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).stdout.trim()
+const remoteBranches = (await run("git", ["-C", first, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"])).stdout.split("\n").filter((name) => name.startsWith("origin/") && name !== "origin/HEAD" && name !== defaultBranch)
 const branchOnGitHub = values.branch ? `origin/${values.branch}` : undefined
 if (branchOnGitHub && !remoteBranches.includes(branchOnGitHub)) throw new Error(`${values.repository} has no branch on GitHub besides ${defaultBranch} named ${values.branch}`)
 
@@ -157,9 +193,41 @@ const cut = () => {
 }
 await listen()
 
+// With `--sleep-watch`, the host's sleep watch is a stand-in for the native helper, where a checkout's host looks for it:
+// `sleep` has it say the Mac is about to sleep, as macOS tells the real one, and it lets the Mac sleep once the host
+// says so. The checkout's own helper goes back as the run ends.
+const sleepHelper = join(process.cwd(), "build", "mako-sleep-watch")
+const realHelper = `${sleepHelper}.proof-real`
+const sleepWatch = join(root, "sleep-watch")
+if (values["sleep-watch"]) {
+  await mkdir(sleepWatch, { recursive: true })
+  if (existsSync(sleepHelper) && !existsSync(realHelper)) await rename(sleepHelper, realHelper)
+  await writeFile(sleepHelper, `#!${process.execPath}
+const fs = require("fs"), path = require("path"), readline = require("readline")
+const dir = ${JSON.stringify(sleepWatch)}
+fs.writeFileSync(path.join(dir, "ready"), String(Date.now()))
+console.log("ready")
+let id = 0
+setInterval(() => {
+  const asked = path.join(dir, "sleep")
+  if (!fs.existsSync(asked)) return
+  fs.rmSync(asked)
+  id += 1
+  console.log("will-sleep " + id)
+}, 100)
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const [word, n] = line.trim().split(" ")
+  if (word !== "allow") return
+  fs.writeFileSync(path.join(dir, "slept-" + n), String(Date.now()))
+  console.log("slept " + n + " answer")
+})
+process.stdin.on("end", () => process.exit(0))
+`, { mode: 0o755 })
+}
+
 // The host: screenless on its own, or the desktop's on a profile of its own, both on the scratch home through the relay.
 const cloudUrl = `http://127.0.0.1:${relayPort}`
-const hostEnv: NodeJS.ProcessEnv = { ...scratch.env, ...opencodeBin && { PATH: [opencodeBin, scratch.env["PATH"]].filter(Boolean).join(delimiter) }, MAKO_CLOUD_URL: cloudUrl, MAKO_SCREENLESS: "1", OPENCODE_DISABLE_MODELS_FETCH: "1" }
+const hostEnv: NodeJS.ProcessEnv = { ...gitEnv, ...opencodeBin && { PATH: [opencodeBin, scratch.env["PATH"]].filter(Boolean).join(delimiter) }, MAKO_CLOUD_URL: cloudUrl, MAKO_SCREENLESS: "1", OPENCODE_DISABLE_MODELS_FETCH: "1" }
 assertScratchEnvironment(hostEnv, "the continue proof's host")
 // SAFETY: the electron package's main export is the path of its executable.
 const electron = createRequire(import.meta.url)("electron") as string
@@ -214,7 +282,7 @@ const read = async (id: string) => {
   const shot = await snapshot(id)
   const kept = said(shot.base?.entries ?? [])
   const words = [...kept, ...said(shot.blocks).filter((word) => !kept.includes(word))]
-  return { elsewhere: shot.elsewhere ?? null, threadId: shot.threadId ?? null, requests: shot.requests.map(({ id: request, status, error }) => ({ request, status, ...error && { error } })), words }
+  return { elsewhere: shot.elsewhere ?? null, threadId: shot.threadId ?? null, cwd: shot.session.cwd ?? null, requests: shot.requests.map(({ id: request, status, error }) => ({ request, status, ...error && { error } })), words }
 }
 const SyncSchema = z.object({ state: z.string(), stale: z.number().optional(), sending: z.number().optional(), tiers: z.array(z.object({ sessions: z.number(), inCloud: z.number() }).loose()).optional() }).loose()
 
@@ -228,6 +296,7 @@ const stop = async () => {
     await exited
   }
   await release?.()
+  if (values["sleep-watch"] && existsSync(realHelper)) await rename(realHelper, sleepHelper)
   await cut()
   await model.close()
   scratch.dispose()
@@ -256,6 +325,82 @@ for await (const line of createInterface({ input: process.stdin })) {
     if (!branchOnGitHub) await run("git", ["-C", folder, "branch", "--quiet", `--set-upstream-to=${defaultBranch}`])
     const upstream = (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])).stdout.trim()
     say("STARTED", JSON.stringify({ conversation: conversationId, thread: shot.threadId, folder, branch: (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim(), upstream, ...await read(conversationId) }))
+  } else if (command === "start-here") {
+    const word = rest.pop()!
+    const title = rest.join(" ")
+    const conversationId = randomUUID()
+    const request = randomUUID()
+    await call("mako:live-start", ["opencode", project, { conversationId, title, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
+    for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
+      const status = (await snapshot(conversationId)).requests.find((entry) => entry.id === request)?.status
+      if (status && !["queued", "held", "dispatching"].includes(status)) break
+      if (Date.now() > deadline) throw new Error(`the first turn didn't end within five minutes: ${JSON.stringify(await read(conversationId))}`)
+    }
+    const shot = await snapshot(conversationId)
+    say("STARTED", JSON.stringify({ conversation: conversationId, thread: shot.threadId, folder: shot.session.cwd ?? "", ...await read(conversationId) }))
+  } else if (command === "join") {
+    const [conversation, folder, word] = rest
+    const thread = conversation && (await snapshot(conversation)).threadId
+    if (!thread || !folder || !word) {
+      say("UNKNOWN", JSON.stringify({ line }))
+      continue
+    }
+    const placed = z.object({ session: z.string() }).loose().parse(await call("mako:thread-create-session", [randomUUID(), thread]))
+    const conversationId = randomUUID()
+    const request = randomUUID()
+    await call("mako:live-start", ["opencode", join(project, folder), { conversationId, title: folder, session: placed.session, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
+    for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
+      const status = (await snapshot(conversationId)).requests.find((entry) => entry.id === request)?.status
+      if (status && !["queued", "held", "dispatching"].includes(status)) break
+      if (Date.now() > deadline) throw new Error(`the joined Session's first turn didn't end within five minutes: ${JSON.stringify(await read(conversationId))}`)
+    }
+    const joined = await snapshot(conversationId)
+    say("JOINED", JSON.stringify({ conversation: conversationId, thread: joined.threadId, folder: joined.session.cwd ?? "", ...await read(conversationId) }))
+  } else if (command === "hold") {
+    const [conversation, word] = rest
+    if (!conversation || !word?.startsWith(HELD)) {
+      say("UNKNOWN", JSON.stringify({ line }))
+      continue
+    }
+    const request = randomUUID()
+    await call("mako:live-prompt", [conversation, request, `Reply with the single word ${word}.`, []])
+    for (const deadline = Date.now() + 2 * 60_000; !heard.includes(word); await new Promise((resolve) => setTimeout(resolve, 200)))
+      if (Date.now() > deadline) throw new Error(`the held turn never reached the model: ${JSON.stringify(await read(conversation))}`)
+    say("HOLDING", JSON.stringify({ request, ...await read(conversation) }))
+  } else if (command === "person") {
+    const [file, ...text] = rest
+    await writeFile(join(project, file!), `${text.join(" ")}\n`)
+    say("PERSON", JSON.stringify({ path: join(project, file!) }))
+  } else if (command === "status") {
+    // A folder's uncommitted files, by each repository it holds when it isn't one itself.
+    const changed = async (folder: string) => {
+      const repositories = existsSync(join(folder, ".git")) ? [""] : (await readdir(folder)).filter((name) => existsSync(join(folder, name, ".git")))
+      const each = await Promise.all(repositories.map(async (name) => (await run("git", ["-C", join(folder, name), "status", "--porcelain"])).stdout.split("\n").filter(Boolean).map((entry) => (name ? `${entry.slice(0, 3)}${name}/${entry.slice(3)}` : entry))))
+      return each.flat()
+    }
+    const folder = (await snapshot(rest[0]!)).session.cwd ?? ""
+    const there = folder && existsSync(folder)
+    say("STATUS", JSON.stringify({ project: await changed(project), folder, branch: there ? (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim() : null, changed: there ? await changed(folder) : null }))
+  } else if (command === "sleep") {
+    if (!values["sleep-watch"]) {
+      say("UNKNOWN", JSON.stringify({ line, reason: "started without --sleep-watch" }))
+      continue
+    }
+    // The host starts its sleep watch once it may hand off (signed in with the cloud), within a minute.
+    for (const deadline = Date.now() + 90_000; !existsSync(join(sleepWatch, "ready")); await new Promise((resolve) => setTimeout(resolve, 250)))
+      if (Date.now() > deadline) throw new Error("the host never started its sleep watch")
+    const began = Date.now()
+    const slept = new Set((await readdir(sleepWatch)).filter((name) => name.startsWith("slept-")))
+    await writeFile(join(sleepWatch, "sleep"), "")
+    for (const deadline = began + 60_000; ; await new Promise((resolve) => setTimeout(resolve, 100))) {
+      if ((await readdir(sleepWatch)).some((name) => name.startsWith("slept-") && !slept.has(name))) break
+      if (Date.now() > deadline) throw new Error("the host never let the Mac sleep")
+    }
+    say("SLEPT", JSON.stringify({ ms: Date.now() - began }))
+  } else if (command === "shutdown") {
+    const began = Date.now()
+    await call("mako:machine-leaving", ["shutdown"])
+    say("SHUTDOWN", JSON.stringify({ ms: Date.now() - began }))
   } else if (command === "say") {
     const [conversation, word] = rest
     if (!conversation || !word) {
