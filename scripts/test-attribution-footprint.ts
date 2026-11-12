@@ -9,6 +9,7 @@ import { classify, noiseFolders, readIgnore, type FootprintInput, type RuleFolde
 import { MAX_WEAK, type PathVerdict } from "@mako/host/attribution/footprint-reader"
 import { NoiseBaseline, template, type NoiseRow, type NoiseStore } from "@mako/host/attribution/noise-baseline"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
+import { otherAppsData } from "@mako/host/base/other-apps-data"
 import { childHistory } from "@mako/host/workspaces/watch-backend"
 import { WatchReadings } from "@mako/host/workspaces/watch-readings"
 
@@ -334,6 +335,22 @@ test("a change between a segment's cut and its read reaches the turn that just s
   }
 })
 
+test("another app's data is every container, group, daemon container and scripts folder, by case on macOS only", () => {
+  assert.equal(otherAppsData("/h/Library/Containers/com.example.notes/Data/a.json", "/h", "darwin"), "/h/Library/Containers/com.example.notes")
+  assert.equal(otherAppsData("/h/Library/Group Containers/group.example.chat/db", "/h", "darwin"), "/h/Library/Group Containers/group.example.chat")
+  assert.equal(otherAppsData("/h/Library/Daemon Containers/0A1B-2C3D/Data/x", "/h", "darwin"), "/h/Library/Daemon Containers/0A1B-2C3D")
+  assert.equal(otherAppsData("/h/Library/Application Scripts/com.example.notes/run.scpt", "/h/", "darwin"), "/h/Library/Application Scripts/com.example.notes")
+  assert.equal(otherAppsData("/h/Library/Containers", "/h", "darwin"), "/h/Library/Containers")
+  // APFS usually ignores case: an agent's spelling is the same folder, and the answer keeps that spelling.
+  assert.equal(otherAppsData("/h/library/containers/com.example.notes/Data/a.json", "/h", "darwin"), "/h/library/containers/com.example.notes")
+  assert.equal(otherAppsData("/h/LIBRARY/Group containers/g/x", "/h", "darwin"), "/h/LIBRARY/Group containers/g")
+  // Linux's folders tell case apart, and a name that only begins the same is another folder.
+  assert.equal(otherAppsData("/h/library/containers/x", "/h", "linux"), undefined)
+  assert.equal(otherAppsData("/h/Library/ContainersOld/x", "/h", "darwin"), undefined)
+  assert.equal(otherAppsData("/h/Library/Application Support/x", "/h", "darwin"), undefined)
+  assert.equal(otherAppsData("/other/Library/Containers/x", "/h", "darwin"), undefined)
+})
+
 test("another app's container is never stat-ed or read, even when a call named it: macOS would ask the person each time", async () => {
   const world = await footprintWorld()
   const { fs, tracker, reader, verdicts, mark } = world
@@ -345,7 +362,7 @@ test("another app's container is never stat-ed or read, even when a call named i
   try {
     const chat = "/h/Library/Group Containers/group.net.example.chat/Message/db.sqlite"
     const notes = "/h/Library/Containers/com.example.notes/Data/notes.json"
-    const read1 = "/h/Library/Containers/com.example.reader/Data/prefs.plist"
+    const read1 = "/h/library/containers/com.example.reader/Data/prefs.plist"
     reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/h/work/app" }))
     await reader.settled()
     reader.activity(mark("T1", { kind: "call", id: "c1", edge: "start", turn: "t1", named: [chat, notes, read1, "/h/work/app/a.ts"] }))
@@ -357,7 +374,7 @@ test("another app's container is never stat-ed or read, even when a call named i
     await reader.settled()
     assert.equal(described(verdicts.get(chat)), "out noise")
     assert.equal(verdicts.get(notes) && "group" in verdicts.get(notes)! ? verdicts.get(notes)!.group : undefined, "/h/Library/Containers/com.example.notes")
-    assert.deepEqual(touched.filter((path) => path.includes("/Library/")), [])
+    assert.deepEqual(touched.filter((path) => /\/library\//i.test(path)), [])
     assert.deepEqual(tracker.footprint("T1").map((entry) => entry.path), ["/h/work/app/a.ts"])
   } finally {
     await world.close()
@@ -533,8 +550,11 @@ test("a history read of the home folder never replays another app's container, s
     const mark = await history.mark().finally(() => (process.env.HOME = real))
     const container = join(home, "Library/Containers/com.example.notes/Data")
     const group = join(home, "Library/Group Containers/group.example.chat")
-    mkdirSync(container, { recursive: true })
-    mkdirSync(group, { recursive: true })
+    const daemon = join(home, "Library/Daemon Containers/0A1B-2C3D/Data")
+    const scripts = join(home, "Library/Application Scripts/com.example.notes")
+    for (const folder of [container, group, daemon, scripts]) mkdirSync(folder, { recursive: true })
+    writeFileSync(join(daemon, "state.plist"), "x")
+    writeFileSync(join(scripts, "run.scpt"), "x")
     mkdirSync(join(home, "work"))
     writeFileSync(join(container, "notes.json"), "{}")
     writeFileSync(join(group, "db.sqlite"), "x")
@@ -542,7 +562,7 @@ test("a history read of the home folder never replays another app's container, s
     await new Promise((done) => setTimeout(done, 1_000))
     const found = await history.since(mark, [home], {})
     assert.ok(found.paths.includes(join(home, "work/a.txt")), "the rest of the home folder crosses")
-    assert.deepEqual(found.paths.filter((path) => path.includes("Containers")), [], "nothing in a container is replayed")
+    assert.deepEqual(found.paths.filter((path) => path.includes("Containers") || path.includes("Application Scripts")), [], "nothing in another app's data is replayed")
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
