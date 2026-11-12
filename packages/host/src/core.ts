@@ -741,7 +741,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         streams: (lease) => (lease.resource.ref === "ios-simulator" ? [{ name: "screen", kind: "video" }] : []),
         lent,
         words: (lease) => ({ what: operationWords(lease.resource.ref), for: lease.borrower.place.kind === "machine" ? "a cloud Thread" : "a Thread on another device" }),
-        ended: (lease) => control.simulators.releaseThread({ thread: lease.borrower.thread }),
+        ended: (lease) => control.simulators.releaseLease(lease.id),
         log: (message, fields) => hostLog("borrowing", message, fields),
       })
     : undefined

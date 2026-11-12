@@ -15,7 +15,7 @@ export interface LendingDeps {
   leases(): Promise<Lease[] | null>
   /** Whether this device can serve what an ask names now: yes with a version, or why not. */
   serve(ask: SourceAsk): Promise<SourceAnswer>
-  /** Says a served session is alive on the runtime link, with its streams when they're first said; false while the link is down or older. */
+  /** Says a served session is alive on the runtime link, with its streams until a beat with them is heard; false while the link is down or older. */
   beat(lease: string, progress?: Progress, streams?: Stream[]): boolean
   /** What a served lease's session streams its borrower: a simulator's screen. */
   streams?(lease: Lease): Stream[]
@@ -42,6 +42,8 @@ export class Lending {
   readonly #served = new HeldLeases()
   /** Progress said since the last beat, sent with the next one. */
   readonly #progress = new Map<string, Progress>()
+  /** Served sessions whose streams no heard beat has said yet: each beat says them until one is heard. */
+  readonly #unsaid = new Set<string>()
   /** The phase each served session was last said to be in. */
   readonly #phases = new Map<string, Progress["phase"]>()
   /** The broker being asked for leases near their end; one ask at a time. */
@@ -76,8 +78,8 @@ export class Lending {
     const words = this.#deps.words(lease)
     this.#deps.lent.add({ lease: lease.id, what: words.what, for: words.for, since: this.#now() })
     this.#deps.log?.("serving a lease", { lease: lease.id, ref: lease.resource.ref, thread: lease.borrower.thread })
-    const streams = this.#deps.streams?.(lease)
-    this.#deps.beat(lease.id, undefined, streams?.length ? streams : undefined)
+    if (this.#deps.streams?.(lease).length) this.#unsaid.add(lease.id)
+    this.#say(lease.id)
   }
 
   /** A served lease ended, however it ended: its slot is free, and what it held here lets go. */
@@ -86,8 +88,20 @@ export class Lending {
     if (held) this.#let(held, why)
   }
 
+  /** One beat for a served session: its progress since the last heard one, and its streams until a beat says them. */
+  #say(id: string): void {
+    const lease = this.#served.get(id)
+    if (!lease) return
+    const progress = this.#progress.get(id)
+    const streams = this.#unsaid.has(id) ? this.#deps.streams?.(lease) : undefined
+    if (!this.#deps.beat(id, progress, streams?.length ? streams : undefined)) return
+    this.#progress.delete(id)
+    this.#unsaid.delete(id)
+  }
+
   /** What a served lease held here lets go, once it has ended. */
   #let(held: Lease, why: LeaseEnd): void {
+    this.#unsaid.delete(held.id)
     this.#progress.delete(held.id)
     this.#phases.delete(held.id)
     this.#deps.lent.remove(held.id)
@@ -114,7 +128,7 @@ export class Lending {
   progress(lease: string, progress: Progress): void {
     if (!this.#served.has(lease)) return
     this.#progress.set(lease, progress)
-    if (this.#deps.beat(lease, progress)) this.#progress.delete(lease)
+    this.#say(lease)
   }
 
   /** A verb ran under a served lease: opening reads as booting, anything after as running, said when it changes. */
@@ -133,10 +147,7 @@ export class Lending {
   beat(): void {
     const now = this.#now()
     for (const lease of this.#served.expired(now)) this.#let(lease, "expired")
-    for (const { id } of this.#served.leases()) {
-      const progress = this.#progress.get(id)
-      if (this.#deps.beat(id, progress) && progress) this.#progress.delete(id)
-    }
+    for (const { id } of this.#served.leases()) this.#say(id)
     if (this.#served.leases().some((lease) => lease.expiresAt - 2 * LEND_BEAT_MS <= now)) void this.#renew()
   }
 

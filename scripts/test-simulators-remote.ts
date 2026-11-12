@@ -477,3 +477,48 @@ test("a machine runtime is never the person at main's later doors either: agents
   assert.deepEqual(heard, ["settle", "threads-act", "settings-act", "automations-act", "harnesses-act"], "the person's own device is heard at each")
   await methods.close()
 })
+
+test("another place's call releases only under a live lease of its Thread, and a lease lends one simulator and ends only its own claims", async () => {
+  const host = fakeHost()
+  const TABLET: SimulatorSummary = { ...PHONE, id: "MAKO-TABLET", name: "Mako iPad Air", form: "tablet" }
+  host.list = async () => [PHONE, TABLET]
+  const leases = new Map<string, string>()
+  const simulators = new Simulators({ hosts: [host], consent: async () => [], agent: () => undefined, leases: { leaseOf: (_via, thread) => leases.get(thread) } })
+  const from = (thread: string): SimulatorCaller => ({ kind: "agent", session: `s-${thread}`, agent: { thread, session: `s-${thread}`, folder: "/workspace" }, via: { from: "runtime:m-00000000000000a1.g1" } })
+  const phone = { host: LOCAL_HOST, simulator: "MAKO-PHONE" }
+  const tablet = { host: LOCAL_HOST, simulator: "MAKO-TABLET" }
+  const claimOf = async (simulator: string) => {
+    const listed = await simulators.list({ kind: "person" })
+    return "refused" in listed ? undefined : listed.simulators.find((each) => each.id === simulator)?.claim?.thread
+  }
+
+  // t2 holds the phone under its lease; a machine with no lease names t2 and asks to release it.
+  leases.set("t2", "lease-t2")
+  assert.ok(!("refused" in (await simulators.open(from("t2"), phone))))
+  leases.delete("t2")
+  const forged = await simulators.release(from("t2"), phone)
+  assert.equal("refused" in forged && forged.refused, "not-offered", "no lease, no release, whatever Thread the call names")
+  assert.equal(await claimOf("MAKO-PHONE"), "t2", "and t2 still drives it")
+  leases.set("t2", "lease-t2")
+
+  // A lease lends one simulator: t1's lease opens the tablet, and the same lease can't open another.
+  leases.set("t1", "lease-a")
+  await simulators.release(from("t2"), phone)
+  assert.ok(!("refused" in (await simulators.open(from("t1"), tablet))))
+  const second = await simulators.open(from("t1"), phone)
+  assert.equal("refused" in second && second.refused, "not-offered", "one lease, one simulator")
+
+  // Under another lease of the same Thread, the phone; neither lease drives the other's simulator.
+  leases.set("t1", "lease-b")
+  assert.ok(!("refused" in (await simulators.open(from("t1"), phone))))
+  const across = await simulators.act(from("t1"), { ...tablet, action: { kind: "tap", at: { x: 1, y: 1 } } })
+  assert.equal("refused" in across && across.refused, "not-offered", "lease-b doesn't drive lease-a's tablet")
+  const releasedAcross = await simulators.release(from("t1"), tablet)
+  assert.equal("refused" in releasedAcross && releasedAcross.refused, "not-offered", "nor release it")
+
+  // lease-a ends: its tablet goes, and lease-b's phone stays.
+  simulators.releaseLease("lease-a")
+  assert.equal(await claimOf("MAKO-TABLET"), undefined)
+  assert.equal(await claimOf("MAKO-PHONE"), "t1")
+  await simulators.close()
+})

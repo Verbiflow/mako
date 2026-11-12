@@ -108,6 +108,8 @@ export interface SimulatorClaim {
   /** When its holder last acted: a claim idle for `CLAIM_IDLE_MS` lets go. */
   lastAt: number
   generation: number
+  /** The lease another place's agent holds it under: only that lease drives it, and its end lets it go. */
+  lease?: string
 }
 
 export interface ListedSimulator extends SimulatorSummary {
