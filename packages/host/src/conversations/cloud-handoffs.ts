@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { z } from "zod"
-import { QUIET_THREADS_MAX, type AcknowledgedCheckpoint, type QuietAnswer, type QuietNote, type QuietRefusal, type QuietThread } from "@mako/protocol/handoff"
+import { PARKED_PER_THREAD_MAX, QUIET_THREADS_MAX, type AcknowledgedCheckpoint, type QuietAnswer, type QuietNote, type QuietRefusal, type QuietThread } from "@mako/protocol/handoff"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { goesOff, SHUTDOWN_HOLD_MS, type HandOffCandidate, type HandOffResult, type HandOffSettings, type ThreadHandOff, type ThreadMoveOutcome } from "../contracts/cloud-threads.js"
@@ -30,7 +30,7 @@ export type CloudHandOffsOptions = {
     /** Waits until `deadline` at most for every move running here to settle; answers how many still run (`CloudMoves.settled`). */
     settled(deadline: number): Promise<number>
     /** The Thread's turns paused and parked as this Mac goes away, nothing of it moved (`CloudMoves.goAway`). */
-    goAway?(conversationId: string, goingAway: string, handOff: ThreadHandOff): Promise<{ thread: string; sessions: Array<{ session: string; generation: number }>; parked: number }>
+    goAway?(conversationId: string, goingAway: string, handOff: ThreadHandOff): Promise<{ thread: string; sessions: Array<{ session: string; generation: number }>; parked: Array<{ conversation: string; request: string; continuation: string; stopped: string[] }> }>
   }
   /**
    * What a Mac going away (a sleep, a shutdown) takes: each Thread's last changes sent (`CloudReadiness.flush`), the
@@ -162,12 +162,13 @@ export class CloudHandOffs {
     const flushedMs = performance.now() - began - pausedMs
     const threads: QuietThread[] = []
     for (const each of parked) {
-      if (!("gone" in each) || !each.gone.parked) continue
+      if (!("gone" in each) || !each.gone.parked.length) continue
       // Only the Sessions the account lists as this Mac's: one it has no row of would have it refuse the whole Thread.
       const listed = rows ? each.gone.sessions.filter((session) => rows.has(session.session)) : each.gone.sessions
       if (!listed.length) continue
       const checkpoint = await goingAway.checkpoint(each.gone.thread)
-      threads.push({ thread: each.gone.thread, sessions: listed, ...checkpoint && { checkpoint } })
+      const parked = each.gone.parked.slice(0, PARKED_PER_THREAD_MAX).map(({ stopped, ...turn }) => ({ ...turn, ...stopped.length && { stopped } }))
+      threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint } })
     }
     const note: QuietNote = { note: handOff, reason: why, at: Date.now(), threads: threads.slice(0, QUIET_THREADS_MAX) }
     let heard: NoteHeard
