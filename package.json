@@ -123,6 +123,7 @@
     "bench:mako-log": "tsx --tsconfig tsconfig.app.json scripts/bench-mako-log.ts",
     "bench:history-tool": "node --expose-gc --import tsx scripts/bench-history-tool.ts",
     "bench:live-read": "node --expose-gc --import tsx scripts/bench-live-read.ts",
+    "bench:agents-report": "tsx --tsconfig tsconfig.scripts.json scripts/bench-agents-report.ts",
     "bench:running-memory": "node --expose-gc --import tsx scripts/bench-running-memory.ts",
     "test:thread-history": "tsx scripts/test-thread-history.ts",
     "test:child-input": "npm run -s build --workspace @mako/sessions && tsx scripts/test-child-input.ts",
