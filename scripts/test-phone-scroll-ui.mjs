@@ -235,9 +235,17 @@ async function checkScroll() {
    * barely glided one time in six on the macOS runner (its last moves arrived bunched, read as a stop). A touch on its
    * own is stamped now; a stroke's moves are stamped from its start, 16 ms apart, and its lift 1 ms after its last move
    * however late they arrive: a lift stamped when it arrived read as a finger that had stopped, and nothing glided.
+   * A stroke sent faster than its stamps leaves them ahead of the clock, so a touch on its own first waits for the clock
+   * to pass them: stamped 1 ms after them instead, twelve strokes' stamps ran a second and a half ahead, and the flick
+   * down to the end moved 120 px of 1,100.
    */
   let stamp = 0
-  const touch = (type, point, at = Math.max(Date.now() / 1000, stamp + 0.001)) => {
+  const touch = async (type, point, at) => {
+    if (at === undefined) {
+      const ahead = stamp * 1000 + 1 - Date.now()
+      if (ahead > 0) await wait(ahead)
+      at = Date.now() / 1000
+    }
     stamp = at
     return send("Input.dispatchTouchEvent", { type, touchPoints: point ? [{ x: point.x, y: point.y, id: 1 }] : [], timestamp: at })
   }
@@ -324,9 +332,12 @@ async function checkScroll() {
 
     // 2. Resting, then dragging up: the end's follow, written as the finger lands, leaves the gesture the reader's.
     await wait(300)
+    await evaluate("addEventListener('pointerdown', () => { window.__landed = performance.now() }, { once: true, capture: true }), true")
     await touch("touchStart", centre)
     since = await now()
-    await wait(300)
+    // A rest of 100 ms by the page's own clock, from when it heard the finger land, not 300 ms by the test's: the
+    // reply's long press (500 ms, replies.ts) is the page's to time, and on a slow runner a rest timed here reached it.
+    await evaluate("new Promise((resolve) => setTimeout(() => resolve(true), Math.max(0, 100 - (performance.now() - (window.__landed ?? performance.now())))))")
     await drag(centre, 300)
     // Where the drag settled, the finger still down, rather than a fixed 150 ms after its last move: on a busy runner
     // that read once found it 0 px from the end.
@@ -464,9 +475,17 @@ async function checkScroll() {
 
     // 5. A short move up, short of where the way back shows, stays where it was left.
     // Slow, and still before lifting: no glide carries it past the 96 px it used to be taken back from. The answer
-    // pauses for the move, so it alone sets how far from the end the reader stops.
-    await toEnd()
+    // pauses for the move, so it alone sets how far from the end the reader stops: paused, and its last words drawn,
+    // before the finger lands. Stopped as it landed, a paint still due (up to 90 ms, markdown.tsx) grew the page under
+    // the finger, which holds the end, and a 60 px move read as 110.
     await evaluate("window.scrollCheck.stop(), true")
+    await evaluate(`new Promise(resolve => {
+      const node = ${scroller}
+      let height = node.scrollHeight, since = performance.now()
+      const step = () => { if (node.scrollHeight !== height) { height = node.scrollHeight; since = performance.now() } performance.now() - since >= 200 ? resolve(true) : requestAnimationFrame(step) }
+      requestAnimationFrame(step)
+    })`)
+    await toEnd()
     await touch("touchStart", centre)
     await drag(centre, 60, 4)
     await wait(200)
