@@ -1,3 +1,4 @@
+import "./borrow-composition.mjs"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { describe, test } from "node:test"
@@ -367,11 +368,18 @@ function walkCapable(seed, steps, tally) {
       const live = Object.values(before.leases).filter((held) => !held.ended)
       if (!live.length) input = { type: "tick", at }
       else {
-        const lease = random.pick(live).lease.id
+        const held = random.pick(live).lease
+        const lease = held.id
+        // Mostly the lease's own device; now and then another, which is never heard.
+        const device = random.next() < 0.85 ? held.device : random.pick(DEVICES.filter((id) => id !== held.device))
+        const canary = `CANARY_${seed}_${index}`
         input = random.pick([
-          { type: "heartbeat", lease, at },
-          { type: "heartbeat", lease, at },
-          { type: "progress", lease, progress: { phase: random.pick(["booting", "running", "testing"]), percent: random.int(101) }, at },
+          { type: "heartbeat", lease, device, at },
+          { type: "heartbeat", lease, device, streams: [{ name: "screen", kind: "video" }, { name: "console", kind: "text" }], at },
+          { type: "progress", lease, device, progress: { phase: random.pick(["booting", "running", "testing"]), percent: random.int(101) }, at },
+          { type: "artifact", lease, device, artifact: { name: random.pick(["sign-in.mov", "results.xml", "shot.png"]), hash: sha(`${seed}:${index}`), size: random.int(1 << 20) }, at },
+          // A device that tries to put a value where a name goes: as a path, or as the contents themselves.
+          { type: "artifact", lease, device: held.device, artifact: { name: random.pick([`../${canary}`, `tmp/${canary}/out.mov`, `${canary}`.padEnd(400, "x")]), hash: sha(canary), size: 1 }, at },
           { type: "cancel", lease, by: { kind: "person", account: ACCOUNT }, at },
           { type: "release", lease, at },
         ])
@@ -382,6 +390,30 @@ function walkCapable(seed, steps, tally) {
     const result = step(before, input)
     state = result.state
     const where = `capable seed ${seed}, step ${index}, ${input.type}`
+    // Inputs a session's own device alone may give: from any other device, rejected, and nothing changes but time.
+    if (["heartbeat", "progress", "artifact"].includes(input.type) && before.leases[input.lease] && input.device !== before.leases[input.lease].lease.device) {
+      assert.ok(result.rejected, `${where}: a session heard another device`)
+      assert.deepEqual(result.state, step(before, { type: "tick", at }).state, `${where}: another device's word changed something`)
+      tally.wrongDevice = (tally.wrongDevice ?? 0) + 1
+    }
+    // Every lease on a device that ended in this step tells its device exactly once, and no other lease is told of.
+    const tells = result.effects.filter((effect) => effect.effect === "tell")
+    for (const tell of tells) BorrowPushSchema.parse(tell.push)
+    for (const [id, held] of Object.entries(state.leases)) {
+      const ended = held.ended && !before.leases[id]?.ended && held.lease.device
+      const told = tells.filter((tell) => tell.push.lease === id)
+      assert.equal(told.length, ended ? 1 : 0, `${where}: ${id} told its device ${told.length} times`)
+      if (ended) assert.deepEqual(told[0], { effect: "tell", device: held.lease.device, push: { push: "ended", lease: id, why: held.ended.why } })
+      // A session's files are listed only while it lives.
+      if (held.ended) assert.equal(held.lease.session?.artifacts, undefined, `${where}: an ended lease still lists files`)
+      // No name it lists carries a value.
+      for (const named of [...(held.lease.session?.artifacts ?? []), ...(held.lease.session?.streams ?? [])]) assert.ok(!named.name.includes("CANARY"), `${where}: a name holds a value`)
+    }
+    tally.told = (tally.told ?? 0) + tells.length
+    // A session's file is let go only when no live lease of its grant names it.
+    for (const effect of result.effects.filter((effect) => effect.effect === "unreferenced"))
+      assert.ok(!Object.values(state.leases).some((other) => !other.ended && other.lease.grant === effect.grant && other.lease.session?.artifacts?.some((each) => each.hash === effect.version)), `${where}: a file let go that a live session still names`)
+    if (input.type === "artifact" && !result.rejected) tally.artifacts = (tally.artifacts ?? 0) + 1
     tally[input.type] = (tally[input.type] ?? 0) + 1
     const events = result.effects.filter((effect) => effect.effect === "log").map((effect) => effect.event)
     for (const event of events) {
@@ -456,6 +488,7 @@ describe("borrowing: capable devices keep rules 8 to 12 over generated sequences
     for (const kind of ["queued", "asked", "granted", "cancelled", "lost", "refused"]) assert.ok((tally[`event:${kind}`] ?? 0) > 5, `too few ${kind}: ${JSON.stringify(tally)}`)
     assert.ok((tally.timedOut ?? 0) > 3, `too few waits reached their deadline: ${JSON.stringify(tally)}`)
     assert.ok((tally.waited ?? 0) > 10, "too few needs waited")
+    for (const kind of ["wrongDevice", "told", "artifacts"]) assert.ok((tally[kind] ?? 0) > 5, `too few ${kind}: ${JSON.stringify(tally)}`)
   })
 })
 
@@ -660,11 +693,23 @@ describe("borrowing: exact cases", () => {
     assert.equal(yes.answer.lease.device, "mac")
     assert.equal(yes.answer.lease.session.state, "starting")
     assert.ok(yes.effects.some((effect) => effect.effect === "push" && effect.push.push === "decided" && effect.push.correlationId === "sim-1"))
-    const running = step(yes.state, { type: "heartbeat", lease: "l1", at: 100_000 })
+    assert.equal(step(yes.state, { type: "heartbeat", lease: "l1", device: "studio", at: 100_000 }).rejected, "Only the lease's device speaks for its session")
+    const running = step(yes.state, { type: "heartbeat", lease: "l1", device: "mac", streams: [{ name: "screen", kind: "video" }], at: 100_000 })
     assert.equal(running.state.leases.l1.lease.session.state, "running")
-    const lost = step(running.state, { type: "tick", at: 100_000 + 4 * 60_000 })
+    assert.deepEqual(running.state.leases.l1.lease.session.streams, [{ name: "screen", kind: "video" }], "the lease names what it streams")
+    // A file the session made: by name, hash and size, from its own device; a path or another device's word isn't taken.
+    const recording = { name: "sign-up.mov", hash: sha("recording"), size: 4_096 }
+    const made = step(running.state, { type: "artifact", lease: "l1", device: "mac", artifact: recording, at: 101_000 })
+    assert.deepEqual(made.state.leases.l1.lease.session.artifacts, [recording])
+    for (const name of ["..", ".", "../secret", "tmp/out.mov", "a\\b"]) assert.ok(step(running.state, { type: "artifact", lease: "l1", device: "mac", artifact: { ...recording, name }, at: 101_000 }).rejected, `${name} isn't a file's name`)
+    assert.ok(step(running.state, { type: "artifact", lease: "l1", device: "studio", artifact: recording, at: 101_000 }).rejected)
+    const lost = step(made.state, { type: "tick", at: 101_000 + 4 * 60_000 })
     assert.equal(lost.state.leases.l1.ended.why, "lost")
     assert.ok(lost.effects.some((effect) => effect.effect === "push" && effect.push.push === "ended" && effect.push.why === "lost"))
+    assert.deepEqual(lost.effects.filter((effect) => effect.effect === "tell"), [{ effect: "tell", device: "mac", push: { push: "ended", lease: "l1", why: "lost" } }], "its device is told, once")
+    assert.equal(lost.state.leases.l1.lease.session.artifacts, undefined, "an ended lease lists no files")
+    assert.ok(lost.effects.some((effect) => effect.effect === "unreferenced" && effect.version === recording.hash), "and its files are let go")
+    assert.ok(step(lost.state, { type: "artifact", lease: "l1", device: "mac", artifact: recording, at: 400_000 }).rejected, "nothing more is listed on an ended lease")
   })
 
   test("with no capable device online a need waits to its deadline and ends typed; a device that can't serve is passed over; the borrower's own device goes first", () => {
@@ -750,6 +795,28 @@ describe("borrowing: exact cases", () => {
     const moved = step(lent.state, { type: "grant", grant: { ...named, version: 3, devices: ["studio"] }, at: 5 })
     assert.equal(moved.state.leases.l2.ended?.why, "revoked")
     assert.equal(step(moved.state, { type: "borrow", need: need({ for: atMac }), lease: "l3", ask: "a3", at: 6, content: { version: sha("x"), size: 1 } }).answer.refusal?.refused, "revoked")
+  })
+
+  test("a session's file shared with another live session stays until the last one naming it ends", () => {
+    const simulators = GrantSchema.parse({
+      id: "sims", resource: { kind: "operation", ref: "ios-simulator.*" }, source: { kind: "capable", requires: [{ capability: "ios-simulator" }] },
+      scope: { level: "project", account: ACCOUNT, repository: "acme/web" }, mode: "relay", access: "run", lifetime: { until: "revoked" }, ask: "never", secret: false,
+      grantedBy: { kind: "person", account: ACCOUNT }, grantedAt: 1, version: 1,
+    })
+    let state = step(emptyBroker(ACCOUNT), { type: "grant", grant: simulators, at: 1 }).state
+    state = step(state, { type: "advertise", device: "mac", capabilities: [{ capability: "ios-simulator", version: "27.2" }], slots: { used: 0, of: 4 }, at: 2 }).state
+    for (const [index, thread] of ["t1", "t2"].entries()) {
+      const need = { kind: "operation", ref: "ios-simulator.session", for: { ...mac, thread }, why: "drive it", correlationId: `s${index}` }
+      state = step(state, { type: "borrow", need, at: 3, lease: `l${index}`, ask: `a${index}` }).state
+      state = step(state, { type: "source-answer", ask: `a${index}`, answer: { answer: "yes", version: "v1" }, at: 4 }).state
+      state = step(state, { type: "artifact", lease: `l${index}`, device: "mac", artifact: { name: "shot.png", hash: sha("same bytes"), size: 10 }, at: 5 }).state
+    }
+    const unreferenced = (effects) => effects.filter((effect) => effect.effect === "unreferenced" && effect.version === sha("same bytes"))
+    const first = step(state, { type: "release", lease: "l0", at: 6 })
+    assert.deepEqual(unreferenced(first.effects), [], "the other live session still names the file")
+    assert.deepEqual(first.state.leases.l1.lease.session.artifacts?.map((each) => each.hash), [sha("same bytes")])
+    const last = step(first.state, { type: "release", lease: "l1", at: 7 })
+    assert.equal(unreferenced(last.effects).length, 1, "the last one naming it lets it go")
   })
 
   test("a need's answer is its whole borrower's: the same Thread and correlation ID from another repository or place is decided afresh", () => {

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { machineCall, NOT_THE_PERSON } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
@@ -83,6 +84,7 @@ export class AutomationTool {
 }
 
 /** `mako:automations-act`. */
-export function declareAutomationToolMethods(methods: MethodTable, tool: () => AutomationTool | undefined): void {
-  methods.handle("mako:automations-act", (caller: AgentCaller, input: AutomationActInput) => tool()?.act(caller, input) ?? { refused: "unavailable", why: "This host has no automations." })
+export function declareAutomationToolMethods(methods: MethodTable, tool: () => Pick<AutomationTool, "act"> | undefined): void {
+  methods.handle("mako:automations-act", (caller: AgentCaller, input: AutomationActInput) =>
+    caller.kind === "person" && machineCall() ? { refused: "no-thread" as const, why: NOT_THE_PERSON } : tool()?.act(caller, input) ?? { refused: "unavailable", why: "This host has no automations." })
 }

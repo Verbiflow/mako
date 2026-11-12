@@ -33,7 +33,7 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { SimulatorSetupFollower } from "./simulators/setup.js"
-import { Simulators } from "./simulators/simulators.js"
+import { Simulators, type SimulatorLeases } from "./simulators/simulators.js"
 import { LocalSimulatorHost, localDriving } from "./simulators/local-host.js"
 import { declareSimulatorMethods } from "./simulators/methods.js"
 import type { SimulatorAgent } from "../contracts/simulators.js"
@@ -41,6 +41,7 @@ import { SimulatorTools } from "./simulators/mcp.js"
 
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
 export { ControlResidency } from "./residency.js"
+export type { SimulatorLeases } from "./simulators/simulators.js"
 export { controlVideoMedia } from "./video-media.js"
 
 /** Browser and computer use, and the desktop app that does what only Electron can. */
@@ -110,7 +111,9 @@ export function openControl(
   jobs: HostJobs,
   emit: (event: HostEvent) => void,
   updated: () => void,
-  simulatorAgent: (session: string) => SimulatorAgent | undefined
+  simulatorAgent: (session: string) => SimulatorAgent | undefined,
+  /** The session leases this Mac serves, which another place's agent's every simulator call must be under. */
+  simulatorLeases?: SimulatorLeases
 ): Control {
   const { environment, fixtureDesk } = config
   const configuredDevServerUrl = config.development?.devServerUrl ?? null
@@ -284,6 +287,7 @@ export function openControl(
     consent: () => simulatorSetup.consent(),
     agent: simulatorAgent,
     holding: (on) => simulatorHeld.set(on),
+    ...(simulatorLeases && { leases: simulatorLeases }),
   })
   const stopSimulatorSweep = jobs.every("simulator-claims", 60_000, () => simulators.sweep(), { needs: [simulatorHeld] })
   let service: ControlService | undefined

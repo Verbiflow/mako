@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
+import { machineCall, NOT_THE_PERSON } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
 import type { AgentCaller, AgentRefused, AgentsCancelInput, AgentsNoticeInput, AgentsPlaceInput } from "../contracts/agents.js"
 import {
@@ -25,22 +26,30 @@ import { AgentListResults } from "./agent-list-results.js"
 
 const UNAVAILABLE: AgentRefused = { refused: "unavailable", why: "Children need the Thread store, which didn't open on this host." }
 
-/** `mako:agents-<verb>`: every door's one way in, each the engine's operation of the same name. */
+const MACHINE_AS_PERSON: AgentRefused = { refused: "access", why: NOT_THE_PERSON }
+
+/**
+ * `mako:agents-<verb>`: every door's one way in, each the engine's operation of the same name. A machine runtime's call
+ * that names the person as its caller is refused before the engine hears it (`machineCall`).
+ */
 export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOperations & PlacementOperations) | undefined): void {
   const listResults = new AgentListResults()
+  const machineAsPerson = (caller: AgentCaller) => caller.kind === "person" && machineCall()
   // Between hosts, for Fins placed across the person's devices: no door shows these to an agent.
   methods.handle("mako:agents-capabilities", () => agents()?.capabilities() ?? UNAVAILABLE)
   methods.handle("mako:agents-place", (input: AgentsPlaceInput) => agents()?.place(input) ?? UNAVAILABLE)
   methods.handle("mako:agents-notice", (input: AgentsNoticeInput) => agents()?.notice(input) ?? UNAVAILABLE)
   methods.handle("mako:agents-cancel", (input: AgentsCancelInput) => agents()?.cancel(input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-start", (caller: AgentCaller, input: AgentsStartInput) => agents()?.start(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-move", (caller: AgentCaller, input: AgentsMoveInput) => agents()?.move(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-link", (caller: AgentCaller, input: AgentsLinkInput) => agents()?.link(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-start", (caller: AgentCaller, input: AgentsStartInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.start(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-move", (caller: AgentCaller, input: AgentsMoveInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.move(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-link", (caller: AgentCaller, input: AgentsLinkInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.link(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-list", async (caller: AgentCaller, input: AgentsListInput) => {
+    if (machineAsPerson(caller)) return MACHINE_AS_PERSON
     const result = await agents()?.list(caller, input) ?? UNAVAILABLE
     return input.presentation === "summary" ? listResults.summarize(caller, result) : result
   })
   methods.handle("mako:agents-read", async (caller: AgentCaller, input: AgentsReadInput) => {
+    if (machineAsPerson(caller)) return MACHINE_AS_PERSON
     const service = agents()
     if (!service) return UNAVAILABLE
     if (input.view === "pulls" && input.afterAction !== undefined) return { refused: "conflict", why: "afterAction applies to report follow-up pages, not PR snapshots." } satisfies AgentRefused
@@ -49,12 +58,12 @@ export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOp
       return { refused: "conflict", why: "snapshot, offset and limit apply only to view pulls." } satisfies AgentRefused
     return service.read(caller, input)
   })
-  methods.handle("mako:agents-report", (caller: AgentCaller, input: AgentsReportInput) => agents()?.report(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-send", (caller: AgentCaller, input: AgentsSendInput) => agents()?.send(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-settle", (caller: AgentCaller, input: AgentsSettleInput) => agents()?.settle(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-answer", (caller: AgentCaller, input: AgentsAnswerInput) => agents()?.answer(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-stop", (caller: AgentCaller, input: AgentsStopInput) => agents()?.stop(caller, input) ?? UNAVAILABLE)
-  methods.handle("mako:agents-wait", (caller: AgentCaller, input: AgentsWaitInput) => agents()?.wait(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-report", (caller: AgentCaller, input: AgentsReportInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.report(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-send", (caller: AgentCaller, input: AgentsSendInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.send(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-settle", (caller: AgentCaller, input: AgentsSettleInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.settle(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-answer", (caller: AgentCaller, input: AgentsAnswerInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.answer(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-stop", (caller: AgentCaller, input: AgentsStopInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.stop(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:agents-wait", (caller: AgentCaller, input: AgentsWaitInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.wait(caller, input) ?? UNAVAILABLE)
 }
 
 /**

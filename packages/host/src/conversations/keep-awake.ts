@@ -34,6 +34,11 @@ export type KeepAwakeOptions = {
   helper(): Promise<string | undefined>
   /** How many of this Mac's Threads have an agent at work now (`workingThreads`, `ownWork`). */
   working(): number
+  /**
+   * How many sessions this Mac serves another place's Thread under a lease now (`LentHere`): a simulator a cloud
+   * Thread drives is work this Mac does, and sleeping mid-lease would end it.
+   */
+  serving?(): number
   /** What every window shows changed. */
   changed(state: KeepAwakeState): void
   /** How a test starts the helper; the real one by default. */
@@ -157,7 +162,7 @@ export class KeepAwake {
     if (this.#stopped) return
     const settings = await this.#readSettings()
     if (this.#stopped) return
-    const agents = settings.on ? this.#options.working() : 0
+    const agents = settings.on ? this.#options.working() + (this.#options.serving?.() ?? 0) : 0
     if (agents === 0) {
       this.#asked = undefined
       this.#tell(undefined)

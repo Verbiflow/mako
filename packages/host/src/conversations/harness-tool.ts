@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { machineCall, NOT_THE_PERSON } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AccessTier } from "../contracts/access.js"
@@ -79,6 +80,7 @@ export class HarnessTool {
 }
 
 /** `mako:harnesses-act`. */
-export function declareHarnessToolMethods(methods: MethodTable, tool: () => HarnessTool | undefined): void {
-  methods.handle("mako:harnesses-act", (caller: AgentCaller, input: HarnessActInput) => tool()?.act(caller, input) ?? { refused: "unavailable", why: "This host can't install harnesses." })
+export function declareHarnessToolMethods(methods: MethodTable, tool: () => Pick<HarnessTool, "act"> | undefined): void {
+  methods.handle("mako:harnesses-act", (caller: AgentCaller, input: HarnessActInput) =>
+    caller.kind === "person" && machineCall() ? { refused: "no-thread" as const, why: NOT_THE_PERSON } : tool()?.act(caller, input) ?? { refused: "unavailable", why: "This host can't install harnesses." })
 }

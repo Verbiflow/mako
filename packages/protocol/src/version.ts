@@ -36,9 +36,10 @@ export const PROTOCOL_VERSION = 1
  * does. 20 lets a row's Fins say all their selectors read of them (`FIN_STATES_VERSION`). 21 takes `borrow` frames,
  * what the runtime's Thread borrows as it changes. 22 lets a `sessions` row say its Session's place among its
  * Thread's Sessions (`order`, `SESSION_ORDER_VERSION`). 23 takes a device runtime's `advertise`: what it can serve
- * and its room. Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * and its room. 24 carries the sessions a device lends: `source-ask`, `lent` and `lent-ended` to it, and its
+ * `lease-beat`. Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 23
+export const LINK_VERSION = 24
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -143,6 +144,13 @@ export const SESSION_ORDER_VERSION = 22
  * (`borrow.ts`), on enrolment, on each change and hourly. A gateway that agreed less hears none, and routes nothing to it.
  */
 export const ADVERTISE_LINK_VERSION = 23
+
+/**
+ * The first link version that carries the sessions a device lends (`borrow.ts`): what it's asked as a source, the leases
+ * it serves as they're issued and end, and its heartbeats for them. A device on an older link answers asks by polling
+ * for them, and serves no session, since nothing could keep one alive.
+ */
+export const LEND_LINK_VERSION = 24
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

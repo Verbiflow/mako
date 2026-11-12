@@ -19,7 +19,7 @@ import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveH
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
-import { BORROW_PATHS, GrantSchema, LeaseEventSchema, LeaseSchema, SourceAnswerSchema, SourceAskSchema, type Grant, type SourceAnswer } from "@mako/protocol/borrow"
+import { ArtifactSchema, BORROW_PATHS, BorrowAnswerSchema, GrantSchema, type Artifact, LeaseEventSchema, LeaseSchema, SourceAnswerSchema, SourceAskSchema, type BorrowAnswer, type Grant, type Lease, type Progress, type SourceAnswer, type Stream } from "@mako/protocol/borrow"
 import type { BorrowSnapshot } from "../contracts/setup.js"
 import {
   LIVE_FORM,
@@ -249,9 +249,13 @@ export function cloudLegacyFiles(dataRoot: string): LegacyFiles {
 /** A Thread this Mac's runtime runs, and under which generation: claimed again when its link comes back. */
 export type RuntimeClaim = { threadId: string; generation: number }
 
+/** A file a lent session made, as its lease lists it (the contract's `Artifact`): by name, hash and size, never contents. */
+export const BorrowArtifactSchema = ArtifactSchema
+export type BorrowArtifact = Artifact
+
 /** How this Mac serves the host to the cloud as a runtime: the host's own dispatcher, behind the protocol. */
 export type CloudRuntime = {
-  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[]; watch?: RuntimeOptions["watch"] }): Promise<ServedRuntime>
+  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[]; watch?: RuntimeOptions["watch"]; lending?: RuntimeOptions["lending"] }): Promise<ServedRuntime>
 }
 
 /** How a cloud Thread is made: ahead of its first message (`prepare`), and the harness that message is for. */
@@ -283,8 +287,11 @@ export type CloudAccountOptions = {
   runtime?: CloudRuntime
   /** What tells the account's list of this Mac's Sessions over that runtime's link, and relays what's watched. */
   sessions?: SessionPublishing | undefined
-  /** What this Mac can serve and its room (`Advertiser`), said as its runtime's link enrols. */
-  advertising?: { current(): Advertisement | undefined }
+  /**
+   * What this Mac lends under borrowing's leases: its advertisement (`Advertiser`), said as its runtime's link enrols;
+   * what the link says it lends (`RuntimeOptions.lending`); and the enrolment itself, after which it reads its leases.
+   */
+  lending?: { advertisement(): Advertisement | undefined; frames: NonNullable<RuntimeOptions["lending"]>; enrolled(): void }
   /** A connection down this long shows as offline; a shorter blip isn't shown. For tests. */
   offlineAfterMs?: number
   /**
@@ -656,8 +663,29 @@ export class CloudAccounts {
   }
 
   /** This device's answer, as a source, to an ask the account's broker holds for it. */
-  async answerBorrowAsk(ask: string, answer: SourceAnswer): Promise<void> {
-    await this.#call("borrow.answer", "POST", `/v1/borrow/asks/${encodeURIComponent(ask)}`, SourceAnswerSchema.parse(answer))
+  async answerBorrowAsk(ask: string, answer: SourceAnswer): Promise<BorrowAnswer | undefined> {
+    const response = await this.#call("borrow.answer", "POST", `/v1/borrow/asks/${encodeURIComponent(ask)}`, SourceAnswerSchema.parse(answer))
+    return z.object({ answer: BorrowAnswerSchema }).safeParse(await response.json().catch(() => undefined)).data?.answer
+  }
+
+  /** The account's live leases, as its broker lists them; null from a cloud without a broker. */
+  async borrowLeases(): Promise<Lease[] | null> {
+    const response = await this.#call("borrow.read", "GET", "/v1/borrow/leases", undefined, false, [404])
+    return response.status === 404 ? null : z.object({ leases: z.array(LeaseSchema) }).parse(await response.json()).leases
+  }
+
+  /** The person ends a session lease, from any of their devices (Setup's Stop on what's lent): its device stops it. */
+  async cancelBorrowLease(lease: string): Promise<void> {
+    await this.#call("borrow.cancel", "POST", `${BORROW_PATHS.lease(lease)}/cancel`)
+  }
+
+  /**
+   * A file a session this Mac serves made (a recording, a large picture), given to its lease: the cloud seals it, keeps
+   * it as content-addressed pieces, and lists it on the lease by name, hash and size for its borrower alone.
+   */
+  async putBorrowArtifact(lease: string, name: string, file: string, bytes: number): Promise<BorrowArtifact> {
+    const response = await this.#call("borrow.artifact", "POST", `${BORROW_PATHS.lease(lease)}/artifacts?name=${encodeURIComponent(name)}`, new FileBody(file, bytes))
+    return BorrowArtifactSchema.parse(await response.json())
   }
 
   /** The grants that stand at the account's broker; null from a cloud that has none. */
@@ -1560,14 +1588,15 @@ export class CloudAccounts {
     let served: ServedRuntime | undefined
     let closed = false
     if (runtime)
-      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims, watch: (conversations, after, forms) => this.#options.sessions?.watch(link, conversations, after, forms) }).then(
+      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims, watch: (conversations, after, forms) => this.#options.sessions?.watch(link, conversations, after, forms), ...(this.#options.lending && { lending: this.#options.lending.frames }) }).then(
         (started) => {
           served = started
           if (closed) return started.close()
           this.#served = { link, served: started }
           this.#options.sessions?.linked(this.#served)
-          const advertisement = this.#options.advertising?.current()
+          const advertisement = this.#options.lending?.advertisement()
           if (advertisement) started.advertise(advertisement)
+          this.#options.lending?.enrolled()
           this.#options.log?.("cloud runtime enrolled", { runtimeId, claims: this.#claims.length })
           this.#options.onRuntimeLinked?.()
           void started.ended.then((problem) => {
@@ -1591,6 +1620,11 @@ export class CloudAccounts {
   /** Says what this Mac can serve and its room on the runtime link it serves now; false while there's none, or it's older. */
   advertise(advertisement: Advertisement): boolean {
     return this.#served?.served.advertise(advertisement) ?? false
+  }
+
+  /** Says a session this Mac serves is alive on its runtime link; false while there's none, or it's older. */
+  beat(lease: string, progress?: Progress, streams?: Stream[]): boolean {
+    return this.#served?.served.beat(lease, progress, streams) ?? false
   }
 
   /** Tells the cloud this runtime is going away on purpose, on a link that knows the frame. */

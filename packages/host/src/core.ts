@@ -46,8 +46,9 @@ import { busySinceLastAsk } from "./base/machine-load.js"
 import { Advertiser, ADVERTISE_EVERY_MS } from "./base/advertiser.js"
 import { deviceProbe, probeCapabilities, type SimulatorFacts } from "./base/capabilities.js"
 import { LentHere } from "./base/lent.js"
+import { operationWords } from "@mako/protocol/borrow-words"
 import { setupStep } from "./contracts/simulator-setup.js"
-import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice } from "./usage/index.js"
+import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice, Lending, LEND_BEAT_MS } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, CliReadings, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
@@ -183,6 +184,8 @@ interface LateParts {
   conversations?: Conversations
   /** What this Mac can serve another place and its room, said to borrowing's brokers (`Advertiser`). */
   advertiser?: Advertiser
+  /** The session leases this Mac serves another place's Threads (`Lending`). */
+  lending?: Lending
   movers?: WorkspaceMovers
   agentServers?: ConversationMcp
   controlService?: ControlService
@@ -384,6 +387,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const title = store.thread(placed.thread)?.title ?? live.title
     const project = projectFolder(store.worktrees(), live.cwd)
     return { thread: placed.thread, session: placed.session, folder: live.cwd, ...(project && { project }), ...(conversation && { conversation }), ...(title && { title }) }
+  }, {
+    leaseOf: (via, thread) => late.lending?.leaseOf(via, thread, "ios-simulator")?.id,
+    used: (lease, verb) => late.lending?.used(lease, verb),
   })
   const appUpdates = new Updates({
     environment,
@@ -721,7 +727,32 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   lent.subscribe(() => {
     late.conversations?.agents?.capacityChanged()
     late.advertiser?.roomChanged()
+    // A lease served or ended starts or ends work this Mac stays awake for.
+    void late.keepAwake?.refresh()
   })
+  // The sessions this Mac lends as their source: asks it can answer itself, each lease the broker issues it, beats
+  // for them on its runtime link, and every way one ends. A cloud machine and a fixture desk lend nothing.
+  const lending = config.machineAgentFd === undefined && !fixtureDesk
+    ? new Lending({
+        device: async () => late.cloud?.deviceId().catch(() => undefined),
+        answer: async (ask, answer) => late.cloud?.borrow?.answer(ask, answer),
+        leases: async () => (await late.cloud?.borrow?.leases()) ?? null,
+        serve: async (ask) => {
+          if (ask.resource.kind !== "operation" || ask.ref !== "ios-simulator") return { answer: "unavailable", reason: "not-found" }
+          const listed = await control.simulators.list({ kind: "person" })
+          const here = "refused" in listed ? undefined : listed.hosts.find((host) => host.kind === "local")
+          return here?.platforms.ios.ready ? { answer: "yes", version: "ready" } : { answer: "unavailable", reason: "not-found" }
+        },
+        beat: (lease, progress, streams) => late.cloud?.beat?.(lease, progress, streams) ?? false,
+        streams: (lease) => (lease.resource.ref === "ios-simulator" ? [{ name: "screen", kind: "video" }] : []),
+        lent,
+        words: (lease) => ({ what: operationWords(lease.resource.ref), for: lease.borrower.place.kind === "machine" ? "a cloud Thread" : "a Thread on another device" }),
+        ended: (lease) => control.simulators.releaseLease(lease.id),
+        log: (message, fields) => hostLog("borrowing", message, fields),
+      })
+    : undefined
+  late.lending = lending
+  if (lending) shell.jobs.every("beat for what this Mac lends", LEND_BEAT_MS, () => lending.beat())
   declareFinDefaultMethods(methods, finDefaults, () => {
     const reading = finCapacity.reading()
     return lent.count() ? { ...reading, lent: lent.words() } : reading
@@ -730,7 +761,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const buildSlots = new BuildSlots(() => finCapacity.builds())
   finCapacity.subscribe(() => buildSlots.changed())
   late.cloud = declareCloudAccountMethods(methods, {
-    advertising: { current: () => late.advertiser?.current() },
+    ...(lending && {
+      lending: {
+        advertisement: () => late.advertiser?.current(),
+        frames: {
+          asked: (ask) => void lending.asked(ask),
+          lent: (lease) => void lending.lent(lease),
+          ended: (lease, why) => lending.ended(lease, why),
+        },
+        enrolled: () => void lending.sync(),
+      },
+    }),
     accessChoices: {
       heard: (answer) => void late.cloud?.id().then((account) => account && accessChoices.heard({ account, ...answer }), () => undefined),
       again: () => void accessChoices.sync(),
@@ -1287,6 +1328,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     file: join(environment.dataRoot, "keep-awake.json"),
     helper: () => sleepWatchHelper(environment),
     working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations.has(id), ownWork: true }).length,
+    serving: () => lent.count(),
     changed: (state) => emit({ type: "keep-awake", state }),
   }) : undefined
   late.keepAwake = keepAwake
@@ -1473,7 +1515,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           snapshot: async (since) => (await late.cloud?.borrow?.snapshot(since)) ?? null,
           answer: async (ask, answer) => {
             if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
-            await late.cloud.borrow.answer(ask, answer)
+            const decided = await late.cloud.borrow.answer(ask, answer)
+            // The person's yes to a session this Mac serves: it's served from now, before the link says so.
+            if (decided && "lease" in decided) await late.lending?.lent(decided.lease)
           },
           revoke: async (grant) => {
             if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")

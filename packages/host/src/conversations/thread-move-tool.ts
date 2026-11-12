@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import type { MethodTable } from "../base/methods.js"
+import { machineCall, NOT_THE_PERSON } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
@@ -171,8 +172,9 @@ function continued(outcome: ThreadContinueOutcome): ThreadsMoveResult {
 }
 
 /** `mako:threads-move`, and the person's answers to agents' asks. */
-export function declareThreadMoveMethods(methods: MethodTable, tool: () => ThreadMoveTool | undefined): void {
-  methods.handle("mako:threads-move", (caller: AgentCaller, input: ThreadsMoveInput) => tool()?.move(caller, input) ?? refused("unavailable", "This host doesn't move Threads."))
+export function declareThreadMoveMethods(methods: MethodTable, tool: () => Pick<ThreadMoveTool, "move"> | undefined): void {
+  methods.handle("mako:threads-move", (caller: AgentCaller, input: ThreadsMoveInput) =>
+    caller.kind === "person" && machineCall() ? refused("not-yours", NOT_THE_PERSON) : (tool()?.move(caller, input) ?? refused("unavailable", "This host doesn't move Threads.")))
 }
 
 /** The MCP input schema of a Thread tool: its host call's generated schema, less what the door fills in. */

@@ -12,6 +12,7 @@ export { declareFootprintMethods, readProcessTable, type ProcessRow } from "./ma
 export { MakoStorage, type HarnessStorage } from "./storage.js"
 export { LeftoverFiles, RecordRepacks } from "./storage-collectors.js"
 export { declareCloudAccountMethods, type CloudAccount } from "./cloud-account-methods.js"
+export { LEND_BEAT_MS, Lending } from "./lending.js"
 export { describeThisDevice } from "./device-description.js"
 export type { CloudThreadMaking } from "./cloud-account.js"
 export type { MachineRuntime, MachineGatewayLink } from "./machine-runtime.js"
