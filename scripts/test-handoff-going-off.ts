@@ -21,7 +21,7 @@ import { ownerHold } from "@mako/host/conversations/owner-check"
 import { CloudHandOffs, machineLeaving, workingThreads } from "@mako/host/conversations/cloud-handoffs"
 import { CloudMoves, parkedContinuation, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
 import { CloudReadiness } from "@mako/host/conversations/cloud-readiness"
-import { QuietNoteSchema, type OwnerAnswer, type OwnerAsk, type QuietNote } from "@mako/protocol/handoff"
+import { autoContinueOp, QuietNoteSchema, type OwnerAnswer, type OwnerAsk, type QuietNote } from "@mako/protocol/handoff"
 import { SleepHandOff } from "@mako/host/conversations/sleep-handoff"
 import { WorkspaceMoves } from "@mako/host/workspaces/moves"
 import { moveSource, ThreadWorktreeMoves } from "@mako/host/workspaces/thread-worktree-moves"
@@ -324,6 +324,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
       others: (thread) => readiness.noteOthers(thread),
       // As the host's: the note as it goes, recorded first, which alone may leave the project folder later.
       noted: (sent) => readiness.noted(sent),
+      refused: (note, threads) => readiness.refused(note, threads),
       project: (thread) => readiness.noteProject(thread),
       projectFrom: (thread) => readiness.noteProjectFrom(thread),
       rows: async () => {
@@ -454,7 +455,7 @@ async function wentAway(h: Host, way: string, work: Awaited<ReturnType<typeof at
     assert.ok(h.acknowledged.some((each) => each.threadId === named.checkpoint!.standby && each.sha256 === named.checkpoint!.sha256), `${way}: a checkpoint the cloud acknowledged`)
     assert.ok(named.checkpoint.head && named.checkpoint.work, `${way}: the whole checkpoint, as the arrival applies it`)
     // What the note carried is recorded with the Thread kept ready: the way back takes out only that.
-    if (id === work.inProject) assert.deepEqual((await h.readiness.acknowledged(placed.thread))?.noted, [named.checkpoint.sha256], `${way}: the checkpoint the note carried, recorded`)
+    if (id === work.inProject) assert.deepEqual((await h.readiness.acknowledged(placed.thread, await autoContinueOp(placed.thread, named.sessions, note.note)))?.noted, [named.checkpoint.sha256], `${way}: the checkpoint the note carried, recorded for the continue it makes`)
     // Where its Sessions open on the machine: a project folder's project worktree; a repository's own needs none.
     assert.equal(named.project, id === work.inProject ? project : undefined, `${way}: ${id === work.inProject && project ? "names the project worktree it was kept ready at" : "names no project"}`)
     // Its parked turn, under the very request this Mac's join would send it on under.
@@ -622,19 +623,32 @@ try {
     assert.equal(onApi("person.ts"), "export const person = 1\n", "never the person's")
     const onWeb = await laid(join(h.base, "web.git"), other.checkpoint, "web")
     assert.equal(onWeb("own.ts"), "export const web = 1 // the agent's\n", "the Thread's change in the other repository")
-    // Back, the way back takes out only what the note carried, against the checkpoint the continue went on from.
-    const leaving = async () => {
-      const kept = (await h.readiness.acknowledged(named.thread))!
+    // Back, the way back takes out only what the note the continue came from carried (by the continue's op), against
+    // the checkpoint it went on from.
+    const opOf = (of: QuietNote) => autoContinueOp(named.thread, of.threads[0]!.sessions, of.note)
+    const leaving = async (op: string) => {
+      const kept = (await h.readiness.acknowledged(named.thread, op))!
       return cloudHasAll(kept.acknowledged.map((each) => ({ root: each.root, sha256: each.checkpoint.sha256, changes: each.versions?.length ?? 0 })), kept.noted, first.sha256)
     }
-    assert.deepEqual((await h.readiness.acknowledged(named.thread))?.noted, [first.sha256, other.checkpoint.sha256], "the note carried both, recorded as it went")
-    assert.equal(await leaving(), undefined, "both carried (a gateway at 26): the Thread's changes may leave both repositories")
-    // A gateway at 25 is sent no others: recorded as it went, the note carried the first alone, and nothing leaves.
-    await h.readiness.noted({ ...note, threads: note.threads.map(({ others: _others, ...thread }) => thread) })
-    assert.match((await leaving()) ?? "", /web/, "the other's change isn't on the machine: it stays, and so does the first's")
+    assert.deepEqual((await h.readiness.acknowledged(named.thread, await opOf(note)))?.noted, [first.sha256, other.checkpoint.sha256], "the note carried both, recorded as it went")
+    assert.equal(await leaving(await opOf(note)), undefined, "both carried (a gateway at 26): the Thread's changes may leave both repositories")
+    assert.match((await leaving(randomUUID())) ?? "", /no going-away note/, "a continue no recorded note names (a press): nothing leaves")
+    // Note A goes to a gateway at 25 (the first alone) and the account continues from it; the Mac wakes and goes away
+    // again before it joins, and note B, at 26, records both. The join is A's continue: only what A carried may leave.
+    const alone = (of: QuietNote): QuietNote => ({ ...of, threads: of.threads.map(({ others: _others, ...thread }) => thread) })
+    const noteA = alone({ ...note, note: randomUUID() })
+    const noteB: QuietNote = { ...note, note: randomUUID() }
+    await h.readiness.noted(noteA)
+    await h.readiness.noted(noteB)
+    assert.match((await leaving(await opOf(noteA))) ?? "", /web/, "continued from A: the other's change isn't on the machine, so nothing leaves, though B carried it")
+    assert.equal(await leaving(await opOf(noteB)), undefined, "a continue from B, which carried both, may")
+    // The account refused the Thread in B: B's record goes, and nothing is ever continued from it.
+    await h.readiness.refused(noteB.note, [named.thread])
+    assert.match((await leaving(await opOf(noteB))) ?? "", /no going-away note/, "B refused: nothing leaves by it")
     // At 26, but the other's checkpoint acknowledged here isn't the one the note carried (acknowledged anew after it went).
-    await h.readiness.noted({ ...note, threads: note.threads.map((thread) => ({ ...thread, others: thread.others?.map((each) => ({ ...each, checkpoint: { ...each.checkpoint, sha256: "0".repeat(64) } })) })) })
-    assert.match((await leaving()) ?? "", /web/, "the other's newer change isn't on the machine: nothing leaves")
+    const stale: QuietNote = { ...note, note: randomUUID(), threads: note.threads.map((thread) => ({ ...thread, others: thread.others?.map((each) => ({ ...each, checkpoint: { ...each.checkpoint, sha256: "0".repeat(64) } })) })) }
+    await h.readiness.noted(stale)
+    assert.match((await leaving(await opOf(stale))) ?? "", /web/, "the other's newer change isn't on the machine: nothing leaves")
     await h.close()
   }
 
@@ -677,6 +691,8 @@ try {
     await keptReady(h, work)
     await sleeps(h, 9_000)
     assert.equal(h.notes.length, 1, "the note went, and wasn't taken")
+    const untaken = h.notes[0]!.threads.find((each) => each.thread === h.world.store.journalPlacement(work.inProject)!.thread)!
+    assert.equal((await h.readiness.acknowledged(untaken.thread, await autoContinueOp(untaken.thread, untaken.sessions, h.notes[0]!.note)))?.noted, undefined, "a note nobody took keeps no record: nothing leaves by it")
     assert.equal(h.moved.size, 0, "nothing moved")
     assert.ok(workingThreads({ live: h.world.live, threads: h.world.store, cloud: () => false }).length === 0, "nothing reads at work")
     const before = h.world.prompts.length

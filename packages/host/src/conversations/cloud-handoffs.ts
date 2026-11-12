@@ -56,6 +56,8 @@ export type CloudHandOffsOptions = {
      * the note carried them. Without it, nothing is recorded, and nothing leaves.
      */
     noted?(sent: QuietNote): Promise<void>
+    /** The account took none of these Threads of the note (it refused them, or took no notes): their record of it goes. */
+    refused?(note: string, threads: readonly string[]): Promise<void>
     /** Sends the note (`CloudAccount.quiet`), handing `record` the very note that goes, before it does. */
     quiet(note: QuietNote, record?: (sent: QuietNote) => Promise<void>): Promise<QuietAnswer | "unserved">
     /**
@@ -227,6 +229,10 @@ export class CloudHandOffs {
     // had, and an owner ask lets them go if it wasn't. Only a gateway that takes no notes (`unserved`) took none.
     const taken = heard.kind === "answered" ? new Set(heard.answer.threads.filter((each) => each.accepted).map((each) => each.thread))
       : heard.kind === "unanswered" ? new Set(note.threads.map((each) => each.thread)) : new Set<string>()
+    // Only the Threads the account took keep this note's record: nothing is continued from it for the rest.
+    const untaken = note.threads.filter((each) => !taken.has(each.thread)).map((each) => each.thread)
+    if (untaken.length)
+      await goingAway.refused?.(note.note, untaken).catch((error: Error) => hostWarn("handoff", "a refused note's record couldn't be dropped; no continue comes from it", { error: error.message }))
     try {
       await goingAway.accepted(note.note, note.threads.filter((each) => taken.has(each.thread)).flatMap((each) => each.sessions))
     } catch (error) {

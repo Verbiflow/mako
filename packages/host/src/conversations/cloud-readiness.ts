@@ -1,4 +1,4 @@
-import type { QuietNote } from "@mako/protocol/handoff"
+import { autoContinueOp, type QuietNote } from "@mako/protocol/handoff"
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { z } from "zod"
@@ -58,6 +58,12 @@ const AcknowledgedSchema = z.object({
 })
 export type Acknowledged = z.infer<typeof AcknowledgedSchema>
 
+/** A going-away note's word on one Thread, as `CloudReadiness.noted` keeps it. */
+const NotedSchema = z.object({ note: z.string(), sessions: z.array(z.object({ session: z.string(), generation: z.number().int() })), sha256: z.array(z.string()) })
+type Noted = z.infer<typeof NotedSchema>
+/** How many going-away notes a Thread keeps the word of: a continue comes from one of the last few, or from none. */
+const NOTES_KEPT = 8
+
 const ReadyEntrySchema = z.object({
   cloudThread: z.string(),
   folder: z.string(),
@@ -69,10 +75,12 @@ const ReadyEntrySchema = z.object({
   /** A Thread in the main checkout: its own changes, one per repository, as the cloud last acknowledged them. */
   acknowledged: z.array(AcknowledgedSchema).optional(),
   /**
-   * The last going-away note's word on this Thread: each checkpoint it carried, by hash. Only what went in it may leave
-   * the project folder once the cloud went on (`leavable`); a checkpoint acknowledged after it didn't go.
+   * Each going-away note's word on this Thread, newest last (`NOTES_KEPT` at most): the note, the Sessions it named at
+   * their generations, and each checkpoint it carried, by hash. The way back reads the one the account's continue came
+   * from (`continuedFrom`), whose op names it: only what that note carried may leave the project folder. A build before
+   * kept the latest alone, without its Sessions; no continue can be matched to that, so it counts as none.
    */
-  noted: z.object({ note: z.string(), sha256: z.array(z.string()) }).optional(),
+  noted: z.union([z.array(NotedSchema), z.object({ note: z.string(), sha256: z.array(z.string()) })]).optional(),
   /** A project folder's Thread: its project worktree, where its Sessions open on the machine (`noteProject`). */
   project: z.string().optional(),
   /** With `project`: the folder of this Mac's it mirrors (`noteProject`). */
@@ -84,6 +92,17 @@ const ReadyFileSchema = z.object({ version: z.literal(1), threads: z.record(z.st
 
 /** What keeping a Thread ready asks of the account: a cloud Thread standing by, its checkpoints and its records. */
 export type ReadinessAccount = Pick<CloudAccount, "createThread" | "sendCheckpoint" | "threadRecords">
+
+/** A Thread's recorded notes; a build before kept one without its Sessions, which no continue can be matched to. */
+function notesOf(entry: { noted?: Noted[] | { note: string; sha256: string[] } }): Noted[] {
+  return Array.isArray(entry.noted) ? entry.noted : []
+}
+
+/** The note a continue of `thread` came from: the one whose op (`autoContinueOp`) is the continue's. */
+async function continuedFrom(thread: string, notes: readonly Noted[], op: string): Promise<Noted | undefined> {
+  for (const each of notes) if ((await autoContinueOp(thread, each.sessions, each.note)) === op) return each
+  return undefined
+}
 
 /** As the cloud weighs them: a cloud Thread is made for one repository and one branch, and refuses any other. */
 const sameRepository = (left: CloudRepository, right: CloudRepository) => left.url === right.url && left.branch === right.branch
@@ -326,16 +345,23 @@ export class CloudReadiness {
     return entry?.project ? entry.projectFrom : undefined
   }
 
-  /** What the cloud acknowledged of a Thread in the main checkout, by repository, for its going-away to name. */
-  async acknowledged(thread: string): Promise<{ cloudThread: string; acknowledged: Acknowledged[]; noted?: string[] } | undefined> {
+  /**
+   * What the cloud acknowledged of a Thread in the main checkout, by repository, for its going-away to name; with `op`,
+   * a continue the account made of it, the checkpoints the note that continue came from carried (`noted`), and none
+   * when no note recorded here names it (a press, a note refused, one long gone).
+   */
+  async acknowledged(thread: string, op?: string): Promise<{ cloudThread: string; acknowledged: Acknowledged[]; noted?: string[] } | undefined> {
     await this.#rounds.get(thread)?.catch(() => undefined)
     const entry = (await this.#load())[thread]
-    return entry?.acknowledged?.length ? { cloudThread: entry.cloudThread, acknowledged: entry.acknowledged, ...entry.noted && { noted: entry.noted.sha256 } } : undefined
+    if (!entry?.acknowledged?.length) return undefined
+    const from = op === undefined ? undefined : await continuedFrom(thread, notesOf(entry), op)
+    return { cloudThread: entry.cloudThread, acknowledged: entry.acknowledged, ...from && { noted: from.sha256 } }
   }
 
   /**
    * A going-away note as it goes (`CloudHandOffs`, after the account left out what its gateway doesn't take): each of
-   * its Threads kept ready here records the checkpoints it carried, which alone may leave the project folder later.
+   * its Threads kept ready here records the note, the Sessions it named and the checkpoints it carried, beside the
+   * notes before it. Only what the note a continue came from carried may leave the project folder later.
    */
   async noted(note: QuietNote): Promise<void> {
     const entries = await this.#load()
@@ -343,7 +369,23 @@ export class CloudReadiness {
     for (const thread of note.threads) {
       const entry = entries[thread.thread]
       if (!entry) continue
-      entry.noted = { note: note.note, sha256: thread.checkpoint ? [thread.checkpoint.sha256, ...(thread.others ?? []).map((other) => other.checkpoint.sha256)] : [] }
+      const sha256 = thread.checkpoint ? [thread.checkpoint.sha256, ...(thread.others ?? []).map((other) => other.checkpoint.sha256)] : []
+      const kept = notesOf(entry).filter((each) => each.note !== note.note)
+      entry.noted = [...kept, { note: note.note, sessions: thread.sessions.map(({ session, generation }) => ({ session, generation })), sha256 }].slice(-NOTES_KEPT)
+      changed = true
+    }
+    if (changed) await this.#save()
+  }
+
+  /** The account refused these Threads of a note (or took no note at all): nothing is continued from it, so its word goes. */
+  async refused(note: string, threads: readonly string[]): Promise<void> {
+    const entries = await this.#load()
+    let changed = false
+    for (const thread of threads) {
+      const entry = entries[thread]
+      const kept = entry ? notesOf(entry) : []
+      if (!entry || !kept.some((each) => each.note === note)) continue
+      entry.noted = kept.filter((each) => each.note !== note)
       changed = true
     }
     if (changed) await this.#save()
