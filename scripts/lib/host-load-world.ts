@@ -228,7 +228,8 @@ export function reapWhenGone(owner: number, pgids: readonly number[], seconds = 
     'while kill -0 "$owner" 2>/dev/null; do [ "$(date +%s)" -ge "$until" ] && exit 0; sleep 2; done',
     'for g in "$@"; do',
     '  [ "$(ps -o pgid= -p "$g" 2>/dev/null | tr -d " ")" = "$g" ] || continue',
-    '  ps -o command= -p "$g" 2>/dev/null | grep -Eq "$pattern" && kill -KILL -- "-$g" 2>/dev/null',
+    // No `--`: dash's `kill` (Ubuntu's /bin/sh) refuses it, and a group after `-KILL` is an operand in every sh.
+    '  ps -o command= -p "$g" 2>/dev/null | grep -Eq "$pattern" && kill -KILL "-$g" 2>/dev/null',
     'done',
   ].join("\n")
   const reaper = spawn("/bin/sh", ["-c", script, "mako-load-reaper", String(owner), FIXTURE_PATTERN, String(seconds), ...pgids.map(String)], { detached: true, stdio: "ignore" })
