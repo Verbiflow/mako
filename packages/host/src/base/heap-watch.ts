@@ -10,6 +10,11 @@ import { getHeapStatistics } from "node:v8"
 export const HEAP_PRESSURE = [0.6, 0.8] as const
 /** How far below a line the heap must ease before that line is said again. */
 const HYSTERESIS = 0.1
+/**
+ * How often the heap is said whatever its level: below the first line it said nothing, so on 2026-11-12 the person's
+ * host sat at 1.4 to 2.4 GB with no line in its log saying what the heap held of it.
+ */
+export const HEAP_SAID_EVERY_MS = 5 * 60_000
 
 export type HeapLevel = 0 | 1 | 2
 
@@ -50,11 +55,17 @@ export function readHeap(): HeapReading {
 export class HeapWatch {
   readonly #read: () => HeapReading
   readonly #crossed: (change: HeapChange, level: HeapLevel, reading: HeapReading) => void
+  readonly #steady: ((reading: HeapReading) => void) | undefined
+  readonly #now: () => number
   #level: HeapLevel = 0
+  #saidAt = Number.NEGATIVE_INFINITY
 
-  constructor(read: () => HeapReading, crossed: (change: HeapChange, level: HeapLevel, reading: HeapReading) => void) {
+  /** `steady` hears a reading every `HEAP_SAID_EVERY_MS`, at any level. */
+  constructor(read: () => HeapReading, crossed: (change: HeapChange, level: HeapLevel, reading: HeapReading) => void, steady?: (reading: HeapReading) => void, now: () => number = Date.now) {
     this.#read = read
     this.#crossed = crossed
+    this.#steady = steady
+    this.#now = now
   }
 
   /** The level the heap stands at after this tick. */
@@ -64,6 +75,11 @@ export class HeapWatch {
 
   tick(): HeapLevel {
     const reading = this.#read()
+    const now = this.#now()
+    if (this.#steady && now - this.#saidAt >= HEAP_SAID_EVERY_MS) {
+      this.#saidAt = now
+      this.#steady(reading)
+    }
     const level = heapLevel(reading)
     if (level > this.#level) {
       this.#level = level
