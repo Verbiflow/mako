@@ -1,6 +1,6 @@
 import { execFileSync, fork, spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
@@ -64,6 +64,8 @@ const { values } = parseArgs({
     fins: { type: "string", default: "0" },
     "node-arg": { type: "string", multiple: true },
     gc: { type: "boolean", default: false },
+    "heap-snapshots": { type: "string" },
+    "snapshot-sends": { type: "string" },
     idle: { type: "boolean", default: false },
     "idle-only": { type: "boolean", default: false },
     "summaries-every": { type: "string", default: "30000" },
@@ -144,11 +146,16 @@ try {
   if (profileDir) mkdirSync(profileDir, { recursive: true })
   // `--node-arg` passes options to the host's Node (a heap limit, `--heap-prof`); `--gc` traces its collections.
   // The host's own options first, as the app starts it (`hostCommand`): the program's first line isn't read when Node runs it.
-  const nodeArgs = [...HOST_NODE_OPTIONS, ...(values["node-arg"] ?? []), ...(values.gc ? ["--trace-gc"] : [])]
+  // `--heap-snapshots <dir>`: the host writes a heap snapshot there on SIGUSR2, after a full collection, as each send
+  // `--snapshot-sends` names is answered ("20,80"), to tell what the host keeps per send from what it collects.
+  const snapshots = values["heap-snapshots"] && resolve(values["heap-snapshots"])
+  if (snapshots) mkdirSync(snapshots, { recursive: true })
+  const nodeArgs = [...HOST_NODE_OPTIONS, ...(values["node-arg"] ?? []), ...(values.gc ? ["--trace-gc"] : []), ...(snapshots ? ["--heapsnapshot-signal=SIGUSR2"] : [])]
   host = spawn("nice", ["-n", "5", process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
     env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" } },
     stdio: ["ignore", values.gc ? "pipe" : "ignore", "inherit"],
     ...profileDir && values["node-arg"]?.some((arg) => arg.startsWith("--heap-prof")) && { cwd: profileDir },
+    ...snapshots && { cwd: snapshots },
   })
   // Each collection's pause as `--trace-gc` prints it ("Mark-Compact 450.2 (480.1) -> 320.4 (350.0) MB, … 85.13 / 0.00 ms"), by when it was heard.
   const collections: { at: number; kind: string; ms: number }[] = []
@@ -165,6 +172,7 @@ try {
   }
   // Its resident memory every 5 s, to tell a sawtooth of garbage from growth.
   const rssSeries: [number, number][] = []
+  const snapshotsTaken: { why: string; file: string; rssMb: number | undefined }[] = []
   const exited = new Promise<number | null>((done) => host!.once("exit", (code) => done(code)))
   // Its resident memory, the peak from outside: memory doesn't vary with a runner's speed the way a wait does.
   const memory: ResidentMemory = { peakKb: 0, readings: 0, misses: 0 }
@@ -300,6 +308,24 @@ try {
       await delay(500)
     }
   })()
+  const snapshotAt = new Set((values["snapshot-sends"] ?? "").split(",").filter(Boolean).map(Number))
+  /** A heap snapshot of the host (`--heapsnapshot-signal`), waited for until its file holds still. */
+  const heapSnapshot = async (folder: string, why: string) => {
+    const before = new Set(readdirSync(folder))
+    host!.kill("SIGUSR2")
+    for (const deadline = Date.now() + 300_000; Date.now() < deadline; await delay(2_000)) {
+      const made = readdirSync(folder).find((name) => name.endsWith(".heapsnapshot") && !before.has(name))
+      if (!made) continue
+      const size = statSync(join(folder, made)).size
+      await delay(3_000)
+      if (size > 0 && statSync(join(folder, made)).size === size) {
+        say(`heap snapshot ${why}: ${made}`)
+        snapshotsTaken.push({ why, file: join(folder, made), rssMb: rssSeries.at(-1)?.[1] })
+        return
+      }
+    }
+    say(`heap snapshot ${why}: none written`)
+  }
   const sending = (async () => {
     for (let n = 1; probing && conversation; n += 1) {
       await delay(3_000)
@@ -309,6 +335,7 @@ try {
       for (const deadline = Date.now() + 60_000; !heardAt.has(tag) && Date.now() < deadline; ) await delay(10)
       const heard = heardAt.get(tag)
       sends.push([Date.now(), heard === undefined ? null : Math.round((heard - began) * 10) / 10])
+      if (snapshots && snapshotAt.has(n)) await heapSnapshot(snapshots, `after send ${n}`)
     }
   })()
   say(`probing for ${values.seconds} s`)
@@ -360,7 +387,7 @@ try {
   const report = {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
     ...answers, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
-    nodeArgs, ...idle && { idle }, ...rss && { rss }, ...gc && { gc },
+    nodeArgs, ...idle && { idle }, ...snapshotsTaken.length && { snapshots: snapshotsTaken }, ...rss && { rss }, ...gc && { gc },
     ...profile && {
       profile,
       slices: { count: found.length, totalMs: found.reduce((sum, slice) => sum + slice.ms, 0), longest: [...found].sort((a, b) => b.ms - a.ms).slice(0, 15) },

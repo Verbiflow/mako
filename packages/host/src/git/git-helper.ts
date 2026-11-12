@@ -1,4 +1,5 @@
 import { ChildProcess, type SpawnOptions, type spawn } from "node:child_process"
+import { EventEmitter } from "node:events"
 import { existsSync } from "node:fs"
 import { Readable, Writable } from "node:stream"
 import { fileURLToPath } from "node:url"
@@ -36,8 +37,16 @@ const ORPHAN_WAIT_MS = 60_000
  * `stdin` takes what Git writes, and the child says `error` and `close` with Node's code and signal, in the order the
  * helper heard them. It's a `ChildProcess` that was never spawned here: nothing else of one is read by `Git.run`, and
  * its stop is the helper's (`GitHelper.close`).
+ *
+ * It is made as an `EventEmitter` with `ChildProcess`'s prototype after its own, never through `ChildProcess`'s
+ * constructor: that one makes a native process handle, which a child never spawned can't close, and which holds its
+ * owner from the host's roots for the host's life. Under bench:host-load's sends on 2026-11-12 the host held 25,673
+ * finished `git` runs that way, and 1.1 GB of live heap, after 80 sends. Every method of a `ChildProcess` checks for
+ * its handle before using one, so with none they do nothing, as they did for this child before.
  */
-class HelperChild extends ChildProcess {
+class HelperChild extends EventEmitter {
+  /** The `git`'s pid once the helper says it started (`#set`), as a `ChildProcess`'s is. */
+  declare readonly pid: number | undefined
   closed = false
   /** `Git.run` asked it stopped (a timeout, a cancel, too much output). */
   stopAsked = false
@@ -60,6 +69,10 @@ class HelperChild extends ChildProcess {
 
   constructor(id: number, command: string, owner: ChildProcess, send: (ask: HelperAsk) => void, piped: boolean) {
     super()
+    // What `ChildProcess`'s constructor would have set, which `Git.run` reads until the helper says otherwise.
+    this.#set("exitCode", null)
+    this.#set("signalCode", null)
+    Object.defineProperty(this, "killed", { value: false, writable: true, configurable: true, enumerable: true })
     this.id = id
     this.command = command
     this.owner = owner
@@ -125,6 +138,15 @@ class HelperChild extends ChildProcess {
     this.emit("error", error)
     this.finish(null, null)
   }
+}
+
+// `instanceof ChildProcess` and its methods, through its prototype, with none of its constructor's handle.
+Object.setPrototypeOf(HelperChild.prototype, ChildProcess.prototype)
+
+/** A helper's child as the `ChildProcess` its prototype makes it, which is what the runner's `spawn` answers. */
+function asChildProcess(child: HelperChild): ChildProcess {
+  if (!(child instanceof ChildProcess)) throw new Error("A Git helper's child must be a ChildProcess")
+  return child
 }
 
 /**
@@ -200,7 +222,7 @@ export class GitHelper {
     for (const [key, value] of Object.entries(options.env ?? process.env)) if (value !== undefined) env[key] = value
     send({ t: "spawn", id, file, args: [...args], cwd, env, stdin: stdin === "pipe" ? "pipe" : "ignore" })
     this.#watch(child, "that it started", SPAWN_WATCH_MS)
-    return child
+    return asChildProcess(child)
   }
 
   private close(child: ChildProcess, first?: NodeJS.Signals | number): Promise<void> {
