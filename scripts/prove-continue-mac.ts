@@ -202,8 +202,20 @@ const sleepWatch = join(root, "sleep-watch")
 if (values["sleep-watch"]) {
   await mkdir(sleepWatch, { recursive: true })
   if (existsSync(sleepHelper) && !existsSync(realHelper)) await rename(sleepHelper, realHelper)
+  // Built-in modules by `process.getBuiltinModule`, which a script reads alike as a module or not. It's the keep-awake
+  // helper too (`--keep-awake`), which it answers without holding anything.
   await writeFile(sleepHelper, `#!${process.execPath}
-const fs = require("fs"), path = require("path"), readline = require("readline")
+const fs = process.getBuiltinModule("fs"), path = process.getBuiltinModule("path"), readline = process.getBuiltinModule("readline")
+if (process.argv.includes("--keep-awake")) {
+  console.log("ready")
+  console.log("power ac")
+  readline.createInterface({ input: process.stdin }).on("line", (line) => {
+    const words = line.trim().split(" ")
+    if (words[0] === "hold") console.log("holding " + words[1])
+    else if (words[0] === "release") console.log("released")
+  })
+  process.stdin.on("end", () => process.exit(0))
+} else {
 const dir = ${JSON.stringify(sleepWatch)}
 fs.writeFileSync(path.join(dir, "ready"), String(Date.now()))
 console.log("ready")
@@ -222,6 +234,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   console.log("slept " + n + " answer")
 })
 process.stdin.on("end", () => process.exit(0))
+}
 `, { mode: 0o755 })
 }
 
@@ -309,147 +322,153 @@ const stop = async () => {
 let selected: string | undefined
 for await (const line of createInterface({ input: process.stdin })) {
   const [command, ...rest] = line.trim().split(/\s+/)
-  if (command === "start") {
-    const word = rest.pop()!
-    const title = rest.join(" ")
-    const conversationId = randomUUID()
-    const request = randomUUID()
-    await call("mako:live-start", ["opencode", project, { conversationId, title, worktree: true, ...branchOnGitHub && { worktreeStart: { kind: "branch", branch: branchOnGitHub } }, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
-    for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
-      const status = (await snapshot(conversationId)).requests.find((entry) => entry.id === request)?.status
-      if (status && !["queued", "held", "dispatching"].includes(status)) break
-      if (Date.now() > deadline) throw new Error(`the first turn didn't end within five minutes: ${JSON.stringify(await read(conversationId))}`)
-    }
-    const shot = await snapshot(conversationId)
-    const folder = shot.session.cwd ?? ""
-    if (!branchOnGitHub) await run("git", ["-C", folder, "branch", "--quiet", `--set-upstream-to=${defaultBranch}`])
-    const upstream = (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])).stdout.trim()
-    say("STARTED", JSON.stringify({ conversation: conversationId, thread: shot.threadId, folder, branch: (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim(), upstream, ...await read(conversationId) }))
-  } else if (command === "start-here") {
-    const word = rest.pop()!
-    const title = rest.join(" ")
-    const conversationId = randomUUID()
-    const request = randomUUID()
-    await call("mako:live-start", ["opencode", project, { conversationId, title, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
-    for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
-      const status = (await snapshot(conversationId)).requests.find((entry) => entry.id === request)?.status
-      if (status && !["queued", "held", "dispatching"].includes(status)) break
-      if (Date.now() > deadline) throw new Error(`the first turn didn't end within five minutes: ${JSON.stringify(await read(conversationId))}`)
-    }
-    const shot = await snapshot(conversationId)
-    say("STARTED", JSON.stringify({ conversation: conversationId, thread: shot.threadId, folder: shot.session.cwd ?? "", ...await read(conversationId) }))
-  } else if (command === "join") {
-    const [conversation, folder, word] = rest
-    const thread = conversation && (await snapshot(conversation)).threadId
-    if (!thread || !folder || !word) {
-      say("UNKNOWN", JSON.stringify({ line }))
-      continue
-    }
-    const placed = z.object({ session: z.string() }).loose().parse(await call("mako:thread-create-session", [randomUUID(), thread]))
-    const conversationId = randomUUID()
-    const request = randomUUID()
-    await call("mako:live-start", ["opencode", join(project, folder), { conversationId, title: folder, session: placed.session, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
-    for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
-      const status = (await snapshot(conversationId)).requests.find((entry) => entry.id === request)?.status
-      if (status && !["queued", "held", "dispatching"].includes(status)) break
-      if (Date.now() > deadline) throw new Error(`the joined Session's first turn didn't end within five minutes: ${JSON.stringify(await read(conversationId))}`)
-    }
-    const joined = await snapshot(conversationId)
-    say("JOINED", JSON.stringify({ conversation: conversationId, thread: joined.threadId, folder: joined.session.cwd ?? "", ...await read(conversationId) }))
-  } else if (command === "hold") {
-    const [conversation, word] = rest
-    if (!conversation || !word?.startsWith(HELD)) {
-      say("UNKNOWN", JSON.stringify({ line }))
-      continue
-    }
-    const request = randomUUID()
-    await call("mako:live-prompt", [conversation, request, `Reply with the single word ${word}.`, []])
-    for (const deadline = Date.now() + 2 * 60_000; !heard.includes(word); await new Promise((resolve) => setTimeout(resolve, 200)))
-      if (Date.now() > deadline) throw new Error(`the held turn never reached the model: ${JSON.stringify(await read(conversation))}`)
-    say("HOLDING", JSON.stringify({ request, ...await read(conversation) }))
-  } else if (command === "person") {
-    const [file, ...text] = rest
-    await writeFile(join(project, file!), `${text.join(" ")}\n`)
-    say("PERSON", JSON.stringify({ path: join(project, file!) }))
-  } else if (command === "status") {
-    // A folder's uncommitted files, by each repository it holds when it isn't one itself.
-    const changed = async (folder: string) => {
-      const repositories = existsSync(join(folder, ".git")) ? [""] : (await readdir(folder)).filter((name) => existsSync(join(folder, name, ".git")))
-      const each = await Promise.all(repositories.map(async (name) => (await run("git", ["-C", join(folder, name), "status", "--porcelain"])).stdout.split("\n").filter(Boolean).map((entry) => (name ? `${entry.slice(0, 3)}${name}/${entry.slice(3)}` : entry))))
-      return each.flat()
-    }
-    const folder = (await snapshot(rest[0]!)).session.cwd ?? ""
-    const there = folder && existsSync(folder)
-    say("STATUS", JSON.stringify({ project: await changed(project), folder, branch: there ? (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim() : null, changed: there ? await changed(folder) : null }))
-  } else if (command === "sleep") {
-    if (!values["sleep-watch"]) {
-      say("UNKNOWN", JSON.stringify({ line, reason: "started without --sleep-watch" }))
-      continue
-    }
-    // The host starts its sleep watch once it may hand off (signed in with the cloud), within a minute.
-    for (const deadline = Date.now() + 90_000; !existsSync(join(sleepWatch, "ready")); await new Promise((resolve) => setTimeout(resolve, 250)))
-      if (Date.now() > deadline) throw new Error("the host never started its sleep watch")
-    const began = Date.now()
-    const slept = new Set((await readdir(sleepWatch)).filter((name) => name.startsWith("slept-")))
-    await writeFile(join(sleepWatch, "sleep"), "")
-    for (const deadline = began + 60_000; ; await new Promise((resolve) => setTimeout(resolve, 100))) {
-      if ((await readdir(sleepWatch)).some((name) => name.startsWith("slept-") && !slept.has(name))) break
-      if (Date.now() > deadline) throw new Error("the host never let the Mac sleep")
-    }
-    say("SLEPT", JSON.stringify({ ms: Date.now() - began }))
-  } else if (command === "shutdown") {
-    const began = Date.now()
-    await call("mako:machine-leaving", ["shutdown"])
-    say("SHUTDOWN", JSON.stringify({ ms: Date.now() - began }))
-  } else if (command === "say") {
-    const [conversation, word] = rest
-    if (!conversation || !word) {
-      say("UNKNOWN", JSON.stringify({ line }))
-      continue
-    }
-    const request = randomUUID()
-    const at = Date.now()
-    await call("mako:live-prompt", [conversation, request, `Reply with the single word ${word}.`, []])
-    say("SAID", JSON.stringify({ request, at, answeredMs: Date.now() - at }))
-  } else if (command === "read") say("READ", JSON.stringify(await read(rest[0]!)))
-  else if (command === "synced") {
-    const began = Date.now()
-    let sync = SyncSchema.parse(await call("mako:sync-status", []))
-    let up = false
-    for (const limit = Number(rest[0]) || 2 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
-      sync = SyncSchema.parse(await call("mako:sync-status", []))
-      const tiers = sync.tiers ?? []
-      // Each Session the account can show and holds whole: a continue goes on from its records.
-      up = tiers.some((tier) => tier.sessions > 0) && tiers.every((tier) => tier.inCloud >= tier.sessions) && !sync.stale && !sync.sending
-      if (up || Date.now() - began > limit) break
-    }
-    say("SYNCED", JSON.stringify({ ms: Date.now() - began, up, ...sync }))
-  } else if (command === "heard") say("HEARD", JSON.stringify(heard))
-  else if (command === "continues") say("CONTINUES", JSON.stringify(await call("mako:continue-readings", [])))
-  else if (command === "offline") {
-    await cut()
-    say("OFFLINE", JSON.stringify({ at: Date.now() }))
-  } else if (command === "online") {
-    await listen()
-    say("ONLINE", JSON.stringify({ at: Date.now() }))
-  } else if (command === "return") {
-    const began = Date.now()
-    const outcome = await call("mako:thread-return", [rest[0]!, randomUUID()])
-    say("RETURNED", JSON.stringify({ outcome, ms: Date.now() - began }))
-  } else if (command === "shot") {
-    const [path, ...title] = rest
-    if (!desktop) say("SHOT", JSON.stringify({ path: null, reason: "no window: started without --window" }))
-    else {
-      const named = title.join(" ")
-      if (named && named !== selected) {
-        await desktop.waitFor(() => desktop!.evaluate(`[...document.querySelectorAll('[data-thread-row]')].some((row) => row.innerText.includes(${JSON.stringify(named)}))`), Boolean, `the Thread "${named}" in the sidebar`)
-        await desktop.evaluate(`[...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes(${JSON.stringify(named)})).click()`)
-        await desktop.waitFor(() => desktop!.evaluate(`document.querySelector('[data-thread-row][data-active]')?.innerText.includes(${JSON.stringify(named)}) ?? false`), Boolean, `the Thread "${named}" open`)
-        selected = named
+  if (command === "quit") break
+  // A command that fails says so in a line of its own, and the run goes on: `quit` still ends it whole, the window and
+  // the host with it, which a throw here would leave running.
+  try {
+    if (command === "start") {
+      const word = rest.pop()!
+      const title = rest.join(" ")
+      const conversationId = randomUUID()
+      const request = randomUUID()
+      await call("mako:live-start", ["opencode", project, { conversationId, title, worktree: true, ...branchOnGitHub && { worktreeStart: { kind: "branch", branch: branchOnGitHub } }, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
+      for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
+        const status = (await snapshot(conversationId)).requests.find((entry) => entry.id === request)?.status
+        if (status && !["queued", "held", "dispatching"].includes(status)) break
+        if (Date.now() > deadline) throw new Error(`the first turn didn't end within five minutes: ${JSON.stringify(await read(conversationId))}`)
       }
-      say("SHOT", JSON.stringify({ path: await desktop.screenshot(path!) }))
-    }
-  } else if (command === "quit") break
-  else say("UNKNOWN", JSON.stringify({ line }))
+      const shot = await snapshot(conversationId)
+      const folder = shot.session.cwd ?? ""
+      if (!branchOnGitHub) await run("git", ["-C", folder, "branch", "--quiet", `--set-upstream-to=${defaultBranch}`])
+      const upstream = (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])).stdout.trim()
+      say("STARTED", JSON.stringify({ conversation: conversationId, thread: shot.threadId, folder, branch: (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim(), upstream, ...await read(conversationId) }))
+    } else if (command === "start-here") {
+      const word = rest.pop()!
+      const title = rest.join(" ")
+      const conversationId = randomUUID()
+      const request = randomUUID()
+      await call("mako:live-start", ["opencode", project, { conversationId, title, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
+      for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
+        const status = (await snapshot(conversationId)).requests.find((entry) => entry.id === request)?.status
+        if (status && !["queued", "held", "dispatching"].includes(status)) break
+        if (Date.now() > deadline) throw new Error(`the first turn didn't end within five minutes: ${JSON.stringify(await read(conversationId))}`)
+      }
+      const shot = await snapshot(conversationId)
+      say("STARTED", JSON.stringify({ conversation: conversationId, thread: shot.threadId, folder: shot.session.cwd ?? "", ...await read(conversationId) }))
+    } else if (command === "join") {
+      const [conversation, folder, word] = rest
+      const thread = conversation && (await snapshot(conversation)).threadId
+      if (!thread || !folder || !word) {
+        say("UNKNOWN", JSON.stringify({ line }))
+        continue
+      }
+      const placed = z.object({ session: z.string() }).loose().parse(await call("mako:thread-create-session", [randomUUID(), thread]))
+      const conversationId = randomUUID()
+      const request = randomUUID()
+      await call("mako:live-start", ["opencode", join(project, folder), { conversationId, title: folder, session: placed.session, initialRequest: { id: request, text: `Reply with the single word ${word}.`, attachments: [] } }])
+      for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
+        const status = (await snapshot(conversationId)).requests.find((entry) => entry.id === request)?.status
+        if (status && !["queued", "held", "dispatching"].includes(status)) break
+        if (Date.now() > deadline) throw new Error(`the joined Session's first turn didn't end within five minutes: ${JSON.stringify(await read(conversationId))}`)
+      }
+      const joined = await snapshot(conversationId)
+      say("JOINED", JSON.stringify({ conversation: conversationId, thread: joined.threadId, folder: joined.session.cwd ?? "", ...await read(conversationId) }))
+    } else if (command === "hold") {
+      const [conversation, word] = rest
+      if (!conversation || !word?.startsWith(HELD)) {
+        say("UNKNOWN", JSON.stringify({ line }))
+        continue
+      }
+      const request = randomUUID()
+      await call("mako:live-prompt", [conversation, request, `Reply with the single word ${word}.`, []])
+      for (const deadline = Date.now() + 2 * 60_000; !heard.includes(word); await new Promise((resolve) => setTimeout(resolve, 200)))
+        if (Date.now() > deadline) throw new Error(`the held turn never reached the model: ${JSON.stringify(await read(conversation))}`)
+      say("HOLDING", JSON.stringify({ request, ...await read(conversation) }))
+    } else if (command === "person") {
+      const [file, ...text] = rest
+      await writeFile(join(project, file!), `${text.join(" ")}\n`)
+      say("PERSON", JSON.stringify({ path: join(project, file!) }))
+    } else if (command === "status") {
+      // A folder's uncommitted files, by each repository it holds when it isn't one itself.
+      const changed = async (folder: string) => {
+        const repositories = existsSync(join(folder, ".git")) ? [""] : (await readdir(folder)).filter((name) => existsSync(join(folder, name, ".git")))
+        const each = await Promise.all(repositories.map(async (name) => (await run("git", ["-C", join(folder, name), "status", "--porcelain"])).stdout.split("\n").filter(Boolean).map((entry) => (name ? `${entry.slice(0, 3)}${name}/${entry.slice(3)}` : entry))))
+        return each.flat()
+      }
+      const folder = (await snapshot(rest[0]!)).session.cwd ?? ""
+      const there = folder && existsSync(folder)
+      say("STATUS", JSON.stringify({ project: await changed(project), folder, branch: there ? (await run("git", ["-C", folder, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim() : null, changed: there ? await changed(folder) : null }))
+    } else if (command === "sleep") {
+      if (!values["sleep-watch"]) {
+        say("UNKNOWN", JSON.stringify({ line, reason: "started without --sleep-watch" }))
+        continue
+      }
+      // The host starts its sleep watch once it may hand off (signed in with the cloud), within a minute.
+      for (const deadline = Date.now() + 90_000; !existsSync(join(sleepWatch, "ready")); await new Promise((resolve) => setTimeout(resolve, 250)))
+        if (Date.now() > deadline) throw new Error("the host never started its sleep watch")
+      const began = Date.now()
+      const slept = new Set((await readdir(sleepWatch)).filter((name) => name.startsWith("slept-")))
+      await writeFile(join(sleepWatch, "sleep"), "")
+      for (const deadline = began + 60_000; ; await new Promise((resolve) => setTimeout(resolve, 100))) {
+        if ((await readdir(sleepWatch)).some((name) => name.startsWith("slept-") && !slept.has(name))) break
+        if (Date.now() > deadline) throw new Error("the host never let the Mac sleep")
+      }
+      say("SLEPT", JSON.stringify({ ms: Date.now() - began }))
+    } else if (command === "shutdown") {
+      const began = Date.now()
+      await call("mako:machine-leaving", ["shutdown"])
+      say("SHUTDOWN", JSON.stringify({ ms: Date.now() - began }))
+    } else if (command === "say") {
+      const [conversation, word] = rest
+      if (!conversation || !word) {
+        say("UNKNOWN", JSON.stringify({ line }))
+        continue
+      }
+      const request = randomUUID()
+      const at = Date.now()
+      await call("mako:live-prompt", [conversation, request, `Reply with the single word ${word}.`, []])
+      say("SAID", JSON.stringify({ request, at, answeredMs: Date.now() - at }))
+    } else if (command === "read") say("READ", JSON.stringify(await read(rest[0]!)))
+    else if (command === "synced") {
+      const began = Date.now()
+      let sync = SyncSchema.parse(await call("mako:sync-status", []))
+      let up = false
+      for (const limit = Number(rest[0]) || 2 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
+        sync = SyncSchema.parse(await call("mako:sync-status", []))
+        const tiers = sync.tiers ?? []
+        // Each Session the account can show and holds whole: a continue goes on from its records.
+        up = tiers.some((tier) => tier.sessions > 0) && tiers.every((tier) => tier.inCloud >= tier.sessions) && !sync.stale && !sync.sending
+        if (up || Date.now() - began > limit) break
+      }
+      say("SYNCED", JSON.stringify({ ms: Date.now() - began, up, ...sync }))
+    } else if (command === "heard") say("HEARD", JSON.stringify(heard))
+    else if (command === "continues") say("CONTINUES", JSON.stringify(await call("mako:continue-readings", [])))
+    else if (command === "offline") {
+      await cut()
+      say("OFFLINE", JSON.stringify({ at: Date.now() }))
+    } else if (command === "online") {
+      await listen()
+      say("ONLINE", JSON.stringify({ at: Date.now() }))
+    } else if (command === "return") {
+      const began = Date.now()
+      const outcome = await call("mako:thread-return", [rest[0]!, randomUUID()])
+      say("RETURNED", JSON.stringify({ outcome, ms: Date.now() - began }))
+    } else if (command === "shot") {
+      const [path, ...title] = rest
+      if (!desktop) say("SHOT", JSON.stringify({ path: null, reason: "no window: started without --window" }))
+      else {
+        const named = title.join(" ")
+        if (named && named !== selected) {
+          await desktop.waitFor(() => desktop!.evaluate(`[...document.querySelectorAll('[data-thread-row]')].some((row) => row.innerText.includes(${JSON.stringify(named)}))`), Boolean, `the Thread "${named}" in the sidebar`)
+          await desktop.evaluate(`[...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes(${JSON.stringify(named)})).click()`)
+          await desktop.waitFor(() => desktop!.evaluate(`document.querySelector('[data-thread-row][data-active]')?.innerText.includes(${JSON.stringify(named)}) ?? false`), Boolean, `the Thread "${named}" open`)
+          selected = named
+        }
+        say("SHOT", JSON.stringify({ path: await desktop.screenshot(path!) }))
+      }
+    } else say("UNKNOWN", JSON.stringify({ line }))
+  } catch (error) {
+    say("FAILED", JSON.stringify({ line, error: error instanceof Error ? error.message : String(error) }))
+  }
 }
 await stop()
