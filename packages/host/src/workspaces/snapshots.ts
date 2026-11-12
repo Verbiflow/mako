@@ -13,6 +13,7 @@ import {
   readdir,
   rm,
 } from "node:fs/promises"
+import { homedir } from "node:os"
 import { dirname, join, relative, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
@@ -124,7 +125,7 @@ export class WorkspaceSnapshots {
    * began, HEAD, and a digest of what the index stages. A turn starting there with all of them as they were is that
    * checkpoint again (`unchangedSince`), and goes to its agent without a capture.
    */
-  private readonly lastTaken = new Map<string, { id: string; mark: HistoryMark; head: string; staged: string }>()
+  private readonly lastTaken = new Map<string, { id: string; mark: HistoryMark; head: string; staged: string; excludes: string }>()
 
   constructor(git: Git, root: string, retention: Partial<SnapshotRetentionPolicy> = {}) {
     this.git = git
@@ -246,10 +247,11 @@ export class WorkspaceSnapshots {
       const kept = reuse ? await this.unchangedSince(scope) : undefined
       if (kept) return this.summary(kept)
       // Marked before anything is read: a change while it's taken is after the mark, so the next turn takes its own.
-      const mark = await this.history?.mark().catch(() => undefined)
-      const staged = mark ? await this.stagedDigest(scope) : undefined
+      // One shared with other runs names them, which a later turn alone there shouldn't say: it's never reused.
+      const mark = shared?.size ? undefined : await this.history?.mark().catch(() => undefined)
+      const [staged, excludes] = mark ? await Promise.all([this.stagedDigest(scope), this.excludesStamp(scope)]) : []
       const record = await this.captureLocked(scope, gitDir, "retained", shared)
-      if (mark && staged !== undefined) this.lastTaken.set(scope, { id: record.id, mark, head: record.head, staged })
+      if (mark && staged !== undefined && excludes !== undefined) this.lastTaken.set(scope, { id: record.id, mark, head: record.head, staged, excludes })
       else this.lastTaken.delete(scope)
       await this.maintainLocked(record)
       return this.summary(record)
@@ -272,14 +274,32 @@ export class WorkspaceSnapshots {
     } catch {
       return undefined
     }
-    const [read, head, staged] = await Promise.all([
+    const [read, head, staged, excludes] = await Promise.all([
       this.history.since(last.mark, [scope], { exclude: [join(scope, ".git")] }).catch(() => undefined),
       this.head(scope).catch(() => undefined),
       this.stagedDigest(scope).catch(() => undefined),
+      this.excludesStamp(scope).catch(() => undefined),
     ])
-    if (!read || read.lost.length || read.paths.length || head !== last.head || staged !== last.staged) return undefined
+    if (!read || read.lost.length || read.paths.length || head !== last.head || staged !== last.staged || excludes !== last.excludes) return undefined
     this.lastTaken.set(scope, last)
     return record
+  }
+
+  /**
+   * The ignore rules outside the working tree, which the history doesn't see: the repository's `info/exclude` and the
+   * global excludes file, each by its path, size and modification time (none when it isn't there).
+   */
+  private async excludesStamp(scope: string): Promise<string> {
+    const [local, configured] = await Promise.all([
+      this.snapshotGit(scope, ["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"]).then((path) => path.trim()),
+      this.snapshotGit(scope, ["config", "--path", "--get", "core.excludesFile"]).then((path) => path.trim(), () => ""),
+    ])
+    const global = configured || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "git", "ignore")
+    const stamps = await Promise.all([local, global].map(async (path) => {
+      const found = await lstat(path).catch(() => null)
+      return `${path}:${found ? `${found.size}:${found.mtimeMs}` : "none"}`
+    }))
+    return stamps.join("\0")
   }
 
   /** What the index stages, by mode, object and path: its stat cache left out. */

@@ -101,14 +101,30 @@ try {
   assert.notEqual(unread.before.id, unsure.after.id, "a history that can't be read is a capture")
   history.since = reading
 
+  // An ignore rule outside the working tree changed: the history can't see it, its file's stamp does.
+  writeFileSync(join(cwd, ".git", "info", "exclude"), "*.log\n")
+  const excluded = await turn()
+  assert.notEqual(excluded.before.id, unread.after.id, "a changed info/exclude is captured")
+
   // Another turn in the same workspace: its checkpoint names the runs that share it, so it's always its own.
   const other = randomUUID()
   await store.beginRun(other, cwd)
   const sharing = randomUUID()
   const shared = await store.beginRun(sharing, cwd)
   assert.ok(shared.shared?.includes(other), "a shared workspace's checkpoint names the other run")
-  await store.endRun(sharing)
+  const sharedEnd = await store.endRun(sharing)
+  assert.ok(sharedEnd.shared?.includes(other), "and so does its end")
   await store.endRun(other)
+  // The last one taken there named the other run (`other`'s end shares nothing now): a turn alone next never reuses
+  // one that names others.
+  const sharingAgain = randomUUID()
+  await store.beginRun(sharingAgain, cwd)
+  const third = randomUUID()
+  await store.beginRun(third, cwd)
+  await store.endRun(third)
+  await store.endRun(sharingAgain)
+  const alone = await turn()
+  assert.equal(alone.before.shared, undefined, "a turn alone never starts on a checkpoint that names other runs")
 
   // Reused, the wait is the history's read and two Git reads, not a capture.
   const settled = await turn()
