@@ -45,6 +45,8 @@ import {
   type SnapshotObjects,
 } from "./snapshot-git.js"
 import { copyGitIndex } from "./index-copy.js"
+import type { FileHistory } from "./watch-backend.js"
+import type { HistoryMark } from "../contracts/watcher-child.js"
 const OperationSchema = z.object({
   plan: RewindPlanSchema,
   backupId: z.string().uuid(),
@@ -115,6 +117,15 @@ export class WorkspaceSnapshots {
   private readonly git: Git
   private readonly root: string
   private readonly retention: SnapshotRetentionPolicy
+  /** The watcher's history of file changes, once the workspaces are open: what lets a turn's checkpoint be the last one. */
+  private history: FileHistory | undefined
+  /**
+   * The last checkpoint taken of each repository, with what it was taken of: where the watcher's history stood as it
+   * began, HEAD, and a digest of what the index stages. A turn starting there with all of them as they were is that
+   * checkpoint again (`unchangedSince`), and goes to its agent without a capture.
+   */
+  private readonly lastTaken = new Map<string, { id: string; mark: HistoryMark; head: string; staged: string }>()
+
   constructor(git: Git, root: string, retention: Partial<SnapshotRetentionPolicy> = {}) {
     this.git = git
     this.retention = SnapshotRetentionPolicySchema.parse(retention)
@@ -132,6 +143,11 @@ export class WorkspaceSnapshots {
 
   close(): void {
     this.db.close()
+  }
+
+  /** Follows the watcher's history, so a turn whose workspace nothing changed in since the last checkpoint takes that one. */
+  followHistory(history: FileHistory): void {
+    this.history = history
   }
 
   /** Rewinds a crash left unfinished; one across several repositories as the whole rewind, which `restore` finishes. */
@@ -174,7 +190,8 @@ export class WorkspaceSnapshots {
       run.shared.add(otherId)
     }
     this.runs.set(id, run)
-    const snapshot = await this.capture(scope, run.shared)
+    // The turn's agent waits for this: it's the last checkpoint again when nothing changed since (`unchangedSince`).
+    const snapshot = await this.capture(scope, run.shared, true)
     run.snapshotId = snapshot.id
     return snapshot
   }
@@ -207,27 +224,67 @@ export class WorkspaceSnapshots {
    * A checkpoint of the workspace `cwd` is in: its repository, or each
    * repository of a project folder and each submodule, one after another.
    */
-  async capture(cwd: string, shared?: ReadonlySet<string>): Promise<WorkspaceSnapshot> {
+  async capture(cwd: string, shared?: ReadonlySet<string>, reuse = false): Promise<WorkspaceSnapshot> {
     const workspace = await this.workspace(cwd)
-    if (workspace.repositories.length === 1 && workspace.repositories[0] === workspace.scope) return this.captureRepository(workspace.scope, shared)
+    // Only a workspace no other run shares: a checkpoint names the runs that shared it, and reusing one would name others.
+    const unshared = reuse && !shared?.size
+    if (workspace.repositories.length === 1 && workspace.repositories[0] === workspace.scope) return this.captureRepository(workspace.scope, shared, unshared)
     const parts: GroupRecord["parts"] = []
     let files = 0
     for (const repository of workspace.repositories) {
-      const part = await this.captureRepository(repository)
+      const part = await this.captureRepository(repository, undefined, unshared)
       parts.push({ path: relative(workspace.scope, repository) || ".", id: part.id })
       files += part.files
     }
     return this.saveGroup({ id: randomUUID(), scope: workspace.scope, createdAt: Date.now(), files, parts, ...(shared?.size && { shared: [...shared].slice(0, 64) }) })
   }
 
-  private async captureRepository(cwd: string, shared?: ReadonlySet<string>): Promise<WorkspaceSnapshot> {
+  private async captureRepository(cwd: string, shared?: ReadonlySet<string>, reuse = false): Promise<WorkspaceSnapshot> {
     const scope = await this.scope(cwd)
     return this.locked(scope, async (gitDir) => {
       this.assertNoPending(scope)
+      const kept = reuse ? await this.unchangedSince(scope) : undefined
+      if (kept) return this.summary(kept)
+      // Marked before anything is read: a change while it's taken is after the mark, so the next turn takes its own.
+      const mark = await this.history?.mark().catch(() => undefined)
+      const staged = mark ? await this.stagedDigest(scope) : undefined
       const record = await this.captureLocked(scope, gitDir, "retained", shared)
+      if (mark && staged !== undefined) this.lastTaken.set(scope, { id: record.id, mark, head: record.head, staged })
+      else this.lastTaken.delete(scope)
       await this.maintainLocked(record)
       return this.summary(record)
     })
+  }
+
+  /**
+   * The repository's last checkpoint, when nothing it holds can have changed since: the watcher's history names no path
+   * in the working tree since it began (Git's own folder aside) and lost none, HEAD is where it was, and the index stages
+   * the same. A refresh of the index's stat cache (any `git status`) changes none of these. Anything unread or
+   * uncertain is a capture.
+   */
+  private async unchangedSince(scope: string): Promise<SnapshotRecord | undefined> {
+    const last = this.lastTaken.get(scope)
+    if (!last || !this.history) return undefined
+    this.lastTaken.delete(scope)
+    let record: SnapshotRecord
+    try {
+      record = this.get(last.id)
+    } catch {
+      return undefined
+    }
+    const [read, head, staged] = await Promise.all([
+      this.history.since(last.mark, [scope], { exclude: [join(scope, ".git")] }).catch(() => undefined),
+      this.head(scope).catch(() => undefined),
+      this.stagedDigest(scope).catch(() => undefined),
+    ])
+    if (!read || read.lost.length || read.paths.length || head !== last.head || staged !== last.staged) return undefined
+    this.lastTaken.set(scope, last)
+    return record
+  }
+
+  /** What the index stages, by mode, object and path: its stat cache left out. */
+  private async stagedDigest(scope: string): Promise<string> {
+    return createHash("sha256").update(await this.snapshotGit(scope, ["ls-files", "--stage", "-z"])).digest("hex")
   }
 
   async prune(cwd: string): Promise<number> {

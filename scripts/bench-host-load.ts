@@ -58,6 +58,7 @@ const { values } = parseArgs({
     out: { type: "string" },
     keep: { type: "boolean", default: false },
     send: { type: "boolean", default: false },
+    "send-quiet": { type: "boolean", default: false },
     fins: { type: "string", default: "0" },
   },
 })
@@ -194,7 +195,10 @@ try {
   let conversation: string | undefined
   if (values.send || finCount > 0) {
     conversation = randomUUID()
-    const cwd = world.checkouts[0]!.path
+    // By default the send's checkout is one the Fins edit all through; `--send-quiet` takes one nothing edits but the send.
+    const churned = (index: number) => world.checkouts[index]!.fin || index < scale.fins.length
+    const quietAt = world.checkouts.findLastIndex((_, index) => !churned(index))
+    const cwd = world.checkouts[values["send-quiet"] && quietAt >= 0 ? quietAt : 0]!.path
     await call("mako:live-start", "codex", cwd, { conversationId: conversation, modeId: "access:ask", title: "Host load send", initialRequest: { id: randomUUID(), text: "BENCH-S0 start", attachments: [] } })
     for (const deadline = Date.now() + 180_000; !heardAt.has("S0"); await delay(100))
       if (Date.now() > deadline) throw new Error("the bench's Codex never asked the stand-in model")
