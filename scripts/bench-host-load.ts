@@ -177,8 +177,23 @@ try {
     stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, TSX_TSCONFIG_PATH: join(import.meta.dirname, "../tsconfig.scripts.json") },
   })
   children.push(prober)
+  // A read someone waits on, as a window's Changes panel or a send's checkpoint asks, one at a time while the windows'
+  // summaries passes run: it must never queue behind a pass of every worktree.
+  const reviewed = z.object({ worktrees: z.array(z.object({ path: z.string() }).loose()) }).loose().parse(await call("mako:worktrees")).worktrees.map((worktree) => worktree.path)
+  const checkoutReads: [number, number | null][] = []
+  let probing = true
+  const reading = (async () => {
+    for (let at = 0; probing && reviewed.length; at += 1) {
+      const began = performance.now()
+      const ms = await call("mako:worktree-review", reviewed[at % reviewed.length]).then(() => performance.now() - began, () => null)
+      checkoutReads.push([Date.now(), ms === null ? null : Math.round(ms * 10) / 10])
+      await delay(500)
+    }
+  })()
   say(`probing for ${values.seconds} s`)
   await delay(Number(values.seconds) * 1000)
+  probing = false
+  await reading
   const proberDone = new Promise((done) => prober.once("exit", done))
   const yardstickDone = new Promise((done) => yardstick.once("exit", done))
   prober.kill("SIGTERM")
@@ -205,7 +220,7 @@ try {
   // One profile per thread: the main thread's is numbered 0 (`CPU.<date>.<time>.<pid>.0.<n>.cpuprofile`).
   const profile = profileDir && readdirSync(profileDir).filter((name) => /\.\d+\.0\.\d+\.cpuprofile$/.test(name)).map((name) => join(profileDir, name)).sort().at(-1)
   const found = profile ? slices(profile, 50) : []
-  const answers = { health: summary(probed.health), reads: summary(probed.reads) }
+  const answers = { health: summary(probed.health), reads: summary(probed.reads), checkoutReads: summary(checkoutReads) }
   const peakMb = Math.round(memory.peakKb / 1024)
   const unread = unmeasured(memory, sampled)
   const report = {
@@ -243,6 +258,7 @@ try {
     "|---|---|---|---|---|",
     row("host health check", answers.health, `p99 > ${healthLimit}, max >= ${heldLimit}`),
     row("host read (`mako:worktrees`)", answers.reads, `p99 > ${readLimit}`),
+    row("a checkout's Git read (`mako:worktree-review`)", answers.checkoutReads, "-"),
     row("yardstick's own loop (calibration)", measured.late, "-"),
     row("yardstick's spawn of git", measured.spawn, "-"),
     row("yardstick's 2,000-row JSON round trip", measured.chunk, "-"),
