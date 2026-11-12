@@ -1,4 +1,6 @@
 import { useLimitContinueNotice } from "@/components/composer/account-notice"
+import { useAskNotice } from "@/components/composer/agent-ask-card"
+import { askBringBack } from "./moves"
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
@@ -35,10 +37,12 @@ import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { AgentsLayer } from "./agents-layer"
+import { SetupLayer } from "./setup-layer"
+import { closeSetup, setupOpenStore } from "./setup-open"
 import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
-import { FinOfApexContext, childSession } from "./fin-of-apex"
+import { FinOfApexContext, childSession, placedSessionOf } from "./fin-of-apex"
 import { webHarnessLabel } from "./labels"
 import { StartForm, StartSheet, type AddingTo, type StartIn } from "./new-thread"
 import { CLOUD_PLACE } from "./places"
@@ -47,8 +51,9 @@ import { routeHref } from "./route"
 import type { Started } from "./start"
 import { startingWhere } from "./started"
 import { archiveWithUndo } from "./archive-thread"
-import { ThreadActions, ThreadBody, TranscriptLoading } from "./thread"
-import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, type WebThread } from "./threads"
+import { ThreadActions, ThreadBody } from "./thread"
+import { TranscriptLoading } from "./transcript-loading"
+import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, threadById, type WebThread } from "./threads"
 import { useThread } from "./use-thread"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
@@ -58,7 +63,7 @@ import { FilesLayer } from "./files-layer"
 import { closeFiles, filesOpenStore, openFiles, useFilesOpen } from "./files-open"
 import { closeReview, deskReviewCode, openReview, reviewOpenStore, useReviewOpen } from "./review-open"
 
-const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
+const DeskSettings = lazy(() => import("./desk-settings"))
 
 /** The rail's narrowest and widest, as the desktop's. */
 const RAIL_MIN = 200
@@ -68,6 +73,11 @@ const RAIL_MAX = 420
  * page, so the web takes the chord web apps share for a new conversation; the palette offers it too.
  */
 const NEW_THREAD_KEYS = "mod+shift+o"
+
+/** A browser reaches a Mac through the sheet that picks it, where the desk's own window brings a Thread back itself. */
+function useWebAskNotice() {
+  return useAskNotice(askBringBack)
+}
 
 /**
  * Mako in a laptop's browser: the desktop app, drawn by the desktop's own pieces. Its title strip (the rail's header on
@@ -120,6 +130,10 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         threadMenu: (thread) => <DeskThreadMenu thread={thread} />,
         agents: toggleAgents,
         fin: (thread, agent) => {
+          // A Fin placed on another device is a Thread of its own there (decision D6): its own page opens, by the row
+          // its device lists, through the gateway to that device, which answers.
+          const own = placedSessionOf(agent)
+          if (own) return latest.current.open({ kind: "thread", thread: own.row.thread, session: own.row.session })
           const listed = foldThreads(latest.current.list).threads.find((each) => each.id === thread)
           if (listed) openDeskFin(agent, thread, openingSession(listed).row.conversation)
           latest.current.open({ kind: "thread", thread })
@@ -130,9 +144,11 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   // The Inbox lies over whatever the desk shows; its address opens it, and going anywhere else puts it away.
   useEffect(() => (under.kind === "inbox" ? inboxView.open() : inboxView.close()), [route, under.kind])
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
-  // Of the desk's notices above its composer, the one a laptop's browser needs: a send to an old Session asks first.
+  // Of the desk's notices above its composer, those a laptop's browser needs: a send to an old Session asks first, and
+  // what an agent asked is answered here as on the desk.
   useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
   useEffect(() => registerNotice("limit-continue", useLimitContinueNotice, -4), [])
+  useEffect(() => registerNotice("agent-ask", useWebAskNotice), [])
 
   return (
     <TooltipProvider delayDuration={350}>
@@ -143,7 +159,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           <>
             <nav ref={rail} aria-label="Threads" style={{ width: prefsStore.get().railWidth }} className="flex min-h-0 shrink-0 flex-col overflow-hidden">
               <AgentThreads />
-              <DeskIdentity settings={!starting && under.kind === "settings"} onSettings={() => open({ kind: "settings" })} />
+              <DeskIdentity settings={!starting && (under.kind === "settings" || under.kind === "setup")} onSettings={() => open({ kind: "settings" })} />
             </nav>
             <Divider
               side="left"
@@ -162,9 +178,9 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
             <DeskStart key="new" startIn={startIn} onDismiss={back} onStarted={onStarted} />
           ) : under.kind === "thread" ? (
             <DeskThread key={under.thread} threadId={under.thread} sessionId={under.session} addSessionRef={addSession} onArchived={back} onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })} />
-          ) : under.kind === "settings" ? (
+          ) : under.kind === "settings" || under.kind === "setup" ? (
             <Suspense fallback={null}>
-              <Settings onBack={undefined} />
+              <DeskSettings route={under} open={open} />
             </Suspense>
           ) : (
             <DeskEmpty onNew={() => newThread()} />
@@ -174,6 +190,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
         <FilesLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
         <AgentsLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
+        <SetupLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} onAll={(project) => open({ kind: "setup", project })} />
       </div>
       <CommandPalette />
       <ConfirmHost />
@@ -230,6 +247,7 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
 function toggleSide(): void {
   if (filesOpenStore.get().open) return closeFiles()
   if (agentsOpenStore.get().open) return closeAgents()
+  if (setupOpenStore.get().open) return closeSetup()
   toggleChanges()
 }
 
@@ -369,7 +387,7 @@ function DeskIdentity({ settings, onSettings }: { settings: boolean; onSettings:
  */
 function DeskThreadMenu({ thread: id }: { thread: string | undefined }) {
   const client = useWebClient()
-  const thread = useAccountList((state) => (id ? foldThreads(state).threads.find((each) => each.id === id) : undefined))
+  const thread = useAccountList((state) => (id ? threadById(foldThreads(state), (each) => each.id === id) : undefined))
   if (!thread) return null
   const reachable = !thread.quietSince && !thread.archived
   const copyLink = async () => {

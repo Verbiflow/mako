@@ -1,5 +1,5 @@
 import { memo, useEffect, type ReactNode } from "react"
-import { GitPullRequestIcon, InboxIcon, SearchIcon, SquarePenIcon, WorkflowIcon } from "lucide-react"
+import { GitPullRequestIcon, InboxIcon, PackageIcon, SearchIcon, SquarePenIcon, WorkflowIcon } from "lucide-react"
 import { formatChord, keysFor, runCommand, useCommands } from "@/extend/commands"
 import { openInbox } from "@/components/inbox/open-inbox"
 import { RailRow } from "@/components/rail/rail-row"
@@ -8,12 +8,13 @@ import { useAutomations } from "@/state/automations"
 import { inboxView, useInboxCount, useInboxRosters, useInboxView } from "@/state/inbox"
 import { OPEN_PULLS_LISTED, openPullRequests, refreshOpenPulls, useOpenPulls } from "@/state/open-pulls"
 import { usePrefs } from "@/state/prefs"
+import { openProjectSetup } from "@/state/project-setup"
 import { useSession } from "@/state/session"
 import { useWindowRoutes } from "@/state/window-routes"
 
 /**
- * The rail's fixed top: New thread, Search, Inbox, Pull requests and
- * Automations, above Pinned and the projects. Five rows, always in this
+ * The rail's fixed top: New thread, Search, Inbox, Pull requests, Setup and
+ * Automations, above Pinned and the projects. Six rows, always in this
  * order, none customised. Each reads its own narrow slice, so a token in a
  * Thread or a row changing below repaints none of them; the Inbox's count is
  * a number from the same facts the marks read (`useInboxCount`).
@@ -32,6 +33,13 @@ export const RailTop = memo(function RailTop() {
       {routed ? null : (
         <>
           <PullsRow />
+          <RailRow
+            data-rail-top-row="setup"
+            icon={<PackageIcon />}
+            label="Setup"
+            title="Files, accounts, tools and environments"
+            onClick={openProjectSetup}
+          />
           <AutomationsRow />
         </>
       )}

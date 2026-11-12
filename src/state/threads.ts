@@ -1,7 +1,7 @@
 import type { HarnessDescriptor } from "@/lib/types"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
-import { listedAsThread, threadList } from "@mako/host/contracts/thread-list"
+import { internalReviewSession, listedAsThread, sameNativeSession, threadList } from "@mako/host/contracts/thread-list"
 import { toast } from "sonner"
 import type { ExternalThreadActivity, ThreadRef } from "@/lib/types"
 import {
@@ -30,12 +30,14 @@ import { setComposerHarness } from "@/state/thread-tuning"
 import {
   applyThreadEntries,
   rememberThread,
+  retireInternalReview,
   threadViewingActions,
 } from "@/state/thread-viewing"
-import { threadsStore, useThreads } from "@/state/thread-store"
+import { nativeSessionRefs, threadsStore, useThreads } from "@/state/thread-store"
 import { followThreadMoves } from "@/state/thread-moves"
-import { noteOutcome, retireSubject } from "@/state/notifications"
+import { noteOutcome, noticeId, retireNotice, retireSubject } from "@/state/notifications"
 import { offerWindowRenames } from "@/state/thread-titles"
+import { inboxView } from "@/state/inbox-view"
 
 interface ThreadCatalog {
   ready: boolean
@@ -76,6 +78,8 @@ export type { ThreadStatus }
 
 /** The Sessions that are a conversation's background agents: shown under it, never a Thread of their own, so nothing of theirs notifies. */
 const helpers = new Set<string>()
+/** What an app outside Mako last asked the person, by its Thread's path: the notice it was said as. */
+const externalAsks = new Map<string, string>()
 
 function noteHelpers(list: readonly ThreadRef[]): void {
   for (const ref of list) {
@@ -85,6 +89,14 @@ function noteHelpers(list: readonly ThreadRef[]): void {
 }
 
 export function applyThreadRef(ref: ThreadRef) {
+  ref = nativeSessionRefs.observe(ref)
+  if (retireInternalReview(ref)) {
+    if (nativeSessionRefs.owns(ref)) noteHelpers([ref])
+    const current = threadsStore.get().threads
+    if (current.some(candidate => sameNativeSession(nativeSessionRefs.classify(candidate), ref)))
+      applyThreads(current.filter(candidate => !sameNativeSession(nativeSessionRefs.classify(candidate), ref)))
+    return
+  }
   noteHelpers([ref])
   if (helpers.has(ref.path)) {
     clearObserved(ref.path)
@@ -121,8 +133,8 @@ export function applyThreadRef(ref: ThreadRef) {
 /** A Session still opening, or whose last read failed, is described by its newest row too: the composer reads where it works from this ref. */
 function followViewedRef(ref: ThreadRef): void {
   const { viewing, opening } = threadsStore.get()
-  if (opening?.ref.path === ref.path) threadsStore.set({ opening: { ...opening, ref } })
-  if (viewing?.ref.path === ref.path) {
+  if (opening?.ref.path === ref.path && sameNativeSession(opening.ref, ref)) threadsStore.set({ opening: { ...opening, ref } })
+  if (viewing?.ref.path === ref.path && sameNativeSession(viewing.ref, ref)) {
     const updated = { ...viewing, ref }
     threadsStore.set({ viewing: updated })
     rememberThread(updated)
@@ -145,16 +157,19 @@ function noteExternalOutcome(
   if (!provider || helpers.has(path)) return
   const subject = threadSubject(path, provider)
   if (activity?.status === "needs-input") {
-    if (previous?.status !== "needs-input")
-      noteOutcome({
-        kind: "needs-you",
-        subject,
-        marker: `external:${activity.since}`,
-        detail: activity.detail,
-      })
+    if (previous?.status !== "needs-input") {
+      const marker = `external:${activity.since}`
+      externalAsks.set(path, noticeId(subject, "needs-you", marker))
+      noteOutcome({ kind: "needs-you", subject, marker, detail: activity.detail })
+    }
     return
   }
-  if (previous?.status === "needs-input") retireSubject(subject.id, "asks")
+  // What it asked goes by its own notice once it no longer waits on the person.
+  const asked = externalAsks.get(path)
+  if (asked) {
+    externalAsks.delete(path)
+    retireNotice(asked)
+  }
   if (activity?.status === "active") {
     if (previous?.status !== "active") retireSubject(subject.id)
     return
@@ -202,8 +217,15 @@ export function applyThreadRemoved(path: string) {
 export function applyThreads(list: ThreadRef[], loaded = true) {
   const { threads: previous, loaded: wasLoaded } = threadsStore.get()
   const initialHydration = loaded && !wasLoaded
-  noteHelpers(list)
-  const unique = threadList(list)
+  const observed = list.map(ref => nativeSessionRefs.observe(ref))
+  for (const ref of observed) retireInternalReview(ref)
+  const previousByPath = new Map(previous.map(ref => [ref.path, ref]))
+  const candidates = observed.map(ref => {
+    const held = nativeSessionRefs.version(ref.path)?.ref ?? previousByPath.get(ref.path)
+    return internalReviewSession(ref) && held && !sameNativeSession(held, ref) ? held : ref
+  })
+  noteHelpers(candidates)
+  const unique = threadList(candidates)
   threadsStore.set({ threads: unique, loaded })
   followThreadMoves(previous, unique)
   offerWindowRenames(unique)
@@ -277,4 +299,9 @@ export const threads = {
   ...threadCatalogActions,
   ...threadViewingActions,
   ...threadContinuationActions,
+  /** The person's open action; background reader recovery uses threadViewingActions directly. */
+  view(ref: ThreadRef, mode?: "conversation" | "native") {
+    inboxView.close()
+    return threadViewingActions.view(ref, mode)
+  },
 }

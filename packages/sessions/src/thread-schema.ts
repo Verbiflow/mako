@@ -9,6 +9,7 @@ import {
 import { ToolEffectSchema } from "./tool-effects.js"
 import { EntrySchema, TurnUsageSchema, unfinished } from "./entries.js"
 import { entriesFromMessages } from "./entry-sink.js"
+import { NativeAgentOriginSchema } from "./native-agent-origin.js"
 
 /**
  * A decoder's working shape (`DecodedEntry` in `format.ts`): a message
@@ -102,6 +103,7 @@ export const DecodedEntrySchema = z.discriminatedUnion("kind", [
 export const ThreadRefSchema = z.object({
   harness: z.string(),
   nativeId: z.string(),
+  nativeAgent: NativeAgentOriginSchema.optional(),
   path: z.string(),
   cwd: z.string().optional(),
   currentCwd: z.string().optional(),

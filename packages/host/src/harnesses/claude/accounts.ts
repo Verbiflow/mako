@@ -1,3 +1,4 @@
+import { hostFetch } from "../../base/host-stopping.js"
 import { z } from "zod"
 import type { SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk"
 import { claudeProbeUsage } from "./usage-probe.js"
@@ -545,7 +546,7 @@ export async function claudeOAuthUsage(
   harnessLabel: string
 ): Promise<AccountUsage> {
   try {
-    const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
+    const response = await hostFetch("https://api.anthropic.com/api/oauth/usage", {
       headers: {
         Authorization: `Bearer ${token}`,
         "anthropic-beta": "oauth-2025-04-20",

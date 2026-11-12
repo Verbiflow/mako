@@ -53,6 +53,7 @@ import type { ThreadWorktreeMoveDeps } from "./thread-worktree-moves.js"
 
 export { ArtifactPreviews, type ProviderArtifactPreview } from "./artifact-previews.js"
 export { Automations } from "./automations.js"
+export { AutomationLaunches, AutomationNotStartedError } from "./automation-launches.js"
 export { checkoutConversations } from "./checkout-conversations.js"
 export { WorkspaceClients } from "./clients.js"
 export { applyMoveCheckpoint, captureMoveCheckpoint, MoveCheckpointError, verifyMoveCheckpoint } from "./move-checkpoint.js"
@@ -60,6 +61,7 @@ export { captureCarry, cloneRepository, openCarry, placeOutside, planOutsideRetu
 export { mergeReturned, unchangedSince } from "./move-merge.js"
 export { ProjectMissingError } from "./worktree-reattach.js"
 export { CloudCarriedFiles, declareCarriedFilesMethods } from "./cloud-carried-files.js"
+export { declareSetupMethods, SetupViews, type SetupViewDeps } from "./setup-view.js"
 export { projectRecipe, readProjectRecipe, type ProjectRecipeRead } from "./thread-recipe.js"
 export { answeredElsewhere, elsewhereRefusal, type ElsewhereFolder } from "./elsewhere.js"
 export type { Relocation, WorkspaceConversations } from "./conversations.js"
@@ -408,11 +410,12 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
     })
   )
   methods.handle("mako:automations", () => automations.list())
+  methods.handle("mako:automation-context", () => automations.context())
   methods.handle("mako:save-automations", (next: Automation[]) =>
     withHost((h) => automations.save(h.workspace, next))
   )
-  methods.handle("mako:automation-enabled", (id: string, enabled: boolean) => automations.setEnabled(id, enabled))
-  methods.handle("mako:run-automation", (id: string) => automations.fire(id, "manual"))
+  methods.handle("mako:automation-enabled", (id: string, enabled: boolean, cwd?: string) => automations.setEnabled(id, enabled, cwd))
+  methods.handle("mako:run-automation", (id: string, operation?: string, cwd?: string) => automations.fire(id, "manual", operation, cwd))
   methods.handle("mako:reload-automations", () => withHost((h) => automations.load(h.workspace)))
   declareWorktreeMethods(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls })
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)

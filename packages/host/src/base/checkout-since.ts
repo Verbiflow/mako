@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process"
+import { hostExecFile } from "./host-command.js"
 import { existsSync, readdirSync, realpathSync } from "node:fs"
 import { lstat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
@@ -45,7 +45,7 @@ const GIT_TIMEOUT_MS = 10_000
 
 function git(cwd: string, args: readonly string[]): Promise<string | undefined> {
   return new Promise((resolve) => {
-    execFile(
+    hostExecFile(
       "git",
       ["-c", "core.quotePath=false", ...args],
       { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" } },

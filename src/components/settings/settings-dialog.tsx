@@ -125,9 +125,10 @@ export function SettingsDialog({
     const nextTerm = next.trim().toLowerCase()
     if (!nextTerm) return
     const hits = SECTIONS.filter((entry) => matches(entry, nextTerm, descriptors))
-    const first = hits[0]
-    if (first && !hits.some((entry) => entry.id === active.id))
-      onSectionChange(first.id)
+    const destination = hits.find((entry) => entry.id === active.id) ?? hits[0]
+    if (!destination) return
+    destination.onSearch?.(nextTerm)
+    if (destination.id !== active.id) onSectionChange(destination.id)
   }
 
   return (
@@ -214,8 +215,12 @@ export function SettingsDialog({
                             <button
                               key={entry.id}
                               type="button"
+                              data-settings-section={entry.id}
                               aria-current={selected ? "page" : undefined}
-                              onClick={() => onSectionChange(entry.id)}
+                              onClick={() => {
+                                if (term) entry.onSearch?.(term)
+                                onSectionChange(entry.id)
+                              }}
                               className={cn(
                                 "pressable flex h-8 w-full items-center gap-2.5 px-2 text-left text-ui transition-colors duration-100",
                                 selected

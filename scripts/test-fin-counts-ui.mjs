@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /*
  * Every surface that counts an Apex's Fins, drawn from one roster, says the same numbers in the same words: the
@@ -75,9 +76,11 @@ async function check() {
   await mkdir(join(root, "shots"), { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const base = process.env.MAKO_FIN_COUNTS_URL
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
+  atSize(window, 1440, 900)
   const page = window.webContents
   const evaluate = (code) => page.executeJavaScript(code)
   const until = async (code, what = code) => {
@@ -171,6 +174,28 @@ async function check() {
   assert.equal(await counts("[data-fin-pips]"), desktop, "the phone's row counts the Fins as the desktop's rail does")
   agrees("the phone's row", await evaluate("document.querySelector('[data-fin-pips]').getAttribute('aria-label')"), numbers(desktop))
 
-  console.log(`Fin counts agree on every surface: ${label}; on the phone, ${desktop}`)
+  // An older Session of the Apex on screen, its own roster empty, its Thread's Fins in the newest Session's: the chip
+  // shows them, as every surface reads a Session's Fins from its Thread (`conversationRoster`). #524's third review
+  // found it hidden, counting the Session's own roster.
+  await window.loadURL(`${base}?mock&app=apex`)
+  await until("[...document.querySelectorAll('[data-thread-row]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row again")
+  await evaluate("[...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await until("Boolean(document.querySelector('[data-agents-toggle]'))", "the composer's chip on the Apex's newest Session")
+  const fins = await evaluate(`(async () => {
+    const { acpStore, threadChildren } = await import('/src/state/acp-state.ts')
+    const state = acpStore.get()
+    const shown = state.conversations[state.activeKey]
+    const older = crypto.randomUUID(), newer = crypto.randomUUID(), newerKey = crypto.randomUUID()
+    acpStore.set({
+      conversations: { ...state.conversations, [shown.key]: { ...shown, sessionId: older, nativeAgents: { agents: [], limited: false } }, [newerKey]: { ...shown, key: newerKey, sessionId: newer, session: { ...shown.session, id: newerKey } } },
+      threadSessions: { ...state.threadSessions, [shown.threadId]: [older, newer] },
+    })
+    return threadChildren(acpStore.get(), shown.threadId).length
+  })()`)
+  assert.ok(fins > 0, "the Thread has its Fins in its newest Session")
+  await until("Boolean(document.querySelector('[data-agents-toggle]'))", "the composer's chip on an older Session with an empty roster")
+  assert.match(await counts("[data-agents-toggle]"), new RegExp(`^${fins} Fins`), "counting the Thread's Fins")
+
+  console.log(`Fin counts agree on every surface: ${label}; on the phone, ${desktop}; and on an older Session, its Thread's ${fins}`)
   app.exit(0)
 }

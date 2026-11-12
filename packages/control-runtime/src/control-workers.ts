@@ -1,10 +1,12 @@
-import { fork, type ChildProcess, type Serializable } from "node:child_process"
+import { fork } from "./processes.js"
+import type { ChildProcess, Serializable } from "node:child_process"
 import type { Server, Socket } from "node:net"
 import { fileURLToPath } from "node:url"
 import { ControlFault } from "@mako/control/control"
 import { controlSessionBuild, type SessionDescriptor } from "./control-session-protocol.js"
 import { DesktopWorkerReplySchema, type DesktopSessionConfig, type DesktopWorkerReply } from "./desktop-session-config.js"
 import { sweepAbandonedLaunches } from "./launch-folders.js"
+import { GLOBAL_CONTROL_CLEANUP, type ControlCleanupPolicy } from "./private-socket.js"
 
 /** What a worker inherits: no credentials, which reach it in its `bind`. */
 const INHERITED = [
@@ -134,6 +136,8 @@ export class ControlWorker {
  * after each is taken and stopped after `quietMs` without one being taken.
  */
 export class ControlWorkers {
+  /** The pool owns cleanup policy, including sessions that borrow its workers. */
+  readonly cleanup: ControlCleanupPolicy
   /** The engine this process loaded, hashed as the pool is made; a worker that loaded other code is newer. */
   readonly build: Promise<string>
   private spare: ControlWorker | undefined
@@ -143,14 +147,16 @@ export class ControlWorkers {
   private outdated = false
   private readonly options: ControlWorkerOptions & { spare: boolean; quietMs: number }
 
-  constructor(options: ControlWorkerOptions & { spare?: boolean; quietMs?: number } = {}) {
+  constructor(options: ControlWorkerOptions & { spare?: boolean; quietMs?: number; cleanup?: ControlCleanupPolicy } = {}) {
     this.options = { ...options, spare: options.spare ?? true, quietMs: options.quietMs ?? 10 * 60_000 }
+    this.cleanup = Object.freeze({ ...(options.cleanup ?? GLOBAL_CONTROL_CLEANUP) })
     this.build = controlSessionBuild()
     void this.build.catch(() => {})
   }
 
-  /** Clears launch folders whose owner died before a worker took them, once for this pool. */
+  /** Global, same-user abandoned cleanup once per pool; never started for an explicitly owned root. */
   sweepAbandonedLaunches(): void {
+    if (this.cleanup.scope === "owned") return
     this.launchesSwept ??= sweepAbandonedLaunches().catch(() => {})
   }
 

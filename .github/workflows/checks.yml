@@ -29,7 +29,8 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
+      - run: npm run test:ci-downloads
       - run: npm run lint
       - run: npm run typecheck
 
@@ -47,7 +48,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
       - run: npm run build:control-runtime
       # The host call schemas are generated from the handlers' types: one edited by hand drops what a type declares.
       - run: node scripts/generate-host-inputs.mjs --check
@@ -88,9 +89,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       # The web client as the hosted app vendors it: a desk component that only the desk's window can build fails here.
       - run: npm run build -w @mako/web-client
@@ -98,6 +99,8 @@ jobs:
       - run: npm run test:transcript-events
       - run: npm run test:stage
       - run: npm run test:fin-words
+      # Setup's rows and words: each grant, lease, ask and reading in its part, said against its source.
+      - run: npm run test:setup
       - run: npm run test:fin-row-time
       - run: npm run test:steer-notices
       - run: npm run test:fin-decisions
@@ -124,6 +127,8 @@ jobs:
       # The attribution journal and workspace snapshots: per-turn changes, undo, Git operations, and the guard that keeps
       # every script's scratch repositories away from the one it was started in.
       - run: npm run test:attribution
+      # Letting go of idle roots and counting a turn read the journal in slices, never holding the host's loop for either.
+      - run: npm run test:attribution-holds
       - run: npm run test:workspace-snapshots
       # A worktree's packages linked from the main checkout's: workspace packages resolve to the worktree's own code,
       # and no install writes through the links into the main checkout.
@@ -150,9 +155,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-index.ts
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-kinds.ts
@@ -173,9 +178,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - run: npm run test:start-interleavings
       # A switch against the queue, generated: the rules of `docs/delivery-queue.md` after every step of seeded schedules.
@@ -203,9 +208,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       # The harness definitions, their versions and the pages generated from them (adding-a-harness.md, the descriptors).
       - run: npx tsx --tsconfig tsconfig.app.json scripts/test-harness-definitions.ts
@@ -245,9 +250,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - run: npm run test:background-agents
       - run: npm run test:build-slots
@@ -261,6 +266,16 @@ jobs:
       # A Fin waiting on a pull request is woken once per outcome, never its Apex, across restarts; GitHub is a stub.
       - run: npm run test:fin-pull-waits
       - run: npm run test:fin-resume
+      # A host starting reads each Fin's journal in slices as it resumes them, never all of them at once.
+      - run: npm run test:resume-holds
+        id: resume_holds
+      # Evidence only after that exact required step failed; its failure remains the job result.
+      - name: Diagnose failed resume hold (evidence only)
+        if: ${{ failure() && steps.resume_holds.outcome == 'failure' }}
+        timeout-minutes: 3
+        run: node --import tsx scripts/diagnose-resume-holds.mjs
+        env:
+          MAKO_RESUME_DIAGNOSTICS: "1"
       # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
       - run: npm run test:fin-states
 
@@ -276,9 +291,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - run: npm run test:fin-move
       # One reading of why a queued message waits and one rule for what goes next; one timer for held times; the
@@ -302,9 +317,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - run: npm run test:orch-answer
       # A message its harness can't take for now (capacity, its service, the network, a stalled start, a session still
@@ -319,7 +334,12 @@ jobs:
       - run: npm run test:agents-doors
       - run: npm run test:agents-cli
       - run: npm run test:thread-move-tool
+      - run: npm run test:thread-act-tool
       - run: npm run test:orch-update
+      # A Fin placed on another device: two hosts through the protocol's gateway, its start settled by its op, its
+      # notices kept until its Apex's device takes them (off, restarted, sent twice, from a stale owner), and its Apex's
+      # operations on it routed there.
+      - run: npm run test:fins-placed
 
   # Every harness's decode, live host, projection, recorder, merge and saved-open paths, measured beside the commit
   # this change goes onto, in turns on this runner (`perf-reference.ts`): HEAD^1 is a pull request's base in the merge
@@ -339,9 +359,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       # The rows read `@mako/*` from the packages' builds.
       - run: npm run build:control-runtime
       # How a row is judged, on simulated machines: unchanged code as noisy as this runner is never slower, twice as slow always is.
@@ -371,9 +391,18 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
       - run: npx tsgo -b packages/host
       - run: npx tsx scripts/ci-update-checks.ts
+        env:
+          MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
+      # What a failed check kept to say why (a host's logs when it was slow to stop).
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: update-checks-evidence
+          path: ${{ runner.temp }}/test-evidence
+          if-no-files-found: ignore
 
   # A long Apex Thread on the desk, the web app and the phone opens at its end with no blank room, and a message sent
   # there, between turns and in one, overlaps no row in any frame it paints (`test:transcript-send-ui`). Geometry
@@ -392,7 +421,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
       - run: npm run build:control-runtime
       - run: npm run test:transcript-send-ui
         env:
@@ -426,11 +455,20 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
       # Recording needs ffmpeg and ffprobe, which the Mac runner doesn't have.
       - run: brew install ffmpeg
       - run: npm run build:control-runtime
       - run: node scripts/ci-suites.mjs ${{ matrix.shard }} 3
+        env:
+          MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
+      # What a failed suite kept to say why (a host's logs when it didn't quit).
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: suites-${{ matrix.shard }}-evidence
+          path: ${{ runner.temp }}/test-evidence
+          if-no-files-found: ignore
 
   # How soon each device sees what another does and what a streamed token costs on each hop, against the bench's
   # budgets (`bench:sync-latency`): two screenless hosts, a phone and a cloud watcher on the protocol's fake gateway,
@@ -448,9 +486,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
       - uses: ./.github/actions/codex-sandbox
       # How two runs are judged: a count fails in either, and only a time gets a second try.
       - run: npx tsx scripts/test-sync-bench-judge.ts
@@ -474,9 +510,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
       - uses: ./.github/actions/codex-sandbox
       - name: Steer latency on Claude Code and Codex
@@ -500,9 +536,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       - run: npx tsgo -b packages/host
       - run: npm run bench:host-load -- --scale today --peak-limit-mb 1500 --cpu-prof "$RUNNER_TEMP/host-load-profile"
 

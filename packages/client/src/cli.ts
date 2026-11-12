@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util"
 import { AGENTS_HELP, agentsMain } from "./agents.js"
-import { THREAD_HELP, threadMain } from "./thread.js"
+import { THREAD_HELP, settingsMain, threadMain } from "./thread.js"
 import { MakoClient, type StartOptions } from "./client.js"
 import type { ConversationChange } from "./conversation.js"
 import { cloudThread, localHost } from "./transport.js"
@@ -28,9 +28,10 @@ ${THREAD_HELP}
 
 A conversation on a cloud Thread works through this computer's Mako as it works in the app.`
 
-/** `agents`, `mcp` and `thread` parse their own options (`agentsMain`, `threadMain`). */
+/** `agents`, `mcp`, `thread`, `settings`, `harness` and `automation` parse their own options (`agentsMain`, `threadMain`, `settingsMain`). */
 const threadCommand = process.argv[2] === "thread"
-const delegated = process.argv[2] === "agents" || process.argv[2] === "mcp" || threadCommand
+const settingsCommand = process.argv[2] === "settings" || process.argv[2] === "harness" || process.argv[2] === "automation"
+const delegated = process.argv[2] === "agents" || process.argv[2] === "mcp" || threadCommand || settingsCommand
 const { values, positionals } = parseArgs({
   args: delegated ? [] : process.argv.slice(2),
   allowPositionals: true,
@@ -201,4 +202,4 @@ async function settle(client: MakoClient, conversationId: string, requestId: str
   if (request?.status !== "completed") process.exitCode = 1
 }
 
-(threadCommand ? threadMain(process.argv.slice(2)) : delegated ? agentsMain(process.argv.slice(2)) : main()).catch((error: Error) => fail(error.message))
+(threadCommand ? threadMain(process.argv.slice(2)) : settingsCommand ? settingsMain(process.argv.slice(2)) : delegated ? agentsMain(process.argv.slice(2)) : main()).catch((error: Error) => fail(error.message))

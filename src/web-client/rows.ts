@@ -2,7 +2,7 @@ import { attentionLine } from "@mako/host/contracts/notifications"
 import { formatRelative } from "@/lib/format"
 import type { RunPlace } from "@mako/host/contracts/account-devices"
 import type { MoveWay } from "./move-progress"
-import { CLOUD_WHERE, type WebThread } from "./threads"
+import { CLOUD_WHERE, placeLine, type WebThread } from "./threads"
 
 /** What a row says under its title, and in which tone. */
 export interface RowDetail {
@@ -14,6 +14,8 @@ export interface RowDetail {
   elapsed?: string
   /** A word before the rest, in the row's own ink: "Done", for a run that finished since the Thread was last opened. */
   lead?: "Done"
+  /** The device the glyph stands for, said beside it: a Fin placed there, waiting on the person. */
+  where?: string
   /** On its way between a Mac and the cloud: its mark is a blinking arrow, up or down, where its place stood. */
   move?: MoveWay
 }
@@ -45,7 +47,8 @@ export function workingFor(ms: number): string {
  */
 export function rowDetail(thread: WebThread, named: boolean, context: RowContext = {}): RowDetail {
   if (thread.archived) return { text: `Archived ${formatRelative(Date.parse(thread.archived.archivedAt))}`, tone: "faint" }
-  if (thread.standing === "waiting") return { text: attentionLine(thread.waitingFor ?? "needs-you", thread.waitingOn), tone: "attention" }
+  // A Fin placed on another device says the device, before what it waits on there.
+  if (thread.standing === "waiting") return { text: attentionLine(thread.waitingFor ?? "needs-you", thread.waitingOn), tone: "attention", ...(thread.apex && thread.where !== CLOUD_WHERE && { place: "device" as const, where: thread.where }) }
   if (thread.standing === "failed") return { text: "Failed", tone: "negative" }
   if (thread.standing === "working") {
     const since = context.workingSince
@@ -54,9 +57,8 @@ export function rowDetail(thread: WebThread, named: boolean, context: RowContext
   if (context.move) return { text: context.move === "cloud" ? "Moving to the cloud" : "Coming back from the cloud", tone: "working", move: context.move }
   if (thread.standing === "moving") return { text: "Moving", tone: "working" }
   if (thread.waitingMessages) return { text: thread.waitingMessages === 1 ? "1 message waiting" : `${thread.waitingMessages} messages waiting`, tone: "faint" }
-  const cloud = thread.where === CLOUD_WHERE
-  const words = [thread.project, !cloud && named ? thread.where : undefined].filter(Boolean).join(" · ")
-  const detail: RowDetail = { text: words || (cloud ? "Cloud" : thread.where), tone: "faint", place: cloud ? "cloud" : thread.machine ? "machine" : "device" }
+  const line = placeLine(thread.where, thread.project, { named, machine: thread.machine })
+  const detail: RowDetail = { text: line.text, tone: "faint", place: line.place }
   if (context.done && !thread.quietSince) detail.lead = "Done"
   return detail
 }

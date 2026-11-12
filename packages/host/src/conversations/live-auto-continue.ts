@@ -95,6 +95,7 @@ export class LiveAutoContinue {
       text: continueTurnPrompt(reason, "mako", source.interruption.stopped),
       attachments: [],
       tuning: source.tuning,
+      notification: source.notification,
       status: "queued",
       continues,
     })
@@ -102,7 +103,7 @@ export class LiveAutoContinue {
     try {
       this.access.admission.assert()
       if (reconnect)
-        this.access.transfer(id, { id: request.id, provider: reconnect.provider, text: request.text, attachments: [], tuning: source.tuning }, actor, continues)
+        this.access.transfer(id, { id: request.id, provider: reconnect.provider, text: request.text, attachments: [], tuning: source.tuning, notification: request.notification }, actor, continues)
       else this.access.admit(resident, request)
       hostLog("live", pending.restarted ? "continued a turn Mako's exit cut short" : "continued a dropped turn", {
         conversation: id,
@@ -144,6 +145,7 @@ export class LiveAutoContinue {
       actor: input.actor,
       id: input.requestId,
       createdAt: Date.now(),
+      notification: resident.snapshot.requests.find((request) => request.id === input.continues)?.notification,
       text: brief ? `${brief.digest ? DIGEST_AGAIN : BRIEF_AGAIN}\n\n${brief.text}` : continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped, { stayed: input.stayed === true }),
       ...(brief && brief.digest && { displayText: "", digest: carriedDigest(brief.digest) }),
       attachments: [],
@@ -157,7 +159,7 @@ export class LiveAutoContinue {
     const wakes = !resident.driver && request.digest !== undefined && this.access.reopens(resident)
     const reconnect = wakes ? undefined : this.reconnectBinding(resident)
     if (reconnect)
-      this.access.transfer(id, { id: request.id, provider: reconnect.provider, text: request.text, attachments: [], tuning }, input.actor, continues)
+      this.access.transfer(id, { id: request.id, provider: reconnect.provider, text: request.text, attachments: [], tuning, notification: request.notification }, input.actor, continues)
     else this.access.admit(resident, request)
     if (wakes) void this.access.wake(resident)
     hostLog("live", "continued a turn cut short", { conversation: id, harness: resident.snapshot.session.harness, request: request.id, continues: input.continues, reason: input.reason, reconnect: Boolean(reconnect) })
@@ -199,6 +201,7 @@ export class LiveAutoContinue {
       ...(unheard && { displayText: "", digest: { ...carriedDigest(unheard), ...(!retry && { resting: true as const, ...(waits.digest?.nextTry !== undefined && { nextTry: waits.digest.nextTry }) }) } }),
       attachments: [],
       tuning: failed.tuning,
+      notification: failed.notification,
       status: "held",
       continues,
       ...(retry && { retry }),

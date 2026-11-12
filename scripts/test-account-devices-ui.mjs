@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { literal } from "./lib/page-code.mjs"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * Settings › Devices and Settings › Account against the production components
@@ -30,14 +31,17 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
+  const args = process.argv.slice(2)
+  const portAt = args.indexOf("--port")
+  const port = portAt === -1 ? 0 : Number(args.splice(portAt, 2)[1])
   const root = testScratch("mako-account-devices-ui-")
-  const evidence = process.argv[2] ? resolve(process.argv[2]) : root
+  const evidence = args[0] ? resolve(args[0]) : process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "account-devices") : root
   await mkdir(evidence, { recursive: true })
   const server = await createServer({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],
-    server: { host: "127.0.0.1", port: 0 },
+    server: { host: "127.0.0.1", port, strictPort: port !== 0 },
   })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-account-devices-check", main: fileURLToPath(import.meta.url) }))
@@ -61,8 +65,10 @@ async function checkWindow() {
   const evidence = process.env.MAKO_UI_TEST_EVIDENCE
   const base = process.env.MAKO_UI_TEST_URL
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1280, height: 1240, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1280, 1240)
   const page = window.webContents
   page.debugger.attach("1.3")
   const watchdog = setTimeout(() => {
@@ -141,7 +147,7 @@ async function checkWindow() {
   assert.equal(names[0], "Ada's MacBook Pro", "this Mac first")
   assert.match(await deviceRow("Ada's MacBook Pro"), /^Ada's MacBook Pro\nThis Mac\nMac · macOS 26\.0 · Mako 0\.4\.0\nOnline now/)
   assert.match(await deviceRow("build-box"), /^build-box\nLinux machine · x64 · Ubuntu 24\.04 · Mako 0\.4\.0\nOnline now\nJoined .+ from Frankfurt, Germany, with a code you approved/)
-  assert.match(await deviceRow("gpu-rig"), /\nLinux machine · x64 · Debian 13 · Mako 0\.4\.0\nQuiet since \d/)
+  assert.match(await deviceRow("gpu-rig"), /\nLinux machine · x64 · Debian 13 · Mako 0\.4\.0\nQuiet since (?:[A-Z][a-z]{2} \d{1,2}, )?\d{1,2}[:.]\d{2}/)
   assert.match(await deviceRow("nas"), /^nas\nNeeds Mako's update\nLinux machine · arm64 · Alpine 3\.22 · Mako 0\.1\.37\nOnline now/)
   assert.match(await deviceRow("Studio"), /\nMac · macOS 15\.5 · Mako 0\.3\.9\nQuiet since /)
   assert.match(await deviceRow("ada-terminal"), /\nTerminal · Linux\nNever connected/)
@@ -304,12 +310,15 @@ async function checkWindow() {
   await both("signed-out-reused", ['[role="dialog"] main'])
   // 4. A device joins while this Mac is open: said at once, with Remove.
   await window.loadURL(`${base}?mock&cloud=signed-in&invited&joined`)
-  await until(`Boolean(document.querySelector('[data-sonner-toast]')) && document.body.innerText.includes('render-box joined your account')`, "the joined alert")
-  const alert = await evaluate(`document.querySelector('[data-sonner-toast]').innerText`)
+  // Other fixture toasts can precede this one; wait for and read the same device's alert.
+  const joinedToast = `[...document.querySelectorAll('[data-sonner-toast]')].find((node) => node.querySelector('[data-title]')?.textContent === 'render-box joined your account')`
+  await until(`Boolean(${joinedToast})`, "the joined alert")
+  const alert = await evaluate(`(() => { const node = ${joinedToast}; node.setAttribute('data-device-joined-toast', ''); return node.innerText })()`)
+  await writeFile(join(evidence, "joined-toasts.json"), JSON.stringify(await evaluate(`[...document.querySelectorAll('[data-sonner-toast]')].map(node => ({ joined: node.hasAttribute('data-device-joined-toast'), words: node.innerText }))`), null, 2))
   assert.match(alert, /A machine on Linux x64 · Ubuntu 24\.04, from Frankfurt, Germany, with a code you approved\. If it isn't yours, remove it\./)
   assert.match(alert, /Remove/)
   showToasts = true
-  await both("device-joined", ['[data-sonner-toast]'])
+  await both("device-joined", ['[data-device-joined-toast]'])
   console.log("Account devices UI: every device with its kind, health and joining, removal asked with what stops, a machine added and said as it joins, a machine's rail row marked, the browsers named, placed and signed out one or all, a reused sign-in's sign-out said, a device that joins said at once")
   clearTimeout(watchdog)
   app.exit(0)

@@ -56,7 +56,7 @@ const FILE_EXTENSIONS = new Set(["json", "jsonl", "ndjson", "png", "jpg", "jpeg"
 const AGENT_ADDRESSES = new Set(["cursoragent@cursor.com"])
 
 /** An SSH remote, `git@github.com:owner/repo` or `ssh://git@github.com/owner/repo`, by what's around its `git@host`. */
-const sshRemote = (before, after) => /^:[A-Za-z0-9._~-]+\//.test(after) || (/ssh:\/\/$/.test(before) && /^\/[A-Za-z0-9._~-]/.test(after))
+const sshRemote = (before, after) => /^:[A-Za-z0-9._~-]+\//.test(after) || (before.endsWith("ssh://") && /^\/[A-Za-z0-9._~-]/.test(after))
 
 function allowedEmail(local, domain, tld, before, after) {
   if (FILE_EXTENSIONS.has(tld.toLowerCase())) return true

@@ -90,6 +90,8 @@ export interface WorldOptions {
   root: string
   script: Script
   budget?: TreeBudget
+  /** Each event the host sends its windows, as it sends it. */
+  events?: (event: HostEvent) => void
   /** What the host keeps of conversations in memory (`LiveDependencies.conversationMemory`); the host's own without it. */
   conversationMemory?: ConstructorParameters<typeof LiveConversations>[0]["conversationMemory"]
   /** How long a harness at rest stays connected before it hibernates (`LiveDependencies.providerIdleMs`). */
@@ -108,6 +110,10 @@ export interface WorldOptions {
   preparing?: (options: LiveStartOptions) => Promise<void> | void
   /** The person's ceiling across every place (`AgentsDeps.finCeiling`). */
   finCeiling?: () => number
+  /** Takes up what the last host left as the host does, each conversation read in a slice at a time first (`resumed`); at once without it. */
+  resumeInSlices?: boolean
+  /** The host has begun to stop while it still starts (`ConversationsDeps.stopping`). */
+  stopping?: () => boolean
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
   /** A harness closing a session, awaited before it's closed (a switch retiring its source, say). */
@@ -191,6 +197,14 @@ export interface WorldOptions {
   readingAccounts?: (harness: string, all: boolean) => Promise<void> | void
   /** A pull request as GitHub would say it stands (`AgentsDeps.readPull`): a stub, never the network. */
   readPull?: AgentsDeps["readPull"]
+  /** How this host reaches the person's other devices (`AgentsDeps.away`): with it, a Fin can be placed on one. */
+  away?: AgentsDeps["away"]
+  /** The Git remote a folder is a checkout of (`AgentsDeps.remoteOf`). */
+  remoteOf?: AgentsDeps["remoteOf"]
+  /** This host's checkout of a remote, for a Fin placed here (`AgentsDeps.checkoutOf`). */
+  checkoutOf?: AgentsDeps["checkoutOf"]
+  /** The most access a Fin placed here from another device may have (`AgentsDeps.placedCeiling`). */
+  placedCeiling?: AgentsDeps["placedCeiling"]
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -233,6 +247,8 @@ export class AgentsWorld {
   /** Each move through `continueOn`, in order: who asked and what it went to. */
   readonly continued: { conversation: string; to: string; kind: string; by: string }[] = []
   jobs!: HostJobs
+  /** Settles once this host took up what the last one left (`WorldOptions.resumeInSlices`). */
+  resumed!: Promise<void>
   private running = new Set<Promise<unknown>>()
   private holds = new Map<string, () => void>()
   private ends = new Map<string, ScriptedEnd>()
@@ -258,6 +274,7 @@ export class AgentsWorld {
       return [harness, admission ? withExecutionAdmission(driver, admission) : driver]
     }))
     const live = new LiveConversations({
+      ...(this.options.stopping && { stopping: this.options.stopping }),
       appPath: this.root,
       root: join(this.root, "journals"),
       driver: (provider) => drivers.get(provider),
@@ -271,6 +288,7 @@ export class AgentsWorld {
         return { ref: { harness: "claude", nativeId: path, path }, entries, start: 0, total: entries.length, hasEarlier: false }
       },
       emit: (event) => {
+        this.options.events?.(event)
         this.events.push(event)
         this.eventAt.push(Date.now())
       },
@@ -347,15 +365,29 @@ export class AgentsWorld {
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
       ...(this.options.readPull && { readPull: this.options.readPull }),
       ...(this.options.now && { now: this.options.now }),
+      ...(this.options.away && { away: this.options.away }),
+      ...(this.options.remoteOf && { remoteOf: this.options.remoteOf }),
+      ...(this.options.checkoutOf && { checkoutOf: this.options.checkoutOf }),
+      ...(this.options.placedCeiling && { placedCeiling: this.options.placedCeiling }),
       archived: (conversation) => this.archived.has(conversation),
     }
     const agents = new Agents(deps)
     this.agents = agents
+    if (this.options.resumeInSlices) {
+      // As the host does (`openConversations`), each conversation read in a slice at a time first.
+      this.resumed = (async () => {
+        await this.live.continueRestartedInSlices()
+        await this.agents.resumeInSlices()
+        this.live.armWakes()
+      })()
+      return
+    }
     // As the host does (`openConversations`): the turns an exit cut short go on before the engine looks at what waits.
     this.live.continueRestarted()
     this.agents.resume()
     // As the host's start arms it: held messages' times (`LiveConversations.armWakes`).
     this.live.armWakes()
+    this.resumed = Promise.resolve()
   }
 
   /** The selected account of `harness` when it's at its limit, as `HarnessAccounts.limited` reads it. */
@@ -396,10 +428,12 @@ export class AgentsWorld {
   async restart(): Promise<void> {
     await this.close()
     this.open()
+    await this.resumed
   }
 
   /** A top-level conversation on `harness` at `access`, on `tuning`'s model: an Apex once it starts a child. */
   async apex(harness: string, access: AccessTier = "auto", tuning?: SessionSettings): Promise<{ conversation: string; caller: AgentCaller }> {
+    await this.resumed
     const conversation = randomUUID()
     const modeId = this.options.ladders?.[harness]?.find((mode) => mode.access === access)?.id ?? accessModeId(access)
     await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} apex`, modeId, ...(tuning && { tuning }) })
@@ -596,8 +630,8 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   }
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, wakeDue: () => [], snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, pinnedAccount: () => undefined, submit: none,
-    act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
-    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {},
+    act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, workOf: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
+    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {}, readIn: async () => true,
   }
 }
 

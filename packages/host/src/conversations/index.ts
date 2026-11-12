@@ -28,6 +28,8 @@ import { decodeRuntimeValue, EncodedAnswer } from "../contracts/runtime-value.js
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
+import { placeLink } from "./place-link.js"
+import { PlacedCheckouts } from "./placed-checkouts.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
 import { Agents } from "./agents.js"
 import { continueOn as continuing, type ContinueOn } from "./continue-on.js"
@@ -40,7 +42,7 @@ import { FIN_CEILING } from "../contracts/fin-tuning.js"
 import type { FinCapacity } from "./fin-capacity-host.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { TurnUndoScope } from "../contracts/turn-review.js"
-import type { HostTelemetry } from "../usage/index.js"
+import type { CloudAccount, HostTelemetry } from "../usage/index.js"
 import type { QueuedPromptEdit } from "../contracts/live-queue.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { LiveActionInput } from "../contracts/live-actions.js"
@@ -77,7 +79,7 @@ export { ListedRepositories } from "./listed-repositories.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudContinues } from "./cloud-continues.js"
 export { CloudHandOffs, workingThreads } from "./cloud-handoffs.js"
-export { conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type FinAsking, type ReportSources, type SessionLink } from "./session-report.js"
+export { conversationShown, finAsking, ownedSessions, sessionOrderIn, REPORT_WORK, SessionPublisher, SessionReporter, type FinAsking, type ReportSources, type SessionLink } from "./session-report.js"
 export { MovesUnderWay } from "./moves-under-way.js"
 export { CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, turnOnOf, type TurnOnReading, type TurnOnSources } from "./cloud-turn-on.js"
 export { SessionUploads, declareSyncMethods, readBackfill, syncStatusOf, uploadScope, type UploadSources } from "./session-uploads.js"
@@ -98,6 +100,11 @@ export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 export { Agents } from "./agents.js"
 export { AgentAnswerSchema, declareAgentMethods, registerAgentTools } from "./agent-tools.js"
+export { AgentAskGate, declareAgentAskMethods } from "./agent-ask-gate.js"
+export { ThreadActTool, declareThreadActMethods } from "./thread-act-tool.js"
+export { SettingsTool, declareSettingsMethods } from "./settings-tool.js"
+export { HarnessTool, declareHarnessToolMethods } from "./harness-tool.js"
+export { AutomationTool, declareAutomationToolMethods } from "./automation-tool.js"
 export { ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, threadToolText, type ThreadToolDoor } from "./thread-move-tool.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
@@ -134,11 +141,15 @@ export interface Conversations {
 
 export interface ConversationsDeps {
   environment: HostEnvironment
+  /** The host has begun to stop: what it takes up as it starts ends at its next step, left for the next host. */
+  stopping?(): boolean
   git: Git
   threads: Threads
   harnesses: Harnesses
   workspaces: Workspaces
   telemetry: HostTelemetry
+  /** This host's start on its data root, which its epoch carries (`takeHostStart`). */
+  start?: import("../base/host-start.js").HostStart
   /** A new conversation was written and placed, before its harness starts (`Dependencies.opened`). */
   opened?(conversationId: string): void
   /** Since when a conversation of this Mac's waits to hear its account before it runs a turn (`Dependencies.ownerCheck`). */
@@ -181,6 +192,11 @@ export interface ConversationsDeps {
   builds?(): { slots: number; holders: string[] }
   /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
   finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
+  /**
+   * The Mako account this host is signed in to, through which it reaches the person's other devices: with it a Fin can
+   * be placed on one, and one placed here reports to its Apex's device. Without it Fins start here only.
+   */
+  account?(): Pick<CloudAccount, "deviceId" | "devices" | "session"> | undefined
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -205,6 +221,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   let agents: Agents | undefined
   const live = new LiveConversations({
     agents: () => agents,
+    ...(deps.stopping && { stopping: deps.stopping }),
     ...(deps.builds && { builds: deps.builds }),
     unattended: deps.unattended,
     foreground: deps.foreground,
@@ -213,6 +230,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     opened: deps.opened,
     ownerCheck: deps.ownerCheck,
     memory: memory ?? undefined,
+    ...(deps.start && { start: deps.start }),
     threads: threads.store ?? undefined,
     mcpSnapshot: deps.mcpSnapshot,
     workspaceSnapshots: new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots")),
@@ -280,7 +298,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   // An undo the last host died in the middle of is finished, or put back, from its saved plan.
   await live.resumeUndos().catch((error) => hostWarn("turn-undo", "an undo cut short couldn't be read", { error: error instanceof Error ? error.message : String(error) }))
   // The turns the last host's exit cut short go on, if the person chose so, once their sessions reopen.
-  live.continueRestarted()
+  await live.continueRestartedInSlices()
   // Headless runs report to every window, and claim their session in the ledger while they run.
   const runs = new NativeRuns(host, emit, {
     admission: deps.admission,
@@ -303,6 +321,13 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     resolveLaunch: (provider, cwd, tuning) => harnesses.profiles.resolveLaunch(provider, cwd, tuning),
     resumesUnderAccount: (harness) => host.liveDrivers.get(harness)?.accountContinuation?.kind === "resumes",
     switched: (provider) => deps.telemetry.feature("harness.switched", provider),
+  })
+  // The person's other devices, reached through the account; a Fin placed here works in this device's checkout of its project.
+  const away = deps.account && placeLink(deps.account)
+  const checkouts = new PlacedCheckouts({
+    git: deps.git,
+    projects: join(environment.userRoot, "projects"),
+    known: () => [...(threads.store?.worktrees().map((worktree) => worktree.repoRoot) ?? []), ...live.summaries().flatMap((summary) => summary.session.cwd ?? [])],
   })
   if (threads.store) {
     agents = new Agents({
@@ -362,9 +387,12 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       capacity: new MacCapacity(),
       heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],
       readPull: (target) => readPull(target),
+      ...(away && { away }),
+      remoteOf: (cwd) => deps.git.output(cwd, ["remote", "get-url", "origin"]).then((text) => text.trim() || undefined, () => undefined),
+      checkoutOf: (remote) => checkouts.find(remote),
     })
     deps.finCapacity?.subscribe(() => agents?.capacityChanged())
-    agents.resume()
+    await agents.resumeInSlices()
   }
   const native = new NativeRequests(join(dataRoot, "native-requests"), {
     read: (path) => catalog.readRef(path),
@@ -429,6 +457,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     async stop() {
       shared?.dispose()
       agents?.dispose()
+      away?.close()
       await live.stop()
       for (const driver of host.liveDrivers.list()) driver.stop?.()
       native.stop()
