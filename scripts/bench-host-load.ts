@@ -1,4 +1,4 @@
-import { execFileSync, fork, spawn, type ChildProcess } from "node:child_process"
+import { execFileSync, fork, spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -7,6 +7,7 @@ import { parseArgs } from "node:util"
 import { z } from "zod"
 import { invokeRuntime, probeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
+import { HOST_NODE_OPTIONS } from "@mako/host/base/process-warnings"
 import { heldBy, slices } from "./lib/cpu-slices.ts"
 import { readResident, unmeasured, type ResidentMemory } from "./lib/host-load-memory.ts"
 import { claudeSessionPath, makeWorld, TODAY, type WorldScale } from "./lib/host-load-world.ts"
@@ -61,6 +62,10 @@ const { values } = parseArgs({
     send: { type: "boolean", default: false },
     "send-quiet": { type: "boolean", default: false },
     fins: { type: "string", default: "0" },
+    "node-arg": { type: "string", multiple: true },
+    gc: { type: "boolean", default: false },
+    idle: { type: "boolean", default: false },
+    "idle-only": { type: "boolean", default: false },
   },
 })
 const say = (line: string) => process.stderr.write(`${line}\n`)
@@ -136,16 +141,39 @@ try {
   const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(MAKO_|CLAUDE_|CODEX_HOME|CURSOR_)/.test(name)))
   const profileDir = values["cpu-prof"] && resolve(values["cpu-prof"])
   if (profileDir) mkdirSync(profileDir, { recursive: true })
-  host = spawn("nice", ["-n", "5", process.execPath, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
+  // `--node-arg` passes options to the host's Node (a heap limit, `--heap-prof`); `--gc` traces its collections.
+  // The host's own options first, as the app starts it (`hostCommand`): the program's first line isn't read when Node runs it.
+  const nodeArgs = [...HOST_NODE_OPTIONS, ...(values["node-arg"] ?? []), ...(values.gc ? ["--trace-gc"] : [])]
+  host = spawn("nice", ["-n", "5", process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
     env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" } },
-    stdio: ["ignore", "ignore", "inherit"],
+    stdio: ["ignore", values.gc ? "pipe" : "ignore", "inherit"],
+    ...profileDir && values["node-arg"]?.some((arg) => arg.startsWith("--heap-prof")) && { cwd: profileDir },
   })
+  // Each collection's pause as `--trace-gc` prints it ("Mark-Compact 450.2 (480.1) -> 320.4 (350.0) MB, … 85.13 / 0.00 ms"), by when it was heard.
+  const collections: { at: number; kind: string; ms: number }[] = []
+  if (values.gc && host.stdout) {
+    let pending = ""
+    host.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      const lines = (pending + chunk).split("\n")
+      pending = lines.pop() ?? ""
+      for (const line of lines) {
+        const match = /(Scavenge|Mark-Compact|Mark-Sweep|Minor Mark-Sweep)[^,]*,.*?(\d+(?:\.\d+)?) \/ \d+(?:\.\d+)? ms/.exec(line)
+        if (match) collections.push({ at: Date.now(), kind: match[1]!, ms: Number(match[2]) })
+      }
+    })
+  }
+  // Its resident memory every 5 s, to tell a sawtooth of garbage from growth.
+  const rssSeries: [number, number][] = []
   const exited = new Promise<number | null>((done) => host!.once("exit", (code) => done(code)))
   // Its resident memory, the peak from outside: memory doesn't vary with a runner's speed the way a wait does.
   const memory: ResidentMemory = { peakKb: 0, readings: 0, misses: 0 }
   const hostPid = String(host.pid)
   const sampling = performance.now()
   const footprint = setInterval(() => void readResident(hostPid, memory), 1_000)
+  const series = setInterval(() => {
+    const kb = Number(spawnSync("ps", ["-o", "rss=", "-p", hostPid], { encoding: "utf8" }).stdout.trim())
+    if (kb > 0) rssSeries.push([Date.now(), Math.round(kb / 1024)])
+  }, 5_000)
   for (const deadline = Date.now() + 60_000; ; await delay(100)) {
     const probe = await probeRuntime(socket, { timeoutMs: 2_000 }).catch(() => undefined)
     if (probe?.state === "ready") break
@@ -159,6 +187,30 @@ try {
     if (Date.now() > deadline) throw new Error("the host hasn't read its catalog within three minutes")
   }
   say(`host ready in ${Math.round(performance.now() - began)} ms`)
+
+  // `--idle`: the host on this world with nothing at work and no window, settled 30 s, then its own CPU over 60 s, as
+  // the perf proof of 2026-11-12 measured it; `--idle-only` stops there.
+  let idle: { hostPercent: number; from: number; to: number } | undefined
+  if (values.idle || values["idle-only"]) {
+    const cpuSeconds = () => {
+      const time = spawnSync("ps", ["-o", "time=", "-p", hostPid], { encoding: "utf8" }).stdout.trim()
+      return time.split(":").reduce((sum, part) => sum * 60 + Number(part), 0)
+    }
+    await delay(30_000)
+    const [fromCpu, from] = [cpuSeconds(), Date.now()]
+    await delay(60_000)
+    const [toCpu, to] = [cpuSeconds(), Date.now()]
+    idle = { hostPercent: Math.round(((toCpu - fromCpu) / ((to - from) / 1000)) * 1000) / 10, from, to }
+    say(`idle: the host used ${idle.hostPercent}% of a core`)
+  }
+  if (values["idle-only"]) {
+    clearInterval(footprint)
+    clearInterval(series)
+    host.kill("SIGTERM")
+    await Promise.race([exited, delay(60_000)])
+    if (values.out) writeFileSync(values.out, JSON.stringify({ scale: values.scale, host: hostScript, nodeArgs, idle }, null, 2))
+    await finish(0)
+  }
 
   // The Fins at work: the Apexes with Fins, and every Fin.
   const working = world.checkouts.filter((checkout, index) => checkout.fin || index < scale.fins.length)
@@ -257,6 +309,7 @@ try {
     }
   })()
   say(`probing for ${values.seconds} s`)
+  const probedFrom = Date.now()
   await delay(Number(values.seconds) * 1000)
   probing = false
   await reading
@@ -269,8 +322,10 @@ try {
   const health = z.object({ eventLoop: z.unknown().optional(), jobs: z.unknown().optional() }).loose().parse(
     await (await import("@mako/host/transport/connection")).runtimeRequest({ socket, path: "/health", read: (body: string) => JSON.parse(body), timeoutMs: 30_000 }).catch(() => ({})),
   )
+  const probedTo = Date.now()
   for (const timer of timers) clearInterval(timer)
   clearInterval(footprint)
+  clearInterval(series)
   const sampled = (performance.now() - sampling) / 1_000
   churn.kill("SIGKILL")
   host.kill("SIGTERM")
@@ -289,10 +344,20 @@ try {
   const found = profile ? slices(profile, 50) : []
   const answers = { health: summary(probed.health), reads: summary(probed.reads), checkoutReads: summary(checkoutReads), ...model && { sends: summary(sends) } }
   const peakMb = Math.round(memory.peakKb / 1024)
+  // What the host held and what its collections cost while it was probed.
+  const inWindow = <T extends { at: number }>(entries: T[]) => entries.filter((entry) => entry.at >= probedFrom && entry.at <= probedTo)
+  const rssProbed = rssSeries.filter(([at]) => at >= probedFrom && at <= probedTo).map(([, mb]) => mb).sort((a, b) => a - b)
+  const pauses = (kinds: RegExp) => {
+    const ms = inWindow(collections).filter((entry) => kinds.test(entry.kind)).map((entry) => entry.ms).sort((a, b) => a - b)
+    return { count: ms.length, totalMs: Math.round(ms.reduce((sum, each) => sum + each, 0)), p99: ms[Math.min(ms.length - 1, Math.floor(0.99 * ms.length))] ?? null, max: ms.at(-1) ?? null }
+  }
+  const rss = rssProbed.length ? { min: rssProbed[0]!, median: rssProbed[Math.floor(rssProbed.length / 2)]!, max: rssProbed.at(-1)!, series: rssSeries } : undefined
+  const gc = values.gc ? { major: pauses(/^Mark-(Compact|Sweep)$/), minor: pauses(/^(Scavenge|Minor Mark-Sweep)$/) } : undefined
   const unread = unmeasured(memory, sampled)
   const report = {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
     ...answers, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
+    nodeArgs, ...idle && { idle }, ...rss && { rss }, ...gc && { gc },
     ...profile && {
       profile,
       slices: { count: found.length, totalMs: found.reduce((sum, slice) => sum + slice.ms, 0), longest: [...found].sort((a, b) => b.ms - a.ms).slice(0, 15) },

@@ -13,6 +13,12 @@ const IDLE_MS = 30_000
 /** What the trace and the memory look ran on before, as jobs of their own. */
 const TRACE_MS = SAMPLE_EVERY_MS
 const MEMORY_MS = 30_000
+/**
+ * How long a reader's ask keeps the sampler looking. Windows ask for the marks and each followed folder's app every
+ * 30 s while they show them (`thread-app-host.ts`), so a window open keeps it going and a host with none goes quiet:
+ * looking with nobody to tell took main's idle host from 1.1–1.4% of a core to 3.5–4.5% (perf proof, 2026-11-12).
+ */
+export const WANTED_MS = 90_000
 
 interface SamplerDeps {
   look(): Promise<AppsLook>
@@ -32,9 +38,11 @@ interface SamplerDeps {
  * trace and the memory look ride on the same looks, so the table is read once for all of them, off the host's loop
  * (`childProcessTable`), and only while some run is alive (`ThreadProcesses.tableFor`).
  *
- * `tick` is the one job (`HostJobs.every`, `SAMPLER_TICK_MS`); it looks when one is due: at once after anything this
- * host changed (`changed`), every second while an app is settling, every four while one runs, and every half minute
- * otherwise. A window reads the marks once as it starts (`current`), then only hears them.
+ * `tick` is the one job (`HostJobs.every`, `SAMPLER_TICK_MS`). While someone reads the apps (`wanted`, within
+ * `WANTED_MS`) it looks when one is due: at once after anything this host changed (`changed`), every second while an
+ * app is settling, every four while one runs, and every half minute otherwise. With nobody reading it doesn't look at
+ * all; the trace and the memory look run on their own times then, as they did before the sampler. A reader coming
+ * back reads afresh (`current`), then hears the pushes.
  */
 export class ThreadAppSampler {
   private readonly deps: SamplerDeps
@@ -46,6 +54,8 @@ export class ThreadAppSampler {
   private dirty = true
   /** Whether a run was alive at the last trace: a trace closes an app's as it stops, so one more runs after the last goes. */
   private tracedAlive = true
+  /** Until when someone reading the apps keeps the sampler looking. */
+  private wantedUntil = Number.NEGATIVE_INFINITY
 
   constructor(deps: SamplerDeps) {
     this.deps = deps
@@ -57,21 +67,37 @@ export class ThreadAppSampler {
     this.dirty = true
   }
 
-  /** The marks as last looked at, looking first if nothing has been yet. */
+  /** Someone reads the apps (a window's marks or a folder's app, the ports): looks go on for `WANTED_MS`. */
+  wanted(): void {
+    this.wantedUntil = this.now() + WANTED_MS
+  }
+
+  /** The marks as last looked at, while someone has been reading them; looked at afresh when nobody had been. */
   async current(): Promise<AppMark[]> {
-    if (!this.last) await this.sample()
+    const fresh = this.last !== undefined && this.watched()
+    this.wanted()
+    if (!fresh) await this.sample()
     return this.last?.marks ?? []
+  }
+
+  private watched(): boolean {
+    return this.now() < this.wantedUntil
   }
 
   /** The job's wake: looks if one is due, and runs the trace and the memory look when theirs are. */
   readonly tick = async (): Promise<void> => {
     const now = this.now()
-    const every = !this.last ? 0 : this.last.settling ? SETTLING_MS : this.last.alive ? ALIVE_MS : IDLE_MS
-    if (this.dirty || now - this.lookedAt >= every) await this.sample()
-    const alive = this.last?.alive ?? false
+    const watched = this.watched()
+    if (watched) {
+      const every = !this.last ? 0 : this.last.settling ? SETTLING_MS : this.last.alive ? ALIVE_MS : IDLE_MS
+      if (this.dirty || now - this.lookedAt >= every) await this.sample()
+    }
+    // Unwatched, no look says whether anything runs: the trace and the memory look find out for themselves, each
+    // reading no process table while no run's group is alive (`ThreadProcesses.tableFor`).
+    const alive = watched ? this.last?.alive ?? false : true
     if (this.deps.trace && now - this.tracedAt >= TRACE_MS && (alive || this.tracedAlive)) {
       this.tracedAt = now
-      this.tracedAlive = alive
+      this.tracedAlive = watched ? alive : true
       await this.deps.trace()
     }
     if (this.deps.memory && alive && now - this.measuredAt >= MEMORY_MS) {

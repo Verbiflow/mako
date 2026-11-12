@@ -9,7 +9,7 @@ import { listedUnderApex } from "./contracts/agents.js"
 import { listedFins } from "./contracts/children.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
-import { writeFile } from "node:fs/promises"
+import { stat, writeFile } from "node:fs/promises"
 import { mediaExecutable } from "@mako/control-runtime/media"
 import { controlArtifactsRoot, controlRecordingsRoot } from "@mako/control/program"
 import { homedir } from "node:os"
@@ -59,7 +59,7 @@ import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { KeepAwakeSettings } from "./contracts/keep-awake.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
-import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
+import { accountBorrowing, BorrowedSimulators, ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
@@ -379,6 +379,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     subscribed: shell.subscribed,
   })
   const { catalog, store } = threads
+  // On a cloud Thread's machine its simulators are a Mac of the person's, borrowed under a session lease through the
+  // machine's own routes to the account's broker.
+  const borrowedSimulators = config.machineAgentFd === undefined
+    ? undefined
+    : new BorrowedSimulators({ port: accountBorrowing(() => machineLink, undefined, shell.stopping.signal), shots: join(environment.dataRoot, "simulators", "borrowed") })
   const control = openControl(config, machine, shell.jobs, emit, () => late.updates?.desktopChanged(), (session) => {
     const parsed = SessionIdSchema.safeParse(session)
     const placed = parsed.success && store ? store.sessionPlacement(parsed.data) : undefined
@@ -392,7 +397,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   }, {
     leaseOf: (via, thread) => late.lending?.leaseOf(via, thread, "ios-simulator")?.id,
     used: (lease, verb) => late.lending?.used(lease, verb),
-  })
+    artifact: async (lease, file, name) => {
+      if (!late.lending) throw new Error("This Mac lends nothing")
+      return late.lending.artifact(lease, file, name)
+    },
+  }, borrowedSimulators)
   const appUpdates = new Updates({
     environment,
     git,
@@ -641,9 +650,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   if (config.machineAgentFd === undefined) shell.jobs.every(REPORT_WORK, 1_000, () => late.cloud?.reportSessions?.())
   // The heap, watched so a host filling up says who with while it still can: an out-of-memory report has no
   // JavaScript stack. The line names what memory holds and who read it in; the whole readout goes beside the log.
+  const mb = (bytes: number | undefined) => Math.round((bytes ?? 0) / 1_048_576)
   const heap = new HeapWatch(readHeap, (change, level, reading) => {
     const memory = late.conversations?.live.residency().memory
-    const mb = (bytes: number | undefined) => Math.round((bytes ?? 0) / 1_048_576)
     const fields = {
       level, usedMB: mb(reading.used), limitMB: mb(reading.limit), rssMB: mb(reading.rss),
       conversations: memory?.loaded ?? 0, conversationMB: mb(memory?.bytes), pinnedMB: mb(memory?.pinnedBytes),
@@ -655,6 +664,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const readout = { at: new Date().toISOString(), change, level, heap: reading, memory, jobs: shell.jobs.list() }
     void writeFile(join(logsRoot(environment.dataRoot), "memory-pressure.json"), JSON.stringify(readout, null, 2)).catch((error: Error) =>
       hostWarn("memory", "the memory readout couldn't be written", { error: error.message }))
+  }, (reading) => {
+    // Every few minutes at any level: what V8 holds against its limit and of the process, and what conversations hold.
+    const memory = late.conversations?.live.residency().memory
+    hostLog("memory", "the heap", { usedMB: mb(reading.used), limitMB: mb(reading.limit), rssMB: mb(reading.rss), conversations: memory?.loaded ?? 0, conversationMB: mb(memory?.bytes) })
   })
   shell.jobs.every("watch the heap", 10_000, () => void heap.tick(), { runsWhileHeld: true })
   // This Mac's Sessions in the sync window, kept in step in the account, the ones at work first: as Mako draws each, so
@@ -752,6 +765,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         beat: (lease, progress, streams) => late.cloud?.beat?.(lease, progress, streams) ?? false,
         streams: (lease) => (lease.resource.ref === "ios-simulator" ? [{ name: "screen", kind: "video" }] : []),
         lent,
+        upload: async (lease, file, name) => {
+          if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
+          return late.cloud.borrow.artifact(lease, name, file, (await stat(file)).size)
+        },
         words: (lease) => ({ what: operationWords(lease.resource.ref), for: lease.borrower.place.kind === "machine" ? "a cloud Thread" : "a Thread on another device" }),
         ended: (lease) => control.simulators.releaseLease(lease.id),
         log: (message, fields) => hostLog("borrowing", message, fields),
@@ -1988,3 +2005,4 @@ function watchOwnBuild(directories: readonly string[], emit: (event: HostEvent) 
     }
   })
 }
+
