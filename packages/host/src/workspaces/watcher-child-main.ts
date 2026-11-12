@@ -1,8 +1,9 @@
 import parcel, { type AsyncSubscription } from "@parcel/watcher"
 import { execFile } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
+import { OTHER_APPS_DATA } from "../base/other-apps-data.js"
 import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, WatcherRequestSchema, type CanaryTest, type DropReason, type HistoryMark, type WatcherReply } from "../contracts/watcher-child.js"
 
 /*
@@ -168,7 +169,10 @@ async function since(id: number, from: HistoryMark, roots: string[], ignore: rea
     for (const root of roots) {
       if (!existsSync(root)) continue
       // Only folders inside the root: excluding one that holds it would leave the whole read out.
-      const excluded = exclude.filter((folder) => folder.startsWith(`${root}/`)).slice(0, MAX_EXCLUDED)
+      // Other apps' containers first, always: replaying a change, the watcher stats the path unless it's left out here,
+      // and a stat in another app's container from Mako's child makes macOS ask the person to let Mako read that app's data.
+      const sealed = OTHER_APPS_DATA.map((folder) => join(homedir(), folder)).filter((folder) => folder.startsWith(`${root}/`))
+      const excluded = [...sealed, ...exclude.filter((folder) => folder.startsWith(`${root}/`) && !sealed.includes(folder))].slice(0, MAX_EXCLUDED)
       try {
         for (const event of await parcel.getEventsSince(root, file, { backend: "fs-events", ignore: excluded })) {
           if (paths.has(event.path)) continue
