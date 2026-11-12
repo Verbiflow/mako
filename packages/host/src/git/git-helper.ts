@@ -2,6 +2,7 @@ import { ChildProcess, type SpawnOptions, type spawn } from "node:child_process"
 import { existsSync } from "node:fs"
 import { Readable, Writable } from "node:stream"
 import { fileURLToPath } from "node:url"
+import { z } from "zod"
 import { GitError } from "@mako/git"
 import type { ProcessRunner } from "@mako/git/process-runner"
 import { sendToChild } from "@mako/sessions/child-input"
@@ -23,6 +24,8 @@ const RETRY_MAX_MS = 5 * 60_000
 const SPAWN_WATCH_MS = 5_000
 /** Nor one that hasn't said a `git` ended this long after a stop was asked: the runner's own stop takes at most 5 s. */
 const CLOSE_WATCH_MS = 8_000
+const FolderSchema = z.string()
+
 /** A watch that fires later than this past its time fired after the host's own loop was held, not the helper. */
 const WATCH_LATE_MS = 1_000
 /** A `git` the helper started, lost with it, is waited for this long before its result is said unknown. */
@@ -181,11 +184,12 @@ export class GitHelper {
   private spawn(file: string, args: readonly string[], options: SpawnOptions): ChildProcess {
     const stdio = Array.isArray(options.stdio) ? options.stdio : undefined
     const stdin = stdio?.[0]
-    const { cwd } = options
+    // A folder given as a path; one given as a URL, or none, goes to the host's own spawn.
+    const cwd = FolderSchema.safeParse(options.cwd).data
     const carried = stdio?.length === 3 && (stdin === "ignore" || stdin === "pipe") && stdio[1] === "pipe" && stdio[2] === "pipe" &&
       !options.detached && options.shell === undefined
-    const helper = carried && cwd !== undefined && !(cwd instanceof URL) ? this.#helper() : undefined
-    if (!helper || cwd === undefined || cwd instanceof URL) return this.#direct.spawn(file, args, options)
+    const helper = carried && cwd !== undefined ? this.#helper() : undefined
+    if (!helper || cwd === undefined) return this.#direct.spawn(file, args, options)
     const id = (this.#next += 1)
     const send = (ask: HelperAsk) => { sendToChild(helper, ask).catch(() => {}) }
     const command = args.find((arg) => !arg.startsWith("-") && !arg.includes("=")) ?? ""

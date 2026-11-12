@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -35,6 +36,7 @@ type Outcome =
   | { code: number; stdout: string; stderr: string; truncated: boolean }
   | { error: "GitError"; kind: GitError["kind"]; message: string; code: GitError["code"]; stderr: GitError["stderr"] }
   | { error: string; message?: string }
+const messageOf = (outcome: Outcome) => ("message" in outcome ? outcome.message ?? "" : "")
 async function outcome(git: Git, options: () => RunOptions): Promise<Outcome> {
   try {
     const result = await git.run(options())
@@ -114,7 +116,7 @@ try {
     process.kill(own.pid()!, "SIGKILL")
     const lost = await run
     assert.equal("kind" in lost && lost.kind, "unknown", `a git the helper started is said unknown: ${JSON.stringify(lost)}`)
-    assert.match(lost.message ?? "", /ended on its own/)
+    assert.match(messageOf(lost), /ended on its own/)
     assert.ok(await gone("hash-object --stdin"), "and it ended")
     // While it's down, git runs directly, with the same answer; after its pause it's started again.
     assert.equal(await git.text({ cwd: repo, args: ["rev-parse", "HEAD"] }), many[0])
@@ -137,7 +139,7 @@ try {
     process.kill(own.pid()!, "SIGKILL")
     const lost = await commit
     assert.equal("kind" in lost && lost.kind, "unknown", `the commit is said unknown, not failed: ${JSON.stringify(lost)}`)
-    assert.match(lost.message ?? "", /ended on its own/)
+    assert.match(messageOf(lost), /ended on its own/)
     assert.notEqual(execFileSync("git", ["-C", repo, "rev-parse", "HEAD"]).toString().trim(), before, "the commit landed")
     assert.ok(existsSync(join(root, "hook-ran")), "its hook ran to its end")
     assert.ok(!existsSync(join(repo, ".git", "index.lock")), "no lock left behind")
@@ -185,7 +187,7 @@ try {
     const started = Date.now()
     const never = await outcome(git, () => ({ cwd: repo, args: ["rev-parse", "HEAD"] }))
     assert.equal("kind" in never && never.kind, "failed")
-    assert.match(never.message ?? "", /didn't start: .*Nothing ran\./)
+    assert.match(messageOf(never), /didn't start: .*Nothing ran\./)
     assert.ok(Date.now() - started < 10_000, "within the watch")
   }
 
