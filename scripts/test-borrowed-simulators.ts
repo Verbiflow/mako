@@ -12,7 +12,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, test } from "node:test"
 import { decodeOperation, encodeOperation, encodeReply, type Actor } from "@mako/protocol"
-import { hostCallInput } from "@mako/host/contracts/host-operations"
+import { hostCallInput, hostSuccess } from "@mako/host/contracts/host-operations"
+import { encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import type { BorrowAnswer, Lease, Need, Progress } from "@mako/protocol/borrow"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
@@ -362,4 +363,30 @@ test("closing the simulators releases what this host borrowed, a lease taken by 
   answer({ lease: lease("C") })
   await acquiring
   assert.deepEqual(released, ["A", "C"])
+})
+
+test("a release the Thread asked for that the account refuses is logged and kept to try again, never an unhandled rejection", async () => {
+  const unhandled: Error[] = []
+  const heard = (reason: Error) => void unhandled.push(reason)
+  process.on("unhandledRejection", heard)
+  try {
+    const answering: SimulatorBorrowing = {
+      ...port({ release: async () => {
+        throw new Error("network down")
+      } }),
+      // The far Mac's answer to simulator_release: released.
+      call: async (_lease, text) => encodeReply(hostSuccess(decodeOperation(text).id, encodeRuntimeValue({ released: true }))),
+    }
+    const simulators = borrowed(answering)
+    await simulators.ensure("look")
+    const [mac] = simulators.remotes()
+    assert.ok(mac)
+    const caller: SimulatorCaller = { kind: "agent", session: "s-cloud", agent: agentOnMachine }
+    assert.deepEqual(await mac.release(caller, { host: mac.id, simulator: PHONE.id }), { released: true })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(unhandled, [], "the failed release isn't left unhandled")
+    assert.deepEqual(simulators.unreleased(), ["A"], "it's kept for the keep-alive to try again")
+  } finally {
+    process.off("unhandledRejection", heard)
+  }
 })

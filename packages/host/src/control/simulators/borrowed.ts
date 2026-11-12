@@ -267,7 +267,10 @@ export class BorrowedSimulators {
       await writeFile(path, await this.#port.artifact(lease.id, made.hash))
       return path
     }
-    this.#host = new LeasedMac(new RemoteMacSimulators({ id: macHostId(device), label: name, call, shots: this.#shots, artifact }), name, () => void this.release())
+    this.#host = new LeasedMac(new RemoteMacSimulators({ id: macHostId(device), label: name, call, shots: this.#shots, artifact }), name, () =>
+      // The Thread let go: a release the account didn't confirm stays kept, and the next keep-alive tries it again.
+      void this.release().catch((error: Error) => hostWarn("simulators", "a borrowed lease's release failed", { lease: lease.id, error: error.message, leases: this.unreleased().join(",") }))
+    )
     hostLog("simulators", "borrowed", { lease: lease.id, device })
   }
 
