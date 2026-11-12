@@ -312,6 +312,15 @@ async function checkScroll() {
     await wait(100)
     assert.ok(await fromEnd() < 2, "lifting at the end catches up with it")
     console.log(`Resting at the end: no writes for 350 ms, ${Math.round(waited)} px caught up on lifting`)
+    // The rest is short of the reply's long press (500 ms, replies.ts) by the test's clock, but the page times it by
+    // its own: on a slow runner the lift reached the page past it, the reply's actions opened in a sheet, as a long
+    // press should, and the next case's finger landed on the sheet's backdrop, not the transcript (its drag "took the
+    // transcript 0 px"). Closed as a reader would close it, so the next case starts on the transcript.
+    if (await evaluate("Boolean(document.querySelector('.web-sheet-backdrop'))")) {
+      for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+      await until("!document.querySelector('.web-sheet-backdrop')", "the reply's actions closed")
+      console.log("Resting at the end: the page heard a long press and opened the reply's actions; closed")
+    }
 
     // 2. Resting, then dragging up: the end's follow, written as the finger lands, leaves the gesture the reader's.
     await wait(300)
