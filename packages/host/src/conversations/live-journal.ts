@@ -1317,6 +1317,11 @@ export class LiveJournal {
       }
     }
     this.db.close()
+    // Closed, it writes nothing more, so it lets go of what its rows held by identity: kept, they were the paged
+    // entries' last holder, so none was ever collected and a journal waiting on them (`LiveRecords.releasing`) stayed
+    // for the host's life with its connection and its log (2026-11-12: 68 journals, 80 MB, after 60 opens).
+    this.baseRows = []
+    this.stagedBase = undefined
     const tidy = () => {
       if (this.untidy) return
       if (ahead && !compact && paged) dropRowsAhead(this.path)
