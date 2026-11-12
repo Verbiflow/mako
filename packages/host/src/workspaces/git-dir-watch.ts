@@ -10,6 +10,8 @@ const MARKERS = ["index", join("logs", "HEAD")]
  * any `git status` refreshes its stat cache, as a Changes panel's does on every edit.
  */
 export const HEAD_MARKER = [join("logs", "HEAD")]
+/** What moves when what's staged does, and on any `git status` that refreshes the index's stat cache. */
+export const INDEX_MARKER = ["index"]
 
 export interface GitDirWatch {
   /** Settles once the markers are watched, or once it's clear there's nothing to watch. */

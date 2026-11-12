@@ -20,7 +20,7 @@ import type { MoveHaste, MoveOutcome, MoveShares } from "../contracts/workspace-
 import { hostLog } from "../base/host-log.js"
 import { githubRepositoryUrl } from "../contracts/cloud-threads.js"
 import { ProjectMissingError, reattachWorktree, workingCheckout } from "./worktree-reattach.js"
-import { HEAD_MARKER, watchGitMarkers, type GitDirWatch } from "./git-dir-watch.js"
+import { HEAD_MARKER, INDEX_MARKER, watchGitMarkers, type GitDirWatch } from "./git-dir-watch.js"
 
 /** Git's own markers for work under way, which a removal would throw away. */
 const UNDER_WAY: readonly (readonly [string, string])[] = [
@@ -39,6 +39,13 @@ const SUMMARY_BACKSTOP_MS = 10 * 60_000
 const SUMMARY_SETTLE_MS = 1_000
 /** A worktree whose events keep coming (an agent's own `git status` rewriting its index) is read at most this often. */
 const SUMMARY_GAP_MS = 5_000
+/**
+ * A change of its index alone (a terminal's `git add`, and any `git status` that refreshes it, a Changes panel's as an
+ * agent edits) reads a worktree at most this often: read on each, the summaries cost more than the poll they replace.
+ */
+const SUMMARY_INDEX_GAP_MS = 30_000
+/** The host's own pass, while a window listens: what no event says (a pull request on GitHub, an editor's edit). */
+export const SUMMARY_PASS_MS = 60_000
 /** A new Thread's branch search lists this many branches, the most recently committed. */
 const LISTED_BRANCHES = 200
 const BRANCH_PULLS_EVERY_MS = 60_000
@@ -328,14 +335,16 @@ export class ThreadWorktreeService {
   private readonly summaryPasses = new SharedPasses<WorktreeSummary[]>()
   /** Each worktree's summary as last read, by path, with when and its index's modification time then (`readSummaries`). */
   private readonly heldSummaries = new Map<string, { summary: WorktreeSummary; at: number; index: number }>()
-  /** Worktrees an event says changed since their summary was read. */
+  /** Worktrees an event says changed since their summary was read, and whether all it said is that the index moved. */
   private readonly staleSummaries = new Set<string>()
+  private readonly indexOnly = new Set<string>()
   /** The watches that say so: each worktree's Git directory, and each repository's own. */
   private readonly summaryWatches = new Map<string, GitDirWatch>()
   /** Who hears the summaries when they change (the windows); without one, an event only marks the worktree. */
   private summaryListener: ((summaries: WorktreeSummary[]) => void) | undefined
   private summariesSaid = ""
   private summaryTimer: NodeJS.Timeout | undefined
+  private summaryTimerAt = 0
   private lastPullsOf: PullsOf | undefined
   /** Each worktree's Git directory, read once (`indexTime`). */
   private readonly gitDirs = new Map<string, string | null>()
@@ -806,9 +815,18 @@ export class ThreadWorktreeService {
     for (const path of this.heldSummaries.keys()) if (folder === path || folder.startsWith(`${path}/`)) this.summaryStale([path])
   }
 
-  private summaryStale(paths: Iterable<string>, after = SUMMARY_SETTLE_MS): void {
-    for (const path of paths) this.staleSummaries.add(path)
-    if (!this.summaryListener || this.summaryTimer) return
+  private summaryStale(paths: Iterable<string>, after = SUMMARY_SETTLE_MS, index = false): void {
+    for (const path of paths) {
+      if (index && !this.staleSummaries.has(path)) this.indexOnly.add(path)
+      if (!index) this.indexOnly.delete(path)
+      this.staleSummaries.add(path)
+    }
+    if (!this.summaryListener) return
+    // One timer, at the soonest any event asks: a turn's end doesn't wait behind an index's half minute.
+    const at = performance.now() + after
+    if (this.summaryTimer && this.summaryTimerAt <= at) return
+    clearTimeout(this.summaryTimer)
+    this.summaryTimerAt = at
     this.summaryTimer = setTimeout(() => {
       this.summaryTimer = undefined
       void this.summaryPasses.ask(() => this.readStale()).catch(() => undefined)
@@ -819,7 +837,8 @@ export class ThreadWorktreeService {
   /** What events marked, read again from the last full pass's list, each at most every `SUMMARY_GAP_MS`; said if it changed. */
   private async readStale(): Promise<WorktreeSummary[]> {
     const now = Date.now()
-    const due = this.summaryListed.filter((worktree) => this.staleSummaries.has(worktree.path) && now - (this.heldSummaries.get(worktree.path)?.at ?? 0) >= SUMMARY_GAP_MS)
+    const due = this.summaryListed.filter((worktree) => this.staleSummaries.has(worktree.path) &&
+      now - (this.heldSummaries.get(worktree.path)?.at ?? 0) >= (this.indexOnly.has(worktree.path) ? SUMMARY_INDEX_GAP_MS : SUMMARY_GAP_MS))
     const later = [...this.staleSummaries].filter((path) => !due.some((worktree) => worktree.path === path))
     const facts = new Map<string, Promise<RepositoryFacts>>()
     const factsOf = (repoRoot: string) => {
@@ -829,6 +848,7 @@ export class ThreadWorktreeService {
     }
     await mapLimited(due, 6, async (worktree) => {
       this.staleSummaries.delete(worktree.path)
+      this.indexOnly.delete(worktree.path)
       this.statuses.delete(worktree.path)
       const index = await this.indexTime(worktree.path)
       const summary = await this.summarize(worktree, this.lastPullsOf, await factsOf(worktree.repoRoot), false, true)
@@ -836,8 +856,15 @@ export class ThreadWorktreeService {
     })
     const listed = new Set(this.summaryListed.map((worktree) => worktree.path))
     const waiting = later.filter((path) => listed.has(path))
-    for (const path of later) if (!listed.has(path)) this.staleSummaries.delete(path)
-    if (waiting.length) this.summaryStale([], SUMMARY_GAP_MS)
+    for (const path of later) if (!listed.has(path)) {
+      this.staleSummaries.delete(path)
+      this.indexOnly.delete(path)
+    }
+    // Asked again once the first of them is due, not a whole gap from now.
+    if (waiting.length) {
+      const dueIn = Math.min(...waiting.map((path) => (this.heldSummaries.get(path)?.at ?? 0) + (this.indexOnly.has(path) ? SUMMARY_INDEX_GAP_MS : SUMMARY_GAP_MS) - now))
+      this.summaryStale([], Math.max(SUMMARY_SETTLE_MS, dueIn))
+    }
     const summaries = this.summaryListed.flatMap((worktree) => {
       const held = this.heldSummaries.get(worktree.path)
       return held ? [held.summary] : []
@@ -855,23 +882,24 @@ export class ThreadWorktreeService {
 
   /** Watches each listed worktree's Git directory and each repository's, and lets go of the rest. */
   private async watchSummaries(worktrees: readonly ThreadWorktree[]): Promise<void> {
-    const wanted = new Map<string, () => string[]>()
+    const wanted = new Map<string, { gitDir: () => Promise<string | undefined>; paths: () => string[]; index: boolean }>()
     for (const worktree of worktrees) {
-      wanted.set(worktree.path, () => [worktree.path])
+      const own = () => [worktree.path]
+      wanted.set(worktree.path, { gitDir: () => worktreeGitDir(worktree.path), paths: own, index: false })
+      // What's staged moves without HEAD (a terminal's `git add`): heard, at most every `SUMMARY_INDEX_GAP_MS`.
+      wanted.set(`index\0${worktree.path}`, { gitDir: () => worktreeGitDir(worktree.path), paths: own, index: true })
       // A commit or a fetch in the repository moves where every worktree of it stands against its branch.
-      wanted.set(`repo\0${worktree.repoRoot}`, () => worktrees.filter((each) => each.repoRoot === worktree.repoRoot).map((each) => each.path))
+      wanted.set(`repo\0${worktree.repoRoot}`, { gitDir: async () => join(worktree.repoRoot, ".git"), paths: () => worktrees.filter((each) => each.repoRoot === worktree.repoRoot).map((each) => each.path), index: false })
     }
     for (const [key, watch] of this.summaryWatches) if (!wanted.has(key)) {
       watch.close()
       this.summaryWatches.delete(key)
     }
-    for (const [key, paths] of wanted) {
+    for (const [key, { gitDir: locate, paths, index }] of wanted) {
       if (this.summaryWatches.has(key)) continue
-      const gitDir = key.startsWith("repo\0") ? join(key.slice(5), ".git") : await worktreeGitDir(key)
+      const gitDir = await locate()
       if (!gitDir || this.summaryWatches.has(key)) continue
-      // HEAD alone: a summary's counts move with commits, and a turn's end reads what its edits left. The index moves on
-      // every `git status` that refreshes it, a Changes panel's as an agent edits, and read on that it cost more than the poll.
-      this.summaryWatches.set(key, watchGitMarkers(gitDir, () => this.summaryStale(paths()), HEAD_MARKER))
+      this.summaryWatches.set(key, watchGitMarkers(gitDir, () => this.summaryStale(paths(), SUMMARY_SETTLE_MS, index), index ? INDEX_MARKER : HEAD_MARKER))
     }
   }
 
@@ -922,6 +950,10 @@ export class ThreadWorktreeService {
       if ((await this.indexTime(worktree.path)) !== held.index) return undefined
       // A conversation at work there edits what its index can't show: read as often as a status answers (`statusOf`).
       if (atWork(worktree) && now - held.at > STATUS_FRESH_MS) return undefined
+      // An edit outside a turn (the person's editor, a background process) moves neither HEAD nor the index: its
+      // status is read again once its own wait runs out, 15 s at first and doubling while nothing changes (`statusOf`).
+      const status = this.statuses.get(worktree.path)
+      if (!status || now - status.at >= status.freshMs) return undefined
       const pull = branchPull(pulls.get(worktree.repoRoot) ?? [], worktree.branch)
       return JSON.stringify(pull ?? null) === JSON.stringify(held.summary.pull ?? null) ? held.summary : undefined
     }

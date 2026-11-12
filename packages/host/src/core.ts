@@ -442,6 +442,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     readOnly: fixtureDesk,
     store,
     jobs,
+    subscribed: shell.subscribed,
     emit,
     inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
     working: async (path) => conversationsIn(path, (status) => status === "running"),
