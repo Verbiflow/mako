@@ -23,6 +23,7 @@ const PROGRAMS = new Map([
   ["usage-worker.ts", "the usage history reader's worker (usage/reader.ts)"],
   ["threads/catalog-worker.ts", "the catalog's worker (threads/catalog.ts)"],
   ["conversations/journal-reclaim-worker.ts", "the journal compaction worker (conversations/journal-reclaim.ts)"],
+  ["attribution/journal-vacuum-worker.ts", "the record of changes' compaction worker (attribution/journal-vacuum.ts)"],
   ["workspaces/watcher-child-main.ts", "the file watcher's child process (workspaces/watcher-child.ts)"],
   ["terminals/daemon.ts", "the terminal daemon's process (terminals/index.ts)"],
   ["harnesses/opencode/resume-worker.ts", "OpenCode's resume worker (harnesses/opencode/resume.ts)"],

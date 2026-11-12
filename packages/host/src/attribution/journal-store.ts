@@ -22,6 +22,7 @@ import {
 } from "@mako/protocol"
 import { TurnChangesSchema, type TurnChanges } from "../contracts/turn-changes.js"
 import { compress, decompress } from "./content.js"
+import { StatCache } from "./stat-cache.js"
 import { FootprintTurnSchema, type FootprintTurn } from "./footprint.js"
 import type { NoiseRow } from "./noise-baseline.js"
 import { decodeMap, encodeMap, type Run } from "./line-map.js"
@@ -761,10 +762,10 @@ export class JournalStore {
     this.statement("DELETE FROM files WHERE root=? AND path=?").run(root, path)
   }
 
-  stats(root: string): Map<string, StatRow> {
+  stats(root: string): StatCache {
     const statement = this.statement("SELECT path, dev, ino, size, mode, mtime_ns, ctime_ns, ref, checked_ns FROM stats WHERE root=?")
     statement.setReadBigInts(true)
-    const out = new Map<string, StatRow>()
+    const out = new StatCache()
     for (const value of statement.all(root)) {
       const row = StatRowSchema.parse(value)
       out.set(row.path, {

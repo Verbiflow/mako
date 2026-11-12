@@ -11,6 +11,7 @@ import { acquireHostLock } from "../base/host-lock.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { onMac } from "../base/platform.js"
 import type { MethodTable } from "../base/methods.js"
+import { vacuumIfSparse } from "./journal-vacuum.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { workspaceWrites, type WorkspaceWrite } from "../base/workspace-writes.js"
 import type { LiveBatch } from "../contracts/live-conversations.js"
@@ -697,6 +698,10 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
         // The installed app's own, only for a host of this user's: an isolated one (its user root is its data root) never reads the person's.
         ...(deps.defaultDataRoot && resolve(deps.userRoot) !== resolve(deps.dataRoot) ? [join(deps.defaultDataRoot, "attribution", "journal.sqlite")] : []),
       ])
+      // Compacted before it opens here, on a worker, while nothing else writes it: only when free pages are many.
+      const vacuumed = await vacuumIfSparse(journalFile)
+      if (!vacuumed.ok) hostWarn("attribution", "the record of changes could not be compacted; it keeps its free pages", { error: vacuumed.error, ms: vacuumed.ms })
+      else if (vacuumed.vacuumed) hostLog("attribution", "the record of changes compacted", { before: vacuumed.bytes, after: vacuumed.after, ms: vacuumed.ms })
       return openLocal(folder)
     },
     follow: () => {
