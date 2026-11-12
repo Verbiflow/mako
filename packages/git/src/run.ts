@@ -55,6 +55,11 @@ export interface RunOptions {
    * own `git add`, and they share a bounded pool.
    */
   read?: boolean
+  /**
+   * A read nobody waits on as it's made (a summary a window polls): it takes a slot only while no other read waits,
+   * and leaves `FOREGROUND_SLOTS` for them, so a send's checkpoint never queues behind a pass of a hundred worktrees.
+   */
+  idle?: boolean
 }
 
 export interface RunResult {
@@ -81,6 +86,8 @@ const DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 const STDERR_BYTES = 64 * 1024
 /** Reads at once, across every repository; more only queue behind the disk. */
 const READ_SLOTS = 6
+/** Of `READ_SLOTS`, those an idle read never takes: a read someone waits on starts at once. */
+const FOREGROUND_SLOTS = 2
 
 /**
  * Git's parallel checkout. APFS spends extra workers on contention past four;
@@ -102,6 +109,8 @@ export class Git {
   readonly #runtime: GitRuntime
   readonly #repositories: Repositories
   readonly #readsWaiting: Array<() => void> = []
+  /** Idle reads waiting: each starts once no other read waits and a slot past `FOREGROUND_SLOTS` is free. */
+  readonly #idleWaiting: Array<() => void> = []
   readonly #running = new Set<{ command: string; cwd: string; started: number }>()
   #readsRunning = 0
   #executable: string | undefined
@@ -144,7 +153,7 @@ export class Git {
     if (owner) options = { ...options, signal: options.signal ? AbortSignal.any([owner, options.signal]) : owner }
     options.signal?.throwIfAborted()
     const queued = performance.now()
-    const release = options.read ? await this.#readSlot() : undefined
+    const release = options.read ? await this.#readSlot(options.idle === true) : undefined
     try {
       options.signal?.throwIfAborted()
       return await this.#execute(options, performance.now() - queued)
@@ -177,6 +186,11 @@ export class Git {
     return this.#output({ cwd, args, read: true })
   }
 
+  /** `readOutput` for a read nobody waits on as it's made: behind every other read (`idle`). */
+  idleOutput(cwd: string, args: readonly string[]): Promise<string> {
+    return this.#output({ cwd, args, read: true, idle: true })
+  }
+
   async #output(options: RunOptions): Promise<string> {
     const result = await this.run({ ...options, maxBytes: 16 * 1024 * 1024 })
     if (result.truncated) throw new GitError({ message: `git ${options.args[0] ?? ""} wrote more than 16 MB.`, command: options.args[0], code: result.code })
@@ -206,7 +220,7 @@ export class Git {
     const now = performance.now()
     return {
       running: [...this.#running].map((live) => ({ command: live.command, cwd: live.cwd, ms: Math.round(now - live.started) })),
-      queued: this.#readsWaiting.length,
+      queued: this.#readsWaiting.length + this.#idleWaiting.length,
     }
   }
 
@@ -245,16 +259,24 @@ export class Git {
     await Promise.all([...this.#children].map((child) => this.processes.close(child)))
   }
 
-  async #readSlot(): Promise<() => void> {
-    if (this.#readsRunning >= READ_SLOTS) await new Promise<void>((resolve) => this.#readsWaiting.push(resolve))
+  async #readSlot(idle: boolean): Promise<() => void> {
+    if (idle ? this.#readsRunning >= READ_SLOTS - FOREGROUND_SLOTS || this.#readsWaiting.length > 0 || this.#idleWaiting.length > 0 : this.#readsRunning >= READ_SLOTS)
+      await new Promise<void>((resolve) => (idle ? this.#idleWaiting : this.#readsWaiting).push(resolve))
     this.#readsRunning += 1
     let released = false
     return () => {
       if (released) return
       released = true
       this.#readsRunning -= 1
-      this.#readsWaiting.shift()?.()
+      this.#nextRead()
     }
+  }
+
+  /** A slot came free: the oldest read someone waits on takes it, else the oldest idle one if it leaves the reserve. */
+  #nextRead(): void {
+    const next = this.#readsWaiting.shift()
+    if (next) return next()
+    if (this.#readsRunning < READ_SLOTS - FOREGROUND_SLOTS) this.#idleWaiting.shift()?.()
   }
 
   #execute(options: RunOptions, queuedMs: number): Promise<RunResult> {

@@ -62,7 +62,10 @@ exit 2
   host.stderr?.on("data", (data: Buffer) => (errors = (errors + data.toString()).slice(-4_000)))
   for (const deadline = Date.now() + 60_000; ; ) {
     assert.ok(host.exitCode === null, `The host exited while starting: ${errors}`)
-    if ((await probeRuntime(location.socket, { timeoutMs: 500 })).state === "ready") break
+    // A starting host holds its loop for a few hundred ms at a time as it loads its domains, and its health answer
+    // waits behind them (up to 910 ms here, on a Mac): a probe that gives up at 500 ms threw from inside the
+    // start-up, which the minute's deadline below is for.
+    if ((await probeRuntime(location.socket)).state === "ready") break
     assert.ok(Date.now() < deadline, `The host answered within a minute: ${errors}`)
     await new Promise((settle) => setTimeout(settle, 50))
   }

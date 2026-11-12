@@ -338,6 +338,20 @@ try {
     const quiet = new CloudReadiness({ file: join(root, "quiet.json"), git, scratch: join(root, "quiet-scratch"), account: () => account, enabled: async () => enabled, working: () => [{ conversationId: "c-9", thread: "local-9", harness: "codex" }], leaving: () => false, plan: async () => ({ thread: "local-9", folder, repository, paths: [], harness: "codex" }), sendRecords: async () => [], newCloudThread: () => "t-quiet" })
     await quiet.refresh()
     assert.ok(!made.some((each) => each.threadId === "t-quiet"), "with handing off on sleep off, nothing of a Thread goes to the cloud")
+    // A Thread whose conversation hasn't moved since its last round is passed over: no capture, no renewal, no send.
+    let revision = 1
+    let rounds = 0
+    const still = new CloudReadiness({ file: join(root, "still.json"), git, scratch: join(root, "still-scratch"), account: () => account, enabled: async () => true,
+      working: () => [{ conversationId: "c-7", thread: "local-7", harness: "codex" }], revision: () => revision, leaving: () => false,
+      plan: async () => { rounds += 1; return { thread: "local-7", folder, repository, paths: [], harness: "codex" } }, sendRecords: async () => [], newCloudThread: () => "t-still" })
+    await still.refresh()
+    assert.equal(rounds, 1, "its first round brings it up")
+    await still.refresh()
+    await still.refresh()
+    assert.equal(rounds, 1, "unmoved, it isn't brought up again")
+    revision = 2
+    await still.refresh()
+    assert.equal(rounds, 2, "moved, it is")
   }
   console.log("PASS: agents at work are handed off one move per Thread, named by the handoff; the sleep is held until the handoff answers or its deadline; Threads at work stand by in the cloud with only what changed, taken once by their move")
 } finally {
