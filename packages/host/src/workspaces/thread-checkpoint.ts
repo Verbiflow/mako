@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { Git, RunOptions } from "@mako/git"
 import { MOVE_CHECKPOINT_MAX_BYTES, type MoveCheckpoint } from "@mako/protocol/moves"
-import type { Partition, PartitionFile } from "../attribution/index.js"
+import { contentRef, type Partition, type PartitionFile } from "../attribution/index.js"
 import { commitIn, privateStore, writeCheckpoint } from "./move-checkpoint.js"
 import { mapLimit, onDisk, sidesOf, type MoveLedger } from "./worktree-move.js"
 
@@ -38,7 +38,14 @@ export class ThreadCheckpointRefused extends Error {
 
 export interface ThreadCheckpointInput {
   git: Git
-  ledger: Pick<MoveLedger, "settled" | "track" | "head" | "partition">
+  /**
+   * The record of changes. `partition` may answer later: the host's reads it on a worker (`partitionOffLoop`), since
+   * on a big journal it holds a thread for hundreds of milliseconds. `settled` is what a capture waits for; the host's
+   * is the journal's `heard`, never its full settle, which waits on rescans.
+   */
+  ledger: Pick<MoveLedger, "settled" | "track" | "head"> & { partition(checkout: string, thread: string): Partition | Promise<Partition> }
+  /** The partition the caller just read (`ledger.partition`), taken for the first try instead of reading it again. */
+  partition?: Partition
   thread: string
   /** The repository's top folder: the checkout the Thread shares. */
   repoRoot: string
@@ -60,6 +67,11 @@ export interface ThreadCheckpoint {
   took: string[]
   /** What the Thread changed that the checkpoint leaves out, and why. */
   left: { path: string; why: LeftOut }[]
+  /**
+   * Commits on HEAD that no remote-tracking branch has: the bundle carries them to the machine, so whatever names the
+   * checkpoint to the person says so ("includes 2 unpushed commits").
+   */
+  unpushed: number
   ms: number
 }
 
@@ -67,9 +79,14 @@ const TIMEOUT_MS = 2 * 60_000
 const PARALLEL = 8
 const ATTEMPTS = 4
 const GITLINK = 0o160000
+/**
+ * Every Git call here: no file-system monitor, and no split index, which would write its `sharedindex.*` beside the
+ * person's index in their `.git` even for a scratch `GIT_INDEX_FILE`.
+ */
+const SCRATCH_CONFIG = ["-c", "core.fsmonitor=false", "-c", "core.splitIndex=false"]
 
 async function out(git: Git, options: RunOptions): Promise<Buffer> {
-  const result = await git.run({ timeoutMs: TIMEOUT_MS, background: true, ...options, args: ["-c", "core.fsmonitor=false", ...options.args] })
+  const result = await git.run({ timeoutMs: TIMEOUT_MS, background: true, ...options, args: [...SCRATCH_CONFIG, ...options.args] })
   if (result.truncated) throw new Error(`git ${options.args[0] ?? ""} wrote more than it may`)
   return result.stdout
 }
@@ -182,6 +199,18 @@ function own(result: Partition, repoRoot: string): PartitionFile[] {
   return result.files.filter((file) => roots.has(file.root))
 }
 
+/**
+ * What a capture of the Thread in `repoRoot` from `partition` would read, as one string: HEAD as the journal holds it,
+ * and each of the Thread's files with the content the journal holds and its Thread side. Equal strings make equal
+ * checkpoints, so a trigger may capture nothing when they match; only what the journal has heard is in it, so a write
+ * it hasn't heard yet reads as unchanged.
+ */
+export function threadFingerprint(head: string | null | undefined, partition: Partition, repoRoot: string): string {
+  const side = (version: PartitionFile["thread"]) => (version.kind === "absent" ? "-" : version.kind === "text" ? `t${contentRef(Buffer.from(version.text, "utf8"))}` : `c${version.ref}`)
+  const files = own(partition, repoRoot).map((file) => `${file.path}\0${file.current ?? "-"}\0${side(file.thread)}`).sort()
+  return [head ?? "-", ...files].join("\n")
+}
+
 /** Captures the Thread's changes in `repoRoot` over HEAD; see the top of this file. */
 export async function captureThreadCheckpoint(input: ThreadCheckpointInput): Promise<ThreadCheckpoint> {
   const started = performance.now()
@@ -204,7 +233,8 @@ export async function captureThreadCheckpoint(input: ThreadCheckpointInput): Pro
       await settledBy(ledger, input.by)
     }
     if (ledger.head(repoRoot) !== head) continue
-    found = await changesOf(input, head, own(ledger.partition(repoRoot, input.thread), repoRoot))
+    const read = attempt === 0 && input.partition ? input.partition : await ledger.partition(repoRoot, input.thread)
+    found = await changesOf(input, head, own(read, repoRoot))
   }
   if (found === "stale") throw new ThreadCheckpointRefused("changing", "Files of the Thread's were still changing, or Mako's record of them was catching up with a commit.")
   const { changes, left } = found
@@ -231,7 +261,8 @@ export async function captureThreadCheckpoint(input: ThreadCheckpointInput): Pro
     const indexCommit = await commitIn(git, store, headTree, head, "index", true)
     const workCommit = await commitIn(git, store, tree, head, "work", true)
     const { checkpoint, file } = await writeCheckpoint(git, repoRoot, store, input.folder, { head, index: indexCommit, work: workCommit, branch: input.branch }, MOVE_CHECKPOINT_MAX_BYTES, true)
-    return { checkpoint, file, took: changes.map((change) => change.path).sort(), left: left.sort((a, b) => a.path.localeCompare(b.path)), ms: performance.now() - started }
+    const unpushed = Number(await text(git, { cwd: repoRoot, args: ["rev-list", "--count", head, "--not", "--remotes"], read: true }))
+    return { checkpoint, file, unpushed, took: changes.map((change) => change.path).sort(), left: left.sort((a, b) => a.path.localeCompare(b.path)), ms: performance.now() - started }
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }

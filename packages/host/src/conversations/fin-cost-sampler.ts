@@ -60,9 +60,18 @@ export class FinCostSampler {
     if (!last) return undefined
     const byPid = new Map(rows.map((row) => [row.pid, row]))
     const children = new Map<number, ProcessRow[]>()
-    for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row])
+    // Each list grows in place: copied at every row, launchd's thousand children were half a million copies a sample.
+    for (const row of rows) {
+      const siblings = children.get(row.ppid)
+      if (siblings) siblings.push(row)
+      else children.set(row.ppid, [row])
+    }
     const roots = new Map<string, number[]>()
-    for (const owned of this.#deps.owned()) roots.set(owned.owner, [...(roots.get(owned.owner) ?? []), owned.pid])
+    for (const owned of this.#deps.owned()) {
+      const pids = roots.get(owned.owner)
+      if (pids) pids.push(owned.pid)
+      else roots.set(owned.owner, [owned.pid])
+    }
     const readings: FinCostReading[] = []
     for (const fin of fins) {
       const tree = subtree((roots.get(fin.conversation) ?? []).flatMap((pid) => byPid.get(pid) ?? []), children)

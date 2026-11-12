@@ -18,7 +18,7 @@ import type { PromptAttachment } from "../contracts/providers-acp.js"
 import { executionRefusal, HandoffSchema, MoveIdSchema, RuntimeIdSchema, type ClaimReceipt, type ExecutionOwner, type Handoff, type MoveId, type Refusal, type RuntimeId, type SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type ThreadId } from "../contracts/thread-identity.js"
 import type { CloudAccount } from "../usage/index.js"
-import { captureCarry, captureMoveCheckpoint, readOutside, type OutsideCandidate } from "../workspaces/index.js"
+import { captureCarry, captureMoveCheckpoint, readOutside, type OutsideCandidate, type PlannedCheckout } from "../workspaces/index.js"
 import type { ReadyPlan, TakenReady } from "./cloud-readiness.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 import type { MoveHaste } from "../contracts/workspace-moves.js"
@@ -54,6 +54,15 @@ import { logMoveDiagnostic, moveDiagnosticReason } from "./move-diagnostics.js"
  */
 
 /** A UUID fixed by a name: version 8 (named by its maker), variant 10, from the name's SHA-256. */
+/**
+ * The request a turn parked as this Mac went off goes on under in the cloud: the one id the going-away's note names
+ * (`ParkedTurn.continuation`), which the account's continue sends it on under, and the one this Mac's join sends it
+ * under (`#sendParked`). The host's continue takes one request id once, so the turn runs once whoever sends it first.
+ */
+export function parkedContinuation(move: string, request: string): string {
+  return namedUuid(`mako move\0${move}\0${request}\0continue`)
+}
+
 export function namedUuid(name: string): string {
   const hex = createHash("sha256").update(name).digest("hex")
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
@@ -259,7 +268,7 @@ export type CloudMovesOptions = {
    * The worktree `ownBranch` would put the Thread of a conversation in the main checkout in now, with nothing made
    * (`ThreadWorktreeMoves.planned`): its folder, and the repository there it's a worktree of.
    */
-  planned?(conversationId: string): Promise<{ folder: string; repository: string } | undefined>
+  planned?(conversationId: string): Promise<PlannedCheckout | undefined>
   /** The Thread's paths outside its folder that its journal ties to it (`Attribution.changes`' footprint, with evidence). */
   outside?(thread: ThreadId): OutsideCandidate[]
   /** The Thread's file history (`Attribution.threadHistory`), carried so the side it lands on resolves its files alike. */
@@ -473,10 +482,36 @@ export class CloudMoves {
       const planned = await this.#options.planned(conversationId)
       if (!planned) throw new Error("The worktree its own branch would have can't be named now, so it isn't kept ready.")
       const { url } = await this.#options.repositoryOf(planned.repository)
-      return { thread: weighed.thread, folder: planned.folder, repository: { url }, paths: weighed.sessions.map((session) => session.path), harness: weighed.sessions[0]?.harness ?? "", planned: true }
+      const repositories = planned.repositories.map((root) => ({ root, branch: planned.branch }))
+      return { thread: weighed.thread, folder: planned.folder, repository: { url }, paths: weighed.sessions.map((session) => session.path), harness: weighed.sessions[0]?.harness ?? "", planned: true, repositories }
     }
     const plan = await this.#plan(conversationId, MoveIdSchema.parse(randomUUID()), { why: "asked" })
     return { thread: plan.thread, folder: plan.folder, repository: plan.repository, paths: plan.sessions.map((session) => session.path), harness: plan.sessions[0]?.harness ?? "" }
+  }
+
+  /**
+   * The Thread of `conversationId` as this Mac goes away (a sleep, a shutdown; `goingAway` names it): every running
+   * turn of its Sessions paused and parked (`#stayed`), so it reads idle, and nothing of it moves: no branch, no
+   * worktree, no release. It stays this Mac's; the account may continue it from its last acknowledged checkpoint while
+   * the Mac is quiet, and it goes on here once the Mac is back otherwise (`unpark`). Answers the Thread and its
+   * Sessions at their generations, as the going-away's note names them.
+   */
+  async goAway(conversationId: string, goingAway: string, handOff: ThreadHandOff): Promise<{ thread: ThreadId; sessions: Array<{ session: SessionId; generation: number }>; parked: Array<{ conversation: string; request: string; continuation: string; stopped: string[] }> }> {
+    const threads = this.#options.threads()
+    const thread = threads?.journalPlacement(conversationId)?.thread
+    if (!threads || !thread) throw new Error("It isn't in this Mac's Threads, so nothing could continue it elsewhere.")
+    const move = namedUuid(`mako going away\0${goingAway}\0${thread}`)
+    const conversations = this.#conversationsOf(thread, conversationId)
+    const paused: Paused[] = []
+    await this.#pauseTurns(conversations, thread, handOff, paused).catch((error: Error) => hostWarn("moves", "a Thread's agents didn't all pause as this Mac went away", { thread, error: error.message }))
+    await this.#stayed(move, thread, handOff, paused, conversations)
+    const sessions = threads.threadSessions(thread).flatMap(({ session }) => {
+      const execution = threads.execution(session)
+      return execution?.state === "here" ? [{ session, generation: execution.generation }] : []
+    })
+    // Each named with the request it goes on under, as this Mac's own join would send it (`parkedContinuation`).
+    const parked = paused.map((turn) => ({ conversation: turn.conversationId, request: turn.requestId, continuation: parkedContinuation(move, turn.requestId), stopped: turn.stopped }))
+    return { thread, sessions, parked }
   }
 
   /** Settles every move a stopped host left unsettled: before the release, kept here; after, as the cloud answered. */
@@ -1207,7 +1242,7 @@ export class CloudMoves {
     const mine = (await this.#parkedTurns()).filter((turn) => turn.thread === plan.thread)
     if (!mine.length) return
     for (const { move, conversationId, requestId, stopped } of mine)
-      await this.#options.cloud.callThread(plan.cloudThread, "mako:live-continue-turn", [conversationId, namedUuid(`mako move\0${move}\0${requestId}\0continue`), { reason: "handed-off", continues: requestId, ...stopped.length && { stopped } }], conversationId)
+      await this.#options.cloud.callThread(plan.cloudThread, "mako:live-continue-turn", [conversationId, parkedContinuation(move, requestId), { reason: "handed-off", continues: requestId, ...stopped.length && { stopped } }], conversationId)
     await this.#changeParked((parked) => parked.filter((turn) => turn.thread !== plan.thread))
     hostLog("continues", "turns paused as this Mac went off go on in the cloud with the Thread", { move: plan.move, cloudThread: plan.cloudThread, turns: mine.length })
   }

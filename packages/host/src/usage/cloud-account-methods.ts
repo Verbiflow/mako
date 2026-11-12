@@ -32,6 +32,7 @@ import { onMac } from "../base/platform.js"
 import { describeThisDevice } from "./device-description.js"
 import type { BorrowAnswer, Grant, Lease, Progress, SourceAnswer, Stream } from "@mako/protocol/borrow"
 import type { BorrowSnapshot } from "../contracts/setup.js"
+import type { QuietAnswer, QuietNote } from "@mako/protocol/handoff"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
 /** The account's stream skipped a number, or said one was lost: the list is read whole again (`onAccountGap`). */
@@ -88,6 +89,8 @@ export interface CloudAccount {
    * `sent` hears how many of its bytes have gone, as they go.
    */
   sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string, sent?: (bytes: number) => void): Promise<{ sent: boolean }>
+  /** This Mac going away, with the Threads the account may continue meanwhile (`CloudAccounts.quiet`); `unserved` from a gateway that takes no notes yet. */
+  quiet?(note: QuietNote): Promise<QuietAnswer | "unserved">
   /**
    * A move this Mac released, handed to the cloud to carry through once it sent what only it has: the cloud arrives
    * it, claims it (or refuses it), and starts it (`CloudAccounts.handOverMove`).
@@ -396,6 +399,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     checkPlan: () => cloud.checkPlan(),
     signIns: async () => sync?.current(),
     sendCheckpoint: (threadId, checkpoint, file, sent) => cloud.sendCheckpoint(threadId, checkpoint, file, sent),
+    quiet: (note) => cloud.quiet(note),
     handOverMove: (threadId, move, request) => cloud.handOverMove(threadId, move, request),
     refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),
     moveAnswer: (threadId, move, waitMs) => cloud.moveAnswer(threadId, move, waitMs),

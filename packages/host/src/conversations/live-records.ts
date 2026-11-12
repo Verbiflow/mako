@@ -23,6 +23,7 @@ import { backfillMemory } from "./live-ledger.js"
 import { conversationControl, residentOf, type Dependencies, type Resident } from "./live-runtime.js"
 import { interruptRequests, requestTurnEnd } from "./live-settlement.js"
 import { isPaged, pagedWeight } from "./paged-entries.js"
+import { WalPrimer } from "./wal-primer.js"
 
 /**
  * What the host holds of conversations nothing is using; see `ResidencyBudget`.
@@ -118,6 +119,9 @@ export class LiveRecords {
   private stopped = false
   /** Where journals read in a slice at a time are read: off the loop (`JournalReaders`). */
   private readonly readers = new JournalReaders()
+
+  /** Writes a journal's WAL header off the host's thread before reading it in commits (`WalPrimer`). */
+  private readonly primer = new WalPrimer()
 
   constructor(dependencies: Dependencies, hooks: RecordHooks) {
     this.dependencies = dependencies
@@ -277,6 +281,16 @@ export class LiveRecords {
     }
     if (this.residents.has(id) || !this.recovered.has(id)) {
       // Read in at once meanwhile, or gone: the journal open now owns the file.
+      journal.discard()
+      return this.load(id)
+    }
+    // Reading in commits the restart's changes: its WAL's header is written, and synced, off this thread first.
+    await this.primer.prime(journal.file)
+    if (this.stopping()) {
+      journal.discard()
+      return undefined
+    }
+    if (this.residents.has(id) || !this.recovered.has(id)) {
       journal.discard()
       return this.load(id)
     }
@@ -586,6 +600,7 @@ export class LiveRecords {
 
   stop(): void {
     this.stopped = true
+    this.primer.stop()
     clearTimeout(this.sweepTimer)
     this.sweepTimer = undefined
     void this.readers.stop()

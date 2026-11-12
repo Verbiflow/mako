@@ -98,6 +98,18 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   await evaluate(`window.navigationProbe.activations.length = 0`)
   await evaluate(`import('/src/components/notifications/notification-toast.tsx').then(({showNotificationToast}) => showNotificationToast({id: 'navigation-notification', kind: 'finished', subject: {id: 'navigation-live', target: {kind: 'live', key: window.navigationFin.key}, title: 'Navigation notification', agent: 'Codex'}, body: 'Open the saved fixture conversation', at: Date.now(), seen: false}))`)
   await until(`Boolean(document.querySelector('[data-sonner-toast] [role="status"] button'))`, "rendered live notification")
+  // Clicked where it rests: measured while it still slid in from above the window, the click landed on its top edge
+  // only while that edge hadn't yet passed the point, and on a slow runner it had. At rest is in the window, nothing
+  // animating, and the same box two frames apart (a transition shows in getAnimations only once a frame starts it).
+  await until(`new Promise((resolve) => {
+    const button = document.querySelector('[data-sonner-toast] [role="status"] button')
+    const toast = button?.closest('[data-sonner-toast]')
+    if (!toast) return resolve(false)
+    const box = () => { const r = toast.getBoundingClientRect(); return [r.x, r.y, r.width, r.height].join() }
+    const was = box()
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve(box() === was && toast.getBoundingClientRect().top >= 0 &&
+      !toast.getAnimations({ subtree: true }).some((animation) => animation.playState === 'running'))))
+  })`, "live notification at rest")
   await click('[data-sonner-toast] [role="status"] button')
   await until(`!document.querySelector('[data-inbox]') && window.navigationProbe.selection().key === window.navigationFin.key`, "live notification leaves Inbox")
   assert.deepEqual(await evaluate(`window.navigationProbe.activations`), [fin.key])

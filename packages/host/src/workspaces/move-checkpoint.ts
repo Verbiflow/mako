@@ -42,7 +42,7 @@ const FIXED = {
 const TIMEOUT_MS = 5 * 60_000
 
 async function run(git: Git, options: RunOptions): Promise<string> {
-  const result = await git.run({ timeoutMs: TIMEOUT_MS, maxBytes: 16 * 1024 * 1024, ...options, args: ["-c", "core.fsmonitor=false", ...options.args] })
+  const result = await git.run({ timeoutMs: TIMEOUT_MS, maxBytes: 16 * 1024 * 1024, ...options, args: ["-c", "core.fsmonitor=false", "-c", "core.splitIndex=false", ...options.args] })
   if (result.truncated) throw new Error(`git ${options.args[0] ?? ""} wrote more than 16 MB`)
   return result.stdout.toString("utf8").trim()
 }
@@ -116,7 +116,7 @@ export async function captureMoveCheckpoint(git: Git, checkout: string, folder: 
       if (existsSync(index)) await copyGitIndex(index, indexFile)
       else await run(git, { cwd: checkout, args: ["read-tree", head], env: at })
       if (stage) await run(git, { cwd: checkout, args: ["add", "--all", "--", "."], env: at })
-      const written = await git.run({ cwd: checkout, args: ["-c", "core.fsmonitor=false", "write-tree"], env: at, timeoutMs: TIMEOUT_MS, codes: [0, 128] })
+      const written = await git.run({ cwd: checkout, args: ["-c", "core.fsmonitor=false", "-c", "core.splitIndex=false", "write-tree"], env: at, timeoutMs: TIMEOUT_MS, codes: [0, 128] })
       if (written.code !== 0) throw new MoveCheckpointError("conflicts", "This checkout has conflicts to resolve first: Git can't record an index with unmerged files.")
       return written.stdout.toString("utf8").trim()
     }

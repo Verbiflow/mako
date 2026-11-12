@@ -20,6 +20,7 @@ import { writersSince } from "./writers-since.js"
 import { HISTORY_SCRATCH } from "../contracts/watcher-child.js"
 import type { ChangeUsage, LostVersion, ThreadChangeSummary } from "../contracts/thread-changes.js"
 import type { TurnChangedFile, TurnChanges } from "../contracts/turn-changes.js"
+import { JournalReader } from "./journal-reader.js"
 import { JournalStore, type MoveRecord } from "./journal-store.js"
 import { PlacedSessionSchema, SharedJournal, sharedJournalFolder, type JournalWrites, type OwnedJournal, type SharingStatus } from "./shared-journal.js"
 import type { ChosenFile, FileReferenceSource, FileResolution, FileSpelling, FileSpellings, MovedPaths } from "../contracts/file-references.js"
@@ -223,6 +224,11 @@ export interface Attribution {
   hunks(checkout: string): CheckoutHunk[]
   changes(thread: string): ThreadChanges
   partition(checkout: string, thread: string, options?: PartitionOptions): Partition
+  /**
+   * `partition` without `options`, read on a worker from what the journal committed, never on the host's thread: what
+   * work that runs on its own (a Thread's checkpoint as it writes) asks. Rejects if the worker can't answer.
+   */
+  partitionOffLoop(checkout: string, thread: string): Promise<Partition>
   /** How the checkout's changes divide by whose they are, for one Thread. */
   shares(checkout: string, thread: string): CheckoutShares
   /** Every change heard so far journaled. */
@@ -677,6 +683,9 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     }
   }
 
+  /** The worker `partitionOffLoop` reads on, for the journal file it was made for. */
+  let offLoop: { path: string; reader: JournalReader } | undefined
+
   const view = (): JournalView => {
     if (local) return liveView(local.tracker)
     if (!reader) throw new Error("Mako's record of changes isn't open yet. Try again in a moment.")
@@ -830,6 +839,14 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     hunks: (checkout) => hunks(view(), checkout),
     changes: (thread) => changes(view(), thread),
     partition: (checkout, thread, options) => partition(view(), checkout, thread, options),
+    partitionOffLoop: (checkout, thread) => {
+      const path = local ? local.tracker.store.path : journalFile
+      if (offLoop?.path !== path) {
+        offLoop?.reader.close()
+        offLoop = { path, reader: new JournalReader(path) }
+      }
+      return offLoop.reader.partition(checkout, thread)
+    },
     shares: (checkout, thread) => shares(view(), checkout, thread),
     settled: () => journal.writes.settled(),
     heard: () => journal.writes.settled({ rescans: false }),
@@ -883,6 +900,8 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     rescans: () => local?.tracker.rescanReading() ?? null,
     async close() {
       unwatch()
+      offLoop?.reader.close()
+      offLoop = undefined
       await journal.close()
       reader?.store.close()
       reader = undefined

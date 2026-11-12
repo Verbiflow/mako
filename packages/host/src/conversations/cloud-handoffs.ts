@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { z } from "zod"
+import { PARKED_PER_THREAD_MAX, QUIET_THREADS_MAX, type AcknowledgedCheckpoint, type QuietAnswer, type QuietNote, type QuietRefusal, type QuietThread } from "@mako/protocol/handoff"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { goesOff, SHUTDOWN_HOLD_MS, type HandOffCandidate, type HandOffResult, type HandOffSettings, type ThreadHandOff, type ThreadMoveOutcome } from "../contracts/cloud-threads.js"
@@ -28,6 +29,24 @@ export type CloudHandOffsOptions = {
     leaving(thread: string): boolean
     /** Waits until `deadline` at most for every move running here to settle; answers how many still run (`CloudMoves.settled`). */
     settled(deadline: number): Promise<number>
+    /** The Thread's turns paused and parked as this Mac goes away, nothing of it moved (`CloudMoves.goAway`). */
+    goAway?(conversationId: string, goingAway: string, handOff: ThreadHandOff): Promise<{ thread: string; sessions: Array<{ session: string; generation: number }>; parked: Array<{ conversation: string; request: string; continuation: string; stopped: string[] }> }>
+  }
+  /**
+   * What a Mac going away (a sleep, a shutdown) takes: each Thread's last changes sent (`CloudReadiness.flush`), the
+   * checkpoint the cloud acknowledged for it (`noteCheckpoint`), and the note to the account (`CloudAccount.quiet`).
+   * Without it, a Mac going off moves each Thread at work, as a quit does.
+   */
+  goingAway?: {
+    flush(working: WorkingThread[], by: number): Promise<void>
+    checkpoint(thread: string): Promise<AcknowledgedCheckpoint | undefined>
+    quiet(note: QuietNote): Promise<QuietAnswer | "unserved">
+    /**
+     * This Mac's own rows as the account lists them now: each Session's state there. The account takes a note only for
+     * Sessions it lists as this Mac's and idle, so the note waits for the paused turns to read idle. Without it, the
+     * note goes once the flush is done.
+     */
+    rows?(): Promise<ReadonlyMap<string, string>>
   }
   /** Why this Mac can't hand off now (signed out of the cloud); undefined when it can. */
   unavailable(): Promise<string | undefined>
@@ -89,6 +108,7 @@ export class CloudHandOffs {
   }
 
   async #handOff(handOff: string, why: ThreadHandOff["why"], releaseBy?: number): Promise<HandOffResult[]> {
+    if ((why === "sleep" || why === "shutdown") && this.#options.goingAway && this.#options.moves.goAway) return this.#goAway(this.#options.goingAway, handOff, why, releaseBy)
     const began = performance.now()
     const unavailable = await this.#options.unavailable()
     const working = this.#options.working().filter(({ thread }) => !this.#options.moves.leaving(thread))
@@ -109,6 +129,73 @@ export class CloudHandOffs {
       why, threads: results.length, moved: gone, ms: Math.round(performance.now() - began),
       stayed: results.filter((result) => !goneFromHere(result.outcome)).map((result) => `${result.conversationId}: ${"reason" in result.outcome ? result.outcome.reason : ""}`).join("; "),
       ...inFlight && { stillMoving: inFlight },
+    })
+    return results
+  }
+
+  /**
+   * As this Mac sleeps or shuts down: each Thread at work paused and parked, nothing of it moved; its last changes
+   * sent, `FLUSH_MS` and the Mac's deadline at most; then the account told this Mac is going away, naming each Thread,
+   * its Sessions at their generations and the checkpoint the cloud acknowledged, from which it may continue the Thread
+   * while the Mac is quiet. Nothing here waits for that: a Thread the account doesn't take goes on here once the Mac is back.
+   */
+  async #goAway(goingAway: NonNullable<CloudHandOffsOptions["goingAway"]>, handOff: string, why: "sleep" | "shutdown", releaseBy: number | undefined): Promise<HandOffResult[]> {
+    const began = performance.now()
+    const deadline = releaseBy ?? Number.POSITIVE_INFINITY
+    const unavailable = await this.#options.unavailable()
+    const working = this.#options.working().filter(({ thread }) => !this.#options.moves.leaving(thread))
+    if (unavailable || !working.length) return working.map(({ conversationId }) => ({ conversationId, outcome: { kind: "kept-here", reason: unavailable ?? "" } }))
+    const handing: ThreadHandOff = { why, ...releaseBy !== undefined && { releaseBy } }
+    const parked = await Promise.all(working.map(async (each) => {
+      try {
+        return { ...each, gone: await this.#options.moves.goAway!(each.conversationId, handOff, handing) }
+      } catch (error) {
+        return { ...each, error: errorMessage({ error }) }
+      }
+    }))
+    const pausedMs = performance.now() - began
+    const sessions = parked.flatMap((each) => ("gone" in each ? each.gone.sessions.map((session) => session.session) : []))
+    const [, rows] = await Promise.all([
+      goingAway.flush(working, Math.min(Date.now() + FLUSH_MS, deadline)),
+      idleRows(goingAway, sessions, Math.min(Date.now() + IDLE_WAIT_MS, deadline)),
+    ])
+    const flushedMs = performance.now() - began - pausedMs
+    const threads: QuietThread[] = []
+    for (const each of parked) {
+      if (!("gone" in each) || !each.gone.parked.length) continue
+      // Only the Sessions the account lists as this Mac's: one it has no row of would have it refuse the whole Thread.
+      const listed = rows ? each.gone.sessions.filter((session) => rows.has(session.session)) : each.gone.sessions
+      if (!listed.length) continue
+      const checkpoint = await goingAway.checkpoint(each.gone.thread)
+      const parked = each.gone.parked.slice(0, PARKED_PER_THREAD_MAX).map(({ stopped, ...turn }) => ({ ...turn, ...stopped.length && { stopped } }))
+      threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint } })
+    }
+    const note: QuietNote = { note: handOff, reason: why, at: Date.now(), threads: threads.slice(0, QUIET_THREADS_MAX) }
+    let heard: NoteHeard
+    try {
+      heard = await answeredBy(goingAway.quiet(note), deadline)
+    } catch (error) {
+      hostWarn("handoff", "the account didn't hear this Mac go away; its Threads wait here, paused", { why, error: errorMessage({ error }) })
+      heard = { kind: "unanswered" }
+    }
+    const results = parked.map((each): HandOffResult => {
+      if (!("gone" in each)) return { conversationId: each.conversationId, outcome: { kind: "kept-here", reason: each.error } }
+      const word = heard.kind === "answered" ? heard.answer.threads.find((known) => known.thread === each.gone.thread) : undefined
+      return { conversationId: each.conversationId, outcome: { kind: "kept-here", reason: goingAwayWords(heard, word) } }
+    })
+    const accepted = heard.kind === "answered" ? heard.answer.threads.filter((each) => each.accepted).length : 0
+    hostLog("handoff", "agents at work paused as this Mac went away", {
+      why,
+      threads: working.length,
+      noted: threads.length,
+      withCheckpoint: threads.filter((each) => each.checkpoint).length,
+      ...rows && { notIdle: sessions.filter((session) => rows.has(session) && rows.get(session) !== "idle").length },
+      accepted,
+      answer: heard.kind,
+      pausedMs: Math.round(pausedMs),
+      flushedMs: Math.round(flushedMs),
+      ms: Math.round(performance.now() - began),
+      ...parked.some((each) => "error" in each) && { stayed: parked.flatMap((each) => ("error" in each ? [`${each.conversationId}: ${each.error}`] : [])).join("; ") },
     })
     return results
   }
@@ -140,6 +227,64 @@ export class CloudHandOffs {
     this.#onSleep = saved.success ? saved.data.onSleep : true
     return this.#onSleep
   }
+}
+
+/** What going away waits for a Thread's last changes to reach the cloud, at most. */
+const FLUSH_MS = 5_000
+/** And for the account to list its paused turns idle, which it takes a note for only then. */
+const IDLE_WAIT_MS = 4_000
+const IDLE_LOOK_MS = 250
+
+/**
+ * This Mac's rows as the account lists them, read until every one of `sessions` it lists reads idle, or `until`: the
+ * last read, or undefined when none could be read (the note goes naming every Session, as without rows).
+ */
+async function idleRows(goingAway: { rows?(): Promise<ReadonlyMap<string, string>> }, sessions: readonly string[], until: number): Promise<ReadonlyMap<string, string> | undefined> {
+  if (!goingAway.rows || !sessions.length) return undefined
+  let last: ReadonlyMap<string, string> | undefined
+  for (;;) {
+    try {
+      last = await goingAway.rows()
+      const rows = last
+      if (sessions.every((session) => !rows.has(session) || rows.get(session) === "idle")) return last
+    } catch {
+      // Unread this time: looked at again until `until`.
+    }
+    if (Date.now() + IDLE_LOOK_MS >= until) return last
+    await new Promise((resolve) => setTimeout(resolve, IDLE_LOOK_MS))
+  }
+}
+
+/** What became of a going-away's note: the account's answer, a gateway that takes none yet, or none by the deadline. */
+type NoteHeard = { kind: "answered"; answer: QuietAnswer } | { kind: "unserved" } | { kind: "unanswered" }
+
+/** The account's word on the note, or `unanswered` once `deadline` passes first. */
+async function answeredBy(work: Promise<QuietAnswer | "unserved">, deadline: number): Promise<NoteHeard> {
+  const heard = work.then((answer): NoteHeard => (answer === "unserved" ? { kind: "unserved" } : { kind: "answered", answer }))
+  if (deadline === Number.POSITIVE_INFINITY) return heard
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<NoteHeard>((resolve) => { timer = setTimeout(() => resolve({ kind: "unanswered" }), Math.max(0, deadline - Date.now())) })
+  try {
+    return await Promise.race([heard, late])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const REFUSED = {
+  "not-yours": "The account doesn't have it as this Mac's",
+  stale: "The account has it at another point than this Mac",
+  "no-checkpoint": "None of its changes had reached Mako Cloud yet",
+  "auto-off": "Moving agents to the cloud when this Mac is off is turned off",
+} satisfies Record<QuietRefusal, string>
+
+/** What a Thread paused as this Mac went away says of where it goes on. */
+function goingAwayWords(heard: NoteHeard, word: QuietAnswer["threads"][number] | undefined): string {
+  const here = "it goes on here when this Mac is back, or Continue in the cloud from another device takes it."
+  if (word?.accepted) return "Paused while this Mac is away. If it's still away in a couple of minutes, Mako Cloud goes on with it from its last changes; otherwise it goes on here."
+  if (word && !word.accepted) return `Paused while this Mac is away. ${REFUSED[word.why]}, so ${here}`
+  if (heard.kind === "unserved") return `Paused while this Mac is away. Mako Cloud can't go on with it by itself yet, so ${here}`
+  return `Paused while this Mac is away. Mako Cloud didn't hear it go, so ${here}`
 }
 
 export { SHUTDOWN_HOLD_MS }

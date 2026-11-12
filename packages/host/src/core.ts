@@ -82,6 +82,8 @@ type WebHost = Awaited<ReturnType<typeof startWebHost>>
 const HELD_WAKES_AFTER_START_MS = 2_000
 /** A project whose checkout this host couldn't read, or let go of, is asked about again at most this often. */
 const HEAD_ASK_AGAIN_MS = 60_000
+/** How long attribution's read of the catalog stands with nothing said to move it (`cataloguedRows`). */
+const CATALOGUED_FRESH_MS = 30_000
 
 /** What the host gives its core: the socket, the method table, and the domains that load on their own. */
 /** When a stop still running says where it is: well before the 15 s a machine's agent or a test waits for it. */
@@ -202,6 +204,8 @@ interface LateParts {
   agentAsks?: AgentAskGate
   /** The worktrees here of Threads that run in the cloud, following them at each turn's end. */
   cloudFollow?: CloudFollow
+  /** Keeps Threads at work ready to move, and takes their checkpoints as they write (`CloudReadiness`). */
+  readiness?: CloudReadiness
   /** This host's Sessions on the account's list: told again when one is archived here. */
   sessions?: SessionPublisher
   /** The keys of the account's archived cloud Threads' Sessions, told to every window (`ThreadArchives.account`). */
@@ -284,7 +288,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (shell.closing()) return
     const limits = spent(event)
     if (limits) emit(limits)
-    if (event.type === "threads" || event.type === "thread-ref") late.conversations?.live.discoverNativePaths()
+    // A row's change can move only its own session's file: only conversations bound to it look again.
+    if (event.type === "threads") late.conversations?.live.discoverNativePaths()
+    else if (event.type === "thread-ref") late.conversations?.live.discoverNativePaths({ harness: event.ref.harness, nativeId: event.ref.nativeId })
     if (event.type === "thread-run" && event.run.status !== "running") late.conversations?.native.ready(event.run.path)
     // Git status is recomputed after every turn and on focus, which is exactly
     // when HEAD could have moved — so the commit trigger rides on it rather than
@@ -442,6 +448,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     readOnly: fixtureDesk,
     store,
     jobs,
+    subscribed: shell.subscribed,
     emit,
     inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
     working: async (path) => conversationsIn(path, (status) => status === "running"),
@@ -458,8 +465,23 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   late.fileHistory = workspaces.fileHistory
   // Who changed what in every checkout a Thread works in. It catches up on its own, after the host is up.
-  const unfollowEffects = fixtureDesk ? undefined : liveToolEffects.subscribe((reported) => late.attribution?.effects(reported.conversation, reported.call))
+  const unfollowEffects = fixtureDesk ? undefined : liveToolEffects.subscribe((reported) => {
+    late.attribution?.effects(reported.conversation, reported.call)
+    // A call that may have written: the Thread's checkpoint follows a few seconds later, when it's kept ready.
+    if (reported.call.status !== "refused" && reported.call.effects.some((effect) => effect.kind !== "read")) late.readiness?.wrote(reported.conversation)
+  })
   const unfollowBounds = fixtureDesk ? undefined : liveCallBounds.subscribe((bounds) => late.attribution?.bounds(bounds))
+  // The catalog as attribution reads it, at every record and every footprint: placed whole once, then kept until the
+  // catalog says something moved or the Thread store changed (a placement), and at most `CATALOGUED_FRESH_MS`, for what
+  // moves without either (a worktree's origin). Placed again at each read, it was a tenth of the host's allocation.
+  let catalogued: { rows: ThreadRef[]; stores: readonly string[] | undefined; version: string | undefined; at: number } | undefined
+  if (!fixtureDesk) catalog.subscribe(() => { catalogued = undefined })
+  const cataloguedRows = () => {
+    const version = store?.version()
+    if (!catalogued || catalogued.version !== version || Date.now() - catalogued.at > CATALOGUED_FRESH_MS)
+      catalogued = { rows: catalog.list(), stores: undefined, version, at: Date.now() }
+    return catalogued
+  }
   if (!fixtureDesk) void openAttribution({
     dataRoot: environment.dataRoot,
     userRoot: environment.userRoot,
@@ -471,9 +493,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     deliveryLagMs: () => watchReadings.lagMs(),
     watchGitDir: (folder, moved) => watchOutsideGitDir(folder, moved),
     jobs,
-    stores: () => harnessStores(catalog.list().map((ref) => ref.path)),
+    stores: () => {
+      const held = cataloguedRows()
+      return held.stores ??= harnessStores(held.rows.map((ref) => ref.path))
+    },
     children: catalog.childSource,
-    catalogued: () => catalog.list(),
+    catalogued: () => cataloguedRows().rows,
     running: () => catalog.activity(),
     placement: (conversation) => store?.journalPlacement(conversation),
     session: (conversation) => {
@@ -1004,10 +1029,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     rewindWriters: (paths, since) => late.attribution?.rewindWriters(paths, since),
     suspendTools: (bindingId, conversationId) => residency.suspend(bindingId, conversationId),
     settled: (id) => {
+      late.readiness?.settled(id)
       late.movers?.moves.settled(id)
       late.movers?.leaves.settled(id)
       late.threadMoves?.settled(id)
     },
+    // What a turn left in its worktree is read again for the rail, as its own event rather than a window's poll.
+    turnEnded: (_id, cwd) => workspaces.worktrees?.turnEnded(cwd),
     movePending: (id) => {
       const answer = late.movers?.moves.answerFor(id)
       return answer === "asking" || answer === "allowed" || answer === "moving"
@@ -1312,6 +1340,23 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations?.has(id) ?? false }),
     moves: cloudMoves,
     unavailable: handOffUnavailable,
+    // A sleep or a shutdown: each Thread paused and parked here, its last changes sent, and the account told this Mac
+    // went away, so it may continue them while the Mac is quiet. The quit sheet still moves them.
+    goingAway: {
+      flush: async (working, by) => late.readiness?.flush(working, by),
+      checkpoint: async (thread) => late.readiness?.noteCheckpoint(thread),
+      quiet: async (note) => {
+        if (!late.cloud?.quiet) throw new Error("This Mac isn't signed in to Mako Cloud.")
+        return late.cloud.quiet(note)
+      },
+      // The account takes a note only for Sessions it lists as this Mac's and idle: read here until the paused turns are.
+      rows: async () => {
+        const cloud = late.cloud
+        const [device, listed] = await Promise.all([cloud?.deviceId(), cloud?.sessionListings?.()])
+        if (!device || !listed) throw new Error("This Mac's rows can't be read from the account now.")
+        return new Map(listed.sessions.filter((row) => row.runsOn.kind === "device" && row.runsOn.deviceId === device).map((row) => [row.session, row.state]))
+      },
+    },
     changed: (settings) => {
       emit({ type: "handoff-settings", settings })
       void sleepHandOff?.refresh()
@@ -1337,8 +1382,20 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       plan: (conversationId) => cloudMoves.readyPlan(conversationId),
       sendRecords: (link, paths) => catalog.sendRecords(link, paths),
       newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
+      // Never the journal's full settle (rescans held the loop for seconds, #583), nor a partition on this thread.
+      ledger: () => {
+        const attribution = late.attribution
+        return attribution && {
+          heard: () => attribution.heard(),
+          settled: () => attribution.heard(),
+          track: (checkout) => attribution.track(checkout),
+          head: (repository) => attribution.head(repository),
+          partition: (checkout, thread) => attribution.partitionOffLoop(checkout, thread),
+        }
+      },
     })
     readinessOnce = readiness
+    late.readiness = readiness
     shell.jobs.every("keep Threads at work ready to move", READY_EVERY_MS, () => readiness.refresh())
   }
   // This Mac kept awake while its agents work: a turn, background work or a subagent, never a wait on the person, and never a Fin that sits open.

@@ -9,6 +9,7 @@ import { Git } from "@mako/git"
 import type { ActivityMark, ReportedEffect } from "@mako/protocol"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
 import { contentRef } from "@mako/host/attribution/index"
+import { JournalReader } from "@mako/host/attribution/journal-reader"
 import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
 import { partition, type JournalView, type Partition } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
@@ -68,7 +69,7 @@ async function fixture(name: string) {
     settled: () => tracker.settled(),
     track: async () => {},
     head: (repository) => [...tracker.rootStates().values()].find((state) => state.root.path === repository)?.root.head,
-    partition: (checkout, thread, options) => partition(view, checkout, thread, options),
+    partition: (checkout, thread) => partition(view, checkout, thread),
   }
   const abs = (path: string) => join(repo, path)
   const write = (path: string, content: string | Buffer) => {
@@ -168,8 +169,16 @@ test("only the Thread's lines and files are in its checkpoint, over HEAD, and th
   const status = f.git("status", "--porcelain=v1", "--untracked-files=all")
   const index = readFileSync(join(f.repo, ".git", "index"))
   const before = files(f.repo)
+  // The person's repository splits its index: a scratch index must still write no shared index into their `.git`.
+  f.git("config", "core.splitIndex", "true")
+  f.git("update-index", "--split-index")
+  const shared = () => readdirSync(join(f.repo, ".git")).filter((name) => name.startsWith("sharedindex.")).sort()
+  const sharedBefore = shared()
+  const indexSplit = readFileSync(join(f.repo, ".git", "index"))
 
   const taken = await f.capture()
+  assert.deepEqual(shared(), sharedBefore, "no sharedindex.* written into the person's .git")
+  assert.equal(taken.unpushed, 1, "the commit the remote lacks is counted, to be named")
   const { checkpoint } = taken
   assert.equal(checkpoint.head, f.git("rev-parse", "HEAD"))
   assert.equal(checkpoint.branch, "mako/t1")
@@ -180,7 +189,8 @@ test("only the Thread's lines and files are in its checkpoint, over HEAD, and th
   // Capture wrote nothing into the checkout.
   assert.equal(f.git("count-objects", "-v"), objects, "no objects")
   assert.equal(f.git("for-each-ref"), refs, "no refs")
-  assert.deepEqual(readFileSync(join(f.repo, ".git", "index")), index, "the index as it was")
+  assert.deepEqual(readFileSync(join(f.repo, ".git", "index")), indexSplit, "the index as it was")
+  assert.ok(index.length > 0)
   assert.equal(f.git("status", "--porcelain=v1", "--untracked-files=all"), status)
   assert.deepEqual(files(f.repo), before, "the files as they were")
 
@@ -232,6 +242,22 @@ test("the same Thread changes make the same bundle, whatever the person does; th
   const next = await f.capture()
   assert.notEqual(next.checkpoint.sha256, first.checkpoint.sha256)
   assert.equal(f.show(next, "shared.ts"), lines(30, { 3: "line 3 by T1", 5: "line 5 by T1" }))
+})
+
+test("read on the journal's worker, the partition and the checkpoint are the same as read on the host's thread", async () => {
+  const f = await fixture("worker")
+  await edits(f)
+  const reader = new JournalReader(f.tracker.store.path)
+  try {
+    const onThread = await f.ledger.partition(f.repo, "T1")
+    const onWorker = await reader.partition(f.repo, "T1")
+    assert.deepEqual(onWorker.files, onThread.files, "what the journal committed, divided the same")
+    const here = await f.capture()
+    const there = await f.capture({ ledger: { ...f.ledger, partition: (checkout, thread) => reader.partition(checkout, thread) } })
+    assert.equal(there.checkpoint.sha256, here.checkpoint.sha256)
+  } finally {
+    reader.close()
+  }
 })
 
 test("past the total the largest files are left out and named; the rest stay", async () => {

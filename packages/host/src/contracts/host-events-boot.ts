@@ -10,7 +10,7 @@ import type { StoreFormats } from "./store-formats.js"
 import type { FileEventsService } from "./file-events-service.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { Entry } from "@mako/sessions/entries"
-import type { WorktreeStep } from "./thread-worktrees.js"
+import type { WorktreeStep, WorktreeSummary } from "./thread-worktrees.js"
 import type { MachineOffer } from "./machine-offer.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CloudStartStep, ThreadContinueStep, ThreadMoveStep, ThreadReturnStep } from "./cloud-threads.js"
@@ -78,6 +78,8 @@ export type HostEventBody =
   | { type: "cloud-archive-step"; step: CloudArchiveStep }
   /** A followed checkout's HEAD moved, by folder; window-wide. */
   | { type: "checkout-heads"; heads: CheckoutHeads }
+  /** Every worktree's summary, said whenever one changes (`ThreadWorktreeService.followSummaries`); window-wide. */
+  | { type: "worktree-summaries"; summaries: WorktreeSummary[] }
   /** A new Thread's worktree is checked out; its provider starts next. */
   | { type: "worktree-ready"; conversationId: string }
   | { type: "worktree-step"; conversationId: string; step: WorktreeStep }
