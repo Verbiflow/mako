@@ -551,7 +551,10 @@ export class JournalWriteError extends Error {
  * are written.
  *
  * WAL with `synchronous=NORMAL`: a commit appends to the WAL without an
- * fsync, and the WAL is synced at each checkpoint. A committed transaction
+ * fsync, and the WAL is synced at each checkpoint. The one exception is the
+ * first frame into a WAL with none (a journal its last host closed), whose
+ * header SQLite syncs, folder and all: a restart's read-in has `WalPrimer`
+ * write it off the host's thread first. A committed transaction
  * survives a host crash or kill either way — SQLite's durability against the
  * application dying does not depend on this pragma — and only a power loss
  * or kernel panic in the same instant can lose the last few commits, and the
