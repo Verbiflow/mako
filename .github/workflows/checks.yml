@@ -269,6 +269,7 @@ jobs:
       - run: npm run test:fin-pull-waits
       - run: npm run test:fin-resume
       - run: npm run test:fin-reopen
+      - run: npm run test:roster-refresh
       # A host starting reads each Fin's journal in slices as it resumes them, never all of them at once.
       - run: npm run test:resume-holds
         id: resume_holds
@@ -334,6 +335,9 @@ jobs:
       - run: npm run test:orch-deliver
       # The person's steer lands within a second on each landing, on a cloud Thread too, and the case of 2026-11-03.
       - run: npm run test:steer-landing
+      # A Thread at work keeps going without a click: a steer that stopped Claude's turn goes once its after-snapshot ends,
+      # and a turn continued after a move and a crash runs on its session's own model.
+      - run: npm run test:thread-stays-live
       - run: npm run test:agents-doors
       # An Apex of 57 Fins streams without its row's check of them holding the loop (2026-11-12's holds of 0.3-0.6 s a batch).
       - run: npm run bench:person-ask

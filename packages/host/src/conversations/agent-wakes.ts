@@ -79,6 +79,8 @@ export class AgentWakes {
   private readonly heard = new Set<string>()
   /** Notices a steer carries until the harness answers it: heard if it took them, else admitted. */
   private readonly steering = new Set<string>()
+  /** Notices waiting for their Apex's conversation to be read in (`noticeWhen`). */
+  private reading = 0
   /** Conversations with a digest admitted, for `pending`. */
   private readonly digests = new Set<string>()
   private stopped = false
@@ -166,8 +168,21 @@ export class AgentWakes {
   }
 
   /** How many digests wait unsent, every Apex's, and steers unanswered: Diagnostics shows it. */
+  /**
+   * A notice for an Apex whose conversation is being read in first (`Agents.noticeOf`): it's under way until `ready`
+   * settles, and is noticed then if it says the conversation was read. Counted as pending meanwhile, so nothing that
+   * waits for the wakes to settle (a stop, Diagnostics, a test's `settle`) takes the wait for none.
+   */
+  noticeWhen(ready: Promise<boolean>, conversation: string, apex: string, notice: Notice): void {
+    this.reading += 1
+    void ready.then((read) => {
+      if (read && !this.stopped) this.notice(conversation, apex, notice)
+    }, (error: Error) => hostWarn("agents", "an Apex's conversation couldn't be read in for a notice; it waits unheard", { notice: notice.id, error: errorMessage({ error }) }))
+      .finally(() => { this.reading -= 1 })
+  }
+
   pending(): number {
-    let count = this.steering.size
+    let count = this.steering.size + this.reading
     for (const conversation of this.digests) {
       const unsent = this.deps.unsent(conversation).length
       if (unsent) count += unsent
