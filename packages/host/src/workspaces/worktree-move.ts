@@ -153,14 +153,14 @@ function blobId(bytes: Uint8Array, format: "sha1" | "sha256"): string {
 }
 
 /** What a file is on disk: its bytes and permission bits; null for no regular file there. */
-async function onDisk(path: string): Promise<{ bytes: Buffer; perm: number } | null | "other"> {
+export async function onDisk(path: string): Promise<{ bytes: Buffer; perm: number } | null | "other"> {
   const stat = await lstat(path).catch(() => null)
   if (!stat) return null
   if (!stat.isFile()) return "other"
   return { bytes: await readFile(path), perm: stat.mode & 0o777 }
 }
 
-async function mapLimit<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
   const results: R[] = []
   const queue = values.entries()
   const worker = async () => {
@@ -292,9 +292,9 @@ export async function pruneBackups(git: Git, repoRoot: string, now = Date.now())
  * the main checkout's file isn't what the journal holds yet, `unknown` when a
  * side is neither checkout's version (a filter rewrote the base, say).
  */
-type Sides = { thread: Buffer | null; remaining: Buffer | null } | "stale" | "unknown"
+export type Sides = { thread: Buffer | null; remaining: Buffer | null } | "stale" | "unknown"
 
-function sidesOf(file: PartitionFile, before: Buffer | null, base: Buffer | null): Sides {
+export function sidesOf(file: PartitionFile, before: Buffer | null, base: Buffer | null): Sides {
   const ref = (bytes: Buffer | null) => (bytes ? contentRef(bytes) : null)
   if (ref(before) !== file.current) return "stale"
   const version = (side: PartitionFile["thread"]): Buffer | null | "unknown" => {
