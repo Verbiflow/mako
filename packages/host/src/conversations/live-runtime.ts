@@ -307,6 +307,8 @@ export interface Dependencies {
   projectFolderOfRemoved?(cwd: string): string | undefined
   /** The conversation changed in a way that may let a waiting move go ahead (`LiveConversations.relocation`); called on the write path. */
   settled?(conversationId: string): void
+  /** A turn ended in `cwd`, failed or stopped included. */
+  turnEnded?(conversationId: string, cwd: string): void
   /** The attribution journal, which counts what each turn changed (`LiveTurnChanges`); undefined until it opens. */
   turnLedger?(): TurnLedger | undefined
   /** The attribution journal as a turn's review and its undo read it (`LiveTurnReview`); undefined until it opens. */

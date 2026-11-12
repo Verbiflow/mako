@@ -8,7 +8,8 @@ import { rm, stat } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { declareSessionMethods, type SessionMethodsDeps } from "./session-methods.js"
 import type { MethodTable } from "../base/methods.js"
-import type { HostJobs } from "../base/host-jobs.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
+import { SUMMARY_PASS_MS } from "./thread-worktrees.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ThreadStore, ThreadLifecycle } from "../threads/index.js"
 import { portListening, ThreadEnvironments } from "./thread-environment.js"
@@ -120,6 +121,8 @@ export interface WorkspacesDeps {
   readOnly: boolean
   store: ThreadStore | null
   jobs: HostJobs
+  /** On while a client is subscribed: the summaries' own pass runs only for someone who'd hear it. */
+  subscribed?: JobDemand
   emit(event: HostEvent): void
   /** What holds a worktree: its conversations and terminals, as a person would name them. */
   inUse(path: string): Promise<string[]>
@@ -213,6 +216,13 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
         }),
       } : undefined, deps.conversations, deps.ledger, deps.workingFolders)
     : null
+  // Windows hear the summaries as they change, rather than each asking every half minute. What no event of its own
+  // says (a pull request on GitHub, an edit outside a turn) a pass of the host's says, each worktree read only once
+  // its index, pull request, status's freshness or age moved (`current`).
+  if (worktrees) {
+    worktrees.followSummaries((summaries) => emit({ type: "worktree-summaries", summaries }))
+    deps.jobs.every("say the worktrees' summaries as they change", SUMMARY_PASS_MS, () => void worktrees.summaries().catch(() => undefined), deps.subscribed ? { needs: [deps.subscribed] } : {})
+  }
   if (worktrees) {
     const tidy = () => worktrees.tidy()
     void tidy().catch((error: Error) => hostWarn("threads", "spare worktrees could not be tidied", { error: error.message }))
@@ -230,7 +240,10 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     whoseApp,
     appOwner,
     fileHistory,
-    close: () => checkoutHeads.close(),
+    close: () => {
+      checkoutHeads.close()
+      worktrees?.closeSummaries()
+    },
   }
 }
 

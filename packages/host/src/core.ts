@@ -442,6 +442,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     readOnly: fixtureDesk,
     store,
     jobs,
+    subscribed: shell.subscribed,
     emit,
     inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
     working: async (path) => conversationsIn(path, (status) => status === "running"),
@@ -1008,6 +1009,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       late.movers?.leaves.settled(id)
       late.threadMoves?.settled(id)
     },
+    // What a turn left in its worktree is read again for the rail, as its own event rather than a window's poll.
+    turnEnded: (_id, cwd) => workspaces.worktrees?.turnEnded(cwd),
     movePending: (id) => {
       const answer = late.movers?.moves.answerFor(id)
       return answer === "asking" || answer === "allowed" || answer === "moving"
