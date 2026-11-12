@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises"
+import { basename } from "node:path"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 import type { SetupConsent } from "../../contracts/simulator-setup.js"
@@ -31,6 +32,7 @@ import {
   type SimulatorsWatchInput,
   type SimulatorsWatchResult,
   type SimulatorVia,
+  type SimulatorArtifact,
 } from "../../contracts/simulators.js"
 import { hostLog, hostWarn } from "../../base/host-log.js"
 import { MACHINE_CLIENT, NOT_THE_PERSON } from "../../base/host-client.js"
@@ -55,6 +57,8 @@ export interface SimulatorLeases {
   leaseOf(via: SimulatorVia, thread: string): string | undefined
   /** A verb ran under the lease, for its session's progress. */
   used?(lease: string, verb: string): void
+  /** A file made under the lease (a large picture, a recording), given to it for its borrower: sealed, by hash. */
+  artifact?(lease: string, file: string, name: string): Promise<SimulatorArtifact>
 }
 
 /**
@@ -69,9 +73,16 @@ export interface SimulatorLeases {
  * another of their devices, and an agent's only under a live session lease of its Thread that this Mac serves
  * (`leases`), checked on every call.
  */
+/** A cloud Thread's borrowed simulators, as the list asks for one and a stopping host lets them go (`BorrowedSimulators`). */
+export interface SimulatorsBorrowing {
+  ensure(why: string): Promise<SimulatorHostSummary | undefined>
+  close?(): Promise<void>
+}
+
 export class Simulators {
   readonly #hosts: ReadonlyMap<string, SimulatorHost>
   readonly #remotes: () => readonly RemoteSimulatorHost[]
+  readonly #borrowing: SimulatorsBorrowing | undefined
   readonly #consent: () => Promise<SetupConsent[]>
   /** The one simulator each lease lends, from its first open until its claim ends. */
   readonly #leased = new Map<string, string>()
@@ -94,6 +105,11 @@ export class Simulators {
     remotes?: () => readonly RemoteSimulatorHost[]
     /** The leases this Mac serves, which an agent's call from another place must be under; without them, none is. */
     leases?: SimulatorLeases
+    /**
+     * On a cloud Thread's machine: its simulators are a Mac of the person's borrowed under a session lease. The first
+     * look asks for one, and how that stands is a host in the list; the person's grant is the consent there.
+     */
+    borrowing?: SimulatorsBorrowing
     now?: () => number
     /** Whether any simulator is held, as it changes: the idle sweep runs only while one is. */
     holding?: (on: boolean) => void
@@ -103,6 +119,7 @@ export class Simulators {
     this.#remotes = options.remotes ?? (() => [])
     this.#consent = options.consent
     this.#leases = options.leases
+    this.#borrowing = options.borrowing
     this.#agent = options.agent
     this.#now = options.now ?? Date.now
     this.#holding = options.holding ?? (() => undefined)
@@ -115,6 +132,7 @@ export class Simulators {
     const consent = await this.#consentFor(who, caller)
     if (caller.via && consent !== "allowed") return { hosts: await this.#notOffered(), simulators: [], consent }
     const hosts = [...this.#hosts.values()]
+    const waiting = !caller.via && who.kind === "agent" ? await this.#borrowing?.ensure(`${who.title ?? "This Thread"} looks for a simulator`) : undefined
     // Another device hears this Mac's own simulators alone: it reaches the account's other Macs itself.
     const remotes = caller.via ? [] : this.#remotes()
     const [summaries, lists, others] = await Promise.all([
@@ -126,7 +144,7 @@ export class Simulators {
       const claim = this.#claim(key(simulator.hostId, simulator.id))
       return claim ? { ...simulator, claim } : simulator
     })
-    return { hosts: [...summaries, ...others.flatMap((other) => other.hosts)], simulators: [...simulators, ...others.flatMap((other) => other.simulators)], consent }
+    return { hosts: [...summaries, ...others.flatMap((other) => other.hosts), ...(waiting ? [waiting] : [])], simulators: [...simulators, ...others.flatMap((other) => other.simulators)], consent }
   }
 
   async open(caller: SimulatorCaller, input: SimulatorsOpenInput): Promise<SimulatorsOpenResult> {
@@ -203,6 +221,8 @@ export class Simulators {
     const refused = await this.#perform("shot", found.who, key(found.host.id, found.simulator.id), async () => {
       shot = await found.host.screenshot(found.simulator.id)
       if (input.inline) shot = await inlined(shot)
+      // Too large to go inline to a caller under a lease: the picture goes to the lease, and the caller fetches it.
+      if (input.inline && shot && !shot.inline && found.lease && this.#leases?.artifact) shot = { ...shot, artifact: await this.#leases.artifact(found.lease, shot.path, basename(shot.path)) }
     })
     return refused ?? shot ?? { refused: "unsupported", why: "The host took no picture." }
   }
@@ -210,7 +230,12 @@ export class Simulators {
   async record(caller: SimulatorCaller, input: SimulatorsRecordInput): Promise<SimulatorsRecordResult> {
     const remote = await this.#remote(caller, "record", input)
     if (remote) return "refused" in remote ? remote : remote.host.record(remote.caller, input)
-    return this.#held(caller, "record", input, (host, simulator) => host.record(simulator, input.recording))
+    return this.#held(caller, "record", input, async (host, simulator, lease) => {
+      const recorded = await host.record(simulator, input.recording)
+      // A recording for a caller under a lease goes to that lease: its file on this Mac means nothing there.
+      if (!lease || !recorded.path || !this.#leases?.artifact) return recorded
+      return { artifact: await this.#leases.artifact(lease, recorded.path, basename(recorded.path)) }
+    })
   }
 
   async release(caller: SimulatorCaller, input: SimulatorsReleaseInput): Promise<SimulatorsReleaseResult> {
@@ -277,8 +302,9 @@ export class Simulators {
     for (const id of this.#claims.keys()) this.#claim(id)
   }
 
-  /** Every screen stops streaming, and every host stops what it started. */
+  /** Every screen stops streaming, every host stops what it started, and what this host borrowed is released. */
   async close(): Promise<void> {
+    await this.#borrowing?.close?.()
     await this.#streams.close()
     await Promise.all([...this.#hosts.values()].map((host) => host.close().catch((error) => hostWarn("simulators", "host close failed", { host: host.id, error: error instanceof Error ? error.message : String(error) }))))
   }
@@ -315,7 +341,7 @@ export class Simulators {
     caller: SimulatorCaller,
     verb: string,
     input: { simulator: string; host: string },
-    work: (host: SimulatorHost, simulator: string) => Promise<Result>,
+    work: (host: SimulatorHost, simulator: string, lease?: string) => Promise<Result>,
     quiet = false
   ): Promise<Result | SimulatorRefused> {
     const found = await this.#find(caller, verb, input)
@@ -337,7 +363,7 @@ export class Simulators {
       who,
       id,
       async () => {
-        result = await work(found.host, found.simulator.id)
+        result = await work(found.host, found.simulator.id, found.lease)
       },
       quiet
     )
@@ -442,6 +468,8 @@ export class Simulators {
   async #consentFor(who: Who, caller?: SimulatorCaller): Promise<SimulatorConsent> {
     if (who.kind === "person") return "allowed"
     if (caller?.via) return this.#leases?.leaseOf(caller.via, who.thread) ? "allowed" : "refused"
+    // A cloud Thread's simulators are borrowed: the person's grant, decided at the broker, is the consent.
+    if (this.#borrowing) return "allowed"
     return consentFor(await this.#consent(), who)
   }
 
