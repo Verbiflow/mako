@@ -5230,9 +5230,22 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private occupies(edge: ThreadParent): boolean {
     if (this.starting.has(edge.op)) return true
-    const reading = this.childReading(edge)
-    if (reading.starting) return true
-    return reading.working === true && reading.awaiting === undefined && reading.waiting === undefined
+    // The same answer `childReading` gives, without building what a Fin shows: the room watch, every admission and
+    // every report ask it of each edge there is (260 on the person's Mac on 2026-11-12), and building each one's step,
+    // model and title held the host's loop for hundreds of milliseconds at a time.
+    if (edge.placed) return this.placedReading(edge).working === true
+    const run = edge.run
+    const conversation = this.askingConversation(edge.child)
+    if (run && (!run.ended || !conversation || this.runs.isTerminating(edge.child))) {
+      const reading = this.runs.reading(edge.child)
+      return Boolean(reading?.starting) || (reading?.working === true && reading.awaiting === undefined && reading.waiting === undefined)
+    }
+    if (!conversation) return false
+    const session = this.deps.live.session(conversation)
+    if (!session) return false
+    if (session.status === "starting") return true
+    // Not at work, it reads as working only while it waits on its own Fins or its move, which holds no place.
+    return this.deps.live.atWork(conversation) && this.personWaiting(conversation) === undefined
   }
 
   /** Spawns waiting for room in a place, every tree's; with none named, in every place. */

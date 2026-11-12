@@ -402,9 +402,14 @@ export class ThreadProcesses {
     })
   }
 
-  async status(app: AppKey): Promise<RunStatus[]> {
+  /**
+   * Each of the app's runs as it stands. `shown` is for a look that only shows it (a window's view of the app, asked
+   * every few seconds by each window for each folder it follows): it reads the process table shared with the marks
+   * and the Room (`sharedProcessTable`), never one of its own, which every window's view spawned and parsed apart.
+   */
+  async status(app: AppKey, options: { shown?: boolean } = {}): Promise<RunStatus[]> {
     const runs = await this.runs(app)
-    const rows = await processTable()
+    const rows = await (options.shown ? this.sharedProcessTable() : processTable())
     return Promise.all(Object.entries(runs).map(async ([key, record]): Promise<RunStatus> => {
       await trimLog(this.file(app, key, "log"))
       const status: RunStatus = {
