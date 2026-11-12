@@ -1,3 +1,4 @@
+import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "./report-actions.js"
 import { z } from "zod"
 import { LISTED_AFTER, LISTED_FINS, LISTED_WAITING_ON, type ListedFin, type ListedFinState } from "@mako/protocol/thread-listing"
 import { APEX_WORD, entryState, FIN_WORD, finsWord, LEGACY_APEX_WORD, waitingStateWords, type Brief, type ChildState } from "./agents.js"
@@ -112,7 +113,7 @@ export function briefText(brief: Brief, name: string): string {
   if (brief.doneWhen?.length) lines.push("", "Done when:", ...brief.doneWhen.map((item) => `- ${item}`))
   if (brief.boundaries?.length) lines.push("", "Boundaries:", ...brief.boundaries.map((item) => `- ${item}`))
   if (brief.output) lines.push("", `Your report carries: ${brief.output}`)
-  lines.push("", BRIEF_CLOSE)
+  lines.push("", BRIEF_CLOSE, REPORT_FOLLOW_UP_INSTRUCTIONS)
   return lines.join("\n")
 }
 
@@ -152,7 +153,7 @@ export function agentWords(text: string): AgentWords | undefined {
   const body = words
     .slice(header[0].length)
     .split("\n")
-    .filter((line) => line !== BRIEF_CLOSE && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && line.endsWith(APEX_NOTE_TAIL)))
+    .filter((line) => line !== BRIEF_CLOSE && line !== REPORT_FOLLOW_UP_INSTRUCTIONS && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && line.endsWith(APEX_NOTE_TAIL)))
     .join("\n")
     .trim()
   return { from: spoken(header[1]!), body, ...(reports.length && { reports }) }

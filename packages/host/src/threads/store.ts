@@ -1,3 +1,4 @@
+import { ReportActionSchema, ReportActionTargetSchema, ReportDispositionSchema, pendingReportAction, type ReportAction, type ReportActionTarget, type ReportActionsPage, type ReportDisposition } from "../contracts/report-actions.js"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, realpathSync, renameSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
@@ -49,7 +50,7 @@ import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
-import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
+import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, internalDiscoveredRun, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
@@ -221,6 +222,8 @@ export interface ThreadRecord {
  */
 export interface ThreadEdges {
   all: readonly ThreadParent[]
+  /** Historical discoveries reclassified as internal native reviews; only reconciliation reads these. */
+  internalRuns: readonly ThreadParent[]
   of(child: string): ThreadParent | undefined
   children(parent: string): readonly ThreadParent[]
   byOp(op: string): ThreadParent | undefined
@@ -589,6 +592,14 @@ CREATE TABLE IF NOT EXISTS thread_reports (
   wake_request TEXT, delivered_at INTEGER);
 CREATE INDEX IF NOT EXISTS thread_reports_child ON thread_reports(child_thread, at);
 CREATE INDEX IF NOT EXISTS thread_reports_waiting ON thread_reports(at) WHERE delivered_at IS NULL;
+CREATE TABLE IF NOT EXISTS agent_report_actions (
+  report TEXT PRIMARY KEY REFERENCES thread_reports(id), parent_thread TEXT NOT NULL REFERENCES threads(id),
+  child_thread TEXT NOT NULL REFERENCES threads(id), pending INTEGER NOT NULL, record TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS agent_report_actions_pending ON agent_report_actions(parent_thread, pending, child_thread);
+CREATE INDEX IF NOT EXISTS agent_report_actions_owner ON agent_report_actions(json_extract(record, '$.owner'), pending);
+CREATE TABLE IF NOT EXISTS agent_report_action_ops (
+  op TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, record TEXT NOT NULL);
+
 CREATE TABLE IF NOT EXISTS agent_spawns (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS agent_placings (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS agent_cancels (op TEXT PRIMARY KEY, at INTEGER NOT NULL);
@@ -632,14 +643,14 @@ function keptAnswer(row: Record<string, SQLOutputValue>): KeptAnswer {
 
 /**
  * The outcome of a pull request that woke a Fin waiting on it, claimed before it's delivered: the wait (its Fin, the
- * report that named the pull request, and the pull request), the outcome, and the note that carries it under the
+ * dependency's first report, pull request and observation cursor), the outcome, and the note that carries it under the
  * request it's sent as, so a host that stopped before it was delivered sends that same request once, and none sends
  * a wait's outcome twice.
  */
 export const KeptPullWakeSchema = z.object({
   wait: z.string().min(1).max(1200),
   child: ThreadIdSchema,
-  /** The report that named the pull request, and the pull request by `pullKey`: what must still stand for it to go. */
+  /** A report in the retained dependency registration, and its pull request by `pullKey`: what must still stand for it to go. */
   report: z.string().min(1).max(600),
   pull: z.string().min(1).max(300),
   outcome: z.enum(["settled", "failed", "review", "merged", "closed"]),
@@ -647,7 +658,7 @@ export const KeptPullWakeSchema = z.object({
   text: z.string().max(2_000),
   at: z.number(),
   delivered: z.object({ at: z.number(), delivery: z.enum(["turn", "steer", "queued", "interrupt"]) }).optional(),
-  /** When its wait stopped holding before its note was sent (a newer report, a stop): retired, never sent. */
+  /** When its wait stopped holding before its note was sent (withdrawal, changed condition, stop): retired, never sent. */
   obsolete: z.number().optional(),
 })
 export type KeptPullWake = z.infer<typeof KeptPullWakeSchema>
@@ -948,6 +959,7 @@ export class ThreadStore {
     const held = this.edgesSeen
     if (held && held.revision === this.revision && this.depth === 0) return held.edges
     const all: ThreadParent[] = []
+    const internalRuns: ThreadParent[] = []
     const byChild = new Map<string, ThreadParent>()
     const byParent = new Map<string, ThreadParent[]>()
     const byOp = new Map<string, ThreadParent>()
@@ -956,6 +968,8 @@ export class ThreadStore {
       const parsed = ThreadParentSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
       if (!parsed.success) continue
       const edge = parsed.data
+      // Keep the original edge and reports as history. A confirmed internal native reviewer was never delegated work.
+      if (internalDiscoveredRun(edge)) { internalRuns.push(edge); continue }
       all.push(edge)
       byChild.set(edge.child, edge)
       byOp.set(edge.op, edge)
@@ -975,6 +989,7 @@ export class ThreadStore {
       }
     const edges: ThreadEdges = {
       all,
+      internalRuns,
       of: (child) => byChild.get(child),
       children: (parent) => byParent.get(parent) ?? [],
       byOp: (op) => byOp.get(op),
@@ -998,6 +1013,8 @@ export class ThreadStore {
       const previous = kept ? ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record)) : undefined
       if (byOp && !previous) return ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(byOp).record))
       if (previous && (previous.parent !== edge.parent || previous.op !== edge.op)) return previous
+      // Reclassified discoveries are immutable history. Stale catalog/adoption or run callbacks cannot make them workers again.
+      if (previous && internalDiscoveredRun(previous)) return previous
       // The end of an edge that lives on another device has a row here only so the edge and its reports can name it:
       // a Thread with no Session, which nothing lists.
       if (edge.remote) this.keepAwayThread(edge.parent, edge.startedBy)
@@ -1016,6 +1033,16 @@ export class ThreadStore {
           record = excluded.record, closed_at = excluded.closed_at`)
         .run(next.child, next.parent, next.name, next.op, next.run?.harness ?? null, next.run?.nativeId ?? null, JSON.stringify(next), next.createdAt, next.closedAt ?? null)
       return next
+    })
+  }
+
+  /** Replace a followed run only while its persisted generation and delegation still match the caller's snapshot. */
+  keepRun(expected: ThreadParent, run: FollowedRun): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(expected.child)
+      const current = kept ? ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(kept).record)) : undefined
+      if (!current?.run || internalDiscoveredRun(current) || current.op !== expected.op || current.parent !== expected.parent || current.parentSession !== expected.parentSession || current.closedAt !== expected.closedAt || JSON.stringify(current.run) !== JSON.stringify(expected.run)) return undefined
+      return this.keepEdge({ ...current, run })
     })
   }
 
@@ -1254,6 +1281,15 @@ export class ThreadStore {
       if (newest && ReportSchema.parse(JSON.parse(RecordRowSchema.parse(newest).record)).ownerGeneration > report.ownerGeneration) return { stale: true }
       this.sql("INSERT INTO thread_reports (id, child_thread, record, at, delivered_at) VALUES (?, ?, ?, ?, ?)")
         .run(report.id, report.child, JSON.stringify(report), report.at, null)
+      if (report.followUp) {
+        const edge = this.edges().of(report.child)
+        if (!edge || edge.closedAt !== undefined || edge.placed || edge.remote || !report.action?.trim() || report.question?.trim() || (report.status !== "done" && report.status !== "failed") || report.implicit)
+          throw new ThreadOperationConflictError(report.id)
+        const action: ReportAction = ReportActionSchema.parse({ report: report.id, child: report.child, parent: edge.parent,
+          owner: edge.parent, target: report.followUp, action: report.action, version: 1, at: report.at, updatedAt: report.at, disposition: { kind: "pending" } })
+        this.sql("INSERT INTO agent_report_actions (report, parent_thread, child_thread, pending, record) VALUES (?, ?, ?, 1, ?)")
+          .run(report.id, edge.parent, edge.child, JSON.stringify(action))
+      }
       return { report, deduped: false }
     })
   }
@@ -1269,6 +1305,94 @@ export class ThreadStore {
         const parsed = ReportSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
         return parsed.success ? [parsed.data] : []
       })
+  }
+
+  /** Report questions still owned by someone: notice delivery and later narration do not answer them. */
+  openReportAsks(child: string): Report[] {
+    const reports = this.reportsOf(child)
+    const answered = new Set(this.sql("SELECT ask FROM agent_answers WHERE child_thread = ?").all(child).map((row) => z.object({ ask: z.string() }).parse(row).ask))
+    const superseded = new Set(reports.flatMap((report) => report.supersedes ?? []))
+    const latest = reports.at(-1)
+    return reports.filter((report) => (report.retainsQuestion || report === latest) && !report.implicit &&
+      (report.status === "done" || report.status === "blocked" || report.status === "needs-input") && report.question?.trim() &&
+      !answered.has(report.id) && !superseded.has(report.id))
+  }
+
+  /** A follow-up's immutable report/target plus its current exact disposition. Never a delivery receipt. */
+  reportAction(report: string): ReportAction | undefined {
+    this.syncVersion()
+    if (!this.sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_report_actions'").get()) return undefined
+    const row = this.sql("SELECT record FROM agent_report_actions WHERE report = ?").get(report)
+    return row ? ReportActionSchema.parse(JSON.parse(RecordRowSchema.parse(row).record)) : undefined
+  }
+
+  /** Bounded indexed projection. Resolved cursor rows remain addressable; clocks never determine page order. */
+  reportActions(parent: string, children: readonly string[], after?: string): ReportActionsPage {
+    this.syncVersion()
+    if (!children.length || !this.sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_report_actions'").get()) return { items: [], total: 0 }
+    return this.reportActionPage(`parent_thread = ? AND child_thread IN (${children.map(() => "?").join(",")})`, [parent, ...children], after)
+  }
+
+  /** Source Apex retains custody decisions even when source/receiver native work stops or is archived. */
+  reportActionInbox(thread: string): ReportActionsPage {
+    return this.reportActionPage("parent_thread = ? OR json_extract(record, '$.owner') = ?", [thread, thread])
+  }
+
+  /** A custodian can inspect only the explicit work assigned to itself, not sibling conversations. */
+  reportCustody(owner: string, after?: string): ReportActionsPage {
+    return this.reportActionPage("json_extract(record, '$.owner') = ? AND parent_thread <> ?", [owner, owner], after)
+  }
+
+  private reportActionPage(scope: string, args: string[], after?: string): ReportActionsPage {
+    this.syncVersion()
+    if (!this.sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_report_actions'").get()) return { items: [], total: 0 }
+    const count = z.object({ count: z.number() })
+    const total = count.parse(this.sql(`SELECT count(*) AS count FROM agent_report_actions WHERE (${scope}) AND pending = 1`).get(...args)).count
+    const cursor = after === undefined ? undefined : this.sql(`SELECT rowid AS position FROM agent_report_actions WHERE report = ? AND (${scope})`).get(after, ...args)
+    const position = cursor ? z.object({ position: z.number() }).parse(cursor).position : undefined
+    if (after !== undefined && position === undefined) throw new ThreadOperationConflictError(after)
+    const rows = this.sql(`SELECT record FROM agent_report_actions WHERE (${scope}) AND pending = 1 AND rowid > ? ORDER BY rowid LIMIT 9`).all(...args, position ?? 0)
+    const items = rows.slice(0, 8).map(row => ReportActionSchema.parse(JSON.parse(RecordRowSchema.parse(row).record)))
+    return { items, total, ...(rows.length > 8 && { next: items.at(-1)!.report }) }
+  }
+
+  hasReportActionOperation(op: string): boolean {
+    this.syncVersion()
+    return this.sql("SELECT 1 FROM agent_report_action_ops WHERE op = ?").get(op) !== undefined
+  }
+
+  /** One transaction owns the expected version and durable receipt; retries cannot settle siblings or successors. */
+  resolveReportAction(input: { parent: string; child: string; report: string; version: number; target: ReportActionTarget;
+    disposition: ReportDisposition; op: string; at: number }): { action: ReportAction; deduped?: true } {
+    const target = ReportActionTargetSchema.parse(input.target)
+    const disposition = ReportDispositionSchema.parse(input.disposition)
+    const fingerprint = JSON.stringify({ parent: input.parent, child: input.child, report: input.report, version: input.version, target, disposition })
+    return this.write(() => {
+      const prior = this.sql("SELECT fingerprint, record FROM agent_report_action_ops WHERE op = ?").get(input.op)
+      if (prior) {
+        const kept = z.object({ fingerprint: z.string(), record: z.string() }).parse(prior)
+        if (kept.fingerprint !== fingerprint) throw new ThreadOperationConflictError(input.op)
+        return { action: ReportActionSchema.parse(JSON.parse(kept.record)), deduped: true as const }
+      }
+      const current = this.reportAction(input.report)
+      const edge = this.edges().of(input.child)
+      if (!current || current.parent !== input.parent || current.child !== input.child || edge?.parent !== input.parent ||
+          current.version !== input.version || !pendingReportAction(current) || current.target.ref !== target.ref || current.target.version !== target.version)
+        throw new ThreadOperationConflictError(input.op)
+      if (disposition.kind === "supersede") {
+        const next = this.reportAction(disposition.report)
+        const position = this.sql("SELECT 1 AS newer FROM agent_report_actions a, agent_report_actions b WHERE a.report = ? AND b.report = ? AND b.rowid > a.rowid").get(input.report, disposition.report)
+        if (!next || next.parent !== current.parent || next.child !== current.child || !pendingReportAction(next) || !position)
+          throw new ThreadOperationConflictError(input.op)
+      }
+      const action = ReportActionSchema.parse({ ...current, version: current.version + 1, updatedAt: input.at, disposition,
+        ...((disposition.kind === "dispatch" || disposition.kind === "handoff") && { owner: disposition.to, custody: disposition }),
+        ...(disposition.kind === "reclaim" && { owner: current.parent, custody: undefined }) })
+      const record = JSON.stringify(action)
+      this.sql("UPDATE agent_report_actions SET pending = ?, record = ? WHERE report = ?").run(pendingReportAction(action) ? 1 : 0, record, input.report)
+      this.sql("INSERT INTO agent_report_action_ops (op, fingerprint, record) VALUES (?, ?, ?)").run(input.op, fingerprint, record)
+      return { action }
+    })
   }
 
   /** Moves with every write to this store, this host's or another's, without reading a table. */
@@ -1423,6 +1547,12 @@ export class ThreadStore {
     if (!children.length) return new Set()
     const rows = this.sql(`SELECT wait FROM agent_pull_wakes WHERE child_thread IN (${children.map(() => "?").join(", ")})`).all(...children)
     return new Set(rows.map((row) => z.object({ wait: z.string() }).parse(row).wait))
+  }
+
+  /** A Fin's durable outcome claims, including retired ones, for legacy-wait reconciliation. */
+  pullWakesFor(child: string): KeptPullWake[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM agent_pull_wakes WHERE child_thread = ? ORDER BY at, wait").all(child).map(keptPullWake)
   }
 
   /** Wakes claimed and not yet delivered to their Fin, oldest first: what a starting host sends once. */

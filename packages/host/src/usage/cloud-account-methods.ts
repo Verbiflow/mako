@@ -1,4 +1,5 @@
-import type { ClientSessionOverSockets } from "@mako/protocol"
+import type { SourceProjectCommand, SourceProjectReceipt } from "@mako/protocol/source-project"
+import type { Advertisement, ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking, type WaitingClaim } from "./cloud-account.js"
@@ -29,7 +30,7 @@ import { appPorts } from "./app-ports.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac } from "../base/platform.js"
 import { describeThisDevice } from "./device-description.js"
-import type { SourceAnswer } from "@mako/protocol/borrow"
+import type { Grant, SourceAnswer } from "@mako/protocol/borrow"
 import type { BorrowSnapshot } from "../contracts/setup.js"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
@@ -42,6 +43,8 @@ export type AccountListGap = { gap: { after: number; seq: number; why: "skipped"
 export type AccountListNotice = AccountListHeard | "account-changed" | "linked" | AccountListGap
 
 export interface CloudAccount {
+  /** Internal control transport; no caller-selected URL or clone authority. */
+  sourceProjectControl?(input: SourceProjectCommand): Promise<SourceProjectReceipt>
   /** A connection token while this Mac is signed in to Mako. */
   token(): Promise<string | undefined>
   /** The cloud's address this Mac reaches, such as `https://api.example.com`; undefined in a build without one. */
@@ -57,6 +60,8 @@ export interface CloudAccount {
   deviceId(): Promise<string | undefined>
   /** Why this Mac can't use the cloud now: signed out, or an account without it; undefined when it can. */
   cloudBlocked?(): Promise<"signed-out" | "no-cloud" | undefined>
+  /** Says what this Mac can serve and its room on its runtime's link; false while that link isn't up. */
+  advertise?(advertisement: Advertisement): boolean
   /**
    * A cloud Thread in the account, its machine working in a clone of `repository`; the same Thread when made again
    * under its ID. `prepare`: made ahead of its first message, as its person writes it; `ready` once its machine is.
@@ -148,6 +153,8 @@ export interface CloudAccount {
   /** The account's broker, for Setup: what it holds for this person, this device's answer to an ask, a revoke. */
   borrow?: {
     snapshot(since: number): Promise<BorrowSnapshot | null>
+    /** The grants that stand there, as this device advertises by them; null from a cloud that has none. */
+    grants(): Promise<Grant[] | null>
     answer(ask: string, answer: SourceAnswer): Promise<void>
     revoke(grant: string): Promise<void>
   }
@@ -210,6 +217,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   signedFiles,
   jobs,
   accessChoices,
+  advertising,
 }: {
   environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
   secrets: DomainSecrets
@@ -231,6 +239,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
    * again, as this Mac signs in or to another account, or the stream may have missed an event.
    */
   accessChoices?: { heard(answer: AccessChoicesAnswer): void; again(): void }
+  /** What this Mac can serve and its room (`Advertiser`), said as its runtime's link enrols. */
+  advertising?: { current(): Advertisement | undefined }
 }): CloudAccount {
   let status: string | undefined
   /** What the sign-ins depend on in the account: who it is and whether it has the cloud. */
@@ -311,6 +321,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     onRequest: request,
     sessions,
+    ...(advertising && { advertising }),
     // With the cloud entitlement, this Mac answers its account's other devices and the cloud through the same
     // dispatcher as its own windows: the same schemas, the same refusals, the same logs.
     runtime: {
@@ -365,6 +376,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       return state.status === "signed-in" ? state.account.id : undefined
     },
     session: () => cloud.session(),
+    sourceProjectControl: (input) => cloud.sourceProjectControl(input),
     deviceId: () => cloud.deviceId(),
     cloudBlocked: () => cloud.signInsBlocked(),
     createThread: (threadId, repository, options) => cloud.createThread(threadId, repository, options),
@@ -396,6 +408,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     unwaitMessage: (session, id) => cloud.unwaitMessage(session, id),
     claimWaiting: (session, id) => cloud.claimWaiting(session, id),
     reportSessions: () => cloud.reportSessions(),
+    advertise: (advertisement) => cloud.advertise(advertisement),
     liveSent: () => cloud.liveSent(),
     devices: () => cloud.devices(),
     cloudHarnesses: () => cloud.cloudHarnesses(),
@@ -408,6 +421,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     borrow: {
       snapshot: (since) => cloud.borrowSnapshot(since),
+      grants: () => cloud.borrowGrants(),
       answer: (ask, answer) => cloud.answerBorrowAsk(ask, answer),
       revoke: (grant) => cloud.revokeBorrowGrant(grant),
     },

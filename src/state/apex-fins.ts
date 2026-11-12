@@ -15,6 +15,7 @@ import { currentOnScreen } from "@/state/thread-sessions"
 import { threads } from "@/state/threads"
 import { threadsStore, useThreads } from "@/state/thread-store"
 import { threadGroupsStore } from "@/state/thread-groups"
+import { inboxView } from "@/state/inbox-view"
 
 const NO_CHILDREN: readonly NativeAgent[] = []
 const listedByThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, Rollup> }>()
@@ -156,7 +157,10 @@ export const useApexView = createHook(apexViewStore)
 /** Open `child` in place, inside the Apex's Thread: its live conversation, else its saved transcript. */
 export function openFinInApex(apex: string, apexTitle: string, child: NativeAgent): void {
   const { routes } = windowRoutesStore.get()
-  if (routes?.fin) return routes.fin(apex, child)
+  if (routes?.fin) {
+    inboxView.close()
+    return routes.fin(apex, child)
+  }
   const thread = child.child?.thread
   if (!thread) return
   // What will open is found first: a row with nothing behind it opens nothing, and sets no view.
@@ -164,7 +168,7 @@ export function openFinInApex(apex: string, apexTitle: string, child: NativeAgen
   const opening = finOpening(state, child)
   if (!opening) return
   apexViewStore.set({ open: { apex, apexTitle, child: thread, shown: false } })
-  if (opening.kind === "conversation") acp.activate(opening.key)
+  if (opening.kind === "conversation") acp.open(opening.key)
   else void threads.view(opening.ref, "native")
 }
 
@@ -178,7 +182,7 @@ export function backToApex(): void {
   const conversation =
     Object.values(state.conversations).find((candidate) => candidate.threadId === open.apex && candidate.sessionId === last) ??
     apexConversation(state, open.apex)
-  if (conversation) acp.activate(conversation.key)
+  if (conversation) acp.open(conversation.key)
 }
 
 /** Keeps the Fin view honest: it ends once anything else is on screen, a saved conversation with no Thread of its own too. */

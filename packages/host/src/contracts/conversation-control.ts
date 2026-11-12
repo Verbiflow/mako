@@ -27,6 +27,7 @@ export const TransferInputSchema = z.object({
   account: z.string().optional(),
   /** What its message may attach (`LiveRequest.grants`), kept with the words it carries. */
   grants: z.array(z.string().max(1024)).max(100).optional(),
+  notification: z.literal(true).optional(),
 })
 export type TransferInput = z.infer<typeof TransferInputSchema>
 /** A harness's running totals for one native session, as `NativeTotals`. */
@@ -82,7 +83,11 @@ export type ResumeVerdict =
   | { kind: "resumable"; record: "same" | "moved" | "unknown" }
   /** Something else has the session open; `by` names it for the user. */
   | { kind: "held"; by: string }
-  | { kind: "unavailable"; reason: string }
+  /**
+   * It can't be reopened. `lost`: its harness has no record of it here (its identity or source was never located), so
+   * nothing could ever resume it: a message goes on in a new session of that harness, handed the whole conversation.
+   */
+  | { kind: "unavailable"; reason: string; lost?: true }
   /**
    * The harness keeps this record closed to resumes (a Codex archive, a
    * Cursor desktop chat) and the catalog says so; continuing it starts a new

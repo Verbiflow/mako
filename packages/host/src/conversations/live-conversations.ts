@@ -7,7 +7,7 @@ import { disconnectedContext } from "../base/execution-context.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AccountRemovalSession } from "../contracts/accounts.js"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
-import type { ContextTransfer, ForkInput, TransferInput } from "../contracts/conversation-control.js"
+import type { ContextTransfer, ForkInput, ProviderBinding, TransferInput } from "../contracts/conversation-control.js"
 import type { ThreadMove } from "./continue-on.js"
 import { ASLEEP_AFTER_MS } from "../contracts/session-choice.js"
 import type { LiveActionInput } from "../contracts/live-actions.js"
@@ -827,7 +827,7 @@ export class LiveConversations {
     targetBindingId?: string,
     displayText?: string,
     actor?: Actor,
-    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants"> = {}
+    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants" | "notification"> = {}
   ): LiveRequest {
     this.admission.assert()
     const resident = this.records.require(id)
@@ -837,10 +837,14 @@ export class LiveConversations {
     if (resident.snapshot.permissions.some((permission) => permission.gone))
       resident.snapshot = { ...resident.snapshot, permissions: resident.snapshot.permissions.filter((permission) => !permission.gone) }
     this.flush(resident)
+    // A retune (`moveOn`) rides the next message that names no model of its own, once.
+    const retuned = tuning ? undefined : resident.retuned
+    tuning ??= retuned
     const request = LiveRequestSchema.parse({
       actor: this.threads.actor(actor),
       id: requestId,
       createdAt: Date.now(),
+      admissionOrder: resident.snapshot.requests.reduce((last, request) => Math.max(last, request.admissionOrder ?? 0), resident.snapshot.requests.length) + 1,
       text,
       attachments,
       tuning,
@@ -884,6 +888,7 @@ export class LiveConversations {
       throw new Error("The selected native session changed before this message was accepted")
     if (!text.trim() && !attachments.length)
       throw new Error("A prompt cannot be empty")
+    if (retuned && resident.retuned === retuned) resident.retuned = undefined
     if (resident.snapshot.session.status === "closed") this.reopenClosed(resident)
     const rested = (request.createdAt ?? Date.now()) - (resident.snapshot.requests.at(-1)?.createdAt ?? Number.POSITIVE_INFINITY)
     if (rested > ASLEEP_AFTER_MS) hostLog("residency", "a message reaches a session asleep a day or more", { conversation: id, request: requestId, restedMs: rested })
@@ -922,6 +927,7 @@ export class LiveConversations {
         tuning,
         displayText,
         ...marks.grants && { grants: marks.grants },
+        ...marks.notification && { notification: marks.notification },
       }, actor)
       return request
     }
@@ -937,8 +943,12 @@ export class LiveConversations {
    */
   private reopenClosed(resident: Resident): void {
     if (resident.closing || resident.driver) throw new Error("This conversation is still closing. Send again in a moment.")
-    if (!launched(activeBinding(resident))) throw new Error("This conversation was closed before it started a session. Start a new conversation to carry on.")
-    resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, status: "ready", connection: "hibernated", error: undefined } }
+    const binding = activeBinding(resident)
+    if (!binding?.nativeId) throw new Error("This conversation was closed before it started a session. Start a new conversation to carry on.")
+    // A session whose records were never located opens through a transfer instead, which finds them or hands a new
+    // session of its harness the conversation (`LiveTransfers.perform`): a wake could only fail.
+    const connection = launched(binding) ? "hibernated" : "disconnected"
+    resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, status: "ready", connection, error: undefined } }
     hostLog("residency", "a closed conversation reopens for a new message", { conversation: resident.snapshot.session.id })
   }
 
@@ -1222,16 +1232,26 @@ export class LiveConversations {
     if (!stays) return this.transfers.accept(id, { id: move.id, provider: to.harness, text: "", attachments: [], ...(to.tuning && { tuning: to.tuning }), ...(to.modeId && { modeId: to.modeId }), ...(to.account && { account: to.account }) }, this.threads.actor(actor), undefined, { wanted, ...(move.first !== undefined && { first: move.first }) })
     const previous = resident.snapshot
     const control = conversationControl(resident)
+    // A move that names a model on the harness it's on retunes the session: its binding and settings take it, so a
+    // reopening launches on it, and the next message that names none carries it into the process running now.
+    const retune = to.tuning
+    const pinned = (binding: ProviderBinding): ProviderBinding => binding.id !== control.activeBindingId ? binding
+      : { ...binding, ...(to.account && { account: to.account }), ...(retune && { tuning: retune }) }
     resident.snapshot = {
       ...previous,
       requests: arriving(previous.requests, { harness: to.harness, account: to.account, tuning: to.tuning }, false, move.first),
-      control: { ...control, bindings: to.account ? control.bindings.map((binding) => (binding.id === control.activeBindingId ? { ...binding, account: to.account } : binding)) : control.bindings },
+      ...(retune && { session: { ...previous.session, settings: retune } }),
+      control: { ...control, bindings: to.account || retune ? control.bindings.map(pinned) : control.bindings },
     }
     try {
       this.flush(resident)
     } catch (error) {
       resident.snapshot = previous
       throw error
+    }
+    if (retune) {
+      resident.retuned = retune
+      hostLog("transfer", "a Thread is retuned on its harness", { conversation: id, harness: to.harness, model: retune.model ?? "" })
     }
     this.release(resident)
     return resident.snapshot
@@ -1565,9 +1585,9 @@ export class LiveConversations {
    * Stops the running turn and sends this message as the next one, ahead of what was queued, which follows it in
    * order; with no turn running it goes as the next message, like any. Answers whether it stopped a turn.
    */
-  interrupt(id: string, requestId: string, text: string, attachments: PromptAttachment[], actor?: Actor, grants?: string[]): boolean {
+  interrupt(id: string, requestId: string, text: string, attachments: PromptAttachment[], actor?: Actor, grants?: string[], notification?: true): boolean {
     const running = this.activeRequest(id)
-    this.submit(id, requestId, text, attachments, undefined, undefined, undefined, actor, { ...grants && { grants } })
+    this.submit(id, requestId, text, attachments, undefined, undefined, undefined, actor, { ...grants && { grants }, ...notification && { notification } })
     if (!running) return false
     this.stopFor(id, running, requestId, "person")
     return true

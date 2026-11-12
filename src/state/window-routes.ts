@@ -4,6 +4,7 @@ import { stage } from "@/state/stage"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { AcpPresence } from "@/state/acp-presence"
 import { createHook, createStore } from "@/state/store"
+import { inboxView } from "@/state/inbox-view"
 
 /**
  * How a window opens what its rail and its tab strip point at. The desktop
@@ -53,6 +54,8 @@ export function toggleAgentsPanel(): void {
 /** Open a listed conversation: in place on the desktop, at its address where the window routes. */
 export function openConversation(presence: AcpPresence): void {
   const { routes } = windowRoutesStore.get()
-  if (routes) routes.open(presence)
-  else acp.activate(presence.key)
+  if (routes) {
+    inboxView.close()
+    routes.open(presence)
+  } else acp.open(presence.key)
 }

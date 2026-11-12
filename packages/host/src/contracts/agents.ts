@@ -1,4 +1,6 @@
+import { ReportActionTargetSchema } from "./report-actions.js"
 import { z } from "zod"
+import { NativeAgentOriginSchema } from "@mako/sessions/native-agent-origin"
 import { ACCESS_TIER_NAMES, accessModeId, type AccessTier } from "./access.js"
 import { ASK_OPTIONS, AskOptionSchema, CHILDREN_BINDING, WAITING_ON_LIMIT, WaitingOnSchema, type ChildStateReading, type FinAnswered, type FinAsk, type FinDecision, type NativeAgent, type WaitingOn } from "./native-agents.js"
 import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"
@@ -227,7 +229,7 @@ export function waitingWords(items: readonly WaitingOn[] | undefined): string | 
     return repository ? [repository] : []
   }))
   const words = items.map((item) => {
-    if (item.kind === "other") return item.text.trim()
+    if (item.kind === "other") return `${item.text.trim()} (no automatic wake)`
     if (item.kind === "person") return `the person to ${item.what.trim()}`
     const pull = pullRef(item.ref)
     const repository = item.repository ?? pull?.repository
@@ -244,7 +246,7 @@ export function waitingWords(items: readonly WaitingOn[] | undefined): string | 
  */
 export function waitingStateWords(items: readonly WaitingOn[], since: number | undefined, now: number | undefined): string {
   const words = items.map((item) => {
-    if (item.kind === "other") return item.text.trim()
+    if (item.kind === "other") return `${item.text.trim()} (no automatic wake)`
     if (item.kind === "person") return `the person to ${item.what.trim()}`
     const pull = pullRef(item.ref)
     const repository = item.repository ?? pull?.repository
@@ -319,6 +321,8 @@ export function idleFor(state: ChildState, at: number, now: number): number | un
  */
 export const FollowedRunSchema = z.object({
   harness: z.string().min(1).max(64),
+  /** Native origin retained on historical discoveries, even once they leave the managed Fin lifecycle. */
+  nativeAgent: NativeAgentOriginSchema.optional(),
   /** Its harness's ID for its Session, once known. */
   nativeId: z.string().min(1).max(512).optional(),
   /** The device it runs on: only that device's hosts can see its process. */
@@ -438,6 +442,11 @@ export const ThreadParentSchema = z.object({
 })
 export type ThreadParent = z.infer<typeof ThreadParentSchema>
 
+/** An old discovery of a provider's internal reviewer is history, never a managed delegation. */
+export function internalDiscoveredRun(edge: ThreadParent): boolean {
+  return edge.origin === "discovered" && edge.run?.nativeAgent?.kind === "internal-review"
+}
+
 /**
  * Whether a Fin is listed inside its Apex's Thread on this device. One whose Apex runs on another device
  * (`ThreadParent.remote`) has no such Thread here to be listed in, so on this device it's a Thread of its own, in the
@@ -476,6 +485,10 @@ export const ReportSchema = z.object({
   artifacts: z.array(ArtifactSchema).max(64).optional(),
   /** What it waits on, for `blocked` and `needs-input`; on `done`, the decision its finished work leaves. */
   question: z.string().max(4_000).optional(),
+  /** New explicit report questions persist independently of later narration. Absent in legacy reports. Host-owned. */
+  retainsQuestion: z.literal(true).optional(),
+  /** This Fin explicitly withdraws/replaces these report questions; an unrelated report settles nothing. */
+  supersedes: z.array(z.string().min(1).max(600)).max(8).optional(),
   /** Who decides a done report's question (`decisionOn`): its Apex when absent, or the person. */
   decides: z.enum(["apex", "person"]).optional(),
   /**
@@ -489,6 +502,8 @@ export const ReportSchema = z.object({
   recommended: z.number().int().nonnegative().optional(),
   /** What whoever answers does, in one sentence: "Pick the branch the release goes from." */
   action: z.string().max(400).optional(),
+  /** Explicit action-only follow-through. Questions retain their existing ask identity instead. */
+  followUp: ReportActionTargetSchema.optional(),
   /** Its Apex left its question to the person (`agents_answer` with `person`), or it was the person's from the start. */
   for: z.literal("person").optional(),
   /** The person's ask its Apex is told of though it can't answer it: an approval under an Apex below full access. */

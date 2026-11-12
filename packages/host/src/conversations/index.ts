@@ -78,7 +78,7 @@ export { OwnerFiles } from "./owner-files.js"
 export { ListedRepositories } from "./listed-repositories.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudContinues } from "./cloud-continues.js"
-export { CloudHandOffs, workingThreads } from "./cloud-handoffs.js"
+export { CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, workingThreads } from "./cloud-handoffs.js"
 export { conversationShown, finAsking, ownedSessions, sessionOrderIn, REPORT_WORK, SessionPublisher, SessionReporter, type FinAsking, type ReportSources, type SessionLink } from "./session-report.js"
 export { MovesUnderWay } from "./moves-under-way.js"
 export { CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, turnOnOf, type TurnOnReading, type TurnOnSources } from "./cloud-turn-on.js"
@@ -100,6 +100,11 @@ export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 export { Agents } from "./agents.js"
 export { AgentAnswerSchema, declareAgentMethods, registerAgentTools } from "./agent-tools.js"
+export { AgentAskGate, declareAgentAskMethods } from "./agent-ask-gate.js"
+export { ThreadActTool, declareThreadActMethods } from "./thread-act-tool.js"
+export { SettingsTool, declareSettingsMethods } from "./settings-tool.js"
+export { HarnessTool, declareHarnessToolMethods } from "./harness-tool.js"
+export { AutomationTool, declareAutomationToolMethods } from "./automation-tool.js"
 export { ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, threadToolText, type ThreadToolDoor } from "./thread-move-tool.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
@@ -187,6 +192,8 @@ export interface ConversationsDeps {
   builds?(): { slots: number; holders: string[] }
   /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
   finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
+  /** Operations this device runs for another place's Threads (`LentHere`): each takes a Fin's place here. */
+  lent?: () => number
   /**
    * The Mako account this host is signed in to, through which it reaches the person's other devices: with it a Fin can
    * be placed on one, and one placed here reports to its Apex's device. Without it Fins start here only.
@@ -314,6 +321,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const continueOn = continuing({
     live,
     resolveLaunch: (provider, cwd, tuning) => harnesses.profiles.resolveLaunch(provider, cwd, tuning),
+    carried: (provider, cwd, tuning) => harnesses.profiles.carried(provider, cwd, tuning),
     resumesUnderAccount: (harness) => host.liveDrivers.get(harness)?.accountContinuation?.kind === "resumes",
     switched: (provider) => deps.telemetry.feature("harness.switched", provider),
   })
@@ -374,6 +382,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
         const saved = await deps.invoke("mako:harness-order-saved", [])
         return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))
       },
+      ...(deps.lent && { lent: deps.lent }),
       ...(deps.finCapacity && {
         finLimit: () => deps.finCapacity!.atOnce(),
         observeCapacity: (working: number, mix: Readonly<Record<string, number>>, fins?: readonly { conversation: string; harness: string }[]) => deps.finCapacity!.observe(working, mix, fins),

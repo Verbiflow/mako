@@ -726,7 +726,7 @@ async function reviewed(): Promise<void> {
     await f.world.close()
   }
   {
-    // A failed answer doesn't reopen a question another message closed, while its Fin works on and no later report does.
+    // A failed answer doesn't reopen a question the person's delivered message closed while its Fin works on.
     let finConversation = ""
     const f = await fixture("codex", { script: async (turn) => {
       if (turn.text.includes("You're fin:")) finConversation = turn.conversation
@@ -755,7 +755,7 @@ async function reviewed(): Promise<void> {
     }
     const first = f.world.agents.answer(f.apex.caller, { to: "labels", answer: "first-answer", clientKey: "first" })
     await until("the answer to wait", () => entered)
-    assert.ok(!("refused" in await f.world.agents.send(f.apex.caller, { to: "labels", text: "another-message", clientKey: "other" })))
+    f.world.say(conversation, "another-message")
     await until("the other message's turn", () => f.world.live.session(conversation)?.status === "running")
     release()
     assert.ok("refused" in await first, "the first answer failed")
@@ -836,7 +836,7 @@ async function reviewed(): Promise<void> {
   }
 }
 
-/** What the second review reproduced: text is never a grant, and a question closes when input is delivered, from anyone. */
+/** Text is never a grant; a person's delivered input answers, while retained questions require exact agent answers. */
 async function grantsAndQuestions(): Promise<void> {
   {
     // What a Thread holds is what was stored, read apart from anything that escapes an agent's words on their way in.
@@ -921,7 +921,7 @@ async function grantsAndQuestions(): Promise<void> {
     await f.world.close()
   }
   {
-    // A person's message delivered closes the question, as an Apex's does: a later answer isn't sent into their turn.
+    // A person's delivered message closes the question: a later answer isn't sent into their turn.
     const f = await fixture("codex", { script: async (turn) => (turn.text.includes("person-words") ? turn.world.hold(turn.conversation).then(() => "Done.") : "Done.") })
     await f.world.settle(40, 20_000, "ignore")
     const conversation = f.world.live.summaries().find((summary) => summary.session.harness === "codex")!.session.id
@@ -985,8 +985,7 @@ async function grantsAndQuestions(): Promise<void> {
     await f.world.close()
   }
   {
-    // A steer the harness took is delivered too, so with the question heard, it answers it; what Mako sends by itself
-    // isn't anyone answering.
+    // An unlinked agent steer is delivered but doesn't resolve a retained question; its exact answer still goes.
     const f = await fixture("claude", { hold: true, apex: "codex" })
     await until("its turn", () => f.world.live.session(f.fin().conversation)?.status === "running")
     const { conversation } = f.fin()
@@ -994,8 +993,10 @@ async function grantsAndQuestions(): Promise<void> {
     await until("the question to reach its Apex", () => f.world.prompts.some((prompt) => prompt.conversation === f.apex.conversation && prompt.text.includes("Which one?")))
     assert.ok(!("refused" in await f.world.agents.send(f.apex.caller, { to: "labels", text: "steered-words", deliver: "steer", clientKey: "steer" })))
     await until("the steer", () => f.world.steers.some((steer) => steer.text.includes("steered-words")))
-    const late = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "steered-late", clientKey: "late" })
-    assert.ok("refused" in late && late.refused === "conflict", JSON.stringify(late))
+    const pending = f.world.store.openReportAsks(f.fin().child)
+    assert.equal(pending.length, 1, "delivery of the unlinked steer cannot settle the retained question")
+    const late = await f.world.agents.answer(f.apex.caller, { to: "labels", ask: pending[0]!.id, answer: "steered-late", clientKey: "late" })
+    assert.ok(!("refused" in late) && late.ask === pending[0]!.id, JSON.stringify(late))
     f.world.release(conversation)
     await f.world.settle(40, 20_000, "ignore")
     await f.world.close()

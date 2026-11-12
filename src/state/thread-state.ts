@@ -33,7 +33,8 @@ export interface ViewedThread extends Omit<Thread, "entries"> {
   pageStart: number
   totalEntries: number
   hasEarlier: boolean
-  loadingEarlier?: boolean
+  /** The earlier-page operation whose busy state this view carries. */
+  loadingEarlier?: symbol
   streamRevision?: number
   streamReplaceFrom?: number
   /**

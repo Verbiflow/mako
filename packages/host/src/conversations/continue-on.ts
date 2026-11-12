@@ -51,6 +51,11 @@ export interface ContinueOnDeps {
   resumesUnderAccount?(harness: string): boolean
   /** The selection as the harness takes it (`HarnessProfiles.resolveLaunch`). */
   resolveLaunch(provider: string, cwd: string | undefined, tuning: SessionSettings | undefined): Promise<SessionSettings | undefined>
+  /**
+   * A selection carried onto another harness as that harness lists it (`HarnessProfiles.carried`): never a model it
+   * doesn't list, nor another harness's encoding of one, which it would refuse at every send.
+   */
+  carried?(provider: string, cwd: string | undefined, tuning: SessionSettings | undefined): Promise<SessionSettings | undefined>
   /** Counts a harness switched to (`HostTelemetry.feature`). */
   switched(provider: string): void
 }
@@ -87,9 +92,12 @@ export function continueOn(deps: ContinueOnDeps): ContinueOn {
     const { provider, tuning: asked } = destination(continuation)
     // A reply to the active binding sends what it would with or without the history; a read that fails doesn't refuse it.
     const history = continuation.kind === "reply" ? live.historyReady(id).catch(() => undefined) : live.historyReady(id)
-    const ready = Promise.all([deps.resolveLaunch(provider, before?.cwd, asked), history]).then(([tuning]) => tuning)
+    // Onto another harness, what was chosen on the one it leaves goes only as far as the target lists it.
+    const fitted = before && before.harness !== provider && deps.carried ? deps.carried(provider, before.cwd, asked) : Promise.resolve(asked)
+    const ready = Promise.all([fitted.then((tuning) => deps.resolveLaunch(provider, before?.cwd, tuning)), history]).then(([tuning]) => tuning)
     const admitted = await live.admitInOrder(id, ready, (tuning) => {
-      const withTuning = { ...tuning && { tuning } }
+      // The resolved selection replaces what was asked, an empty one too: what the target doesn't list never rides along.
+      const withTuning = { tuning }
       if (continuation.kind === "move") {
         const { move } = continuation
         return live.moveOn(id, { ...move, to: { ...move.to, ...withTuning } }, stays(before?.harness, move.to), actor, () => !stoppedSince() && (stillDecided?.() ?? true))

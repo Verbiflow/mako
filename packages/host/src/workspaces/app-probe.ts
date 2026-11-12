@@ -17,6 +17,8 @@ const LSOF_BYTES = 16 * 1024 * 1024
 const REPORT_LIMIT = 40
 /** Paths kept for each changed folder, to name what changed in it. */
 const PATHS_KEPT = 20
+/** The most a placing of a history read runs before letting the host's loop turn. */
+const PLACE_SLICE_MS = 8
 /** Paths an agent's report names per folder; the desk shows them all. */
 const PATHS_SAID = 5
 /**
@@ -232,14 +234,58 @@ async function rootsOf(home: string): Promise<Roots> {
 
 /** The folder a path counts under: one level into a watched or sealed folder or /tmp, or at the top of home; and where in it. */
 function folderOf(path: string, roots: Roots): { folder: string; inner: string } | undefined {
+  // By prefix, not `relative`: a history read places every path it holds, and `relative` resolves both sides each time.
   for (const root of [...roots.history, ...roots.sealed]) {
-    if (path === root || !within(path, root)) continue
-    const [name, ...rest] = relative(root, path).split(sep)
-    return { folder: join(root, name!), inner: rest.join(sep) }
+    const below = under(path, root)
+    if (below !== undefined) return split(root, below)
   }
-  if (path === roots.home || !within(path, roots.home)) return undefined
-  const [name, ...rest] = relative(roots.home, path).split(sep)
-  return name === "Library" ? undefined : { folder: join(roots.home, name!), inner: rest.join(sep) }
+  const below = under(path, roots.home)
+  if (below === undefined) return undefined
+  const at = split(roots.home, below)
+  return at.folder === join(roots.home, "Library") ? undefined : at
+}
+
+/** What follows `root` in `path`, when `path` is strictly inside it; both absolute and normalized. */
+function under(path: string, root: string): string | undefined {
+  const prefix = root.endsWith(sep) ? root : `${root}${sep}`
+  if (!path.startsWith(prefix)) return undefined
+  const rest = path.slice(prefix.length).replace(/\/+$/, "")
+  return rest || undefined
+}
+
+function split(root: string, below: string): { folder: string; inner: string } {
+  const end = below.indexOf(sep)
+  return end < 0 ? { folder: join(root, below), inner: "" } : { folder: join(root, below.slice(0, end)), inner: below.slice(end + 1) }
+}
+
+/** Paths a history read placed in the folders they count under, once for every app that shares the read; between turns of the host's loop. */
+async function placed(paths: readonly string[], capped: readonly string[], roots: Roots): Promise<Map<string, Changed>> {
+  const changed = new Map<string, Changed>()
+  const kept = new Map<string, Set<string>>()
+  const place = (path: string, more: boolean) => {
+    const at = folderOf(path, roots)
+    if (!at) return
+    let entry = changed.get(at.folder)
+    if (!entry) changed.set(at.folder, (entry = { paths: [] }))
+    if (more) entry.more = true
+    if (!at.inner) return
+    const seen = kept.get(at.folder) ?? new Set<string>()
+    kept.set(at.folder, seen)
+    if (seen.has(at.inner)) return
+    seen.add(at.inner)
+    if (entry.paths.length < PATHS_KEPT) entry.paths.push(at.inner)
+    else entry.more = true
+  }
+  let sliceStart = performance.now()
+  for (const [index, path] of paths.entries()) {
+    place(path, false)
+    if (index % 256 === 255 && performance.now() - sliceStart > PLACE_SLICE_MS) {
+      await new Promise((resume) => setImmediate(resume))
+      sliceStart = performance.now()
+    }
+  }
+  for (const folder of capped) place(folder, true)
+  return changed
 }
 
 function note(changed: Record<string, Changed>, folder: string, inner: string): void {
@@ -313,12 +359,15 @@ async function refresh(apps: Traced[], { history, home = homedir(), open }: { hi
     const groups = new Map<string, typeof marked>()
     for (const app of marked) groups.set(app.trace.mark!.id, [...(groups.get(app.trace.mark!.id) ?? []), app])
     for (const group of groups.values()) {
-      const found = await history.since(group[0]!.trace.mark!, roots.history).catch(() => undefined)
+      // The child sends a few paths of each folder, never every path a busy day changed (`perFolder`).
+      const found = await history.since(group[0]!.trace.mark!, roots.history, { perFolder: PATHS_KEPT }).catch(() => undefined)
       if (!found) continue
+      const changed = await placed(found.paths, found.capped ?? [], roots)
       for (const app of group) {
-        for (const path of found.paths) {
-          const place = folderOf(path, roots)
-          if (place) note(app.trace.changed, place.folder, place.inner)
+        for (const [folder, entry] of changed) {
+          note(app.trace.changed, folder, "")
+          for (const inner of entry.paths) note(app.trace.changed, folder, inner)
+          if (entry.more) app.trace.changed[folder]!.more = true
         }
         if (found.lost.length) app.trace.lost = [...new Set([...(app.trace.lost ?? []), ...found.lost])]
         app.trace.mark = now

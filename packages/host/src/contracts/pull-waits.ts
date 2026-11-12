@@ -11,6 +11,8 @@ export type PullWaitUntil = "checks" | "review" | "merge"
 export interface PullReading {
   state: "open" | "merged" | "closed"
   url: string
+  /** Head observed with this check rollup. A wake is a snapshot of it, never authorization to merge the later head. */
+  head?: string
   /** Its author's login: their own review comments are replies, not a review. */
   author?: string
   checks: { name: string; state: "passed" | "failed" | "running" | "unknown"; at?: number }[]
@@ -31,7 +33,8 @@ export type PullOutcome =
 /**
  * The outcome a wait since `since` (its report's time) sees in `reading`, matched to `until`: merged or closed ends
  * every wait; `review` takes a review submitted since, by anyone but the author; `checks` takes its checks settled,
- * once one of them finished since, or a check that failed since while others run. Undefined while nothing it waits
+ * or a check that failed while others run, even if it finished before the report. The reader supplies the current
+ * head's checks: registering a wait doesn't mean the Fin already knows their outcome. Undefined while nothing it waits
  * for happened.
  */
 export function pullOutcome(reading: PullReading, until: PullWaitUntil | undefined, since: number): PullOutcome | undefined {
@@ -49,12 +52,9 @@ export function pullOutcome(reading: PullReading, until: PullWaitUntil | undefin
   if (!checks.length) return undefined
   const running = checks.filter((check) => check.state === "running" || check.state === "unknown").length
   const failed = checks.filter((check) => check.state === "failed")
-  // Checks that all finished before the wait began are an earlier push's, or what the Fin already knew.
-  if (!running) return checks.some((check) => check.at === undefined || check.at >= since)
-    ? { kind: "settled", passed: checks.length - failed.length, failed: failed.map((check) => check.name) }
-    : undefined
-  const fresh = failed.filter((check) => check.at !== undefined && check.at >= since).sort((left, right) => left.at! - right.at!)[0]
-  return fresh ? { kind: "failed", check: fresh.name, running } : undefined
+  if (!running) return { kind: "settled", passed: checks.length - failed.length, failed: failed.map((check) => check.name) }
+  const first = failed[0]
+  return first ? { kind: "failed", check: first.name, running } : undefined
 }
 
 const NAMED_CHECKS = 4
@@ -79,16 +79,16 @@ function outcomeWords(outcome: PullOutcome): string {
 }
 
 /** The one line Mako wakes the Fin with: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e). <url>". */
-export function pullWakeNote(pull: string, url: string | undefined, outcome: PullOutcome): string {
-  return `${PULL_WAKE_HEAD}${pull} ${outcomeWords(outcome)}.${url ? ` ${url}` : ""}`
+export function pullWakeNote(pull: string, url: string | undefined, outcome: PullOutcome, head?: string): string {
+  return `${PULL_WAKE_HEAD}${pull} ${outcomeWords(outcome)}${head ? `; observed head ${head}` : ""}.${url ? ` ${url}` : ""}`
 }
 const PULL_WAKE_HEAD = "Mako: PR "
 const OUTCOME_WORDS = String.raw`checks settled: (?:all \d+ passed|1 passed|\d+ failed \([^\n)]*\))|check failed: [^\n]+?|review: \S+ (?:approved|requested changes|commented)|merged|closed without merging`
-const PULL_WAKE = new RegExp(String.raw`^Mako: PR ([\w.-]+\/[\w.-]+#\d+|#\d+) (${OUTCOME_WORDS})\.(?: (https?:\/\/\S+))?$`)
+const PULL_WAKE = new RegExp(String.raw`^Mako: PR ([\w.-]+\/[\w.-]+#\d+|#\d+) (${OUTCOME_WORDS})(; observed head [a-f0-9]{40,64})?\.(?: (https?:\/\/\S+))?$`)
 
 /** A wake's note read back from its words, as a saved transcript keeps it: what its event line says, and the link. */
 export function pullWakeWords(text: string): { line: string; url?: string } | undefined {
   const found = PULL_WAKE.exec(text.trim())
   if (!found) return undefined
-  return { line: `${PULL_WAKE_HEAD}${found[1]} ${found[2]}.`, ...(found[3] && { url: found[3] }) }
+  return { line: `${PULL_WAKE_HEAD}${found[1]} ${found[2]}${found[3] ?? ""}.`, ...(found[4] && { url: found[4] }) }
 }

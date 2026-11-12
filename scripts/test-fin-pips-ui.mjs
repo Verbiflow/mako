@@ -131,7 +131,7 @@ async function check() {
   assert.equal(rail.height, 44, "the Apex's row is two lines, 44 px")
   const asking = orderedChildren(roster).filter((agent) => childGroup(childStateOf(agent)) === "needs")
   assert.deepEqual(rail.asking.map((row) => row.thread), asking.map((agent) => agent.child.thread), "the Fins that need you hang under the Apex, oldest first")
-  for (const row of rail.asking) assert.match(row.text, /Needs you$/)
+  for (const row of rail.asking) assert.match(row.text, /Needs you \S/, `${row.text}: Needs you, then what it needs`)
   for (const agent of roster) if (!asking.includes(agent)) assert.ok(!rail.rail.includes(agent.title), `no other Fin is in the rail: ${agent.title}`)
   await capture("desktop-dark.png")
 
@@ -157,7 +157,8 @@ async function check() {
   const after = rail.rows.filter((row) => row.key !== `fin:${working.child.thread}`)
   assert.deepEqual(after.map((row) => row.key), before.map((row) => row.key), "every other row keeps its order")
   const top = rail.rows[nested].top
-  for (const [index, row] of after.entries()) assert.equal(row.top - before[index].top, row.top > top ? 28 : 0, `${row.key} moves by the nested row alone`)
+  // An asking Fin's row is two lines, its name and "Needs you" over what it needs: 44 px.
+  for (const [index, row] of after.entries()) assert.equal(row.top - before[index].top, row.top > top ? 44 : 0, `${row.key} moves by the nested row alone`)
   await capture("desktop-asking-dark.png")
 
   // Answered, it leaves the rail and the rows go back.

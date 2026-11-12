@@ -134,6 +134,11 @@ export interface Resident {
   idleTimer?: ReturnType<typeof setTimeout>
   /** Intentional transport teardown; prompts accepted during it wake afterwards. */
   hibernating?: Promise<void>
+  /**
+   * A model, reasoning or fast its own harness's session takes from the next message on (a move to the harness it's on,
+   * `moveOn`): the process running now was started on what it had, so the next message that names none carries this.
+   */
+  retuned?: SessionSettings
   /** One coalesced resume for every prompt that arrives while hibernated. */
   waking?: Promise<void>
   /** At most one automatic account reopen for an input proven unsent. */
@@ -230,8 +235,8 @@ export interface ConversationChildren {
   inputDelivered?(conversation: string, input: Pick<LiveRequest, "id" | "text" | "actor"> & Partial<Pick<LiveRequest, "digest" | "continues" | "goal">>, delivery: "turn" | "steer"): void
   /** Whether the conversation's Thread is an Apex: it has Fins or queued spawns, or was started as one. */
   isApex(conversation: string): boolean
-  /** What an Apex hears before a message the person sends it: its Fins as they stand and how to route it (`frontDoorNote`); nothing for any other message or Thread. */
-  frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
+  /** The person's front door, or the precedence of newer instructions that overtook an agent's queued message. */
+  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance?: boolean): string[]
   /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
   ruleLines(conversation: string): RoleRuleLines
   /** Whether a turn of the conversation a usage limit cut may go on now: a Fin's takes a place as anything else does. */

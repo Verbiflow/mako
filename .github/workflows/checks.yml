@@ -266,8 +266,17 @@ jobs:
       # A Fin waiting on a pull request is woken once per outcome, never its Apex, across restarts; GitHub is a stub.
       - run: npm run test:fin-pull-waits
       - run: npm run test:fin-resume
+      - run: npm run test:fin-reopen
       # A host starting reads each Fin's journal in slices as it resumes them, never all of them at once.
       - run: npm run test:resume-holds
+        id: resume_holds
+      # Evidence only after that exact required step failed; its failure remains the job result.
+      - name: Diagnose failed resume hold (evidence only)
+        if: ${{ failure() && steps.resume_holds.outcome == 'failure' }}
+        timeout-minutes: 3
+        run: node --import tsx scripts/diagnose-resume-holds.mjs
+        env:
+          MAKO_RESUME_DIAGNOSTICS: "1"
       # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
       - run: npm run test:fin-states
 
@@ -324,8 +333,11 @@ jobs:
       # The person's steer lands within a second on each landing, on a cloud Thread too, and the case of 2026-11-03.
       - run: npm run test:steer-landing
       - run: npm run test:agents-doors
+      # An Apex of 57 Fins streams without its row's check of them holding the loop (2026-11-12's holds of 0.3-0.6 s a batch).
+      - run: npm run bench:person-ask
       - run: npm run test:agents-cli
       - run: npm run test:thread-move-tool
+      - run: npm run test:thread-act-tool
       - run: npm run test:orch-update
       # A Fin placed on another device: two hosts through the protocol's gateway, its start settled by its op, its
       # notices kept until its Apex's device takes them (off, restarted, sent twice, from a stale owner), and its Apex's

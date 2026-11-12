@@ -394,6 +394,7 @@ export function installMockBridge() {
   let wakeApex: (() => void) | undefined
   const respondCalls: Array<AgentsRespondInput & { conversation: string }> = []
   const agentAskAnswers: Array<{ conversationId: string; ask: string; allow: boolean }> = []
+  const returnCalls: string[] = []
   let refuseNextAgentAnswer = false
   const continueCalls: string[] = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
@@ -544,6 +545,8 @@ export function installMockBridge() {
       /** The person's answers to Fins' asks, as the Apex's host heard them. */
       responds: () => [...respondCalls],
       agentAsks: () => [...agentAskAnswers],
+      /** The moves back this window asked of its host. */
+      returns: () => [...returnCalls],
       /** The host refuses the next answer to an agent's ask, as one whose allowed action failed. */
       refuseNextAgentAnswer: () => void (refuseNextAgentAnswer = true),
       /** The Apex's own agent asks now, as the host's control-only batch says it. */
@@ -1095,11 +1098,13 @@ export function installMockBridge() {
       }
       agentAskAnswers.push({ conversationId, ask, allow })
       const snapshot = liveSnapshots.get(conversationId)
-      if (!snapshot?.control) return
+      const pending = snapshot?.control?.asks?.find((each) => each.id === ask)
+      if (!snapshot?.control || !pending) return { outcome: "missing", ask } as const
       const control = { ...snapshot.control, asks: snapshot.control.asks?.filter((each) => each.id !== ask) }
       const next = { ...snapshot, revision: snapshot.revision + 1, control }
       liveSnapshots.set(conversationId, next)
       emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversationId, revision: next.revision, updates: [], control })) })
+      return { outcome: "answered", ask, allow, want: pending.want } as const
     },
     threadChanges: async () => null,
     changeUsage: async () => null,
@@ -3218,6 +3223,7 @@ export function installMockBridge() {
     },
     /** A fixture's way back: its steps a moment apart, as a real one takes them. */
     threadReturn: async (conversationId: string, move: string, options?: ThreadReturnOptions) => {
+      returnCalls.push(conversationId)
       const step = (next: ThreadReturnStep) => emit({ type: "thread-return-step", conversationId, move, step: next })
       if (mockReturnOutdated.value === "project-gone") {
         // Refused before the cloud is asked anything, until the person chooses where the project is now.
