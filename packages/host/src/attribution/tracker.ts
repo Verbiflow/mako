@@ -155,6 +155,8 @@ const RESCAN_MAX_MS = 10 * 60_000
 const RESCAN_QUIET_MS = 15 * 60_000
 /** After each rescan, any root's next waits this many times as long as it ran: rescans take at most a twentieth of the time. */
 const RESCAN_REST = 19
+/** How many times `whatWasHeard` journals what flushing turned up (a folder that came stands for its files) before it answers. */
+const HEARD_PASSES = 3
 /** Spacing past which a root is reported as rescanned less often because its losses keep coming. */
 const BACKED_OFF_MS = 60_000
 
@@ -1852,7 +1854,18 @@ export class LaptopTracker implements AttributionTracker {
     if (!more && !this.pending.size) this.evidence.prune(now - SETTLE_MS - this.lateMs())
   }
 
-  async settled(): Promise<void> {
+  /**
+   * Every change heard so far journaled. With `rescans: false` (a turn's
+   * count), only what was heard: a rescan waiting out its spacing keeps
+   * waiting, and a root rescanning now isn't waited for. A turn ends about
+   * once a minute on a busy Mac. Each ended turn used to rescan every root
+   * that had lost events, back to back with no rest, and wait until none was
+   * left. While fseventsd stayed behind, that could go on for good: the
+   * shared journal's caller gave up at 15 s, and the walks and the stat
+   * cache's writes held the host's loop.
+   */
+  async settled(options: { rescans?: boolean } = {}): Promise<void> {
+    if (options.rescans === false) return this.whatWasHeard()
     await this.resuming
     this.settling++
     try {
@@ -1879,6 +1892,31 @@ export class LaptopTracker implements AttributionTracker {
     } finally {
       this.settling--
     }
+  }
+
+  /** What was heard journaled, rescans left to their own pace: a root rescanning now is passed over, its changes found by the rescan. */
+  private async whatWasHeard(): Promise<void> {
+    await this.resuming
+    for (let pass = 0; pass < HEARD_PASSES; pass++) {
+      const runs: Promise<void>[] = []
+      for (const state of this.states.values()) {
+        if (state.rescanning) continue
+        if (state.headTimer || state.gitSince !== undefined) {
+          clearTimeout(state.timer)
+          clearTimeout(state.headTimer)
+          state.headTimer = undefined
+          runs.push(this.queue(state, () => this.gitMoved(state)))
+        } else if (state.pending.size) {
+          clearTimeout(state.timer)
+          runs.push(this.queue(state, () => this.flush(state)))
+        }
+      }
+      if (!runs.length) break
+      await Promise.all(runs)
+    }
+    await Promise.all(this.scriptReads)
+    await this.footprints?.settled()
+    while (this.reattribution) await this.reattribution
   }
 
   /** How often roots were rescanned for lost events in the last hour, and which are rescanned less often because their losses keep coming. */

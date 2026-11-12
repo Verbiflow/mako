@@ -933,7 +933,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const attribution = late.attribution
       return attribution && {
         placement: (conversation) => threads.store?.journalPlacement(conversation),
-        flushed: () => attribution.settled(),
+        // A turn's count waits only for what was heard: never for checkouts rescanned whole after lost events.
+        flushed: () => attribution.heard(),
         countTurn: (thread, turn, state) => attribution.countTurn(thread, turn, state),
         settledThrough: (at) => attribution.settledThrough(at),
         counted: (summary, session) => attribution.counted(summary, session),
