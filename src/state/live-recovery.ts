@@ -672,6 +672,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
       side: batchSide(batch, current),
       historyFailure: batchHistoryFailure(batch, current),
       harnessTurns: batch.harnessTurns ?? current.harnessTurns,
+      turnReply: batch.turnReply ?? current.turnReply,
       spentThrough: batch.spentThrough === undefined ? current.spentThrough : (batch.spentThrough ?? undefined),
       requests: requests ?? current.requests,
       // What waits follows the requests, as a snapshot reads it: left as listed, a Session listed while its first
@@ -752,6 +753,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
     side: batchSide(batch, current),
     historyFailure: batchHistoryFailure(batch, current),
     harnessTurns: batch.harnessTurns ?? current.harnessTurns,
+    turnReply: batch.turnReply ?? current.turnReply,
     spentThrough: batch.spentThrough === undefined ? current.spentThrough : (batch.spentThrough ?? undefined),
     nativePaths: batch.control
       ? batch.control.bindings.flatMap((binding) =>

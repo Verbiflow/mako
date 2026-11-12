@@ -12,7 +12,7 @@ import { encodeRuntimeEvent, decodeRuntimeEvent } from "@mako/host/contracts/run
 import { ROSTER_LIVE_FORM } from "@mako/protocol/live-form"
 import { LOCAL_CONTENT_CHANNEL, LOCAL_CONTENT_LIMIT, LocalContentReceiptSchema, withoutLiveContent } from "@mako/host/contracts/local-content-watch"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { LiveBatch, LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import { TURN_REPLY_CHARS, turnReplyOf, type LiveBatch, type LiveRequest, type LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures"
 import { removeScratch } from "./lib/scratch-processes.mjs"
 
@@ -186,17 +186,17 @@ try {
   // never taken for a quiet load (the packaged run lost a background Thread's "finished" notice to that).
   const toasts: string[] = []
   const unbindNotices = installNotificationEnvironment({
-    visibleSubjects: () => new Set(), focused: () => true, now: () => Date.now(), cue: () => {}, toast: (item) => void toasts.push(`${item.kind}:${item.subject.id}`),
+    visibleSubjects: () => new Set(), focused: () => true, now: () => Date.now(), cue: () => {}, toast: (item) => void toasts.push(`${item.kind}:${item.subject.id}:${item.body}`),
     dismissToast: () => {}, desktop: async () => true, dismissDesktop: () => {}, badge: () => {}, schedule: () => () => {}, open: () => {}, announces: () => true,
   })
   // Listed while its first prompt waits (the read a batch without content sets off), then taken through its turn by
   // batches of metadata alone: its prompt waits no longer, so its turn's end is announced.
   const asked: LiveRequest = { id: auditId(799), text: "Background work", attachments: [], status: "queued" }
-  const step = async (session: Partial<LiveSnapshot["session"]>, request: LiveRequest, historyChanged: boolean) => {
+  const step = async (session: Partial<LiveSnapshot["session"]>, request: LiveRequest, historyChanged: boolean, turnReply?: string) => {
     const prior = source.get(b)!
     const revision = prior.revision! + 1
     source.set(b, { ...prior, revision, session: { ...prior.session, ...session }, requests: [request] })
-    await sent({ type: "live-batch", batch: { id: b, epoch: prior.epoch, revision, updates: [], sessionChanges: session, requests: [request], ...(historyChanged && { historyChanged }) } })
+    await sent({ type: "live-batch", batch: { id: b, epoch: prior.epoch, revision, updates: [], sessionChanges: session, requests: [request], ...(historyChanged && { historyChanged }), ...(turnReply !== undefined && { turnReply }) } })
     assert.equal(delivered.at(-1)?.contentOmitted, true)
     await until(`the listed Session reads ${session.status}`, () => {
       const current = acpStore.get().conversations[b]
@@ -210,8 +210,13 @@ try {
   assert.ok(listed?.kind === "live")
   assert.equal(listed.queued.length, 1, "listed as it waits")
   await step({ status: "running" }, { ...asked, status: "dispatching" }, false)
-  await step({ status: "ready", lastStop: "completed" }, { ...asked, status: "completed" }, false)
+  await step({ status: "ready", lastStop: "completed" }, { ...asked, status: "completed" }, false, "The background work is done.\n\nDetails follow.")
   await until("its turn's end is announced", () => toasts.some((toast) => toast.startsWith("finished:")))
+  assert.ok(toasts.some((toast) => toast.startsWith("finished:") && toast.endsWith("The background work is done.")), `the notice quotes the reply its end carried: ${toasts.join(" | ")}`)
+  // What the host puts on a turn's end: the reply's first paragraph, bounded, from its text since the prompt.
+  assert.equal(turnReplyOf([{ type: "text", text: "Old turn." }, { type: "user", text: "Go" }, { type: "tool" }, { type: "text", text: "First paragraph\nstill first.\n\nSecond." }]), "First paragraph\nstill first.")
+  assert.equal(turnReplyOf([{ type: "user", text: "Go" }, { type: "tool" }]), "")
+  assert.equal(turnReplyOf([{ type: "text", text: "x".repeat(1000) }]).length, TURN_REPLY_CHARS)
   unbindNotices()
 
   // A Session first heard while the window runs (a Fin, another device's Thread) is listed, not kept whole: kept, it

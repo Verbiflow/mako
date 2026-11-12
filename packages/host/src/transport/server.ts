@@ -252,12 +252,16 @@ export async function startWebHost(
         stream.content = { generation: generation.data, sequence: 0, conversations: null }
       streams.set(response, stream)
       subscribersChanged()
+      // What it sent, framing included, read at its end: the socket's count outlives the response's hold of it.
+      const socket = response.socket
+      const sentBefore = socket?.bytesWritten ?? 0
       response.once("close", () => {
         streams.delete(response)
         // After the host's close it's the host leaving, which every client hears; any other end is a window re-attaching.
         const said = { client: clientId, observer: stream.observer, livedMs: Date.now() - stream.openedAt,
           why: stream.ending?.why ?? (closed ? "the host closed" : "the client left"),
-          queuedBytes: stream.ending?.queuedBytes ?? response.writableLength, ...stream.missed && { missedConversations: stream.missed.size } }
+          queuedBytes: stream.ending?.queuedBytes ?? response.writableLength, ...stream.missed && { missedConversations: stream.missed.size },
+          ...socket && { sentBytes: socket.bytesWritten - sentBefore }, ...stream.content && { contentWatch: true } }
         if (stream.ending) hostWarn("stream", "a client's event stream ended", said)
         else hostLog("stream", "a client's event stream ended", said)
         subscribersChanged()
