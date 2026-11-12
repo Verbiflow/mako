@@ -282,6 +282,15 @@ export interface SimulatorsShot {
   height: number
   /** The picture, base64, when `inline` was asked and it's within `SHOT_INLINE_LIMIT`. */
   inline?: { type: "image/png" | "image/jpeg"; data: string }
+  /** A picture too large to go inline, given to the caller's session lease as an artifact, for a caller under one. */
+  artifact?: SimulatorArtifact
+}
+
+/** A file a lent simulator session made, as its lease lists it: by name, the SHA-256 of its bytes, and size. */
+export interface SimulatorArtifact {
+  name: string
+  hash: string
+  size: number
 }
 export type SimulatorsShotResult = SimulatorsShot | SimulatorRefused
 
@@ -296,6 +305,8 @@ export interface SimulatorsRecordInput {
 export interface SimulatorsRecorded {
   /** The recording's file, once stopped. */
   path?: string
+  /** For a caller under a session lease, the stopped recording given to its lease (the file stays on its Mac). */
+  artifact?: SimulatorArtifact
 }
 export type SimulatorsRecordResult = SimulatorsRecorded | SimulatorRefused
 
