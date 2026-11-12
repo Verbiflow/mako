@@ -111,6 +111,8 @@ export interface WorldOptions {
   preparing?: (options: LiveStartOptions) => Promise<void> | void
   /** The person's ceiling across every place (`AgentsDeps.finCeiling`). */
   finCeiling?: () => number
+  /** Operations this device lends another place's Threads (`AgentsDeps.lent`). */
+  lent?: () => number
   /** Takes up what the last host left as the host does, each conversation read in a slice at a time first (`resumed`); at once without it. */
   resumeInSlices?: boolean
   /** The host has begun to stop while it still starts (`ConversationsDeps.stopping`). */
@@ -366,6 +368,7 @@ export class AgentsWorld {
       ...(this.options.observeCapacity && { observeCapacity: this.options.observeCapacity }),
       ...(this.options.finLimit && { finLimit: this.options.finLimit }),
       ...(this.options.finCeiling && { finCeiling: this.options.finCeiling }),
+      ...(this.options.lent && { lent: this.options.lent }),
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
       ...(this.options.later && { later: this.options.later }),
