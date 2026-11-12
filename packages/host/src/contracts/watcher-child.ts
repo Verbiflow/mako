@@ -27,6 +27,11 @@ export const WatcherRequestSchema = z.discriminatedUnion("t", [
    * paths, and one that had more is named in the reply's `capped`.
    */
   z.object({ t: z.literal("since"), id: z.number().int(), mark: HistoryMarkSchema, roots: z.array(z.string()), ignore: z.array(z.string()), exclude: z.array(z.string()).optional(), perFolder: z.number().int().positive().optional() }),
+  /**
+   * Every process on the machine as `ps` prints it (`pid ppid pgid rss lstart command`), read here so the spawn and
+   * its wait leave the host's loop: the apps' marks and traces ask for it every few seconds while an app runs.
+   */
+  z.object({ t: z.literal("table"), id: z.number().int() }),
   /** How late a folder of the child's own hears `beats` writes, one after another: delivery measured now, not over the last minute. */
   z.object({ t: z.literal("probe"), id: z.number().int(), beats: z.number().int().positive().max(20) }),
 ])
@@ -48,6 +53,7 @@ export const DropReasonSchema = z.enum(["client", "kernel", "coalesced"])
 export type DropReason = z.infer<typeof DropReasonSchema>
 
 export const WatcherReplySchema = z.discriminatedUnion("t", [
+  z.object({ t: z.literal("table"), id: z.number().int(), text: z.string() }),
   z.object({ t: z.literal("ready"), id: z.number().int() }),
   z.object({ t: z.literal("failed"), id: z.number().int(), message: z.string() }),
   z.object({ t: z.literal("events"), id: z.number().int(), events: z.array(WatchEventSchema) }),

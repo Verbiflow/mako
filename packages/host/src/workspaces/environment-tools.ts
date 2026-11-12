@@ -125,6 +125,8 @@ function credentialsSummary(recipe: Recipe): string | undefined {
 
 interface Deps {
   git: Git
+  /** The marks may have changed without any process doing so: an app joined or left the line for memory. */
+  changed?: () => void
   cwd(conversationId: string): string | undefined
   /** The Thread's values now, with the recipe in `cwd`'s checkout. */
   environment(conversationId: string, cwd: string): Promise<ThreadEnvironment | undefined>
@@ -164,6 +166,16 @@ interface Deps {
   now?: () => number
 }
 
+export interface AppsLook {
+  marks: AppMark[]
+  /** What changes in it that the marks don't say: a check's run ending, an install, a run's state. */
+  signature: string
+  /** An app starting, installing or checking: followed every second. */
+  settling: boolean
+  /** Any run up: followed every few seconds; with none, only what this host does changes anything. */
+  alive: boolean
+}
+
 export interface EnvironmentTools {
   status(conversationId: string): Promise<string>
   start(conversationId: string, names?: string[], target?: string): Promise<string>
@@ -192,6 +204,11 @@ export interface EnvironmentTools {
    * `SAMPLE_EVERY_MS`.
    */
   traceApps(): Promise<void>
+  /**
+   * One look at every app on this Mac for the sampler that pushes the marks (`ThreadAppSampler`): the marks, and
+   * whether anything is under way, which it follows closely, or alive, which it follows at all.
+   */
+  look(): Promise<AppsLook>
   /** How to set up the recipe; the project shows as being set up by this conversation until its checks pass or its turn ends with one saved. */
   guide(conversationId: string): Promise<string>
   /** The same app, for a person at the desk, by folder. */
@@ -324,7 +341,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
    * how to try it again with the recipe as it is then. Whoever asked, the
    * desk shows it waiting, and it starts by itself once there's room.
    */
-  const line = new Map<AppKey, InLine>()
+  const line = new LineOfApps(() => deps.changed?.())
   let lineTimer: ReturnType<typeof setTimeout> | undefined
   const pressure = deps.pressure ?? memoryPressure
   const followLine = () => {
@@ -1752,9 +1769,21 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       }
     },
   }
+  const look = async (): Promise<AppsLook> => {
+    const overview = await deps.processes.overview()
+    const up = (kind: string) => kind === "running" || kind === "starting"
+    const marks = marksFrom(overview)
+    return {
+      marks,
+      signature: JSON.stringify([marks, overview.map((entry) => [entry.app, entry.upAt, entry.runs.map((run) => [run.kind, run.name, run.state, run.startedAt])])]),
+      settling: marks.some((mark) => mark.state === "starting") || overview.some((entry) => entry.runs.some((run) => run.kind !== "process" && up(run.state.kind))),
+      alive: overview.some((entry) => entry.runs.some((run) => up(run.state.kind))),
+    }
+  }
   return {
     desk,
     traceApps,
+    look,
     async guide(conversationId) {
       const cwd = deps.cwd(conversationId)
       const environment = cwd ? await deps.environment(conversationId, cwd).catch(() => undefined) : undefined
@@ -2579,4 +2608,27 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     },
     ({ port }) => reply(() => tools.port(conversationId(), port))
   )
+}
+
+/** The apps waiting in line for memory, which says when one joins or leaves: the marks show them waiting. */
+class LineOfApps extends Map<AppKey, InLine> {
+  private readonly moved: () => void
+
+  constructor(moved: () => void) {
+    super()
+    this.moved = moved
+  }
+
+  override set(app: AppKey, entry: InLine): this {
+    const joined = !this.has(app)
+    super.set(app, entry)
+    if (joined) this.moved()
+    return this
+  }
+
+  override delete(app: AppKey): boolean {
+    const left = super.delete(app)
+    if (left) this.moved()
+    return left
+  }
 }

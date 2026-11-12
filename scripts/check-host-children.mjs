@@ -25,6 +25,7 @@ const hostApproved = [
   ["harnesses/cursor/sdk/shell-folder.ts", "guardShellFolder", "spawn", "wraps the SDK child's original spawn without changing its owner"],
   ["harnesses/cursor/sdk/fork.ts", "cloneFile", "execFileSync", "synchronous APFS clone is finished before a stop can run"],
   ["terminals/process-groups.ts", "runPs", "execFileSync", "synchronous process-table read is bounded to one second"],
+  ["workspaces/watcher-child-main.ts", "readTable", "execFile", "the watcher child's bounded ps for the host's app looks; it ends with the child, which the host's hostFork owns"],
 ]
 const approved = [
   ...hostApproved.map(([file, ...rest]) => [`packages/host/src/${file}`, ...rest]),
