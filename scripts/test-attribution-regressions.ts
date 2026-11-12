@@ -47,6 +47,8 @@ async function world(
     fs?: TrackerFileSystem
     log?: (message: string, facts: Readonly<Record<string, string | number | boolean>>) => void
     deliveryLagMs?: () => number
+    sleepAfterMs?: number
+    storage?: string
   } = {},
 ) {
   const project = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-regression-")))
@@ -75,11 +77,12 @@ async function world(
   git(repo, "commit", "-q", "-m", "base")
   const clock = new FakeClock(Date.now())
   const events = new FakeEventSource()
-  const storage = mkdtempSync(join(tmpdir(), "mako-attribution-regression-journal-"))
-  const tracker = await LaptopTracker.open(
+  const storage = options.storage ?? mkdtempSync(join(tmpdir(), "mako-attribution-regression-journal-"))
+  const open = () => LaptopTracker.open(
     { fs: options.fs ?? nodeFileSystem(), events, clock, storage, device: "regression" },
-    { repository: async (path) => gitRepository(runner, path), uncertain: options.uncertain, outsider: options.outsider, log: options.log, deliveryLagMs: options.deliveryLagMs },
+    { repository: async (path) => gitRepository(runner, path), uncertain: options.uncertain, outsider: options.outsider, log: options.log, deliveryLagMs: options.deliveryLagMs, sleepAfterMs: options.sleepAfterMs },
   )
+  const tracker = await open()
   await tracker.track({ id: "repo", path: repo, kind: "workspace" })
   const view: JournalView = { store: tracker.store, roots: () => tracker.rootStates().values(), author: (seq) => tracker.authorOf(seq) }
   const write = (path: string, text: string) => {
@@ -94,7 +97,7 @@ async function world(
   const report = (thread: string, call: string, effects: ReportedEffect[], startedAt: number) =>
     tracker.reported({ thread, session: `${thread}-session`, call, status: "completed", startedAt, endedAt: clock.now(), checkout: project, effects })
   const last = () => tracker.changes(0).at(-1)!
-  return { project, repo, storage, clock, events, tracker, view, write, mark, report, last }
+  return { project, repo, storage, clock, events, tracker, view, write, mark, report, last, open }
 }
 
 const certainty = (author: Attribution) => ("author" in author ? `${author.certainty}:${author.author.thread}` : author.certainty)
@@ -839,6 +842,86 @@ test("a turn's count journals what was heard and never forces or waits on a resc
   await v.tracker.settled()
   await v.tracker.close()
   await w.tracker.close()
+})
+
+test("a quiet root sleeps, and what changed while it slept is attributed when a turn wakes it, as after a restart", async () => {
+  // On 2026-11-12 the person's tracker held 154 roots' stat caches, a million rows, most of them finished Threads'
+  // worktrees. A root asleep lets its cache go and stays tracked: its wake reads what changed as a restart does.
+  const HOUR = 3_600_000
+  const asleep = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
+  const roots = () => [...asleep.tracker.rootStates().values()]
+  asleep.clock.advance(2 * HOUR)
+  assert.deepEqual(await asleep.tracker.sleepIdle(), [asleep.repo])
+  assert.ok(asleep.tracker.asleep(asleep.repo))
+  assert.equal(roots()[0]!.stats.size, 0, "its stat cache went")
+  assert.deepEqual(asleep.tracker.blame("repo", "src/a.ts"), [], "a clean file still reads as known")
+  // The person edits it while it sleeps; nothing hears it.
+  asleep.clock.advance(1_000)
+  asleep.write("src/a.ts", "export const a = 2\n")
+  asleep.write("src/b.ts", "export const b = 1\n")
+  await asleep.tracker.settled()
+  assert.equal(asleep.tracker.changes(0).length, 0)
+  // A turn there wakes it.
+  await asleep.tracker.track({ id: "repo", path: asleep.repo, kind: "workspace" })
+  await asleep.tracker.settled()
+  assert.ok(!asleep.tracker.asleep(asleep.repo))
+  assert.ok(roots()[0]!.stats.size > 0, "its stat cache came back")
+  const woken = new Map(asleep.tracker.changes(0).map((entry) => [entry.path, certainty(entry.author)]))
+  assert.deepEqual([...woken.keys()].sort(), ["src/a.ts", "src/b.ts"], "both changes it slept through are journaled")
+  await asleep.tracker.close()
+
+  // The same, the host stopped instead of the root asleep: the answers are the same.
+  const restarted = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: 1_000 * HOUR })
+  restarted.clock.advance(2 * HOUR)
+  await restarted.tracker.close()
+  restarted.clock.advance(1_000)
+  restarted.write("src/a.ts", "export const a = 2\n")
+  restarted.write("src/b.ts", "export const b = 1\n")
+  const reopened = await restarted.open()
+  await reopened.settled()
+  assert.deepEqual(new Map(reopened.changes(0).map((entry) => [entry.path, certainty(entry.author)])), woken)
+  await reopened.close()
+})
+
+test("a root a Thread works in or around never sleeps", async () => {
+  const HOUR = 3_600_000
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
+  w.clock.advance(2 * HOUR)
+  w.mark("turn", "T1", "t1", "start")
+  assert.deepEqual(await w.tracker.sleepIdle(), [])
+  assert.ok(!w.tracker.asleep(w.repo))
+  await w.tracker.close()
+})
+
+test("a root unseen longer than a root stays awake starts asleep, and a turn there wakes it", async () => {
+  const HOUR = 3_600_000
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
+  await w.tracker.close()
+  w.clock.advance(2 * HOUR)
+  w.write("src/a.ts", "export const a = 2\n")
+  const reopened = await w.open()
+  await reopened.settled()
+  assert.ok(reopened.asleep(w.repo), "it starts asleep")
+  assert.equal([...reopened.rootStates().values()][0]!.stats.size, 0, "with no stat cache read")
+  assert.equal(reopened.changes(0).length, 0)
+  await reopened.track({ id: "repo", path: w.repo, kind: "workspace" })
+  await reopened.settled()
+  assert.ok(!reopened.asleep(w.repo))
+  assert.deepEqual(reopened.changes(0).map((entry) => entry.path), ["src/a.ts"], "what changed while the host was away is journaled on waking")
+  await reopened.close()
+})
+
+test("a root asleep whose folder went is let go when it wakes or the host opens", async () => {
+  const HOUR = 3_600_000
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
+  await w.tracker.close()
+  w.clock.advance(2 * HOUR)
+  rmSync(w.repo, { recursive: true, force: true })
+  const reopened = await w.open()
+  await reopened.settled()
+  assert.equal(reopened.rootStates().size, 0)
+  assert.ok(!reopened.store.roots().some((root) => root.active))
+  await reopened.close()
 })
 
 test("a watch polling because delivery went quiet is rescanned once, when it listens again", async () => {
