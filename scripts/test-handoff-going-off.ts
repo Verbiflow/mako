@@ -28,6 +28,7 @@ import { moveSource, ThreadWorktreeMoves } from "@mako/host/workspaces/thread-wo
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import type { MoveLedger } from "@mako/host/workspaces/worktree-move"
 import { applyMoveCheckpoint } from "@mako/host/workspaces/move-checkpoint"
+import { cloudHasAll } from "@mako/host/workspaces/leave-checkout"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -321,6 +322,11 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
       flush: (working, by) => readiness.flush(working, by),
       checkpoint: (thread) => readiness.noteCheckpoint(thread),
       others: (thread) => readiness.noteOthers(thread),
+      // As the host's: the note as it goes, recorded first, which alone may leave the project folder later.
+      sending: async (note) => {
+        await readiness.noted(note)
+        return note
+      },
       project: (thread) => readiness.noteProject(thread),
       rows: async () => {
         rowReads += 1
@@ -447,6 +453,8 @@ async function wentAway(h: Host, way: string, work: Awaited<ReturnType<typeof at
     assert.ok(named.checkpoint && ready.standing.includes(named.checkpoint.standby), `${way}: on the cloud Thread kept ready for it`)
     assert.ok(h.acknowledged.some((each) => each.threadId === named.checkpoint!.standby && each.sha256 === named.checkpoint!.sha256), `${way}: a checkpoint the cloud acknowledged`)
     assert.ok(named.checkpoint.head && named.checkpoint.work, `${way}: the whole checkpoint, as the arrival applies it`)
+    // What the note carried is recorded with the Thread kept ready: the way back takes out only that.
+    if (id === work.inProject) assert.deepEqual((await h.readiness.acknowledged(placed.thread))?.noted, [named.checkpoint.sha256], `${way}: the checkpoint the note carried, recorded`)
     // Where its Sessions open on the machine: a project folder's project worktree; a repository's own needs none.
     assert.equal(named.project, id === work.inProject ? project : undefined, `${way}: ${id === work.inProject && project ? "names the project worktree it was kept ready at" : "names no project"}`)
     // Its parked turn, under the very request this Mac's join would send it on under.
@@ -611,6 +619,19 @@ try {
     assert.equal(onApi("person.ts"), "export const person = 1\n", "never the person's")
     const onWeb = await laid(join(h.base, "web.git"), other.checkpoint, "web")
     assert.equal(onWeb("own.ts"), "export const web = 1 // the agent's\n", "the Thread's change in the other repository")
+    // Back, the way back takes out only what the note carried, against the checkpoint the continue went on from.
+    const leaving = async () => {
+      const kept = (await h.readiness.acknowledged(named.thread))!
+      return cloudHasAll(kept.acknowledged.map((each) => ({ root: each.root, sha256: each.checkpoint.sha256, changes: each.versions?.length ?? 0 })), kept.noted, first.sha256)
+    }
+    assert.deepEqual((await h.readiness.acknowledged(named.thread))?.noted, [first.sha256, other.checkpoint.sha256], "the note carried both, recorded as it went")
+    assert.equal(await leaving(), undefined, "both carried (a gateway at 26): the Thread's changes may leave both repositories")
+    // A gateway at 25 is sent no others: recorded as it went, the note carried the first alone, and nothing leaves.
+    await h.readiness.noted({ ...note, threads: note.threads.map(({ others: _others, ...thread }) => thread) })
+    assert.match((await leaving()) ?? "", /web/, "the other's change isn't on the machine: it stays, and so does the first's")
+    // At 26, but the other's checkpoint acknowledged here isn't the one the note carried (acknowledged anew after it went).
+    await h.readiness.noted({ ...note, threads: note.threads.map((thread) => ({ ...thread, others: thread.others?.map((each) => ({ ...each, checkpoint: { ...each.checkpoint, sha256: "0".repeat(64) } })) })) })
+    assert.match((await leaving()) ?? "", /web/, "the other's newer change isn't on the machine: nothing leaves")
     await h.close()
   }
 

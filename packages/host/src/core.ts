@@ -34,7 +34,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { CheckoutLeave, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
+import { CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -1181,10 +1181,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const attribution = late.attribution
     if (!thread || !acknowledged || !attribution) return
     const repositories = acknowledged.acknowledged.map((each) => ({ root: each.root, versions: each.versions ?? [] }))
-    // Only if the cloud went on from the very checkpoint it acknowledged: a continue that arrived on a clone of the branch
-    // the device last pushed doesn't have the Thread's changes, and taking them out here would lose them.
+    // Only if the cloud has all of it: it went on from the first repository's very checkpoint, and the going-away note
+    // carried that and every other repository's with a change of the Thread's. A continue on a clone of the branch the
+    // device last pushed, or a repository the note left out or acknowledged since, doesn't have the Thread's changes
+    // there, and taking them out here would lose them: then all of it stays.
     const state = await late.cloud?.continueState?.(session, op).catch(() => undefined)
-    const fromOurs = state?.start !== undefined && acknowledged.acknowledged.some((each) => each.checkpoint.sha256 === state.start?.sha256)
+    const why = cloudHasAll(acknowledged.acknowledged.map((each) => ({ root: each.root, sha256: each.checkpoint.sha256, changes: each.versions?.length ?? 0 })), acknowledged.noted, state?.start?.sha256)
+    const fromOurs = why === undefined
     const left = fromOurs
       ? await checkoutLeave.leave(thread, repositories[0]!.root, repositories, {
         heard: () => attribution.heard(),
@@ -1192,7 +1195,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         mako: (write) => attribution.mako(write),
       })
       : { kind: "stayed" as const, paths: repositories.flatMap((each) => each.versions.map((version) => version.path)).sort() }
-    if (!fromOurs) hostLog("leaving", "a Thread the cloud took keeps its changes in the project folder: the cloud didn't go on from them", { thread, op, start: state?.start?.sha256 ?? "none" })
+    if (!fromOurs) hostLog("leaving", "a Thread the cloud took keeps its changes in the project folder: the cloud doesn't have all of them", { thread, op, why, start: state?.start?.sha256 ?? "none" })
     // Nothing of the Thread's sits in the project folder unannounced: its row says what stayed, and the commits the cloud took.
     const unpushed = acknowledged.acknowledged.reduce((sum, each) => sum + each.unpushed, 0)
     if (left.kind === "stayed" || unpushed) {
@@ -1429,6 +1432,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       checkpoint: async (thread) => late.readiness?.noteCheckpoint(thread),
       others: async (thread) => (await late.readiness?.noteOthers(thread)) ?? [],
       project: async (thread) => late.readiness?.noteProject(thread),
+      sending: async (note) => {
+        const sent = late.cloud?.asSent?.(note) ?? note
+        await late.readiness?.noted(sent)
+        return sent
+      },
       quiet: async (note) => {
         if (!late.cloud?.quiet) throw new Error("This Mac isn't signed in to Mako Cloud.")
         return late.cloud.quiet(note)
