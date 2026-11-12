@@ -198,6 +198,18 @@ function transcriptsRoot(userRoot: string): string {
 /** Beside the transcripts; one links a child as `../children/…`. */
 const CHILDREN_FOLDER = "children"
 
+/**
+ * The row a harness's session names among `rows`: the newest by `updatedAt`, as the catalog's list orders them, when
+ * one native id names two stores (two rows of one session that may differ, archived in one and not the other).
+ */
+export function newestSessionRow(rows: Iterable<ThreadRef>, session: { harness: string; nativeId: string }): ThreadRef | undefined {
+  let newest: ThreadRef | undefined
+  for (const ref of rows)
+    if (ref.harness === session.harness && ref.nativeId === session.nativeId && (!newest || (ref.updatedAt ?? "").localeCompare(newest.updatedAt ?? "") > 0))
+      newest = ref
+  return newest
+}
+
 /** Where each Thread's environment keeps the files its conversations link to; Workspaces has them. */
 export interface ThreadFileHomes {
   fileDataDir(owner: { cwd?: string; thread?: ThreadId }): Promise<string | undefined>
@@ -275,6 +287,11 @@ export interface ThreadCatalog {
   rail(filter?: { cwd?: string; harness?: string }): ThreadRef[]
   /** A catalogued row by path, past the list's cap. */
   ref(path: string): ThreadRef | undefined
+  /**
+   * The one row a path or a harness's session names, placed as `list` places every row, past the list's cap: what a
+   * look at one Thread reads, without annotating the whole catalog as `list` does.
+   */
+  thread(target: { path: string } | { harness: string; nativeId: string }): ThreadRef | undefined
   /** The session's ref as reading it now gives it, without moving its entries here. */
   readRef(path: string): Promise<ThreadRef | null>
   /** Recovery must not depend on the sidebar's ordering or visible result cap. */
@@ -1346,6 +1363,11 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return [...listed, ...annotateAll(companions).filter((ref) => !internalReviewSession(ref))]
   }
 
+  function catalogThread(target: { path: string } | { harness: string; nativeId: string }): ThreadRef | undefined {
+    const found = "path" in target ? catalogued(target.path) : newestSessionRow(daemon ? mirror.values() : (catalog?.list() ?? []), target)
+    return found && annotate(found)
+  }
+
   function catalogRef(path: string): ThreadRef | undefined {
     return daemon
       ? mirror.get(path)
@@ -1777,6 +1799,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     list: listThreads,
     rail: railThreads,
     ref: catalogRef,
+    thread: catalogThread,
     readRef: readThreadRef,
     nativePath: nativePathForSession,
     keepsNative,
