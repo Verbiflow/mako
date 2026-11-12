@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { z } from "zod"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import type { HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome } from "../contracts/cloud-threads.js"
+import { goesOff, SHUTDOWN_HOLD_MS, type HandOffCandidate, type HandOffResult, type HandOffSettings, type ThreadHandOff, type ThreadMoveOutcome } from "../contracts/cloud-threads.js"
 import type { LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import { isBusyNativeAgent } from "../contracts/native-agents.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
@@ -43,6 +44,8 @@ export type CloudHandOffsOptions = {
 export class CloudHandOffs {
   readonly #options: CloudHandOffsOptions
   #onSleep: boolean | undefined
+  /** Handoffs running now: what a host stopping, and the cloud hearing this Mac go quiet, wait for (`underWay`). */
+  readonly #underWay = new Set<Promise<HandOffResult[]>>()
 
   constructor(options: CloudHandOffsOptions) {
     this.#options = options
@@ -62,12 +65,30 @@ export class CloudHandOffs {
    * went:
    *
    * - On quit, each once this Mac let go of it (`released`): the host carries the rest after the window closes.
-   * - As the Mac sleeps (`releaseBy`), each once the cloud carries it through (`handed`: this Mac sent what only it
-   *   has), or left here untouched if it couldn't be released by then; and, until `releaseBy`, every move already
-   *   running here (a quit's, a person's) to the same point, so the Mac never sleeps holding what a Thread it let go
-   *   of still needs. A Thread already moving isn't moved again.
+   * - As the Mac sleeps or shuts down (`releaseBy`), each once the cloud carries it through (`handed`: this Mac sent
+   *   what only it has), or, if it couldn't be released by then, left here with its turns paused (`goesOff`); and,
+   *   until `releaseBy`, every move already running here (a quit's, a person's) to the same point, so the Mac never
+   *   goes off holding what a Thread it let go of still needs. A Thread already moving isn't moved again.
    */
-  async handOff(handOff: string, why: ThreadHandOff["why"], releaseBy?: number): Promise<HandOffResult[]> {
+  handOff(handOff: string, why: ThreadHandOff["why"], releaseBy?: number): Promise<HandOffResult[]> {
+    const work = this.#handOff(handOff, why, releaseBy)
+    this.#underWay.add(work)
+    void work.finally(() => this.#underWay.delete(work)).catch(() => undefined)
+    return work
+  }
+
+  /** Waits until every handoff running now answered, or until `deadline`. */
+  async underWay(deadline: number): Promise<void> {
+    if (!this.#underWay.size) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      Promise.allSettled(this.#underWay),
+      new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now())) }),
+    ])
+    clearTimeout(timer)
+  }
+
+  async #handOff(handOff: string, why: ThreadHandOff["why"], releaseBy?: number): Promise<HandOffResult[]> {
     const began = performance.now()
     const unavailable = await this.#options.unavailable()
     const working = this.#options.working().filter(({ thread }) => !this.#options.moves.leaving(thread))
@@ -81,7 +102,7 @@ export class CloudHandOffs {
         return { conversationId, outcome: { kind: "kept-here", reason: errorMessage({ error }) } }
       }
     }))
-    const inFlight = why === "sleep" && releaseBy !== undefined ? await this.#options.moves.settled(releaseBy) : 0
+    const inFlight = goesOff({ why }) && releaseBy !== undefined ? await this.#options.moves.settled(releaseBy) : 0
     const gone = results.filter((result) => goneFromHere(result.outcome)).length
     const log = gone === results.length && !inFlight ? hostLog : hostWarn
     log("handoff", "agents at work handed to the cloud", {
@@ -118,6 +139,43 @@ export class CloudHandOffs {
     const saved = SettingsFileSchema.safeParse(JSON.parse(await readFile(this.#options.file, "utf8").catch(() => "null")))
     this.#onSleep = saved.success ? saved.data.onSleep : true
     return this.#onSleep
+  }
+}
+
+export { SHUTDOWN_HOLD_MS }
+/** What a shutdown's hold leaves after the handoff: its answer reaching the desktop app, which then quits. */
+const SHUTDOWN_ANSWER_MS = 1_500
+
+export type MachineLeavingOptions = {
+  handOffs: Pick<CloudHandOffs, "handOff" | "underWay"> | undefined
+  /** Whether agents at work go to the cloud as this Mac goes off: the person's choice, and a Mac able to. */
+  enabled(): Promise<boolean>
+  /** The cloud hears this Mac go quiet (`CloudAccount.leaving`). */
+  quiet(why: "sleep" | "quit"): void
+  holdMs?: number
+}
+
+/**
+ * This Mac going to sleep or shutting down, as its desktop app heard it. A shutdown hands every Thread at work to the
+ * cloud as a sleep does (`SleepHandOff`), within its hold. Either way the cloud hears this Mac go quiet once the
+ * handoff under way answered, never before: a quiet Mac's runtime link carries no move.
+ */
+export async function machineLeaving(source: "suspend" | "shutdown", options: MachineLeavingOptions): Promise<void> {
+  const deadline = Date.now() + (options.holdMs ?? SHUTDOWN_HOLD_MS)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const { handOffs } = options
+    if (source === "shutdown" && handOffs && (await options.enabled())) {
+      await Promise.race([
+        handOffs.handOff(randomUUID(), "shutdown", deadline - SHUTDOWN_ANSWER_MS),
+        new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, deadline - SHUTDOWN_ANSWER_MS - Date.now())) }),
+      ])
+    } else await handOffs?.underWay(deadline)
+  } catch (error) {
+    hostWarn("handoff", "agents at work couldn't be handed off as this Mac went off", { source, error: errorMessage({ error }) })
+  } finally {
+    clearTimeout(timer)
+    options.quiet(source === "suspend" ? "sleep" : "quit")
   }
 }
 

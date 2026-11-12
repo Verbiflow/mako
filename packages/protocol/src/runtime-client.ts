@@ -10,11 +10,11 @@ import { type LiveForm, WHOLE_LIVE_FORM } from "./live-form.js"
 import { type MediaHandler, type MediaSender, type MediaStreamId, decodeMediaMessage, encodeMediaMessage } from "./media.js"
 import type { Payload } from "./payload.js"
 import type { PortHandler, PortRequest } from "./ports.js"
-import type { GatewayFrame, GoingQuietReason, RuntimeFrame } from "./runtime-frames.js"
+import type { Advertisement, GatewayFrame, GoingQuietReason, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
 import { type SshHandler, type SshSender, SshIncoming } from "./ssh.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { ACTIVITY_VERSION, COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { ACTIVITY_VERSION, ADVERTISE_LINK_VERSION, COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 import { WireError } from "./wire-error.js"
 
 export class RuntimeRefusedError extends Error {
@@ -97,6 +97,11 @@ export type ServedRuntime = {
    * as down at once. False on an older gateway, which finds out from the missed heartbeats, or on a closed link.
    */
   goingQuiet(reason: GoingQuietReason): boolean
+  /**
+   * Says what this device can serve and its room (`advertise`, version 23 on). False on an older gateway, which routes
+   * nothing to it by capability, or on a closed link. Not kept: each new link is told again.
+   */
+  advertise(advertisement: Advertisement): boolean
   /** Settles when the link closes. */
   done: Promise<void>
   /** Why the link ended: the gateway's refusal, or undefined when the connection just closed. */
@@ -355,6 +360,11 @@ export async function serveRuntime(
     goingQuiet: (reason) => {
       if (first.version < QUIET_VERSION || link.closed) return false
       link.send({ type: "going-quiet", reason })
+      return true
+    },
+    advertise: (advertisement) => {
+      if (first.version < ADVERTISE_LINK_VERSION || link.closed) return false
+      link.send({ type: "advertise", ...advertisement })
       return true
     },
     done,

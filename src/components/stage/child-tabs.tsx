@@ -47,7 +47,7 @@ export function FinTab({ agent, onClose }: { agent: NativeAgent; onClose: () => 
         tabIndex={0}
         data-child-tab={agent.child?.thread}
         onClick={inboxView.close}
-        title={`${agent.title} · ${harnessLabel(agent.provider)} · ${childWord(state)}`}
+        title={[`${agent.title} · ${harnessLabel(agent.provider)} · ${childWord(state)}`, childLine(state)].filter(Boolean).join("\n")}
         className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-1.5 text-left text-ui font-medium"
       >
         <FinMark agent={agent} state={state} read lit cut="var(--raised)" />

@@ -10,7 +10,7 @@ import type { MoveCheckpoint } from "@mako/protocol/moves"
 import type { ThreadHandOff, ThreadMoveOutcome } from "@mako/host/contracts/cloud-threads"
 import type { SessionExecution } from "@mako/host/contracts/thread-execution"
 import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadPlacement } from "@mako/host/contracts/thread-identity"
-import { CloudHandOffs, workingThreads, type WorkingSnapshot, type WorkingThread } from "@mako/host/conversations/cloud-handoffs"
+import { CloudHandOffs, machineLeaving, workingThreads, type WorkingSnapshot, type WorkingThread } from "@mako/host/conversations/cloud-handoffs"
 import { CloudReadiness, type ReadinessAccount } from "@mako/host/conversations/cloud-readiness"
 import type { CloudRepository } from "@mako/host/contracts/cloud-threads"
 import type { LivePermissionRequest, LiveSessionState } from "@mako/host/contracts/providers-acp"
@@ -136,6 +136,70 @@ try {
     assert.deepEqual(changed, [{ onSleep: false }], "windows hear the change")
     const again = new CloudHandOffs({ file: join(root, "handoff.json"), working: () => [], moves: { move: async () => ({ kind: "moved", cloudThread: "" }), refusal: async () => undefined, leaving: () => false, settled: async () => 0 }, unavailable: async () => undefined, changed: () => {} })
     assert.equal(await again.onSleep(), false, "kept across a restart")
+  }
+
+  // This Mac shutting down hands every Thread at work to the cloud, as a sleep does, within its hold, and the cloud hears
+  // it go quiet only once that handoff answered: a quiet Mac's link carries no move. A sleep's quiet waits for the
+  // sleep's handoff under way the same way. With the person's choice off, nothing moves and the Mac goes quiet at once.
+  {
+    const order: string[] = []
+    const asked: Array<ThreadHandOff | undefined> = []
+    let answers = true
+    let finish: () => void = () => undefined
+    const handOffs = new CloudHandOffs({
+      file: join(root, "shutdown.json"),
+      working: () => [{ conversationId: "c-1", thread: "t-1", harness: "codex" }],
+      moves: {
+        move: async (_conversationId, _move, handOff, options): Promise<ThreadMoveOutcome> => {
+          asked.push(handOff)
+          order.push(`move ${handOff?.why ?? ""} ${options?.answer ?? ""}`)
+          if (answers) await new Promise<void>((resolve) => { finish = resolve })
+          else await new Promise(() => undefined)
+          return { kind: "moved", cloudThread: "t-cloud" }
+        },
+        refusal: async () => undefined,
+        leaving: () => false,
+        settled: async () => (order.push("settled"), 0),
+      },
+      unavailable: async () => undefined,
+      changed: () => {},
+    })
+    const quiet = (why: "sleep" | "quit") => void order.push(`quiet ${why}`)
+    const until = async (done: () => boolean) => {
+      for (let tries = 0; !done() && tries < 500; tries++) await new Promise((resolve) => setTimeout(resolve, 5))
+      assert.ok(done())
+    }
+    const began = Date.now()
+    const shutdown = machineLeaving("shutdown", { handOffs, enabled: async () => true, quiet, holdMs: 5_000 })
+    await until(() => order.length > 0)
+    assert.deepEqual(order, ["move shutdown handed"], "each Thread at work moves, waited for until the cloud has it, before the Mac goes quiet")
+    const releaseBy = asked[0]?.releaseBy ?? 0
+    assert.ok(releaseBy > began && releaseBy <= began + 5_000, "released within the hold")
+    finish()
+    await shutdown
+    assert.deepEqual(order, ["move shutdown handed", "settled", "quiet quit"], "then every move in flight, then quiet")
+    // A move that never answers holds the shutdown no longer than its hold.
+    order.splice(0)
+    answers = false
+    const held = Date.now()
+    await machineLeaving("shutdown", { handOffs, enabled: async () => true, quiet, holdMs: 300 })
+    assert.deepEqual(order, ["move shutdown handed", "quiet quit"])
+    assert.ok(Date.now() - held < 2_000, "held no longer than its hold")
+    // A sleep's handoff under way: the cloud hears the Mac go quiet once it answered.
+    order.splice(0)
+    answers = true
+    const sleeping = handOffs.handOff(randomUUID(), "sleep", Date.now() + 5_000)
+    await until(() => order.length > 0)
+    const suspend = machineLeaving("suspend", { handOffs, enabled: async () => true, quiet, holdMs: 5_000 })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.deepEqual(order, ["move sleep handed"], "not quiet while the sleep's handoff runs")
+    finish()
+    await Promise.all([sleeping, suspend])
+    assert.deepEqual(order, ["move sleep handed", "settled", "quiet sleep"])
+    // The person's choice off: nothing moves.
+    order.splice(0)
+    await machineLeaving("shutdown", { handOffs, enabled: async () => false, quiet, holdMs: 5_000 })
+    assert.deepEqual(order, ["quiet quit"])
   }
 
   // The sleep watch, against a stand-in for the native helper: told the Mac will sleep, it hands off with a deadline
@@ -274,6 +338,20 @@ try {
     const quiet = new CloudReadiness({ file: join(root, "quiet.json"), git, scratch: join(root, "quiet-scratch"), account: () => account, enabled: async () => enabled, working: () => [{ conversationId: "c-9", thread: "local-9", harness: "codex" }], leaving: () => false, plan: async () => ({ thread: "local-9", folder, repository, paths: [], harness: "codex" }), sendRecords: async () => [], newCloudThread: () => "t-quiet" })
     await quiet.refresh()
     assert.ok(!made.some((each) => each.threadId === "t-quiet"), "with handing off on sleep off, nothing of a Thread goes to the cloud")
+    // A Thread whose conversation hasn't moved since its last round is passed over: no capture, no renewal, no send.
+    let revision = 1
+    let rounds = 0
+    const still = new CloudReadiness({ file: join(root, "still.json"), git, scratch: join(root, "still-scratch"), account: () => account, enabled: async () => true,
+      working: () => [{ conversationId: "c-7", thread: "local-7", harness: "codex" }], revision: () => revision, leaving: () => false,
+      plan: async () => { rounds += 1; return { thread: "local-7", folder, repository, paths: [], harness: "codex" } }, sendRecords: async () => [], newCloudThread: () => "t-still" })
+    await still.refresh()
+    assert.equal(rounds, 1, "its first round brings it up")
+    await still.refresh()
+    await still.refresh()
+    assert.equal(rounds, 1, "unmoved, it isn't brought up again")
+    revision = 2
+    await still.refresh()
+    assert.equal(rounds, 2, "moved, it is")
   }
   console.log("PASS: agents at work are handed off one move per Thread, named by the handoff; the sleep is held until the handoff answers or its deadline; Threads at work stand by in the cloud with only what changed, taken once by their move")
 } finally {

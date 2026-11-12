@@ -14,12 +14,14 @@ import {
   type Borrowing,
   type BrokerInput,
   type BrokerState,
+  type Capability,
   type Grant,
   type Kind,
   type Lease,
   type LeaseEnd,
   type LeaseEvent,
   type Need,
+  type Slots,
   type SourceAnswer,
   type SourceAsk,
 } from "@mako/protocol/borrow"
@@ -118,6 +120,18 @@ export class LocalBorrowing implements Borrowing {
   /** Every lease of a Thread here ends, its waiting asks with it, and the grants that end with it. */
   threadEnded(thread: string): Promise<void> {
     return this.#change(async (kept) => void (await this.#step(kept, { type: "thread-ended", account: this.account, thread, at: this.#now() })))
+  }
+
+  /**
+   * What this device can serve and its room, as it advertises them (`Advertiser`): a need here under a grant over
+   * capable devices routes to it by the same rule as the account's broker. Said only when it changed, it costs a write.
+   */
+  advertise(capabilities: Capability[], slots: Slots): Promise<void> {
+    return this.#change(async (kept) => {
+      const known = kept.state.devices[this.device]
+      if (known?.online && JSON.stringify([known.capabilities, known.slots]) === JSON.stringify([capabilities, slots])) return
+      await this.#step(kept, { type: "advertise", device: this.device, capabilities, slots, at: this.#now() })
+    })
   }
 
   /** Ends leases and grants whose time has come, and answers asks waiting for a source this broker has. */

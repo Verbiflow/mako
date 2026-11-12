@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.12.28"
+    "version": "3000.12.43"
   },
   "about": "Plan how to move the release to Monday. Read notes.md first; don't change any file. Propose the plan when it's ready. / Thanks. Without changing anything, tell me in one line what the plan's first step is. A plan-mode turn that reads a file and proposes a plan, approved where the harness asks, then a turn in the session's own mode.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#simplistic-elbow",
+      "path": ".local/share/devin/cli/sessions.db#hurricane-sage",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/f28f634c-025e-418c-aae0-821dac68dc33.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/eaad3440-3147-4d12-9f15-ceb35c418c4c.db",
       "known": [
         {
           "side": "-",

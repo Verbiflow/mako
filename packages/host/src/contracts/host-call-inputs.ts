@@ -3053,6 +3053,7 @@ const inputs = {
           why: z.union([
             z.literal("quit"),
             z.literal("asked"),
+            z.literal("shutdown"),
             z.literal("sleep"),
           ]),
           releaseBy: z.number().optional(),
