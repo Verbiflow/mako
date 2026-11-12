@@ -262,14 +262,14 @@ try {
     writeFileSync(join(folder, "a.txt"), "one\n")
     sh(folder, "add", ".")
     sh(folder, "commit", "--quiet", "-m", "base")
-    const made: Array<{ threadId: string; standby?: boolean }> = []
+    const made: Array<{ threadId: string; standby?: boolean; standsByFor?: string }> = []
     const checkpoints: string[] = []
     const records: string[][] = []
     /** Cloud Threads the cloud ended unused, as it says when one is made again. */
     const ended = new Set<string>()
     const account: ReadinessAccount = {
-      createThread: async (threadId: string, _repository: CloudRepository, making?: { standby?: boolean }) => {
-        made.push({ threadId, ...making?.standby && { standby: true } })
+      createThread: async (threadId: string, _repository: CloudRepository, making?: { standby?: boolean; standsByFor?: string }) => {
+        made.push({ threadId, ...making?.standby && { standby: true }, ...making?.standsByFor && { standsByFor: making.standsByFor } })
         return ended.has(threadId) ? { ready: false, ended: true as const } : { ready: false }
       },
       sendCheckpoint: async (_threadId: string, checkpoint: MoveCheckpoint) => {
@@ -304,6 +304,7 @@ try {
     await readiness.refresh()
     await readiness.refresh()
     assert.equal(new Set(made.map((each) => each.threadId)).size, 1, "one cloud Thread stands by")
+    assert.ok(made.every((each) => each.standsByFor === "local-1"), "made naming the Thread of this Mac's it stands by for, so the account can trust it")
     assert.ok(made.every((each) => each.standby), "standing by: no machine until a move")
     assert.equal(checkpoints.length, 1, "the checkout goes once while it's unchanged")
     assert.equal(records.length, 2, "records each round, only what's new")

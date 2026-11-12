@@ -374,14 +374,14 @@ export class CloudReadiness {
     let ready = entry
     const began = performance.now()
     try {
-      const made = await account.createThread(ready.cloudThread, ready.repository, { folder: ready.folder, harness: plan.harness, standby: true })
+      const made = await account.createThread(ready.cloudThread, ready.repository, { folder: ready.folder, harness: plan.harness, standby: true, standsByFor: plan.thread })
       if (made.ended) {
         // The cloud ended it unused (nothing kept it ready for a while): a new one stands by in its place.
         hostLog("readiness", "a cloud Thread standing by had ended; standing by with a new one", { thread: plan.thread, ended: ready.cloudThread })
         ready = { cloudThread: this.#options.newCloudThread(), folder: plan.folder, repository: plan.repository, at: Date.now() }
         entries[plan.thread] = ready
         await this.#save()
-        await account.createThread(ready.cloudThread, ready.repository, { folder: ready.folder, harness: plan.harness, standby: true })
+        await account.createThread(ready.cloudThread, ready.repository, { folder: ready.folder, harness: plan.harness, standby: true, standsByFor: plan.thread })
       }
       const [checkpoint, sent] = await Promise.all([
         // A Thread in the main checkout sends its own changes, when a write or its turn's end asks; a worktree Thread its checkout.
