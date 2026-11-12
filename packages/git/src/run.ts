@@ -20,7 +20,7 @@ export interface GitTrace {
   ms: number
   code: number | null
   bytes: number
-  outcome: "ok" | "failed" | "timeout" | "cancelled" | "truncated"
+  outcome: "ok" | "failed" | "timeout" | "cancelled" | "truncated" | "unknown"
   /** The start of Git's error output, when it wrote any and didn't exit 0. */
   stderr?: string
 }
@@ -346,6 +346,8 @@ export class Git {
         errorBytes += chunk.length
       })
       child.on("error", (error: NodeJS.ErrnoException) => {
+        // A runner that ran the process elsewhere says itself how it went (the host's helper, lost under it).
+        if (error instanceof GitError) return fail(error, error.kind === "unknown" ? "unknown" : "failed", null)
         // Spawning in a folder that's gone fails the same way as a missing binary.
         const failure = error.code !== "ENOENT"
           ? new GitError({ message: `Git could not start: ${error.message}`, command: subcommand, cause: error })
