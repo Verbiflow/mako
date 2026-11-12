@@ -1322,6 +1322,23 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations?.has(id) ?? false }),
     moves: cloudMoves,
     unavailable: handOffUnavailable,
+    // A sleep or a shutdown: each Thread paused and parked here, its last changes sent, and the account told this Mac
+    // went away, so it may continue them while the Mac is quiet. The quit sheet still moves them.
+    goingAway: {
+      flush: async (working, by) => late.readiness?.flush(working, by),
+      checkpoint: async (thread) => late.readiness?.noteCheckpoint(thread),
+      quiet: async (note) => {
+        if (!late.cloud?.quiet) throw new Error("This Mac isn't signed in to Mako Cloud.")
+        return late.cloud.quiet(note)
+      },
+      // The account takes a note only for Sessions it lists as this Mac's and idle: read here until the paused turns are.
+      rows: async () => {
+        const cloud = late.cloud
+        const [device, listed] = await Promise.all([cloud?.deviceId(), cloud?.sessionListings?.()])
+        if (!device || !listed) throw new Error("This Mac's rows can't be read from the account now.")
+        return new Map(listed.sessions.filter((row) => row.runsOn.kind === "device" && row.runsOn.deviceId === device).map((row) => [row.session, row.state]))
+      },
+    },
     changed: (settings) => {
       emit({ type: "handoff-settings", settings })
       void sleepHandOff?.refresh()

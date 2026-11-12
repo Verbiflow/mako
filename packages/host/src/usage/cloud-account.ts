@@ -15,6 +15,7 @@ import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thre
 import { WaitingInputSchema, WaitingMessageSchema, type WaitingInput, type WaitingMessage } from "@mako/protocol/waiting"
 import type { SessionPublishing } from "./machine-runtime.js"
 import { ContinueStateSchema, type ContinueState } from "@mako/protocol/continues"
+import { QuietAnswerSchema, QuietNoteSchema, type QuietAnswer, type QuietNote } from "@mako/protocol/handoff"
 import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
@@ -1015,6 +1016,20 @@ export class CloudAccounts {
     this.#token = undefined
     await this.#connectionToken()
     return this.account()
+  }
+
+  /**
+   * This Mac is going away (`QuietNote`): each of its Threads with a turn parked, the Sessions it holds at their
+   * generations, and the checkpoint the cloud acknowledged, which the account may continue it from while this Mac is
+   * quiet. It releases nothing. The same note again is the same note. A gateway that takes no notes yet answers 404:
+   * `unserved`, and nothing is continued.
+   */
+  async quiet(note: QuietNote): Promise<QuietAnswer | "unserved"> {
+    const deviceId = await this.deviceId()
+    if (!deviceId) throw new CloudAccountError("This Mac isn't signed in to Mako.")
+    const response = await this.#call("devices.quiet", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/quiet`, QuietNoteSchema.parse(note), false, [404])
+    if (response.status === 404) return "unserved"
+    return QuietAnswerSchema.parse(await response.json())
   }
 
   /** This Mac's device in the account, while it's signed in. */

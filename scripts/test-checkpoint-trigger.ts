@@ -254,3 +254,28 @@ test("with handing off on sleep off, a write captures nothing", async () => {
   assert.equal(w.captures.length, 0)
   assert.equal(w.sent.length, 0)
 })
+
+test("going away: the last changes are captured and sent by the deadline, and the note names what the cloud acknowledged", async () => {
+  const w = world()
+  w.readiness.wrote("c-1")
+  await sleep(AFTER_WRITE_MS * 2)
+  const working = [...w.working]
+  w.write("/project/api", "v-away", false)
+  w.working.length = 0
+  await w.readiness.flush(working, Date.now() + 2_000)
+  assert.equal(w.captures.at(-1)?.content, "v-away", "the turn's last edit, heard or not")
+  const named = await w.readiness.noteCheckpoint("local-1")
+  assert.equal(named?.sha256, w.sent.at(-1)!.sha256)
+  assert.equal(named?.standby, "t-standby")
+  assert.ok(named?.head && named.index && named.work && named.branch === "mako/fix", "whole, as the arrival applies it")
+})
+
+test("going away waits no longer than its deadline for a slow capture", async () => {
+  const w = world({ captureMs: 2_000 })
+  const working = [...w.working]
+  const began = Date.now()
+  await w.readiness.flush(working, Date.now() + 200)
+  assert.ok(Date.now() - began < 600, `back in ${Date.now() - began} ms`)
+  assert.equal(await w.readiness.noteCheckpoint("local-1"), undefined, "nothing acknowledged yet: the note names none")
+})
+
