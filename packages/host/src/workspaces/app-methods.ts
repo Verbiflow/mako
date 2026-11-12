@@ -13,7 +13,11 @@ export function declareThreadAppMethods(methods: MethodTable, apps: DeskApp | un
     if (!apps) throw new Error("Thread apps need the Thread store, which this host couldn't open.")
     return apps
   }
-  methods.handle("mako:thread-app", (cwd: string, target?: string): Promise<ThreadAppView> => desk().view(cwd, target))
+  // A window showing a folder's app hears it change by the sampler's pushes, so its ask keeps the sampler looking.
+  methods.handle("mako:thread-app", (cwd: string, target?: string): Promise<ThreadAppView> => {
+    sampler?.wanted()
+    return desk().view(cwd, target)
+  })
   methods.handle("mako:thread-app-start", (cwd: string, target?: string): Promise<AppActionOutcome> => desk().start(cwd, target))
   methods.handle("mako:thread-app-stop", (cwd: string): Promise<void> => desk().stop(cwd))
   methods.handle("mako:thread-app-restart", (cwd: string, target?: string): Promise<AppActionOutcome> => desk().restart(cwd, target))
@@ -26,7 +30,10 @@ export function declareThreadAppMethods(methods: MethodTable, apps: DeskApp | un
   methods.handle("mako:thread-app-probe", (cwd: string): Promise<AppProbeView> => desk().probe(cwd))
   // As last looked at for every window (`ThreadAppSampler`), which then hears them pushed as they change.
   methods.handle("mako:thread-app-marks", (): Promise<AppMark[]> => sampler ? sampler.current() : desk().marks())
-  methods.handle("mako:thread-app-room", (): Promise<RoomView> => desk().room())
+  methods.handle("mako:thread-app-room", (): Promise<RoomView> => {
+    sampler?.wanted()
+    return desk().room()
+  })
   methods.handle("mako:thread-app-stop-apps", (apps: string[]): Promise<void> => desk().stopApps(apps))
   methods.handle("mako:project-app-setup", (cwd: string): Promise<ProjectAppSetup> => desk().setup(cwd))
 }
