@@ -1315,6 +1315,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations?.has(id) ?? false }),
     moves: cloudMoves,
     unavailable: handOffUnavailable,
+    // A sleep or a shutdown: each Thread paused and parked here, its last changes sent, and the account told this Mac
+    // went away, so it may continue them while the Mac is quiet. The quit sheet still moves them.
+    goingAway: {
+      flush: async (working, by) => late.readiness?.flush(working, by),
+      checkpoint: async (thread) => late.readiness?.noteCheckpoint(thread),
+      quiet: async (note) => {
+        if (!late.cloud) throw new Error("This Mac isn't signed in to Mako Cloud.")
+        return late.cloud.quiet(note)
+      },
+    },
     changed: (settings) => {
       emit({ type: "handoff-settings", settings })
       void sleepHandOff?.refresh()

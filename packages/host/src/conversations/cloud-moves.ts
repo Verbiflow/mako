@@ -480,6 +480,29 @@ export class CloudMoves {
     return { thread: plan.thread, folder: plan.folder, repository: plan.repository, paths: plan.sessions.map((session) => session.path), harness: plan.sessions[0]?.harness ?? "" }
   }
 
+  /**
+   * The Thread of `conversationId` as this Mac goes away (a sleep, a shutdown; `goingAway` names it): every running
+   * turn of its Sessions paused and parked (`#stayed`), so it reads idle, and nothing of it moves: no branch, no
+   * worktree, no release. It stays this Mac's; the account may continue it from its last acknowledged checkpoint while
+   * the Mac is quiet, and it goes on here once the Mac is back otherwise (`unpark`). Answers the Thread and its
+   * Sessions at their generations, as the going-away's note names them.
+   */
+  async goAway(conversationId: string, goingAway: string, handOff: ThreadHandOff): Promise<{ thread: ThreadId; sessions: Array<{ session: SessionId; generation: number }>; parked: number }> {
+    const threads = this.#options.threads()
+    const thread = threads?.journalPlacement(conversationId)?.thread
+    if (!threads || !thread) throw new Error("It isn't in this Mac's Threads, so nothing could continue it elsewhere.")
+    const move = namedUuid(`mako going away\0${goingAway}\0${thread}`)
+    const conversations = this.#conversationsOf(thread, conversationId)
+    const paused: Paused[] = []
+    await this.#pauseTurns(conversations, thread, handOff, paused).catch((error: Error) => hostWarn("moves", "a Thread's agents didn't all pause as this Mac went away", { thread, error: error.message }))
+    await this.#stayed(move, thread, handOff, paused, conversations)
+    const sessions = threads.threadSessions(thread).flatMap(({ session }) => {
+      const execution = threads.execution(session)
+      return execution?.state === "here" ? [{ session, generation: execution.generation }] : []
+    })
+    return { thread, sessions, parked: paused.length }
+  }
+
   /** Settles every move a stopped host left unsettled: before the release, kept here; after, as the cloud answered. */
   async settle(): Promise<void> {
     const names = await readdir(this.#options.folder).catch(() => [])
