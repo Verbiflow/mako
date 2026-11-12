@@ -521,3 +521,29 @@ test("Mako's own folders are left out of a history read before they're replayed,
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test("a history read of the home folder never replays another app's container, so the watcher never stats one (macOS)", { skip: process.platform !== "darwin" }, async () => {
+  // A scratch home: the child reads its home from HOME, and the person's own containers are never written.
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "mako-footprint-home-")))
+  const real = process.env.HOME
+  process.env.HOME = home
+  const history = childHistory()
+  try {
+    // The child starts with the first call, and keeps the HOME it started with.
+    const mark = await history.mark().finally(() => (process.env.HOME = real))
+    const container = join(home, "Library/Containers/com.example.notes/Data")
+    const group = join(home, "Library/Group Containers/group.example.chat")
+    mkdirSync(container, { recursive: true })
+    mkdirSync(group, { recursive: true })
+    mkdirSync(join(home, "work"))
+    writeFileSync(join(container, "notes.json"), "{}")
+    writeFileSync(join(group, "db.sqlite"), "x")
+    writeFileSync(join(home, "work/a.txt"), "x")
+    await new Promise((done) => setTimeout(done, 1_000))
+    const found = await history.since(mark, [home], {})
+    assert.ok(found.paths.includes(join(home, "work/a.txt")), "the rest of the home folder crosses")
+    assert.deepEqual(found.paths.filter((path) => path.includes("Containers")), [], "nothing in a container is replayed")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
