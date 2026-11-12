@@ -126,6 +126,15 @@ try {
   natives.archive({ id: randomUUID(), target: codex, archived: false })
   refs[0] = { ...refs[0]!, path: "/home/.codex/sessions/2026/09/28/rollout-a.jsonl", nativeArchived: undefined, nativeArchiveStamp: undefined }
   assert.equal(natives.controls(codex).archived, false, "unarchived in Codex, it stays out")
+  // A look at one target reads that one row (`thread`), never the whole catalog: at a Fin's every batch, `threads()`
+  // annotated every row the host lists, which was half its allocation.
+  const one = new ThreadLifecycle({live:owner,archives,native:{list:()=>[],editQueued:()=>[]},
+    threads:()=>{ throw new Error("the whole catalog was read for one target") },
+    thread:(target)=>refs.find((ref) => "path" in target ? ref.path === target.path : ref.harness === target.harness && ref.nativeId === target.nativeId),
+    nativeToken:()=>null,abortNative:()=>{},external:()=>false})
+  assert.equal(one.archived(codex), natives.archived(codex), "one row answers as the whole catalog does")
+  assert.equal(one.controls(codex).archived, natives.controls(codex).archived)
+  assert.equal(one.archived({ kind: "file", path: refs[1]!.path }), natives.archived({ kind: "file", path: refs[1]!.path }))
 
   // A restore holds for the harness's archive it answered, no longer.
   const shownKeys = () => archives.snapshot().keys.filter((key) => key.startsWith("shown"))

@@ -275,6 +275,11 @@ export interface ThreadCatalog {
   rail(filter?: { cwd?: string; harness?: string }): ThreadRef[]
   /** A catalogued row by path, past the list's cap. */
   ref(path: string): ThreadRef | undefined
+  /**
+   * The one row a path or a harness's session names, placed as `list` places every row, past the list's cap: what a
+   * look at one Thread reads, without annotating the whole catalog as `list` does.
+   */
+  thread(target: { path: string } | { harness: string; nativeId: string }): ThreadRef | undefined
   /** The session's ref as reading it now gives it, without moving its entries here. */
   readRef(path: string): Promise<ThreadRef | null>
   /** Recovery must not depend on the sidebar's ordering or visible result cap. */
@@ -1346,6 +1351,17 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return [...listed, ...annotateAll(companions).filter((ref) => !internalReviewSession(ref))]
   }
 
+  function catalogThread(target: { path: string } | { harness: string; nativeId: string }): ThreadRef | undefined {
+    let found: ThreadRef | undefined
+    if ("path" in target) found = catalogued(target.path)
+    else for (const ref of daemon ? mirror.values() : (catalog?.list() ?? []))
+      if (ref.harness === target.harness && ref.nativeId === target.nativeId) {
+        found = ref
+        break
+      }
+    return found && annotate(found)
+  }
+
   function catalogRef(path: string): ThreadRef | undefined {
     return daemon
       ? mirror.get(path)
@@ -1777,6 +1793,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     list: listThreads,
     rail: railThreads,
     ref: catalogRef,
+    thread: catalogThread,
     readRef: readThreadRef,
     nativePath: nativePathForSession,
     keepsNative,
