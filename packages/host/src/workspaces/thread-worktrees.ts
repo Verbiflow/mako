@@ -17,7 +17,7 @@ import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, type AdjustHooks, type MoveLedger, type MovePlan } from "./worktree-move.js"
 import type { MoveHaste, MoveOutcome, MoveShares } from "../contracts/workspace-moves.js"
-import { hostLog } from "../base/host-log.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import { githubRepositoryUrl } from "../contracts/cloud-threads.js"
 import { ProjectMissingError, reattachWorktree, workingCheckout } from "./worktree-reattach.js"
 import { HEAD_MARKER, INDEX_MARKER, watchGitMarkers, type GitDirWatch } from "./git-dir-watch.js"
@@ -46,6 +46,8 @@ const SUMMARY_GAP_MS = 5_000
 const SUMMARY_INDEX_GAP_MS = 30_000
 /** The host's own pass, while a window listens: what no event says (a pull request on GitHub, an editor's edit). */
 export const SUMMARY_PASS_MS = 60_000
+/** A branch delete another Git process's lock refused is tried again after each of these waits. */
+const BRANCH_DELETE_WAITS_MS = [200, 400, 800, 1600]
 /** A new Thread's branch search lists this many branches, the most recently committed. */
 const LISTED_BRANCHES = 200
 const BRANCH_PULLS_EVERY_MS = 60_000
@@ -1582,14 +1584,47 @@ export class ThreadWorktreeService {
       const on = await this.git.output(path, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
       if (on !== receipt.branch || (await this.inUse(path)).length || await removalBlocker(this.git, path)) return
     }
+    const left: { repoRoot: string; error: string }[] = []
     for (const { repoRoot, path, base, adopted } of members) {
       if (existsSync(path)) await this.spares.setAside(repoRoot, path)
       const commits = receipt.adopted || adopted ? 1 : await this.git.output(repoRoot, ["rev-list", "--count", `${base}..${receipt.branch}`]).then(Number, () => 1)
-      if (commits === 0) await this.git.output(repoRoot, ["branch", "-D", receipt.branch]).catch(() => undefined)
+      const error = commits === 0 ? await this.dropBranch(repoRoot, receipt.branch) : undefined
+      if (error) left.push({ repoRoot, error })
     }
     if (receipt.members) await this.trashFolder(receipt.path)
+    if (left.length) {
+      // The receipt stays, so the next abandon of it deletes what's left; its worktrees are set aside already.
+      hostWarn("worktrees", "an abandoned worktree's empty branch couldn't be deleted", { conversation: conversationId, branch: receipt.branch, left: left.map(({ repoRoot, error }) => `${repoRoot}: ${error}`).join("; ") })
+      throw new Error(`Couldn't delete the empty branch ${receipt.branch} in ${left.map(({ repoRoot }) => basename(repoRoot)).join(" and ")}: ${left[0]!.error}`)
+    }
     this.untold.delete(conversationId)
     await rm(join(this.receipts(), `${conversationId}.json`), { force: true })
+  }
+
+  /**
+   * Deletes a branch nothing was committed on; the error that kept it, if any. Another Git process in the repository
+   * (a spare being made, a worktree being removed, Git's own maintenance) can hold a ref's lock for a moment, and a
+   * delete it refuses would leave the branch behind for good: what this host has under way for the project ends
+   * first, then the delete is tried again.
+   */
+  private async dropBranch(repoRoot: string, branch: string): Promise<string | undefined> {
+    let error = ""
+    for (const wait of [undefined, ...BRANCH_DELETE_WAITS_MS]) {
+      if (wait !== undefined) {
+        if (wait === BRANCH_DELETE_WAITS_MS[0]) await this.spares.settled()
+        await new Promise((resolve) => setTimeout(resolve, wait))
+      }
+      try {
+        await this.git.output(repoRoot, ["branch", "-D", branch])
+        return undefined
+      } catch (failure) {
+        if (!(await this.hasBranch(repoRoot, branch))) return undefined
+        // Git's first line says what held it ("cannot lock ref …: Unable to create '….lock': File exists").
+        const words = failure instanceof GitError && failure.stderr ? failure.stderr : failure instanceof Error ? failure.message : String(failure)
+        error = words.split("\n").map((line) => line.replace(/^(error|fatal): /, "").trim()).find(Boolean) ?? ""
+      }
+    }
+    return error
   }
 
   private projectFolder(repoRoot: string): string {

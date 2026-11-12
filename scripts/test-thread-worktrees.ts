@@ -798,6 +798,27 @@ await worktrees.abandon(droppedId)
 assert.equal(existsSync(dropped.path), false)
 assert.deepEqual([git(app, "branch", "--list", dropped.branch), git(api, "branch", "--list", dropped.branch)], ["", ""])
 
+// Another Git process holding the branch's lock (a spare being made, a worktree being removed, Git's maintenance) refuses
+// the delete for a moment: abandon waits it out rather than leave the branch behind, as CI saw on 2026-11-11.
+const lockOf = (repo: string, branch: string) => join(repo, ".git", "refs", "heads", `${branch}.lock`)
+const heldId = randomUUID()
+const held = await worktrees.prepare(heldId, suite, "Held a moment")
+writeFileSync(lockOf(app, held.branch), "")
+const freed = setTimeout(() => rmSync(lockOf(app, held.branch), { force: true }), 300)
+await worktrees.abandon(heldId)
+clearTimeout(freed)
+assert.deepEqual([git(app, "branch", "--list", held.branch), git(api, "branch", "--list", held.branch)], ["", ""], "a lock let go in a moment holds the delete, not the branch")
+// One that stays held is said, never hidden, and the next abandon deletes what's left.
+const stuckId = randomUUID()
+const stuck = await worktrees.prepare(stuckId, suite, "Held for good")
+writeFileSync(lockOf(app, stuck.branch), "")
+await assert.rejects(worktrees.abandon(stuckId), new RegExp(`Couldn't delete the empty branch ${stuck.branch} in app: .*lock`))
+assert.equal(existsSync(stuck.path), false, "its worktrees are given back all the same")
+assert.deepEqual([git(app, "branch", "--list", stuck.branch).replace(/^[*+ ]+/, ""), git(api, "branch", "--list", stuck.branch)], [stuck.branch, ""])
+rmSync(lockOf(app, stuck.branch))
+await worktrees.abandon(stuckId)
+assert.equal(git(app, "branch", "--list", stuck.branch), "", "abandoned again, the branch left behind goes")
+
 // A repository added to the project since its spares were made: they mirror what it was, so the next Thread checks out fresh, and they go.
 await worktrees.settled()
 const docs = repository("suite/docs")
