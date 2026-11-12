@@ -1296,8 +1296,9 @@ export class LiveConversations {
     return this.transfers.settled(transferId)
   }
 
-  discoverNativePaths(): void {
-    this.sources.discoverNativePaths()
+  /** Each conversation's native file as the catalog lists it now, or (`only`) those bound to one session's alone. */
+  discoverNativePaths(only?: { harness: string; nativeId: string }): void {
+    this.sources.discoverNativePaths(only)
   }
 
   editQueued(id: string, input: QueuedPromptEdit): LiveSnapshot {
@@ -2066,8 +2067,10 @@ export class LiveConversations {
     this.dependencies.emit({ type: "live-batch", batch, compact, ...(rostered && { rostered }) })
     this.relocations.changed(resident)
     // A turn that ended, as it ended, failed included: what its record holds is all it will.
-    if (previous.session.status === "running" && settled(snapshot.session.status))
+    if (previous.session.status === "running" && settled(snapshot.session.status)) {
       void this.sources.checkpointIdle(resident)
+      this.dependencies.turnEnded?.(snapshot.session.id, snapshot.session.cwd)
+    }
   }
 
   /**

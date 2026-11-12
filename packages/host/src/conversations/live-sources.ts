@@ -730,9 +730,14 @@ export class LiveSources {
   }
 
   /** Native identity belongs to the host, including sessions never opened in a renderer. */
-  discoverNativePaths(): void {
+  discoverNativePaths(only?: { harness: string; nativeId: string }): void {
     for (const resident of this.access.residents()) {
       if (resident.opening || resident.transferring) continue
+      // A catalog row's change moves only its own session's file: every other resident would only be worked out again.
+      if (only) {
+        const binding = activeBinding(resident)
+        if (binding?.provider !== only.harness || binding.nativeId !== only.nativeId) continue
+      }
       this.discoverNativePath(resident)
     }
   }

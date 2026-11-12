@@ -14,6 +14,11 @@ export type GitErrorKind =
   | "missing"
   | "moved"
   | "failed"
+  /**
+   * The process ran, but what it did isn't known: whoever ran it for this `Git` (the host's helper) was lost while it
+   * ran, and it ended on its own or was still running. A write may have landed; read before trying it again.
+   */
+  | "unknown"
 
 export class GitError extends Error {
   readonly kind: GitErrorKind
