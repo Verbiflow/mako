@@ -31,10 +31,29 @@ export const AcknowledgedCheckpointSchema = z.object({ sha256: z.string().regex(
 export type AcknowledgedCheckpoint = z.infer<typeof AcknowledgedCheckpointSchema>
 
 /** A Thread with a parked turn, as its device goes away: what the account may continue, and from what. */
+/** At most this many turns parked in one Thread of a note. */
+export const PARKED_PER_THREAD_MAX = 16
+
+/**
+ * A turn the device paused as it went away. The account's continue sends it on in the cloud Thread once the machine
+ * has arrived, as Mako's continuation of `request` in `conversation`: `mako:live-continue-turn` under `continuation`,
+ * naming the tool calls the pause cut (`stopped`). The device names `continuation` and uses the same one if it joins
+ * that continue later and sends its parked turns there itself, so a turn goes on once whoever sends it first.
+ */
+export const ParkedTurnSchema = z.object({
+  conversation: z.uuid(),
+  request: z.uuid(),
+  continuation: z.uuid(),
+  stopped: z.array(z.string().min(1).max(200)).max(64).optional(),
+}).strict()
+export type ParkedTurn = z.infer<typeof ParkedTurnSchema>
+
 export const QuietThreadSchema = z.object({
   thread: ThreadIdSchema,
   sessions: z.array(SessionAt).min(1).max(OWNER_SESSIONS_MAX),
   checkpoint: AcknowledgedCheckpointSchema.optional(),
+  /** The Thread's turns parked as the device went away, for the continue to send on; absent from devices before it. */
+  parked: z.array(ParkedTurnSchema).max(PARKED_PER_THREAD_MAX).optional(),
 }).strict()
 export type QuietThread = z.infer<typeof QuietThreadSchema>
 

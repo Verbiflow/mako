@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { test } from "node:test"
-import { OwnerAnswerSchema, OwnerAskSchema, QuietAnswerSchema, QuietNoteSchema, autoContinueOp } from "../dist/handoff.js"
+import { OwnerAnswerSchema, OwnerAskSchema, ParkedTurnSchema, QuietAnswerSchema, QuietNoteSchema, autoContinueOp } from "../dist/handoff.js"
 import { continueCloudThread } from "../dist/continues.js"
 
 const session = randomUUID()
@@ -45,3 +45,19 @@ test("the account's continue of a quiet Thread is the same op, and cloud Thread,
   assert.notEqual(await autoContinueOp("t-device", [{ session, generation: 8 }], "0d4b7c2e-4c38-4b8a-9a6f-1f1e0a3b2c4d"), first, "and another generation")
   assert.equal(await continueCloudThread(first), await continueCloudThread(await autoContinueOp("t-device", sessions, "0d4b7c2e-4c38-4b8a-9a6f-1f1e0a3b2c4d")))
 })
+
+test("a Thread of a note names its parked turns, each with the continuation it goes on under; a note without them still reads", () => {
+  const turn = () => ({ conversation: randomUUID(), request: randomUUID(), continuation: randomUUID(), stopped: ["call-1"] })
+  const parked = note()
+  parked.threads[0].parked = [turn(), { ...turn(), stopped: undefined }]
+  assert.equal(QuietNoteSchema.safeParse(parked).success, true)
+  assert.equal(QuietNoteSchema.safeParse(note()).success, true, "a device before parked turns says none")
+  const missing = turn()
+  delete missing.continuation
+  assert.equal(ParkedTurnSchema.safeParse(missing).success, false, "every parked turn names the continuation it goes on under")
+  assert.equal(ParkedTurnSchema.safeParse({ ...turn(), extra: true }).success, false)
+  const many = note()
+  many.threads[0].parked = Array.from({ length: 17 }, turn)
+  assert.equal(QuietNoteSchema.safeParse(many).success, false, "at most 16 a Thread")
+})
+
