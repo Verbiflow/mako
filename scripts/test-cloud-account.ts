@@ -89,7 +89,7 @@ async function fakeCloud({ runtimeEnrolled }: { runtimeEnrolled?: Promise<void> 
   const calls: string[] = []
   const correlations: (string | string[] | undefined)[] = []
   /** What each ask to make a Thread sent. */
-  const threads: Array<{ threadId: string; prepare?: boolean }> = []
+  const threads: Array<{ threadId: string; prepare?: boolean; standby?: boolean; standsByFor?: string }> = []
   /** Repositories asked for project bases. */
   const bases: unknown[] = []
   /** What each move's claim and refusal carried, as the cloud took them. */
@@ -1063,6 +1063,14 @@ test("a cloud Thread made ahead is asked for as one, reported apart from a start
   assert.deepEqual(await mac.accounts.createThread("t-fedcba9876543210", repository), { ready: false })
   assert.deepEqual(cloud.threads.map((made) => made.prepare === true), [true, true, false], "only a Thread made ahead says so")
   assert.deepEqual(reported.filter((call) => call.route.startsWith("threads.")).map((call) => call.route), ["threads.prepare", "threads.prepare", "threads.create"])
+  // One kept ready for a Thread of this Mac's names that Thread, so the account can trust it as its standby.
+  const thread = "0b6f1f2a-3c4d-4e5f-8a9b-1c2d3e4f5a6b"
+  await mac.accounts.createThread("t-00112233aabbccdd", repository, { standby: true, folder: "/Users/ada/worktrees/fix", standsByFor: thread })
+  assert.equal(cloud.threads.at(-1)?.standsByFor, thread)
+  assert.equal(cloud.threads.at(-1)?.standby, true)
+  // Never on a Thread that doesn't stand by.
+  await mac.accounts.createThread("t-99887766aabbccdd", repository, { standsByFor: thread })
+  assert.equal(cloud.threads.at(-1)?.standsByFor, undefined)
 })
 
 test("project bases are asked for with the repositories only, reported as their own route", async () => {
