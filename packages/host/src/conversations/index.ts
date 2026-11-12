@@ -319,6 +319,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const continueOn = continuing({
     live,
     resolveLaunch: (provider, cwd, tuning) => harnesses.profiles.resolveLaunch(provider, cwd, tuning),
+    carried: (provider, cwd, tuning) => harnesses.profiles.carried(provider, cwd, tuning),
     resumesUnderAccount: (harness) => host.liveDrivers.get(harness)?.accountContinuation?.kind === "resumes",
     switched: (provider) => deps.telemetry.feature("harness.switched", provider),
   })
