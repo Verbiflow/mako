@@ -1,5 +1,12 @@
 import { defineConfig } from "oxlint"
 
+// Reviewed prevalidation lint allowlist only; it grants no runtime trust or authority.
+const reviewedDataDecoder = {
+  module: "packages/protocol/src/handoff-project.ts",
+  export: "plainProtocolValue",
+  result: "PlainProtocolValue",
+}
+
 export default defineConfig({
   ignorePatterns: [
     ".agent/**",
@@ -40,9 +47,9 @@ export default defineConfig({
     "anti-slop/no-quadratic-buffer-concat": "error",
     "anti-slop/no-reflect-apply": "error",
     "anti-slop/no-reflect-get": "error",
-    "anti-slop/no-runtime-typeof": "error",
+    "anti-slop/no-runtime-typeof": ["error", { reviewedDataDecoder }],
     "anti-slop/no-shape-in-symbol-names": "error",
-    "anti-slop/no-unknown-parameters": "error",
+    "anti-slop/no-unknown-parameters": ["error", { reviewedDataDecoder }],
     "anti-slop/no-unknown-returns": "error",
     "anti-slop/no-unknown-type-aliases": "error",
     "anti-slop/no-unsafe-dictionary-type": "error",

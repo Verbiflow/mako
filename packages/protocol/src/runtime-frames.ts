@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { BorrowPushSchema, CapabilitySchema, SlotsSchema } from "./borrow.js"
 import {
   type Operation,
   OperationEnvelopeSchema,
@@ -140,7 +141,24 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
    * rather than waiting for it to miss its heartbeats; the runtime connects again when it's back.
    */
   z.object({ type: z.literal("going-quiet"), reason: z.enum(["sleep", "quit", "sign-out"]) }).strict(),
+  /**
+   * What a device's runtime can serve, as it probed it, and its room (version 23 on, `borrow.ts`): sent on enrolment,
+   * on each change, and hourly. `slots.used` is its own work (its Fins); the account's broker counts what it lends.
+   * `load` says the room in the person's words ("14 cores, 36 GB"). Capabilities are names and versions, never a value.
+   */
+  z
+    .object({
+      type: z.literal("advertise"),
+      capabilities: z.array(CapabilitySchema).max(64),
+      slots: SlotsSchema,
+      load: z.string().max(200).optional(),
+      at: z.number().int().nonnegative(),
+    })
+    .strict(),
 ])
+
+/** What a device's runtime says it can serve, and its room (`advertise`). */
+export type Advertisement = Omit<Extract<RuntimeFrameEnvelope, { type: "advertise" }>, "type">
 
 /** Why a runtime says it's going quiet (`going-quiet`). */
 export type GoingQuietReason = Extract<RuntimeFrameEnvelope, { type: "going-quiet" }>["reason"]
@@ -277,6 +295,12 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
    * not said is written in form 1.
    */
   z.object({ type: z.literal("live-form"), threadId: ThreadIdSchema, form: LiveFormSchema }).strict(),
+  /**
+   * What a Thread this runtime runs borrows changed (version 21 on, `borrow.ts`): a lease decided after it waited, a
+   * lease ended, or a newer version of a copy. `seq` is the Thread's push sequence, the one asking for its pushes
+   * answers from, so a runtime that sees a gap asks from the last it had. Never a value.
+   */
+  z.object({ type: z.literal("borrow"), threadId: ThreadIdSchema, seq: SeqSchema, push: BorrowPushSchema }).strict(),
 ])
 
 export type RuntimeFrameEnvelope = z.infer<typeof RuntimeFrameEnvelopeSchema>

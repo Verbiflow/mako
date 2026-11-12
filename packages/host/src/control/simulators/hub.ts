@@ -1,3 +1,4 @@
+import { hostFetch } from "../../base/host-stopping.js"
 import { createHash, randomBytes } from "node:crypto"
 import { chmod, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -90,7 +91,7 @@ export class SimulatorHub implements CaptureSource {
       args: (port) => ["--port", String(port), "--serve-sim", options.serveSim, "--inspect-webkit", options.inspectWebkit, "--socket", socket],
       // serve-sim keeps its state under TMPDIR: the hub's own folder, not the one the person's own serve-sim uses.
       env: { ...(options.env ?? process.env), MAKO_SIMULATOR_HUB_TOKEN: this.#token, TMPDIR: join(options.folder, "tmp") },
-      ready: async (origin) => (await fetch(`${origin}/health`, { headers: this.#headers(), signal: AbortSignal.timeout(2_000) })).ok,
+      ready: async (origin) => (await hostFetch(`${origin}/health`, { headers: this.#headers(), signal: AbortSignal.timeout(2_000) })).ok,
       stateFile: join(options.folder, "hub.json"),
       run: options.run,
     })
@@ -114,7 +115,7 @@ export class SimulatorHub implements CaptureSource {
 
   async #get(path: string, timeoutMs = 10_000): Promise<Response> {
     const { origin, headers } = await this.connection()
-    const response = await fetch(`${origin}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) })
+    const response = await hostFetch(`${origin}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) })
     if (!response.ok) throw new Error(`The simulator hub answered ${path.split("/").pop()} with ${response.status}: ${(await response.text()).slice(0, 200)}`)
     return response
   }
@@ -138,7 +139,7 @@ export class SimulatorHub implements CaptureSource {
 
   async open(udid: string, route: "stream.avcc" | "stream.mjpeg", signal: AbortSignal): Promise<AsyncIterable<Uint8Array>> {
     const { origin, headers } = await this.connection()
-    const response = await fetch(`${origin}/helper/${udid}/${route}`, { headers, signal })
+    const response = await hostFetch(`${origin}/helper/${udid}/${route}`, { headers, signal })
     if (!response.ok || !response.body) throw new Error(`The simulator hub answered ${route} with ${response.status}`)
     return response.body
   }

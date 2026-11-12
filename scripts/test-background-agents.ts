@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import "./test-internal-native-agents.ts"
 import { spawn } from "node:child_process"
 import { mock } from "node:test"
 import { randomUUID } from "node:crypto"
@@ -19,7 +20,7 @@ import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/backgro
 import { AFTER_LIMIT, CHILDREN_BINDING, withChildren } from "@mako/host/contracts/native-agents"
 import { listedAsThread, threadList } from "@mako/host/contracts/thread-list"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
-import { HANDED_OVER_NOTE } from "@mako/host/contracts/children"
+import { HANDED_OVER_NOTE, listedFins } from "@mako/host/contracts/children"
 import { END_CONFIRM_MS, lastStep, PROCESS_READS, type ProcessReads } from "@mako/host/conversations/agent-runs"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { namedUuid } from "@mako/host/conversations/cloud-moves"
@@ -321,6 +322,32 @@ async function finLimit(): Promise<void> {
     await w.close()
   }
 
+  // A simulator this Mac lends another place's Thread takes a Fin's place: one pool, so the Mac never runs more than it can.
+  let lentHere = 1
+  let lending = 0
+  const lender = new AgentsWorld({
+    root: join(root, "fin-lent"),
+    script: (turn) => turn.text.includes("You're fin:") ? (lending++, turn.world.hold(turn.conversation).then(() => (lending--, "stopped"))) : "ok",
+    finLimit: () => 2,
+    lent: () => lentHere,
+  })
+  try {
+    const apex = await lender.apex("claude")
+    const brief = { objective: "Hold" }
+    const one = await lender.agents.start(apex.caller, { brief, name: "one", clientKey: "1", cwd: lender.root })
+    assert.ok(!("refused" in one) && one.state !== "queued", JSON.stringify(one))
+    await waitFor(() => lending === 1, "the first Fin at work")
+    assert.equal(lender.agents.workingHere(), 1, "what this device advertises as its own work leaves out what it lends")
+    const two = await lender.agents.start(apex.caller, { brief, name: "two", queue: true, clientKey: "2", cwd: lender.root })
+    assert.ok(!("refused" in two) && two.state === "queued", `the lent simulator holds the second place: ${JSON.stringify(two)}`)
+    lentHere = 0
+    lender.agents.capacityChanged()
+    await waitFor(() => lending === 2, "the place the lease held goes to the waiting Fin once the lease ends")
+    await lender.agents.stop(apex.caller, { child: "all" })
+  } finally {
+    await lender.close()
+  }
+
   // The person's ceiling across every place holds over a place with room.
   let held = 0
   const capped = new AgentsWorld({
@@ -489,7 +516,7 @@ async function launchesBeforeTheirEdge(): Promise<void> {
     limit = 3
     w.agents.capacityChanged()
     // Its Apex hears once the digest is in its queue, which can come before the row is read.
-    await waitFor(() => w.store.queuedSpawns().length === 0 || w.agents.roster(apex.conversation).some((entry) => entry.state.kind === "waiting" && /^Not started: its worktree couldn't be made/.test(entry.state.reason ?? "")), "the refusal to show on its row")
+    await waitFor(() => w.store.queuedSpawns().length === 0 || w.agents.roster(apex.conversation).some((entry) => entry.state.kind === "waiting" && (entry.state.reason ?? "").startsWith("Not started: its worktree couldn't be made")), "the refusal to show on its row")
     await waitFor(() => w.store.queuedSpawns().length === 0, "it to go once its Apex heard", 15_000)
     const told = /"bad" \(Claude\) failed: It didn't start: its worktree couldn't be made/
     await waitFor(() => w.prompts.some((prompt) => prompt.conversation === apex.conversation && told.test(prompt.text)), "its Apex to hear why it didn't start")
@@ -1007,6 +1034,7 @@ async function refusals(): Promise<void> {
     const five = await w.agents.start(apex.caller, { brief, name: "five", clientKey: "5", cwd: w.root })
     assert.ok("refused" in five && five.refused === "budget")
     assert.match(five.why, /started 3 of its 3/)
+    assert.match(five.why, /lifetime.*agents_send/, "finishing a Fin cannot free a lifetime start; reuse one")
     const childCaller = w.caller(two.conversation!)
     const wider = await w.agents.start(childCaller, { brief, access: "full", clientKey: "w", cwd: w.root })
     assert.ok("refused" in wider && wider.refused === "access", "a child runs at most at its Apex's access")
@@ -1252,9 +1280,8 @@ async function activityTellsNoOne(): Promise<void> {
 }
 
 /**
- * A Fin's progress alone goes to its Apex Thread's newest Session, by the store's order, and never reads another back
- * from its journal; a change of how it stands goes to every one. One Apex of 14 Sessions, 13 closed, took every step 14
- * times.
+ * A Fin's progress, and a change of how it stands, go to its Apex Thread's newest Session alone, by the store's order,
+ * and never read another back from its journal. One Apex of 14 Sessions, 13 closed, took every step 14 times.
  */
 async function progressGoesWhereItsRead(): Promise<void> {
   const w = world("progress", (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "Done: it's finished.") : "Started it."))
@@ -1299,7 +1326,8 @@ async function progressGoesWhereItsRead(): Promise<void> {
     }
     assert.deepEqual(moveFrom({ ...now, title: `${now.title} before`, observedAt: now.observedAt - 1 }).map(([id]) => id), [apex.conversation], "a step goes to the newest Session alone, not one running before it")
     assert.ok(told.every(([, progress]) => progress), "as progress")
-    assert.deepEqual(moveFrom({ ...now, state: { kind: now.state.kind === "waiting" ? "working" : "waiting" } }).map(([id]) => id).sort(), [apex.conversation, ...Object.values(older)].sort(), "a change of how it stands goes to every Session")
+    assert.deepEqual(moveFrom({ ...now, state: { kind: now.state.kind === "waiting" ? "working" : "waiting" } }).map(([id]) => id), [apex.conversation], "so does a change of how it stands")
+    assert.ok(told.every(([, progress]) => !progress), "at once, not as progress")
     // A Session after the Apex's own is the newest: the order is the store's, not whose the Fin is.
     const newer = randomUUID()
     mock.method(store, "thread", (id: Parameters<typeof store.thread>[0]) => {
@@ -1313,6 +1341,152 @@ async function progressGoesWhereItsRead(): Promise<void> {
     assert.deepEqual(moveFrom({ ...now, title: `${now.title} again`, observedAt: now.observedAt - 1 }).map(([id]) => id), [newer], "a step goes to the Session made last")
   } finally {
     mock.restoreAll()
+    await w.close()
+  }
+}
+
+/**
+ * A Fin's start, end or change of how it stands goes to its Apex Thread's newest Session alone, as its progress does: an
+ * older Session in memory keeps its Fins as it last heard them, its Fins no longer hold it there, and one let go of
+ * isn't read back in for them, by the move or by its wakes. Read in, it takes them as they stand. On 2026-11-07 a window
+ * took 62 whole rosters in ten minutes for each of 13 Sessions besides the newest.
+ */
+async function finsMoveInTheNewestSession(): Promise<void> {
+  const w = new AgentsWorld({
+    root: join(root, "newest-session"),
+    script: (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "Done: it's finished.") : "Started them."),
+  })
+  try {
+    const apex = await w.apex("codex")
+    const fins: { child: string; conversation: string }[] = []
+    for (const name of ["one", "two"]) {
+      const started = await w.agents.start(apex.caller, { brief: { objective: "Keep working." }, harness: "claude", name, clientKey: `k-${name}`, cwd: w.root, wake: "never" })
+      assert.ok(!("refused" in started) && started.conversation && started.child, JSON.stringify(started))
+      fins.push({ child: started.child, conversation: started.conversation })
+    }
+    const kindIn = (conversation: string, fin: number) => w.live.held(conversation)?.nativeAgents?.agents.find((agent) => agent.child?.thread === fins[fin]!.child)?.state.kind
+    await waitFor(() => kindIn(apex.conversation, 0) === "working" && kindIn(apex.conversation, 1) === "working", "the Apex's Session has both at work")
+
+    // A new tab of the Apex's Thread is its newest Session; the Apex's own is older now.
+    const apexThread = w.store.journalPlacement(apex.conversation)!.thread
+    const tab = w.store.createSession({ operationId: randomUUID(), thread: apexThread, actor: w.store.person() })
+    const newest = randomUUID()
+    await w.live.start("codex", w.root, { conversationId: newest, session: tab.session, initialRequest: { id: randomUUID(), text: "And this?", attachments: [] } })
+    await waitFor(() => w.live.held(newest)?.requests[0]?.status === "completed", "the new tab's first turn ends")
+    assert.equal(w.agents.showsFins(newest), true, "the newest Session hears its Thread's Fins")
+    assert.equal(w.agents.showsFins(apex.conversation), false, "an older one doesn't")
+    const rostersTo = (from: number, conversation: string) => w.events.slice(from).filter((event) => event.type === "live-batch" && event.batch.id === conversation && event.batch.nativeAgents !== undefined).length
+
+    // A Fin ends with the older Session in memory: the newest hears it, the older keeps what it last heard.
+    let from = w.events.length
+    w.release(fins[0]!.conversation)
+    await waitFor(() => kindIn(newest, 0) !== undefined && kindIn(newest, 0) !== "working", "the newest Session hears the first Fin end")
+    assert.ok(rostersTo(from, newest) > 0, "every window is sent it, in the newest Session's batch")
+    assert.equal(kindIn(apex.conversation, 0), "working", "an older Session in memory isn't told")
+    assert.equal(rostersTo(from, apex.conversation), 0, "and no window is sent its roster")
+    // The person closes it, and it goes from memory while a Fin of its Thread still works.
+    await w.live.close(apex.conversation)
+    await waitFor(() => w.live["records"].release(apex.conversation), "the closed Session goes from memory")
+    assert.equal(kindIn(newest, 1), "working")
+
+    // The other ends with it let go of: nothing reads it back in, neither the move nor the wake its end refreshes.
+    from = w.events.length
+    w.release(fins[1]!.conversation)
+    await waitFor(() => kindIn(newest, 1) !== undefined && kindIn(newest, 1) !== "working", "the newest Session hears the second Fin end")
+    await w.settle(300)
+    assert.equal(w.live.held(apex.conversation), undefined, "the older Session wasn't read back in")
+    assert.equal(rostersTo(from, apex.conversation), 0)
+
+    // Read back in, closed, it takes its Fins as they stand.
+    assert.equal(w.live.snapshot(apex.conversation)?.session.status, "closed", "the closed Session reads back in")
+    for (const fin of [0, 1]) assert.equal(kindIn(apex.conversation, fin), kindIn(newest, fin), "with its Fins as they stand")
+  } finally {
+    await w.close()
+  }
+}
+
+/**
+ * An open ask always surfaces: whichever Session of a Fin's Thread waits on an approval, the older or the newer, beside
+ * one left idle, is what the Fin's standing says, here (its Apex's roster and the person's ask) and on another device
+ * (the row it draws from the account's list), and the answer reaches the Session that asked. A Fin read one Session
+ * alone, the one its host first found, so an approval in another tab was nobody's to see.
+ */
+async function anySessionAsks(): Promise<void> {
+  for (const asker of ["newer", "older"] as const) {
+    const w = world(`asks-${asker}`, (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : "Started it."))
+    try {
+      const apex = await w.apex("codex")
+      const started = await w.agents.start(apex.caller, { brief: { objective: "Finish." }, harness: "claude", name: "asker", clientKey: "k-asker", cwd: w.root })
+      assert.ok(!("refused" in started) && started.conversation && started.child, JSON.stringify(started))
+      await waitFor(() => w.live.held(started.conversation!)?.requests[0]?.status === "completed", "the Fin's first turn ends")
+      // A new tab of the Fin's Thread, idle once its first turn ends: its newest Session.
+      const tab = w.store.createSession({ operationId: randomUUID(), thread: ThreadIdSchema.parse(started.child), actor: w.store.person() })
+      const newer = randomUUID()
+      await w.live.start("claude", w.root, { conversationId: newer, session: tab.session, initialRequest: { id: randomUUID(), text: "Anything else?", attachments: [] } })
+      await waitFor(() => w.live.held(newer)?.requests[0]?.status === "completed", "the new tab's first turn ends")
+      const entry = () => w.agents.roster(apex.conversation).find((agent) => agent.child?.thread === started.child)
+      assert.notEqual(entry()?.child?.state?.kind, "blocked", `${asker}: nothing asks yet`)
+      const asking = asker === "newer" ? newer : started.conversation!
+      const answered = w.ask(asking, "Run the migration?")
+      await waitFor(() => entry()?.child?.state?.kind === "blocked", `${asker}: its Apex's roster says the ${asker} Session asks, not that the other is idle`)
+      const ask = w.agents.personAsk(apex.conversation)
+      assert.equal(ask?.line, "Approve: Run the migration?", `${asker}: the person is asked it`)
+      // Another device draws the Fin from the account's list of the Apex: it asks there too.
+      const listed = listedFins(w.agents.roster(apex.conversation))?.find((fin) => fin.thread === started.child)
+      assert.equal(listed?.state.kind, "blocked", `${asker}: the row another device draws from says it asks`)
+      // The answer goes to the Session that asked.
+      const respond = await w.agents.respond(apex.conversation, { fin: ask!.fin, ask: ask!.ask.id, request: randomUUID(), allow: true })
+      assert.ok(!("refused" in respond), JSON.stringify(respond))
+      await answered
+      assert.equal(w.live.waitingOn(asking), undefined, `${asker}: the answer reached the Session that asked`)
+    } finally {
+      await w.close()
+    }
+  }
+}
+
+/**
+ * A Fin's older Session waiting on the person for something that's neither an approval nor a question (its subagent
+ * waits, with nothing more to say: needs-you, by the protocol's `asks`) is what the Fin stands on, beside a newer one
+ * idle, and it's the person's, never its Apex's to answer. An approval in the older Session beside a newer one that
+ * needs the person still reaches its Apex, and its answer the Session that asked.
+ */
+async function aSessionNeedsYou(): Promise<void> {
+  const w = world("needs-you", (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : "Started it."))
+  try {
+    const apex = await w.apex("codex")
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Finish." }, harness: "claude", name: "needing", clientKey: "k-needing", cwd: w.root })
+    assert.ok(!("refused" in started) && started.conversation && started.child, JSON.stringify(started))
+    const older = started.conversation
+    await waitFor(() => w.live.held(older)?.requests[0]?.status === "completed", "the Fin's first turn ends")
+    const tab = w.store.createSession({ operationId: randomUUID(), thread: ThreadIdSchema.parse(started.child), actor: w.store.person() })
+    const newer = randomUUID()
+    await w.live.start("claude", w.root, { conversationId: newer, session: tab.session, initialRequest: { id: randomUUID(), text: "Anything else?", attachments: [] } })
+    await waitFor(() => w.live.held(newer)?.requests[0]?.status === "completed", "the new tab's first turn ends")
+    const entry = () => w.agents.roster(apex.conversation).find((agent) => agent.child?.thread === started.child)
+    const waits = (conversation: string, kind: "waiting" | "completed") =>
+      w.live.observe({ type: "live-agent", id: conversation, agent: { nativeId: "sub", title: "Explore", work: "agent", stoppable: true, state: { kind } } })
+    waits(older, "waiting")
+    assert.equal(w.live.workOf(older)?.status, "waiting", "the older Session waits on the person")
+    assert.equal(w.live.waitingOn(older), undefined, "for nothing it names")
+    await waitFor(() => entry()?.child?.state?.kind === "blocked", "its Apex's roster says the Fin waits, not that its newer Session is idle")
+    const state = entry()?.child?.state
+    assert.equal(state?.kind === "blocked" ? state.on : undefined, "person", "on the person, not its Apex")
+    assert.equal(entry()?.child?.conversation, older, "read from the Session that waits")
+    waits(older, "completed")
+    await waitFor(() => entry()?.child?.state?.kind !== "blocked", "and no longer, once it doesn't")
+
+    // The older Session asks for an approval while the newer one needs the person: the approval is its Apex's to hear,
+    // and its answer reaches the older Session.
+    waits(newer, "waiting")
+    const answered = w.ask(older, "Run the migration?")
+    await waitFor(() => w.agents.personAsk(apex.conversation)?.ask.kind === "approval", "the approval is asked")
+    const ask = w.agents.personAsk(apex.conversation)!
+    const respond = await w.agents.respond(apex.conversation, { fin: ask.fin, ask: ask.ask.id, request: randomUUID(), allow: true })
+    assert.ok(!("refused" in respond), JSON.stringify(respond))
+    await answered
+    assert.equal(w.live.waitingOn(older), undefined, "the answer reached the Session that asked")
+  } finally {
     await w.close()
   }
 }
@@ -2060,6 +2234,9 @@ try {
   await listsReadNoJournal()
   await activityTellsNoOne()
   await progressGoesWhereItsRead()
+  await finsMoveInTheNewestSession()
+  await anySessionAsks()
+  await aSessionNeedsYou()
   await followsShellRuns()
   await relinkedRuns()
   await messagesReachLinkedRuns()

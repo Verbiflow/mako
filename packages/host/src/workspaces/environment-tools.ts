@@ -343,9 +343,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     lineTimer.unref?.()
   }
   /** The run installing a checkout: one a spare checkout handed over with it, else the app's own. */
-  const installOf = async (app: AppKey, checkout: string) => {
+  /** `shown`: only for showing it (`ThreadProcesses.status`). */
+  const installOf = async (app: AppKey, checkout: string, options: { shown?: boolean } = {}) => {
     const carrier = (await deps.processes.prepared(checkout)).by ?? app
-    return { carrier, status: await installStatus(deps.processes, carrier) }
+    return { carrier, status: await installStatus(deps.processes, carrier, options) }
   }
   /** Starts that found their checkout's install still running, by app: each goes ahead once its install has ended. */
   const afterInstall = new Map<AppKey, { checkout: string; again: () => Promise<StartOutcome> }>()
@@ -1192,7 +1193,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       }
       return { kind: "invalid", project: found.project, root: found.root, message: read.message }
     }
-    const runs = found.environment ? await deps.processes.status(found.app) : []
+    const runs = found.environment ? await deps.processes.status(found.app, { shown: true }) : []
     const run = (kind: RunStatus["kind"], name: string) => runs.find((entry) => entry.kind === kind && entry.name === name)
     const processes = Object.entries(read.recipe.processes).map(([name, spec]) => processView(name, found.environment && processPort(spec, found.environment), run("process", name)))
     const targets = Object.keys(read.recipe.targets ?? {})
@@ -1209,7 +1210,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const up = processes.filter((entry) => entry.state === "running" || entry.state === "starting")
     const started = runs.filter((entry) => entry.kind === "process" && entry.startedAt !== undefined && (entry.state.kind === "running" || entry.state.kind === "starting"))
     if (started.length) view.startedAt = Math.min(...started.map((entry) => entry.startedAt!))
-    const installing = found.environment ? (await installOf(found.app, found.checkout)).status : undefined
+    const installing = found.environment ? (await installOf(found.app, found.checkout, { shown: true })).status : undefined
     const lastStart = Math.max(0, ...runs.filter((entry) => entry.kind === "process").map((entry) => entry.startedAt ?? 0))
     if (installing?.state.kind === "running" || installing?.state.kind === "starting") {
       view.prepare = { command: installing.command, reason: await prepareReason(read.recipe, found.checkout) }

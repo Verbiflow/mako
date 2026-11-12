@@ -28,6 +28,7 @@ export function cursorConnection(auth: CursorSdkAuth, secureStorage: () => Promi
       "Every Cursor thread runs through Cursor's SDK under this key. A cursor-agent login on this machine is used on its own; sign in here to use another account or a key of your own.",
     keyUrl: CURSOR_API_KEY_URL,
     secureStorage,
+    stop: () => auth.stop(),
     async status(refresh = false) {
       const snapshot = await auth.status(refresh)
       return { ...cursorConnectionState(snapshot), checkedAt: new Date(snapshot.checkedAt).toISOString() }

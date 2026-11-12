@@ -3,6 +3,7 @@ import { toast } from "sonner"
 import { z } from "zod"
 import type { ThreadRef } from "@/lib/types"
 import { acpStore, useAcp } from "@/state/acp"
+import { inboxView } from "@/state/inbox-view"
 import type { ConversationScope } from "@/state/conversation-scope"
 import { hydrateLive } from "@/state/live-recovery"
 import { threadGroupsStore } from "@/state/thread-groups"
@@ -62,6 +63,7 @@ let pendingFrom: PaneSession | undefined
 
 /** Open a tab in its pane. With one pane this is opening the tab. */
 export function openTabInPane(paneId: string, thread: string | undefined, tab: SessionTab): void {
+  inboxView.close()
   const state = viewerStore.get()
   if (state.panes.length === 1 || !thread) {
     viewer.activate(paneId, AGENT_TAB_ID)
@@ -243,7 +245,7 @@ function keepPaneLayout(): () => void {
       if (state === "gone") focused = undefined
       if (tab) {
         focused = undefined
-        openSessionTab(tab)
+        openSessionTab(tab, "restore")
       }
     }
     if (resting) {

@@ -1,7 +1,7 @@
 {
   "harness": "claude",
-  "version": "2.1.314",
-  "on": "2026-10-30",
+  "version": "2.1.322",
+  "on": "2026-11-10",
   "via": "the Agent SDK's claude -p --output-format stream-json, stopped at system/init",
   "tools": [
     "Bash",
@@ -49,6 +49,7 @@
     "mcp_read_resource_v1",
     "mcp_tool_ui_meta_v1",
     "ui_surface_v1",
-    "mcp_call_result_not_for_model_v1"
+    "mcp_call_result_not_for_model_v1",
+    "mcp_call_check_permissions_v1"
   ]
 }

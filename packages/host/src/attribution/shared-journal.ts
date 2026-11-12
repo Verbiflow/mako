@@ -71,6 +71,10 @@ export function ownerAddress(folder: string, platform: NodeJS.Platform = nodePla
 export const PlacedSessionSchema = z.object({ path: AbsolutePathSchema, thread: ThreadIdSchema, session: SessionRefSchema }).strict()
 export type PlacedSession = z.infer<typeof PlacedSessionSchema>
 
+export interface SettledOptions {
+  rescans?: boolean
+}
+
 export type LostTarget = { thread: string } | { path: string }
 
 /** Every write a host makes into the journal, wherever the journal is. */
@@ -88,7 +92,8 @@ export interface JournalWrites {
   /** A follower's Threads' sessions; the owner's own are in its catalog. */
   sessions(sessions: readonly PlacedSession[]): void
   track(root: string): Promise<void>
-  settled(): Promise<void>
+  /** Every change heard journaled; `rescans: false` (a turn's count) leaves rescans for lost events to their own pace. */
+  settled(options?: SettledOptions): Promise<void>
   readBack(checkout?: string, budgetMs?: number): Promise<BackfillResult | undefined>
   lost(target: LostTarget): Promise<LostVersion[]>
   restore(root: string, entry: number): Promise<{ path: string }>
@@ -130,7 +135,8 @@ type OneWay = z.infer<typeof OneWaySchema>
 const LostTargetSchema = z.union([z.object({ thread: ThreadIdSchema }).strict(), z.object({ path: AbsolutePathSchema }).strict()])
 const RequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("track"), root: AbsolutePathSchema }),
-  z.object({ kind: z.literal("settled") }),
+  // `rescans` is new: an owner from before it reads every `settled` as a full one, and this one reads a follower's without it so.
+  z.object({ kind: z.literal("settled"), rescans: z.boolean().optional() }),
   z.object({ kind: z.literal("read-back"), checkout: AbsolutePathSchema.optional(), budgetMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("lost"), target: LostTargetSchema }),
   z.object({ kind: z.literal("restore"), root: z.string().min(1).max(200), entry: z.number().int().positive() }),
@@ -379,8 +385,8 @@ export class SharedJournal {
       track: async (root) => {
         answer(await this.request({ kind: "track", root }), "track")
       },
-      settled: async () => {
-        answer(await this.request({ kind: "settled" }), "settled")
+      settled: async (options) => {
+        answer(await this.request({ kind: "settled", ...(options?.rescans === false && { rescans: false }) }), "settled")
       },
       readBack: async (checkout, budgetMs) => answer(await this.request({ kind: "read-back", checkout, budgetMs }), "read-back").result ?? undefined,
       lost: async (target) => answer(await this.request({ kind: "lost", target }), "lost").versions,
@@ -618,7 +624,7 @@ export class SharedJournal {
         await writes.track(request.root)
         return { kind: "track" }
       case "settled":
-        await writes.settled()
+        await writes.settled(request.rescans === false ? { rescans: false } : undefined)
         return { kind: "settled" }
       case "read-back": return { kind: "read-back", result: (await writes.readBack(request.checkout, request.budgetMs)) ?? null }
       case "lost": return { kind: "lost", versions: await writes.lost(request.target) }

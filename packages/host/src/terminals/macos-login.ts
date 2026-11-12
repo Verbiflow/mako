@@ -1,7 +1,8 @@
-import { execFile } from "node:child_process"
+import { hostExecFile } from "../base/host-command.js"
 import { existsSync } from "node:fs"
 import { userInfo } from "node:os"
 import { z } from "zod"
+import { endChildInput } from "@mako/sessions/child-input"
 
 const LOGIN_PATH = "/usr/bin/login"
 const BASH_PATH = "/bin/bash"
@@ -41,12 +42,11 @@ function account(): { username: string; home: string } | null {
 function preflight(username: string, home: string): Promise<boolean | null> {
   return new Promise((resolve) => {
     try {
-      const child = execFile(
+      const child = hostExecFile(
         LOGIN_PATH,
         ["-flpq", username, PRINTF_PATH, MARKER],
         {
           cwd: home,
-          encoding: "utf8",
           killSignal: "SIGKILL",
           maxBuffer: 1024,
           timeout: TIMEOUT_MS,
@@ -60,7 +60,7 @@ function preflight(username: string, home: string): Promise<boolean | null> {
           resolve(parsed.success && parsed.data.killed ? null : false)
         }
       )
-      child.stdin?.end()
+      endChildInput(child)
     } catch {
       resolve(null)
     }

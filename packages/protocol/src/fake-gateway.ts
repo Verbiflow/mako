@@ -34,7 +34,7 @@ import {
   mediaStreamOf,
 } from "./media.js"
 import { Payload } from "./payload.js"
-import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
+import type { Advertisement, GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import { type SshClient, SshIncoming, SshOutgoing, SshRefusedError, type SshStream } from "./ssh.js"
 import type { SessionsReport } from "./thread-listing.js"
 import { COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
@@ -148,6 +148,8 @@ export type FakeGateway = Omit<GatewayUnderTest, "connectClient"> & {
   activity(threadId: string): { busy: boolean; work: string[]; at: Date } | undefined
   /** Each report of its Sessions a runtime sent, in order, for a test of what it says and when. */
   reports(runtimeId: string): SessionsReport[]
+  /** Every advertisement a device's runtime sent (`advertise`), oldest first. */
+  advertisements(runtimeId: string): Advertisement[]
   /** The operations waiting for the Thread's runtime (`whenAsleep: "defer"`). */
   deferred(threadId: string): string[]
 }
@@ -166,6 +168,7 @@ export function createFakeGateway(
   const admissions = new Map<string, number>()
   const activity = new Map<string, { busy: boolean; work: string[]; at: Date }>()
   const reports = new Map<string, SessionsReport[]>()
+  const advertised = new Map<string, Advertisement[]>()
   /**
    * By session stream: who watches it, and its numbering and last few updates (`LiveTail`), as a gateway keeps them. A
    * stream nobody watches lingers `LINGER_MS` (`idleSince`), its runtime still sending, so a watcher back from a dropped
@@ -545,6 +548,11 @@ export function createFakeGateway(
     if (frame.type === "listing") return
     if (frame.type === "sessions") {
       reports.set(connection.runtimeId, [...(reports.get(connection.runtimeId) ?? []), frame.report])
+      return
+    }
+    if (frame.type === "advertise") {
+      const { type: _type, ...advertisement } = frame
+      advertised.set(connection.runtimeId, [...(advertised.get(connection.runtimeId) ?? []), advertisement])
       return
     }
     if (frame.type === "live") {
@@ -955,6 +963,7 @@ export function createFakeGateway(
 
     activity: (threadId) => activity.get(threadId),
     reports: (runtimeId) => reports.get(runtimeId) ?? [],
+    advertisements: (runtimeId) => advertised.get(runtimeId) ?? [],
     deferred: (threadId) => thread(threadId).deferred.map((operation) => operation.id),
   }
 }

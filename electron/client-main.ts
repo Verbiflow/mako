@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, powerMonitor, protocol, shell, type IpcMainInvokeEvent } from "electron"
 import { WindowShutdown } from "@mako/host/application/window-shutdown"
+import { SHUTDOWN_HOLD_MS } from "@mako/host/contracts/cloud-threads"
 import { createHash, randomUUID } from "node:crypto"
 import { cp, mkdir, access, mkdtemp, rename, rm } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -15,7 +16,7 @@ import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtime
 import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, invokeRuntimeVideo, probeRuntime, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { runtimeEventRouting } from "@mako/host/contracts/runtime"
-import { LIVE_FORM } from "@mako/protocol/live-form"
+import { WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { invokeWithRecovery } from "@mako/host/contracts/host-call-recovery"
 import { HostLiveness, type HostProbe } from "@mako/host/contracts/host-liveness"
@@ -339,7 +340,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
         void ensureRuntime(launch).then(async (next) => { runtime = next; await secretKeys?.attached(); connect() }).catch(() => { if (!closed) timer = setTimeout(retry, 2_000) })
       }
       timer = setTimeout(retry, 500)
-    }, { history: true, observer: Boolean(agentView), heard: stream.heard, live: LIVE_FORM })
+    }, { history: true, observer: Boolean(agentView), heard: stream.heard, live: WINDOW_LIVE_FORM })
   }
   connect()
   window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); watchAgentViewsIdle(); finishClientShutdown() })
@@ -415,12 +416,26 @@ async function start() {
   powerMonitor.on("resume", woke("resume"))
   powerMonitor.on("unlock-screen", woke("unlock-screen"))
   // Said before the Mac goes, while the network is still up: the cloud takes this Mac as quiet at once, not a minute on.
-  const leaving = (source: "suspend" | "shutdown") => () => {
-    void invokeRuntime(runtime.socket, desktopClient, "mako:machine-leaving", [source]).catch((error) =>
-      hostLog("desktop", "leaving not delivered", { source, reason: error instanceof Error ? error.message : String(error) }))
-  }
-  powerMonitor.on("suspend", leaving("suspend"))
-  powerMonitor.on("shutdown", leaving("shutdown"))
+  const leaving = (source: "suspend" | "shutdown") => invokeRuntime(runtime.socket, desktopClient, "mako:machine-leaving", [source]).catch((error) =>
+    hostLog("desktop", "leaving not delivered", { source, reason: error instanceof Error ? error.message : String(error) }))
+  powerMonitor.on("suspend", () => void leaving("suspend"))
+  // A shutdown hands agents at work to the cloud in the host (`machineLeaving`), which outlives this app and holds its
+  // own stop for it. Electron delays the shutdown while the event is prevented, where the system lets it, until Mako
+  // quits once the host answered, its hold at most. A quit's Apple event, which the shutdown sends too, isn't held:
+  // held there, the system would take the shutdown as refused.
+  const shutdowns: NodeJS.EventEmitter = powerMonitor
+  let goingOff = false
+  shutdowns.on("shutdown", (event: Electron.Event) => {
+    shuttingDown = true
+    event.preventDefault()
+    if (goingOff) return
+    goingOff = true
+    let held: ReturnType<typeof setTimeout> | undefined
+    void Promise.race([leaving("shutdown"), new Promise((resolve) => { held = setTimeout(resolve, SHUTDOWN_HOLD_MS + 1_000) })]).finally(() => {
+      clearTimeout(held)
+      app.quit()
+    })
+  })
   await serveWindows()
   // What only this process can do for the host: Mako.app's grants, window capture, agents' windows and its own update.
   const pages = deskPageAnswers({ agentView: (previewId) => openWindow({ agentView: previewId }), frame: (frame) => desktopLink?.frame(frame) })

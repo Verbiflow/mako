@@ -14,11 +14,14 @@ import {
   type Borrowing,
   type BrokerInput,
   type BrokerState,
+  type Capability,
   type Grant,
   type Kind,
   type Lease,
+  type LeaseEnd,
   type LeaseEvent,
   type Need,
+  type Slots,
   type SourceAnswer,
   type SourceAsk,
 } from "@mako/protocol/borrow"
@@ -119,6 +122,18 @@ export class LocalBorrowing implements Borrowing {
     return this.#change(async (kept) => void (await this.#step(kept, { type: "thread-ended", account: this.account, thread, at: this.#now() })))
   }
 
+  /**
+   * What this device can serve and its room, as it advertises them (`Advertiser`): a need here under a grant over
+   * capable devices routes to it by the same rule as the account's broker. Said only when it changed, it costs a write.
+   */
+  advertise(capabilities: Capability[], slots: Slots): Promise<void> {
+    return this.#change(async (kept) => {
+      const known = kept.state.devices[this.device]
+      if (known?.online && JSON.stringify([known.capabilities, known.slots]) === JSON.stringify([capabilities, slots])) return
+      await this.#step(kept, { type: "advertise", device: this.device, capabilities, slots, at: this.#now() })
+    })
+  }
+
   /** Ends leases and grants whose time has come, and answers asks waiting for a source this broker has. */
   tick(): Promise<void> {
     return this.#change(async (kept) => void (await this.#step(kept, { type: "tick", at: this.#now() })))
@@ -147,7 +162,7 @@ export class LocalBorrowing implements Borrowing {
     return standingGrants((await this.#read()).state, this.#now())
   }
 
-  async lease(id: string): Promise<{ lease: Lease; ended?: "revoked" | "expired" | "released" } | undefined> {
+  async lease(id: string): Promise<{ lease: Lease; ended?: LeaseEnd } | undefined> {
     const held = (await this.#read()).state.leases[id]
     if (!held) return undefined
     return held.ended ? { lease: held.lease, ended: held.ended.why } : { lease: held.lease }
@@ -174,7 +189,7 @@ export class LocalBorrowing implements Borrowing {
    * does can fall after the lease's revoke: a revoke takes the same lock, so it comes wholly before `work` or sees
    * everything `work` did.
    */
-  whileLeased<T>(lease: string, work: () => Promise<T>): Promise<{ done: T } | { ended: "revoked" | "expired" | "released" }> {
+  whileLeased<T>(lease: string, work: () => Promise<T>): Promise<{ done: T } | { ended: LeaseEnd }> {
     return this.locked(async () => {
       const held = (await this.#load()).state.leases[lease]
       if (!held) return { ended: "released" as const }

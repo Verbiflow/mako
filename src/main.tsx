@@ -24,6 +24,10 @@ async function start() {
   }
 
   const { default: App } = await import("./App.tsx")
+  if (import.meta.env.DEV && new URLSearchParams(location.search).has("mock")) {
+    const { mockState } = await import("./dev/mock-state.ts")
+    Reflect.set(window, "mockState", mockState)
+  }
   watchForFailures()
 
   createRoot(document.getElementById("root")!).render(

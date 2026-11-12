@@ -1,9 +1,11 @@
-import { execFile, spawn } from "node:child_process"
+import { hostCommand, hostSpawn } from "../base/host-command.js"
+import { hostStopping } from "../base/host-stopping.js"
+import { setTimeout as wait } from "node:timers/promises"
+import { spawn } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import { inside, workingDirectories } from "./app-probe.js"
 import { STEPS_FOLDER_VARIABLE, stepsOf, type StepRecord } from "./check-steps.js"
@@ -12,8 +14,9 @@ import { FIT_RUNS } from "../contracts/thread-app.js"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
 import { ContainerEngine, containersBy, type Container, type ContainerLook } from "./container-runtime.js"
 import { onLinux, onMac } from "../base/platform.js"
+import { childInput } from "@mako/sessions/child-input"
 
-const run = promisify(execFile)
+const run = hostCommand
 
 /** Stop asks nicely this long before it kills. */
 /**
@@ -399,9 +402,14 @@ export class ThreadProcesses {
     })
   }
 
-  async status(app: AppKey): Promise<RunStatus[]> {
+  /**
+   * Each of the app's runs as it stands. `shown` is for a look that only shows it (a window's view of the app, asked
+   * every few seconds by each window for each folder it follows): it reads the process table shared with the marks
+   * and the Room (`sharedProcessTable`), never one of its own, which every window's view spawned and parsed apart.
+   */
+  async status(app: AppKey, options: { shown?: boolean } = {}): Promise<RunStatus[]> {
     const runs = await this.runs(app)
-    const rows = await processTable()
+    const rows = await (options.shown ? this.sharedProcessTable() : processTable())
     return Promise.all(Object.entries(runs).map(async ([key, record]): Promise<RunStatus> => {
       await trimLog(this.file(app, key, "log"))
       const status: RunStatus = {
@@ -626,24 +634,27 @@ export class ThreadProcesses {
   private async appsRunning(listed: () => Promise<string[]>, runsOf: (app: AppKey) => Promise<Record<string, Run>>, stopping?: (app: AppKey, key: string, rows: Row[]) => Promise<Row[]>): Promise<ActiveApp[]> {
     const folders = await listed()
     if (!folders.length) return []
-    const rows = await this.sharedProcessTable()
-    const found: ActiveApp[] = []
+    const apps: { app: AppKey; runs: Record<string, Run> }[] = []
     for (const folder of folders) {
       const app = AppKeySchema.safeParse(folder)
-      if (!app.success) continue
-      const runs = await runsOf(app.data)
+      if (app.success) apps.push({ app: app.data, runs: await runsOf(app.data) })
+    }
+    // A run being stopped can leave processes outside its group, which only the table finds.
+    const rows = stopping ? await this.sharedProcessTable() : await this.tableFor(apps.flatMap((entry) => Object.values(entry.runs)))
+    const found: ActiveApp[] = []
+    for (const { app, runs } of apps) {
       let memoryBytes = 0
       const alive: ActiveApp["runs"] = []
       const pids: number[] = []
       for (const [key, record] of Object.entries(runs)) {
         const tree = this.membersOf(rows, record)
-        const held = tree.length ? tree : await stopping?.(app.data, key, rows) ?? []
+        const held = tree.length ? tree : await stopping?.(app, key, rows) ?? []
         if (!held.length) continue
         alive.push({ kind: record.kind, name: record.name })
         pids.push(...held.map((row) => row.pid))
         memoryBytes += held.reduce((sum, row) => sum + row.rssKb * 1024, 0)
       }
-      if (alive.length) found.push({ app: app.data, usedAt: await this.usedAt(app.data), memoryBytes, runs: alive, folder: this.folder(app.data), pids })
+      if (alive.length) found.push({ app, usedAt: await this.usedAt(app), memoryBytes, runs: alive, folder: this.folder(app), pids })
     }
     return found
   }
@@ -664,25 +675,28 @@ export class ThreadProcesses {
   }
 
   private async readOverview(): Promise<AppOverview[]> {
-    const rows = await this.sharedProcessTable()
-    const found: AppOverview[] = []
+    const apps: { app: AppKey; runs: [string, Run][] }[] = []
     for (const folder of await readdir(this.dependencies.root).catch(() => [])) {
       const app = AppKeySchema.safeParse(folder)
       if (!app.success) continue
       const runs = Object.entries(await this.runs(app.data).catch(() => ({})))
-      if (!runs.length) continue
+      if (runs.length) apps.push({ app: app.data, runs })
+    }
+    const rows = await this.tableFor(apps.flatMap((entry) => entry.runs.map(([, record]) => record)))
+    const found: AppOverview[] = []
+    for (const { app, runs } of apps) {
       const [states, usedAt, upAt, project] = await Promise.all([
         Promise.all(runs.map(async ([key, record]) => {
-          const run: AppOverview["runs"][number] = { kind: record.kind, name: record.name, state: await this.state(app.data, key, record, rows), startedAt: record.at }
+          const run: AppOverview["runs"][number] = { kind: record.kind, name: record.name, state: await this.state(app, key, record, rows), startedAt: record.at }
           if (record.port !== undefined) run.port = record.port
           return run
         })),
-        this.usedAt(app.data),
-        this.upAt(app.data),
-        this.projectOf(app.data),
+        this.usedAt(app),
+        this.upAt(app),
+        this.projectOf(app),
       ])
-      const entry: AppOverview = { app: app.data, usedAt, runs: states }
-      const checkout = this.checkoutOf(app.data)
+      const entry: AppOverview = { app, usedAt, runs: states }
+      const checkout = this.checkoutOf(app)
       if (checkout) entry.checkout = checkout
       if (project) entry.project = project
       if (upAt !== undefined) entry.upAt = upAt
@@ -801,6 +815,15 @@ export class ThreadProcesses {
   /** One look at the container runtime shared by a measure, the probe and a stop; a missing runtime is no runtime. */
   private containerLook(): Promise<ContainerLook | undefined> {
     return this.containers().catch(() => undefined)
+  }
+
+  /**
+   * The shared table, for a look at `runs`, or none when no run's process group is alive: a run whose group is gone has
+   * no members in any table (`TableIndex.members`), and an idle host's marks spawned `ps -A` every few seconds for
+   * nothing; on a scratch host with no app running, two of those spawns held the loop 2.1 s and 1.7 s (2026-11-12).
+   */
+  private async tableFor(runs: Run[]): Promise<Row[]> {
+    return runs.some((record) => groupAlive(record.pid)) ? this.sharedProcessTable() : []
   }
 
   private sharedProcessTable(): Promise<Row[]> {
@@ -1157,10 +1180,12 @@ export class ThreadProcesses {
         child.once("error", reject)
       })
       let saved: Run | undefined
-      child.once("exit", () => void this.heardEnd(app, key, pid, saved))
+      const signal = hostStopping()?.signal
+      child.once("exit", () => {
+        if (!signal?.aborted) void this.heardEnd(app, key, pid, saved).catch((error) => { if (!signal?.aborted) throw error })
+      })
       child.unref()
-      const release = child.stdin!
-      release.on("error", () => {})
+      const release = childInput(child)!
       try {
         const row = (await processTable()).find((candidate) => candidate.pid === pid)
         if (!row) throw new Error(`${spec.name} ended before it started, stopped by something outside Mako; see ${log}`)
@@ -1195,6 +1220,7 @@ export class ThreadProcesses {
    * ending stays "starting" until the app is restarted.
    */
   private async watchReady(app: AppKey, key: string, ready: string, spec: RunSpec, pid: number): Promise<void> {
+    const signal = hostStopping()?.signal
     const alive = () => {
       try {
         process.kill(pid, 0)
@@ -1206,8 +1232,9 @@ export class ThreadProcesses {
     const began = this.now()
     const ours = async () => alive() && (await this.runs(app))[key]?.pid === pid
     while (await ours()) {
+      if (signal?.aborted) return
       const tried = await new Promise<ReadyFailure | undefined>((done) => {
-        const child = spawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: ["ignore", "pipe", "pipe"], detached: true })
+        const child = hostSpawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: ["ignore", "pipe", "pipe"], detached: true })
         let output = ""
         const keep = (chunk: Buffer) => {
           output = (output + chunk.toString()).slice(-READY_OUTPUT_CHARS)
@@ -1230,6 +1257,7 @@ export class ThreadProcesses {
           done(code === 0 ? undefined : { code, output })
         })
       })
+      if (signal?.aborted) return
       if (!tried) {
         if (await ours()) {
           await writeFile(this.file(app, key, "ready"), String(this.now()), { mode: 0o600 })
@@ -1238,7 +1266,7 @@ export class ThreadProcesses {
         return
       }
       if (await ours()) await writeFile(this.file(app, key, "unready"), JSON.stringify(tried), { mode: 0o600 })
-      await sleep(readyWait(this.now() - began))
+      await wait(readyWait(this.now() - began), undefined, { signal }).catch((error) => { if (!signal?.aborted) throw error })
     }
   }
 

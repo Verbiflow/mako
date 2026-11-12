@@ -1,4 +1,5 @@
-import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { hostSpawn } from "../base/host-command.js"
+import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import type { EventEmitter } from "node:events"
@@ -9,6 +10,7 @@ import { trackProviderChild } from "../base/provider-children.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { KEEP_AWAKE_BATTERY_FLOOR, type KeepAwakeHold, type KeepAwakeSettings, type KeepAwakeState } from "../contracts/keep-awake.js"
 import type { LiveBatch } from "../contracts/live-conversations.js"
+import { endChildInput, writeChildInput } from "@mako/sessions/child-input"
 
 const SettingsFileSchema = z.object({ version: z.literal(1), on: z.boolean(), lidClosed: z.boolean() })
 const DEFAULTS: KeepAwakeSettings = { on: true, lidClosed: false }
@@ -186,7 +188,8 @@ export class KeepAwake {
       this.#told = undefined
       return
     }
-    child.stdin.write(`${line ?? "release"}\n`)
+    // A helper gone as it's written to ends as `exit` says.
+    writeChildInput(child, `${line ?? "release"}\n`).catch(() => {})
     this.#told = line
   }
 
@@ -218,8 +221,6 @@ export class KeepAwake {
     this.#child = child
     this.#told = undefined
     child.stderr.on("data", (chunk: Buffer) => hostWarn("keep-awake", "the power helper said", { text: chunk.toString("utf8").trim().slice(0, 500) }))
-    // A helper gone as it's written to ends as `exit` says.
-    child.stdin.on("error", () => {})
     this.#ready = new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => resolve(false), READY_MS)
       timer.unref?.()
@@ -288,7 +289,7 @@ export class KeepAwake {
     this.#ready = undefined
     this.#told = undefined
     this.#power = undefined
-    child?.stdin.end()
+    if (child) endChildInput(child)
   }
 
   async #readSettings(): Promise<KeepAwakeSettings> {
@@ -300,7 +301,7 @@ export class KeepAwake {
 }
 
 function spawnHelper(path: string, args: readonly string[]): PowerHelper {
-  const child = spawnProcess(path, args, { stdio: ["pipe", "pipe", "pipe"] })
+  const child = hostSpawn(path, args, { stdio: ["pipe", "pipe", "pipe"] })
   trackProviderChild(child, { kind: "keep-awake", owner: "host" })
   return child
 }

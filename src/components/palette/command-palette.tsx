@@ -22,6 +22,7 @@ interface Entry {
   section: string
   title: string
   hint?: string
+  keywords?: string
   keys?: string[]
   run: () => void
 }
@@ -193,7 +194,7 @@ export function CommandPalette() {
     }
     const scored: Array<{ entry: Entry; score: number }> = []
     for (const entry of entries) {
-      const match = fuzzy(term, `${entry.title} ${entry.section} ${entry.hint ?? ""}`)
+      const match = fuzzy(term, `${entry.title} ${entry.section} ${entry.hint ?? ""} ${entry.keywords ?? ""}`)
       if (match) scored.push({ entry, score: match.score })
     }
     scored.sort((a, b) => b.score - a.score)
@@ -321,6 +322,7 @@ function toEntry(
     section: command.section,
     title: command.title,
     hint: command.hint,
+    keywords: command.keywords,
     keys: formatChord(keysFor(command, keybindings)),
     run: () => void command.run(),
   }

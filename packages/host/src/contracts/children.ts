@@ -1,3 +1,4 @@
+import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "./report-actions.js"
 import { z } from "zod"
 import { LISTED_AFTER, LISTED_FINS, LISTED_WAITING_ON, type ListedFin, type ListedFinState } from "@mako/protocol/thread-listing"
 import { APEX_WORD, entryState, FIN_WORD, finsWord, LEGACY_APEX_WORD, waitingStateWords, type Brief, type ChildState } from "./agents.js"
@@ -112,7 +113,7 @@ export function briefText(brief: Brief, name: string): string {
   if (brief.doneWhen?.length) lines.push("", "Done when:", ...brief.doneWhen.map((item) => `- ${item}`))
   if (brief.boundaries?.length) lines.push("", "Boundaries:", ...brief.boundaries.map((item) => `- ${item}`))
   if (brief.output) lines.push("", `Your report carries: ${brief.output}`)
-  lines.push("", BRIEF_CLOSE)
+  lines.push("", BRIEF_CLOSE, REPORT_FOLLOW_UP_INSTRUCTIONS)
   return lines.join("\n")
 }
 
@@ -152,7 +153,7 @@ export function agentWords(text: string): AgentWords | undefined {
   const body = words
     .slice(header[0].length)
     .split("\n")
-    .filter((line) => line !== BRIEF_CLOSE && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && line.endsWith(APEX_NOTE_TAIL)))
+    .filter((line) => line !== BRIEF_CLOSE && line !== REPORT_FOLLOW_UP_INSTRUCTIONS && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && line.endsWith(APEX_NOTE_TAIL)))
     .join("\n")
     .trim()
   return { from: spoken(header[1]!), body, ...(reports.length && { reports }) }
@@ -284,6 +285,12 @@ export function openAsk(state: ChildState): OpenAsk | undefined {
   if (state.kind === "blocked") return { question: state.question, on: state.on, ...(state.ask && { ask: state.ask }) }
   if (state.kind === "ended" && state.decision) return { ...state.decision, done: true }
   return undefined
+}
+
+/** An approval's two answers as every surface says them: a harness's "Allow once" and "Refuse", or a named ask's own. */
+export function approvalWords(ask: Pick<FinAsk, "named" | "options">) {
+  const [allow, refuse] = ask.named ? (ask.options ?? []) : []
+  return { allow: allow?.label ?? "Allow once", refuse: refuse?.label ?? "Refuse" }
 }
 
 /** How a done Fin's decision for the person reads, before its question: "Done · needs you: Merge #371?". */

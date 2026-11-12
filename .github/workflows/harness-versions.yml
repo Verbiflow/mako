@@ -3,7 +3,8 @@ name: Harness versions
 # The daily bump. Each harness declares the newest version Mako's session
 # flows passed on (`tested`, in packages/host/src/harnesses/<harness>/versions.ts),
 # which Mako's installs and Update go to. This reads every vendor's newest
-# release and, for each one newer than tested, opens a pull request that
+# release and, for each one newer than tested or each tested build its vendor
+# has withdrawn (its installer or npm no longer has it), opens a pull request that
 # moves tested and reruns the drift tools: protocol types, native tools,
 # self-report and the session flows, all against a scripted model, so a bump
 # spends no usage and its diff shows what the release changed. Its checks
@@ -30,6 +31,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       due: ${{ steps.read.outputs.due }}
+      stuck: ${{ steps.read.outputs.stuck }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -38,9 +40,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
       # The scripts read Mako's own packages (@mako/sessions, @mako/git, …) from
       # their built output, as the host does; a fresh checkout has none.
       - run: npm run build:control-runtime
@@ -48,8 +50,26 @@ jobs:
         id: read
         run: |
           npx tsx scripts/bump-harness-versions.ts --dry-run
-          due=$(npx tsx scripts/bump-harness-versions.ts --json | node -e 'const rows = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(JSON.stringify(rows.filter((row) => row.bump).map((row) => ({ harness: row.provider, version: row.newest }))))')
+          npx tsx scripts/bump-harness-versions.ts --json > "$RUNNER_TEMP/readings.json"
+          due=$(node -e 'const rows = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(JSON.stringify(rows.filter((row) => row.bump).map((row) => ({ harness: row.provider, version: row.newest }))))' < "$RUNNER_TEMP/readings.json")
           echo "due=$due" >> "$GITHUB_OUTPUT"
+          # A pinned tested build its vendor withdrew is due for a bump like a newer release; one with nothing newer to
+          # move to fails the run below, since every install of it fails and no pull request will say so.
+          stuck=$(node -e 'const rows = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(JSON.stringify(rows.filter((row) => row.withdrawn && !row.bump).map((row) => `${row.provider} ${row.tested}: ${row.withdrawn}`)))' < "$RUNNER_TEMP/readings.json")
+          echo "stuck=$stuck" >> "$GITHUB_OUTPUT"
+
+  withdrawn:
+    needs: find
+    if: needs.find.outputs.stuck != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: A pinned tested build is no longer published, with nothing to move to
+        env:
+          STUCK: ${{ needs.find.outputs.stuck }}
+        run: |
+          echo "::error::$STUCK"
+          exit 1
 
   bump:
     needs: find
@@ -94,10 +114,10 @@ jobs:
           if [ -n "$(gh pr list --head "$BRANCH" --state all --json number --jq '.[0].number')" ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           fi
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
         if: steps.open.outputs.exists != 'true'
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        with:
+          electron: "false"
       - run: npm run build:control-runtime
         if: steps.open.outputs.exists != 'true'
       # Without it each Codex pair recorded its sandbox failing every shell call, not Codex at work. `checks.yml`'s
@@ -170,7 +190,7 @@ jobs:
         id: install
         if: steps.reported.outputs.done != 'true'
         continue-on-error: true
-        run: npm ci
+        uses: ./.github/actions/install-dependencies
       - name: Build
         id: build
         if: steps.reported.outputs.done != 'true' && steps.install.outcome == 'success'

@@ -474,7 +474,7 @@ export class ConversationFiles {
 
   /** Every kept index and its watch, for a host that is stopping. */
   close(): void {
-    for (const key of [...this.indexes.keys()]) this.dropIndex(key)
+    for (const key of this.indexes.keys()) this.dropIndex(key)
     for (const held of this.held.values()) held.files.index.close()
     this.held.clear()
   }

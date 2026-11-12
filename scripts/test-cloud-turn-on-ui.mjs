@@ -5,6 +5,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * Mako Cloud in Settings › Account and the sidebar, against the production components and the mock bridge: an
@@ -57,8 +58,10 @@ async function checkWindow() {
   const shots = process.env.MAKO_UI_TEST_SHOTS
   const base = process.env.MAKO_UI_TEST_URL
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1280, height: 1000, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1280, 1000)
   const page = window.webContents
   const watchdog = setTimeout(() => {
     console.error("Turn-on UI verification exceeded its 300-second limit")

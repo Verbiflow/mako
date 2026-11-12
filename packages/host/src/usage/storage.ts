@@ -1,14 +1,13 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { statfs } from "node:fs/promises"
 import { basename } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import type { HostJobs } from "../base/host-jobs.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { STORAGE_LOW_BYTES, type StorageCollection, type StoragePart, type StorageReport } from "../contracts/storage.js"
-const run = promisify(execFile)
+const run = hostCommand
 
 /** Collectors run this often, the first a while after the host starts, so a start's own work goes first. */
 const COLLECT_EVERY_MS = 6 * 60 * 60_000

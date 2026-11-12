@@ -125,10 +125,17 @@ Object.defineProperty(globalThis, "window", { value: {}, configurable: true })
 const { installMockBridge } = await import("../src/dev/mock-bridge")
 const { getMako } = await import("../src/lib/bridge")
 const { acpStore } = await import("../src/state/acp-state")
+// What the window's own code writes of a conversation goes through the door (`receiveLive`), or the suite fails.
+const { failAroundTheDoor } = await import("./live-door-watch")
+const { receivingLive: receivingThroughTheDoor, readingLive: readingThroughTheDoor } = await import("../src/state/live-door")
+failAroundTheDoor(acpStore, receivingThroughTheDoor, readingThroughTheDoor)
 const { hydrateLive, loadEarlierLive, applyLiveSnapshot, applyLiveBatch } = await import("../src/state/live-recovery")
 const { loadLiveHistoryDetail, completeLiveAnswer } = await import("../src/state/live-history")
 installMockBridge()
-const source = { ...auditSnapshot(80, "claude", 256, 4096), epoch: "view-epoch" }
+// Host starts as a host names them (`LiveConversations.epoch`): their generation on one data root, in the order they ran.
+const startNamed = (generation: number) => `g${generation}.pagingroot.s${generation}`
+let steers = 3
+const source = { ...auditSnapshot(80, "claude", 256, 4096), epoch: startNamed(1) }
 const id = source.session.id
 const reader = new LiveHistoryReader()
 let gate: Promise<void> | undefined
@@ -204,7 +211,7 @@ try {
   arrived = requested.resolve
   const stale = loadEarlierLive(id)
   await requested.promise
-  const reopened = await read<LiveSnapshot>(reader, { ...source, revision: 1, epoch: "new-host" }, { kind: "snapshot" })
+  const reopened = await read<LiveSnapshot>(reader, { ...source, revision: 1, epoch: startNamed(2) }, { kind: "snapshot" })
   applyLiveSnapshot(reopened)
   late.resolve()
   await stale
@@ -219,7 +226,7 @@ try {
       ? { type: "user" as const, text: "Steer", steeringFor: "question" }
       : { type: "text" as const, id: `part-${n}`, text: `Part ${n}.` })]
   source.requests = []
-  applyLiveSnapshot(await read<LiveSnapshot>(reader, { ...source, revision: 10, epoch: "copy" }, { kind: "snapshot" }))
+  applyLiveSnapshot(await read<LiveSnapshot>(reader, { ...source, revision: 10, epoch: startNamed(3) }, { kind: "snapshot" }))
   const copyView = acpStore.get().conversations[id]!
   const exchange = copyView.projection!.exchanges[0]!
   assert.equal(exchange.prompt, undefined)
@@ -237,7 +244,7 @@ try {
       const label = `${harness}${namesEarlier ? "" : " (no earlierRequests)"}`
       const prompt = `${harness}-running`
       const steer = `${harness}-steer`
-      const long: LiveSnapshot = { ...source, epoch: `steer-${label}`, revision: 30, base: null, baseCoveredBlocks: 0,
+      const long: LiveSnapshot = { ...source, epoch: startNamed((steers += 1)), revision: 30, base: null, baseCoveredBlocks: 0,
         session: { ...source.session, harness, status: "running" },
         requests: [
           { id: `${harness}-earlier`, text: "Earlier question", attachments: [], status: "completed" },
@@ -277,6 +284,8 @@ try {
   }
   console.log("PASS: long turn then steer shows the running prompt once on every harness, with or without earlierRequests")
   source.blocks = []
+  // A host start after the steers' above: a window never goes back to a start it has heard a newer one of.
+  source.epoch = startNamed((steers += 1))
   source.revision = 20
   source.base = { ref: { harness: "claude", nativeId: "cache", path: "fixture" }, start: 0, hasEarlier: false, total: 1,
     entries: [{ type: "tool", id: "native-cache", name: "read", status: "completed", output: "native".repeat(1000) }] }
@@ -415,3 +424,5 @@ console.log("PASS: conditional refresh owner/epoch and eviction fences")
   assert.ok(raw?.type === "tool" && raw.input === patch.input!.slice(0, 2048), "input that isn't JSON keeps its head")
   console.log("PASS: a large call's preview keeps its input's JSON, so an agent with a long prompt is named while it runs")
 }
+
+await import("./test-released-live-turn")

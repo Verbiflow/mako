@@ -1,18 +1,14 @@
 import { useMemo, useState } from "react"
 import { CheckIcon, XIcon } from "lucide-react"
-import {
-  childGroup,
-  childStateOf,
-  childWord,
-  DONE_NEEDS_YOU,
-} from "@mako/host/contracts/children"
+import { approvalWords, childGroup, childLine, childStateOf, childWord, DONE_NEEDS_YOU } from "@mako/host/contracts/children"
 import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import { FinMark } from "@/components/stage/child-tabs"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { LiveMark } from "@/components/ui/live-mark"
 import { cn } from "@/lib/utils"
 import { activeAcp, useAcp } from "@/state/acp"
-import { useThreadAsks, useThreadChildren } from "@/state/apex-fins"
+import { apexConversation, useApexView, useThreadAsks, useThreadChildren } from "@/state/apex-fins"
+import { useOnScreen } from "@/state/thread-sessions"
 import {
   scrollCrewNeedsIntoView,
   useCrewCardVisible,
@@ -85,6 +81,24 @@ export function FinAsks() {
   const thread = useAcp((state) => activeAcp(state)?.threadId)
   const card = useCrewCardVisible(thread)
   const asks = useThreadAsks(thread)
+  const shown = useShownFinAsks()
+  // A Fin opened in its Apex says what it waits on above its own composer: the "Needs you" that opened it answers here.
+  if (shown.apex && shown.asks.length)
+    return (
+      <div data-fin-asks={shown.asks.length} data-own-asks className="mx-3 flex shrink-0 flex-col gap-2.5 bg-surface/60 py-2.5">
+        {shown.asks.map((ask) => (
+          <FinAskRow key={`${ask.fin}:${ask.ask.id}`} apex={shown.apex!} ask={ask} />
+        ))}
+      </div>
+    )
+  // One that needs the person with nothing to answer here (it waits in its own terminal, say) still says on what.
+  if (shown.waits)
+    return (
+      <p data-own-waits className="mx-3 flex shrink-0 items-center gap-1.5 bg-surface/60 py-2.5 text-label">
+        <span className="shrink-0 font-medium text-attention">Needs you</span>
+        <span className="min-w-0 text-foreground">{shown.waits}</span>
+      </p>
+    )
   if (card !== null) return <FinsNeedYou thread={thread} />
   if (!key || !asks.length) return null
   return (
@@ -95,6 +109,30 @@ export function FinAsks() {
     </div>
   )
 }
+
+/**
+ * The Fin on screen, when it's opened in its Apex's Thread: what it asks of the person, read from its Apex's roster as
+ * the crew card reads it, and the Apex's conversation that answers it.
+ */
+function useShownFinAsks(): { apex: string | undefined; asks: readonly PersonAsk[]; waits?: string } {
+  const here = useOnScreen().thread
+  const open = useApexView((state) => (state.open && state.open.child === here ? state.open : null))
+  const apex = useAcp((state) => (open ? apexConversation(state, open.apex)?.key : undefined))
+  const asks = useThreadAsks(open?.apex)
+  const children = useThreadChildren(open?.apex)
+  // An approval its own conversation holds is drawn there already, by its own card above this composer.
+  const approving = useAcp((state) => { const active = activeAcp(state); return Boolean(active && "permission" in active && active.permission) })
+  const child = open?.child
+  return useMemo(() => {
+    const own = child ? asks.filter((ask) => ask.fin === child && !(approving && ask.ask.kind === "approval")) : NO_ASKS
+    const agent = child ? children.find((entry) => entry.child?.thread === child) : undefined
+    const state = agent ? childStateOf(agent) : undefined
+    const waits = !own.length && !approving && state && childGroup(state) === "needs" ? childLine(state) : undefined
+    return { apex, asks: own, ...(waits && { waits }) }
+  }, [apex, asks, children, child, approving])
+}
+
+const NO_ASKS: readonly PersonAsk[] = []
 
 function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
   const [sending, setSending] = useState(false)
@@ -149,17 +187,20 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
               className="pressable flex items-center gap-1.5 border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50"
             >
               <CheckIcon className="size-3" />
-              Allow once
+              {approvalWords(ask.ask).allow}
             </button>
             <button
               type="button"
               data-fin-answer="refuse"
               disabled={sending}
               onClick={() => send({ allow: false })}
-              className="pressable flex items-center gap-1.5 border border-hairline px-2 py-1 text-label text-negative/80 hover:bg-negative/10 hover:text-negative disabled:opacity-50"
+              className={cn(
+                "pressable flex items-center gap-1.5 border border-hairline px-2 py-1 text-label disabled:opacity-50",
+                ask.ask.named ? "text-foreground hover:bg-fill-hover" : "text-negative/80 hover:bg-negative/10 hover:text-negative"
+              )}
             >
               <XIcon className="size-3" />
-              Refuse
+              {approvalWords(ask.ask).refuse}
             </button>
           </>
         ) : (

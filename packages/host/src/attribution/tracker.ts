@@ -25,12 +25,13 @@ import {
   type TrackerPorts,
 } from "@mako/protocol"
 import { join } from "node:path"
+import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { HourCounts } from "../base/hour-counts.js"
 import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
 import { attribute, authorOf, claim, Evidence, LEAD_MS, reaches as reachesChange, TRAIL_MS, type Interval, type ObservedChange, type Reach } from "./evidence.js"
 import { WorkingSets } from "./working-set.js"
-import { JournalStore, wholeChange, type FileState, type StatRow, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
+import { JournalStore, wholeChange, type FileState, type Recency, type StatRow, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
 import { diffLines, splitLines } from "./line-diff.js"
 import { applyHunks, BASE, baseMap, onlyBase, presentLines, presentRuns, rebase, UNKNOWN, withKnownWriters, withWriter, writers, type Run } from "./line-map.js"
 import { FootprintReader, type FootprintOptions } from "./footprint-reader.js"
@@ -154,6 +155,8 @@ const RESCAN_MAX_MS = 10 * 60_000
 const RESCAN_QUIET_MS = 15 * 60_000
 /** After each rescan, any root's next waits this many times as long as it ran: rescans take at most a twentieth of the time. */
 const RESCAN_REST = 19
+/** How many times `whatWasHeard` journals what flushing turned up (a folder that came stands for its files) before it answers. */
+const HEARD_PASSES = 3
 /** Spacing past which a root is reported as rescanned less often because its losses keep coming. */
 const BACKED_OFF_MS = 60_000
 
@@ -1851,7 +1854,18 @@ export class LaptopTracker implements AttributionTracker {
     if (!more && !this.pending.size) this.evidence.prune(now - SETTLE_MS - this.lateMs())
   }
 
-  async settled(): Promise<void> {
+  /**
+   * Every change heard so far journaled. With `rescans: false` (a turn's
+   * count), only what was heard: a rescan waiting out its spacing keeps
+   * waiting, and a root rescanning now isn't waited for. A turn ends about
+   * once a minute on a busy Mac. Each ended turn used to rescan every root
+   * that had lost events, back to back with no rest, and wait until none was
+   * left. While fseventsd stayed behind, that could go on for good: the
+   * shared journal's caller gave up at 15 s, and the walks and the stat
+   * cache's writes held the host's loop.
+   */
+  async settled(options: { rescans?: boolean } = {}): Promise<void> {
+    if (options.rescans === false) return this.whatWasHeard()
     await this.resuming
     this.settling++
     try {
@@ -1878,6 +1892,31 @@ export class LaptopTracker implements AttributionTracker {
     } finally {
       this.settling--
     }
+  }
+
+  /** What was heard journaled, rescans left to their own pace: a root rescanning now is passed over, its changes found by the rescan. */
+  private async whatWasHeard(): Promise<void> {
+    await this.resuming
+    for (let pass = 0; pass < HEARD_PASSES; pass++) {
+      const runs: Promise<void>[] = []
+      for (const state of this.states.values()) {
+        if (state.rescanning) continue
+        if (state.headTimer || state.gitSince !== undefined) {
+          clearTimeout(state.timer)
+          clearTimeout(state.headTimer)
+          state.headTimer = undefined
+          runs.push(this.queue(state, () => this.gitMoved(state)))
+        } else if (state.pending.size) {
+          clearTimeout(state.timer)
+          runs.push(this.queue(state, () => this.flush(state)))
+        }
+      }
+      if (!runs.length) break
+      await Promise.all(runs)
+    }
+    await Promise.all(this.scriptReads)
+    await this.footprints?.settled()
+    while (this.reattribution) await this.reattribution
   }
 
   /** How often roots were rescanned for lost events in the last hour, and which are rescanned less often because their losses keep coming. */
@@ -1978,15 +2017,34 @@ export class LaptopTracker implements AttributionTracker {
    */
   async letGoIdle(): Promise<string[]> {
     const before = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
-    const changed = this.store.lastChanged()
-    const worked = this.store.lastWorked(this.now()).filter(({ at }) => at >= before)
-    const idle = [...this.states.values()].filter(({ root, pending }) =>
-      root.trackedAt < before && (changed.get(root.id) ?? 0) < before && !pending.size &&
-      !worked.some(({ folder }) => within(root.path, folder) || within(folder, root.path)))
-    for (const { root } of idle) await this.untrack(root.id)
-    const paths = idle.map(({ root }) => root.path)
+    // Where Threads worked is read only for a root nobody changed lately: on most passes there's none.
+    // The tracker closing (its host stopping) ends it at its next step, letting go of nothing: the next pass looks again.
+    const stopping = () => this.closing || this.store.closed
+    let read: Recency
+    try {
+      read = await inSlices(this.store.recency(this.now(), (changed) => this.idle({ changed, worked: new Map() }, before).length > 0), undefined, stopping)
+    } catch (error) {
+      if (error instanceof StepsStopped) return []
+      throw error
+    }
+    const paths: string[] = []
+    for (const state of this.idle(read, before)) {
+      if (stopping()) break
+      // Other work ran since the reading, and runs while each root is let go: what was journaled or began there since
+      // keeps it. Nothing stops between this reading and `untrack` taking the root out of `states`.
+      if (this.states.get(state.root.id) !== state || !this.idle(this.store.recencySince(read.mark, this.now()), before).includes(state)) continue
+      await this.untrack(state.root.id)
+      paths.push(state.root.path)
+    }
     if (paths.length) this.log("let go of idle roots", { roots: paths.length, paths: paths.join(", ").slice(0, 500) })
     return paths
+  }
+
+  /** The roots tracked before `before` that `read` says nobody changed since, with no Thread working in or around them since. */
+  private idle(read: Pick<Recency, "changed" | "worked">, before: number): RootState[] {
+    const recent = [...read.worked].filter(([, at]) => at >= before).map(([folder]) => folder)
+    return [...this.states.values()].filter(({ root, pending }) => root.trackedAt < before && (read.changed.get(root.id) ?? 0) < before && !pending.size &&
+      !recent.some((folder) => within(root.path, folder) || within(folder, root.path)))
   }
 
   /** Drop kept content past the retention window and over the budget. */

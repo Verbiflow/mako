@@ -7,6 +7,7 @@ import { LiveMark } from "@/components/ui/live-mark"
 import { finMarkState, motionOf } from "@/lib/live-mark-state"
 import { useHarnessIdentity, harnessLabel } from "@/lib/harness-label"
 import { backToApex, useApexView, useThreadChildren } from "@/state/apex-fins"
+import { inboxView } from "@/state/inbox-view"
 
 /**
  * A Fin's live mark: the plain fin doing what the Fin does, its harness a corner badge. A Fin that finished and
@@ -45,7 +46,8 @@ export function FinTab({ agent, onClose }: { agent: NativeAgent; onClose: () => 
         aria-selected
         tabIndex={0}
         data-child-tab={agent.child?.thread}
-        title={`${agent.title} · ${harnessLabel(agent.provider)} · ${childWord(state)}`}
+        onClick={inboxView.close}
+        title={[`${agent.title} · ${harnessLabel(agent.provider)} · ${childWord(state)}`, childLine(state)].filter(Boolean).join("\n")}
         className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-1.5 text-left text-ui font-medium"
       >
         <FinMark agent={agent} state={state} read lit cut="var(--raised)" />

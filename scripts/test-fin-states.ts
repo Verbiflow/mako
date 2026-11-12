@@ -1,14 +1,19 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { z } from "zod"
 import type { AgentCaller, ChildState } from "@mako/host/contracts/agents"
 import type { AgentsSendResult } from "@mako/host/contracts/agent-tools"
+import { rollup } from "@mako/host/contracts/children"
+import { NativeAgentSchema } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { FROM_AGENTS, WAKE_COALESCE_MS } from "@mako/host/conversations/agent-wakes"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
+import { rosterWindow } from "./lib/roster-window.ts"
 
 /**
  * A Fin reads working only while a turn of it runs or a message is on its way
@@ -53,7 +58,8 @@ function stateOf(world: AgentsWorld, apex: string, name: string): ChildState | u
 }
 
 function promptsOf(world: AgentsWorld, conversation: string): string[] {
-  return world.prompts.filter((prompt) => prompt.conversation === conversation).map((prompt) => prompt.text)
+  // Classify the delivered user payload; Mako's note can repeat instructions that overtook it.
+  return world.prompts.filter((prompt) => prompt.conversation === conversation).map((prompt) => prompt.text.replace(/^<mako-local-control>[\s\S]*?<\/mako-local-control>\n\n/, ""))
 }
 
 function requestOf(world: AgentsWorld, conversation: string, words: string) {
@@ -89,6 +95,8 @@ try {
       assert.equal(resumed.delivery, "turn", "a stopped Fin with a paused message takes a new one now")
       await until(`${harness}: the message after the stop, then the one the stop paused, to reach its harness`, () => promptsOf(world, fin).some((text) => text.includes("Also do the README.")))
       assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => text.includes("Carry on.") ? "carry on" : text.includes("Also do the README.") ? "readme" : text.slice(0, 60)), ["carry on", "readme"], "the message that resumed it goes first")
+      const deliveredReadme = world.prompts.find((prompt) => prompt.conversation === fin && prompt.text.endsWith("Also do the README."))?.text ?? ""
+      assert.match(deliveredReadme, /queued before newer instructions/, "the old work still carries the newer resume instruction as provenance")
       await until("its turns to end", () => { const state = stateOf(world, apex.conversation, "labels"); return state?.kind === "ended" && state.outcome === "done" })
       const second = await world.agents.start(apex.caller, { brief: { objective: "Work as second" }, harness, name: "second", clientKey: "second", cwd: world.root })
       assert.ok(!("refused" in second) && second.state !== "queued", `${harness}: a Fin done with a paused message holds no room: ${JSON.stringify(second)}`)
@@ -122,9 +130,41 @@ try {
       await pause(300)
       assert.equal(promptsOf(world, fin).length, 1, "nothing jumps ahead of a message being edited")
       assert.notEqual(stateOf(world, apex.conversation, "labels")?.kind, "working", `${harness}: a queue held by the person's edit is no work`)
+      const notices = await Promise.all([0, 1].map(() => world.agents.send(apex.caller, { to: "labels", text: "And the NOTICE.", clientKey: "notice" })))
+      const waiting = sent(notices[0]!)
+      assert.equal(waiting.delivery, "queued", `${harness}: saving a message behind an edit is not starting its turn`)
+      assert.match(waiting.hears, /paused for editing/, `${harness}: the receipt names the actual hold`)
+      const waitingState = stateOf(world, apex.conversation, "labels")
+      assert.ok(waitingState?.kind === "blocked" && waitingState.on === "person", `${harness}: pending work is visible instead of the old done report`)
+      const repeated = sent(await world.agents.send(apex.caller, { to: "labels", text: "And the NOTICE.", clientKey: "notice" }))
+      assert.equal(repeated.delivery, "queued")
+      assert.equal(repeated.deduped, true)
+      assert.equal(world.live.snapshot(fin)?.requests.filter(request => request.text.includes("And the NOTICE.")).length, 1, "concurrent and repeated messages are one durable request")
+      const counted = await world.agents.list(apex.caller, {})
+      assert.ok("tree" in counted)
+      assert.equal(counted.tree.running, 0, "held work occupies no concurrent Fin slot")
+      assert.equal(counted.tree.started, 1, "messaging reuses its one lifetime admission")
+      assert.equal(rollup(world.agents.roster(apex.conversation)).needs, 1, "the shared UI count includes the held Fin")
+      if (harness === "claude") {
+        const window = rosterWindow()
+        try {
+          const snapshot = world.live.snapshot(apex.conversation)
+          assert.ok(snapshot)
+          const view = await window.ask({ kind: "init", snapshot, listed: true })
+          const drawn = z.object({ children: z.array(NativeAgentSchema) }).parse(JSON.parse(view.drawn))
+          const fin = drawn.children.find(child => child.child?.name === "labels")
+          assert.equal(fin?.child?.state?.kind, "blocked", "the actual renderer selector preserves the held Fin and its state")
+          assert.equal(rollup(drawn.children).needs, 1)
+        } finally { window.close() }
+      }
+      await world.restart()
+      const afterRestart = sent(await world.agents.send(apex.caller, { to: "labels", text: "And the NOTICE.", clientKey: "notice" }))
+      assert.equal(afterRestart.delivery, "queued")
+      assert.match(afterRestart.hears, /paused for editing/)
+      assert.equal(afterRestart.deduped, true)
       world.live.editQueued(fin, { requestId: readme.id, expectedText: readme.text, change: { kind: "resume" } })
-      await until("all three to go, in order", () => promptsOf(world, fin).length === 4)
-      assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => /Then the README\.|Then the CHANGELOG\.|And the LICENSE\./.exec(text)?.[0]), ["Then the README.", "Then the CHANGELOG.", "And the LICENSE."])
+      await until("all four to go, in order", () => promptsOf(world, fin).length === 5)
+      assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => /Then the README\.|Then the CHANGELOG\.|And the LICENSE\.|And the NOTICE\./.exec(text)?.[0]), ["Then the README.", "Then the CHANGELOG.", "And the LICENSE.", "And the NOTICE."])
       await world.close()
     }
 

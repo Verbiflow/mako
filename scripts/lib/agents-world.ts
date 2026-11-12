@@ -23,6 +23,7 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import type { ProcessReads } from "@mako/host/conversations/agent-runs"
 import { Agents, ROOM_WATCH_JOB, type AgentsDeps } from "@mako/host/conversations/agents"
 import { continueOn, type ContinueOn } from "@mako/host/conversations/continue-on"
+import { carriedTuning } from "@mako/host/harnesses/harness-models"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { AdmittedLiveDriver, ProviderLiveDriver, ProviderSteerResult, SteerCapability } from "@mako/host/harnesses/live-driver"
 import { handOff } from "@mako/host/harnesses/prompt-dispatch"
@@ -90,6 +91,8 @@ export interface WorldOptions {
   root: string
   script: Script
   budget?: TreeBudget
+  /** Each event the host sends its windows, as it sends it. */
+  events?: (event: HostEvent) => void
   /** What the host keeps of conversations in memory (`LiveDependencies.conversationMemory`); the host's own without it. */
   conversationMemory?: ConstructorParameters<typeof LiveConversations>[0]["conversationMemory"]
   /** How long a harness at rest stays connected before it hibernates (`LiveDependencies.providerIdleMs`). */
@@ -108,6 +111,12 @@ export interface WorldOptions {
   preparing?: (options: LiveStartOptions) => Promise<void> | void
   /** The person's ceiling across every place (`AgentsDeps.finCeiling`). */
   finCeiling?: () => number
+  /** Operations this device lends another place's Threads (`AgentsDeps.lent`). */
+  lent?: () => number
+  /** Takes up what the last host left as the host does, each conversation read in a slice at a time first (`resumed`); at once without it. */
+  resumeInSlices?: boolean
+  /** The host has begun to stop while it still starts (`ConversationsDeps.stopping`). */
+  stopping?: () => boolean
   /** Test override for the wait before Mako continues a turn its exit cut short. */
   autoContinueDelayMs?: number
   /** A harness closing a session, awaited before it's closed (a switch retiring its source, say). */
@@ -139,6 +148,8 @@ export interface WorldOptions {
   defaults?: Partial<Record<string, SessionSettings>>
   /** Each harness's catalog, as its profile lists it; a harness without one has none read. */
   catalogs?: Partial<Record<string, readonly SessionModel[]>>
+  /** Harnesses whose driver never names where its session's records are: a binding of theirs has no path to resume. */
+  unlocated?: readonly string[]
   /** The person's Settings › Fins and what they last used, by harness. */
   fins?: { chosen?: Partial<Record<string, SessionSettings>>; used?: Partial<Record<string, SessionSettings>> }
   /** Harnesses whose account in use is at its limit, as `HarnessAccounts.limited` reads them. */
@@ -168,6 +179,8 @@ export interface WorldOptions {
   launchedOn?: (harness: string, account: string | undefined) => void
   /** The harnesses whose session goes on under another account (`ProviderLiveDriver.accountContinuation`). */
   resumesUnderAccount?: readonly string[]
+  /** Every harness goes on in its own session in another folder (`resume.elsewhere`), as the six do: a Thread moves onto its own branch as itself. */
+  elsewhere?: boolean
   /** The conversations an `@` picker offers and their transcripts (`AgentsDeps.references`). */
   references?: AgentsDeps["references"]
   /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
@@ -191,6 +204,14 @@ export interface WorldOptions {
   readingAccounts?: (harness: string, all: boolean) => Promise<void> | void
   /** A pull request as GitHub would say it stands (`AgentsDeps.readPull`): a stub, never the network. */
   readPull?: AgentsDeps["readPull"]
+  /** How this host reaches the person's other devices (`AgentsDeps.away`): with it, a Fin can be placed on one. */
+  away?: AgentsDeps["away"]
+  /** The Git remote a folder is a checkout of (`AgentsDeps.remoteOf`). */
+  remoteOf?: AgentsDeps["remoteOf"]
+  /** This host's checkout of a remote, for a Fin placed here (`AgentsDeps.checkoutOf`). */
+  checkoutOf?: AgentsDeps["checkoutOf"]
+  /** The most access a Fin placed here from another device may have (`AgentsDeps.placedCeiling`). */
+  placedCeiling?: AgentsDeps["placedCeiling"]
 }
 
 /** A message a scripted harness took: a turn's prompt, or a steer into a running one. */
@@ -212,7 +233,9 @@ export class AgentsWorld {
   readonly root: string
   readonly options: WorldOptions
   /** Every prompt a driver was sent, in order: a turn lost or run twice shows here. */
-  readonly prompts: { conversation: string; harness: string; text: string; at: number }[] = []
+  readonly prompts: { conversation: string; harness: string; text: string; at: number; settings?: SessionSettings }[] = []
+  /** Every session a driver started or resumed, with the selection it was started on. */
+  readonly starts: { conversation: string; harness: string; resume?: string; tuning?: SessionSettings }[] = []
   readonly steers: { conversation: string; text: string; at: number }[] = []
   /** Conversations whose Threads the person archived (`AgentsDeps.archived`). */
   readonly archived = new Set<string>()
@@ -233,6 +256,8 @@ export class AgentsWorld {
   /** Each move through `continueOn`, in order: who asked and what it went to. */
   readonly continued: { conversation: string; to: string; kind: string; by: string }[] = []
   jobs!: HostJobs
+  /** Settles once this host took up what the last one left (`WorldOptions.resumeInSlices`). */
+  resumed!: Promise<void>
   private running = new Set<Promise<unknown>>()
   private holds = new Map<string, () => void>()
   private ends = new Map<string, ScriptedEnd>()
@@ -258,6 +283,7 @@ export class AgentsWorld {
       return [harness, admission ? withExecutionAdmission(driver, admission) : driver]
     }))
     const live = new LiveConversations({
+      ...(this.options.stopping && { stopping: this.options.stopping }),
       appPath: this.root,
       root: join(this.root, "journals"),
       driver: (provider) => drivers.get(provider),
@@ -271,6 +297,7 @@ export class AgentsWorld {
         return { ref: { harness: "claude", nativeId: path, path }, entries, start: 0, total: entries.length, hasEarlier: false }
       },
       emit: (event) => {
+        this.options.events?.(event)
         this.events.push(event)
         this.eventAt.push(Date.now())
       },
@@ -283,7 +310,7 @@ export class AgentsWorld {
       resumeVerdict: this.options.resumeVerdict ?? (async () => ({ kind: "resumable", record: "same" })),
     })
     this.live = live
-    const continuing = continueOn({ live, resolveLaunch: async (_provider, _cwd, tuning) => tuning, switched: () => {}, resumesUnderAccount: (harness) => this.options.resumesUnderAccount?.includes(harness) ?? (this.options.continuation?.[harness]?.kind ?? "resumes") === "resumes"})
+    const continuing = continueOn({ live, resolveLaunch: async (_provider, _cwd, tuning) => tuning, carried: async (provider, _cwd, tuning) => tuning && carriedTuning(this.options.catalogs?.[provider], tuning), switched: () => {}, resumesUnderAccount: (harness) => this.options.resumesUnderAccount?.includes(harness) ?? (this.options.continuation?.[harness]?.kind ?? "resumes") === "resumes"})
     this.continueOn = (id, continuation, actor, stillDecided) => {
       const to = continuation.kind === "words" ? continuation.input.provider : continuation.kind === "move" ? continuation.move.to.harness : continuation.reply.provider
       this.continued.push({ conversation: id, to, kind: continuation.kind, by: actor?.kind ?? "person" })
@@ -341,21 +368,36 @@ export class AgentsWorld {
       ...(this.options.observeCapacity && { observeCapacity: this.options.observeCapacity }),
       ...(this.options.finLimit && { finLimit: this.options.finLimit }),
       ...(this.options.finCeiling && { finCeiling: this.options.finCeiling }),
+      ...(this.options.lent && { lent: this.options.lent }),
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
       ...(this.options.later && { later: this.options.later }),
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
       ...(this.options.readPull && { readPull: this.options.readPull }),
       ...(this.options.now && { now: this.options.now }),
+      ...(this.options.away && { away: this.options.away }),
+      ...(this.options.remoteOf && { remoteOf: this.options.remoteOf }),
+      ...(this.options.checkoutOf && { checkoutOf: this.options.checkoutOf }),
+      ...(this.options.placedCeiling && { placedCeiling: this.options.placedCeiling }),
       archived: (conversation) => this.archived.has(conversation),
     }
     const agents = new Agents(deps)
     this.agents = agents
+    if (this.options.resumeInSlices) {
+      // As the host does (`openConversations`), each conversation read in a slice at a time first.
+      this.resumed = (async () => {
+        await this.live.continueRestartedInSlices()
+        await this.agents.resumeInSlices()
+        this.live.armWakes()
+      })()
+      return
+    }
     // As the host does (`openConversations`): the turns an exit cut short go on before the engine looks at what waits.
     this.live.continueRestarted()
     this.agents.resume()
     // As the host's start arms it: held messages' times (`LiveConversations.armWakes`).
     this.live.armWakes()
+    this.resumed = Promise.resolve()
   }
 
   /** The selected account of `harness` when it's at its limit, as `HarnessAccounts.limited` reads it. */
@@ -396,10 +438,24 @@ export class AgentsWorld {
   async restart(): Promise<void> {
     await this.close()
     this.open()
+    await this.resumed
+  }
+
+  /** A new host after one that ended without closing its conversations (a crash, a kill): they reopen as they were left. */
+  async crashed(): Promise<void> {
+    this.holds.clear()
+    this.running.clear()
+    await this.live.stop()
+    this.agents.dispose()
+    this.jobs.stop()
+    this.store.close()
+    this.open()
+    await this.resumed
   }
 
   /** A top-level conversation on `harness` at `access`, on `tuning`'s model: an Apex once it starts a child. */
   async apex(harness: string, access: AccessTier = "auto", tuning?: SessionSettings): Promise<{ conversation: string; caller: AgentCaller }> {
+    await this.resumed
     const conversation = randomUUID()
     const modeId = this.options.ladders?.[harness]?.find((mode) => mode.access === access)?.id ?? accessModeId(access)
     await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} apex`, modeId, ...(tuning && { tuning }) })
@@ -478,7 +534,7 @@ export class AgentsWorld {
   private driver(harness: string): ProviderLiveDriver {
     const modes = this.options.ladders?.[harness] ?? MODES
     const state = (id: string, patch: Partial<LiveSessionState> = {}): LiveSessionState => ({
-      id, nativeId: `native-${id}`, nativePath: join(this.root, "native", id), harness, cwd: this.root,
+      id, nativeId: `native-${id}`, ...!this.options.unlocated?.includes(harness) && { nativePath: join(this.root, "native", id) }, harness, cwd: this.root,
       status: "ready", connection: "connected", modes: [...modes], currentMode: null, configOptions: [], ...patch,
     })
     return {
@@ -492,7 +548,7 @@ export class AgentsWorld {
       planning: { via: "setting", option: "plan", proposal: "Scripted model", feedback: { kind: "next-message", reason: "Scripted model" } },
       backgroundStop: { kind: "ends-with-turn", evidence: "Scripted model" },
       turnRecovery: { kind: "manual", reason: "Scripted model" },
-      resume: fixtureResume(),
+      resume: fixtureResume(this.options.elsewhere ? { elsewhere: { via: "Scripted model", verified: "Scripted model" } } : {}),
       ...((STEERS_AT_STEP.has(harness) || this.options.steering?.[harness]) && {
         steering: {
           kind: "supported" as const,
@@ -518,13 +574,17 @@ export class AgentsWorld {
         // Admission hands every launch its account; a world without accounts runs none through it.
         const launched = this.options.accounts ? options.accountLaunch : undefined
         if (launched) this.launches.push({ conversation: this.live.ownerOf(options.conversationId), harness, account: launched.account.name, ...(options.resume && { resume: options.resume }) })
+        this.starts.push({ conversation: this.live.ownerOf(options.conversationId), harness, ...(options.resume && { resume: options.resume }), ...(options.tuning && { tuning: options.tuning }) })
         await this.options.starting?.(options.conversationId, harness)
         this.options.launchedOn?.(harness, options.pinnedAccount?.())
         // What the harness says goes through the callback its start was given, fenced as a real driver's is (`driverEvents`).
         this.emits.set(options.conversationId, options.emit)
-        return state(options.conversationId, options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {})
+        const started: Partial<LiveSessionState> = options.resume ? { nativeId: options.resume, ...(options.threadPath && { nativePath: options.threadPath }) } : {}
+        // A harness that goes on in another folder says the folder it was started in.
+        if (this.options.elsewhere) started.cwd = _cwd
+        return state(options.conversationId, started)
       },
-      prompt: async (binding, text, _attachments, _settings, dispatch) => {
+      prompt: async (binding, text, _attachments, settings, dispatch) => {
         const id = this.live.ownerOf(binding)
         const refused = await this.options.refusePrompt?.(id, harness)
         if (refused) {
@@ -532,13 +592,13 @@ export class AgentsWorld {
           throw new Error(refused)
         }
         handOff(dispatch, { kind: "submitted", source: "transport-call" })
-        const path = this.live.snapshot(id)?.session.nativePath ?? state(id).nativePath!
+        const path = this.live.snapshot(id)?.session.nativePath ?? state(id).nativePath ?? ""
         // A session another program runs (a linked CLI's) keeps its own transcript, which the catalog reads.
         if (this.options.transcripts && path.startsWith(this.root)) {
           mkdirSync(dirname(path), { recursive: true })
           appendFileSync(path, `${JSON.stringify({ type: "user", text, messageId: dispatch.attemptId } satisfies Entry)}\n`)
         }
-        this.prompts.push({ conversation: id, harness, text, at: Date.now() })
+        this.prompts.push({ conversation: id, harness, text, at: Date.now(), ...(settings && { settings }) })
         this.options.heard?.({ kind: "prompt", conversation: id, harness, text })
         // A hand-off's new session reports under its own binding, through the callback its start was given, fenced as a real driver's is.
         const session = { ...(this.live.snapshot(id)?.session ?? state(binding)), id: binding }
@@ -596,8 +656,8 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   }
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, wakeDue: () => [], snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, pinnedAccount: () => undefined, submit: none,
-    act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
-    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {},
+    act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, waitingOn: () => undefined, workOf: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
+    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {}, readIn: async () => true,
   }
 }
 

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { spawnProviderProcess } from "./provider-process.js"
 import { readFile, realpath, stat } from "node:fs/promises"
 import { basename } from "node:path"
 import { z } from "zod"
@@ -23,10 +23,13 @@ import { registryJson } from "./registry-fetch.js"
 import {
   npmUpdate,
   pinnedPolicy,
+  unpublishedBuild,
+  unpublishedWords,
   type ProviderUpdateSource,
   type RuntimeUpdateSource,
 } from "./update-source.js"
 import type { HostJobs } from "../base/host-jobs.js"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /**
  * The runtimes behind every provider: what is installed, what is current,
@@ -953,6 +956,11 @@ export class RuntimeUpdates {
         this.options.updateTimeoutMs
       )
       if (outcome.code !== 0) {
+        // A pinned build its vendor withdrew: say which, never the installer's bare HTTP error.
+        const versions = this.sources().find((entry) => entry.key === provider)?.versions
+        const pinned = versions && !versions.bundled ? versions.tested : undefined
+        if (pinned && [plan.command, ...plan.args].join(" ").includes(pinned) && unpublishedBuild(outcome.output))
+          throw new Error(unpublishedWords(current.label ?? provider, pinned))
         const tail = outcome.output
           .trim()
           .split("\n")
@@ -1219,7 +1227,7 @@ export async function readRuntimeVersion(
       }
       child.stdout.on("data", collect)
       child.stderr.on("data", collect)
-      child.stdin.end()
+      endChildInput(child)
       const result = await exited
       const output = Buffer.concat(chunks).toString("utf8")
       if (result.code !== 0 && !parseVersion(output))
@@ -1263,11 +1271,11 @@ function spawnUpdate(
   timeoutMs: number
 ): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnProviderProcess(command, args, {
       env: environmentForExecutable(command, env),
-      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
-    })
+    }, { kind: "runtime-update", owner: basename(command) })
+    endChildInput(child)
     let output = ""
     const collect = (chunk: Buffer) => {
       output = (output + chunk.toString("utf8")).slice(-OUTPUT_TAIL)

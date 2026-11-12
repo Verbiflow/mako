@@ -1,4 +1,5 @@
-import type { ClientSessionOverSockets } from "@mako/protocol"
+import type { SourceProjectCommand, SourceProjectReceipt } from "@mako/protocol/source-project"
+import type { Advertisement, ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking, type WaitingClaim } from "./cloud-account.js"
@@ -29,6 +30,8 @@ import { appPorts } from "./app-ports.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac } from "../base/platform.js"
 import { describeThisDevice } from "./device-description.js"
+import type { Grant, SourceAnswer } from "@mako/protocol/borrow"
+import type { BorrowSnapshot } from "../contracts/setup.js"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
 /** The account's stream skipped a number, or said one was lost: the list is read whole again (`onAccountGap`). */
@@ -40,6 +43,8 @@ export type AccountListGap = { gap: { after: number; seq: number; why: "skipped"
 export type AccountListNotice = AccountListHeard | "account-changed" | "linked" | AccountListGap
 
 export interface CloudAccount {
+  /** Internal control transport; no caller-selected URL or clone authority. */
+  sourceProjectControl?(input: SourceProjectCommand): Promise<SourceProjectReceipt>
   /** A connection token while this Mac is signed in to Mako. */
   token(): Promise<string | undefined>
   /** The cloud's address this Mac reaches, such as `https://api.example.com`; undefined in a build without one. */
@@ -55,6 +60,8 @@ export interface CloudAccount {
   deviceId(): Promise<string | undefined>
   /** Why this Mac can't use the cloud now: signed out, or an account without it; undefined when it can. */
   cloudBlocked?(): Promise<"signed-out" | "no-cloud" | undefined>
+  /** Says what this Mac can serve and its room on its runtime's link; false while that link isn't up. */
+  advertise?(advertisement: Advertisement): boolean
   /**
    * A cloud Thread in the account, its machine working in a clone of `repository`; the same Thread when made again
    * under its ID. `prepare`: made ahead of its first message, as its person writes it; `ready` once its machine is.
@@ -129,8 +136,8 @@ export interface CloudAccount {
   unwaitMessage?(session: string, id: string): Promise<WaitingMessage[]>
   /** This Mac's claim on a message that waited for one of its Sessions, before it runs it here (`CloudAccount.claimWaiting`). */
   claimWaiting?(session: string, id: string): Promise<WaitingClaim>
-  /** The account's devices, by ID, name and kind, and which is this one. */
-  devices?(): Promise<{ devices: Array<{ id: string; name: string; kind?: string }>; current: string }>
+  /** The account's devices, by ID and name, and which is this one. */
+  devices?(): Promise<{ devices: Array<{ id: string; name: string; kind?: string; platform?: string }>; current: string }>
   /** The harness versions the cloud's machines run, or null from a cloud that doesn't say (`CloudAccounts.cloudHarnesses`). */
   cloudHarnesses?(): Promise<CloudHarnesses | null>
   /** The person's access choices as the account keeps them, or null from a cloud that doesn't keep them yet. */
@@ -143,8 +150,18 @@ export interface CloudAccount {
     put(repository: string, file: { path: string; data: Buffer; names: string[] }): Promise<CloudCarriedFile>
     remove(repository: string, path?: string): Promise<string[]>
   }
+  /** The account's broker, for Setup: what it holds for this person, this device's answer to an ask, a revoke. */
+  borrow?: {
+    snapshot(since: number): Promise<BorrowSnapshot | null>
+    /** The grants that stand there, as this device advertises by them; null from a cloud that has none. */
+    grants(): Promise<Grant[] | null>
+    answer(ask: string, answer: SourceAnswer): Promise<void>
+    revoke(grant: string): Promise<void>
+  }
   /** Hears what the account's list of Sessions is told (`AccountListNotice`), in the stream's order, as it comes; returns how to stop. */
   onThreadListings?(listener: (heard: AccountListNotice) => void): () => void
+  /** Hears each time this device's runtime is enrolled on a new link: its account's other devices' calls reach it from then. */
+  onRuntimeLinked?(listener: () => void): () => void
   /** Whether the account's link is open and heard from within a ping: what the account says reaches this Mac now. */
   accountHeard?(): boolean
   /** The account's link tried now if it isn't heard, rather than at its next backoff step: whether it opened (`CloudLink.reach`). */
@@ -200,6 +217,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   signedFiles,
   jobs,
   accessChoices,
+  advertising,
 }: {
   environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
   secrets: DomainSecrets
@@ -221,6 +239,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
    * again, as this Mac signs in or to another account, or the stream may have missed an event.
    */
   accessChoices?: { heard(answer: AccessChoicesAnswer): void; again(): void }
+  /** What this Mac can serve and its room (`Advertiser`), said as its runtime's link enrols. */
+  advertising?: { current(): Advertisement | undefined }
 }): CloudAccount {
   let status: string | undefined
   /** What the sign-ins depend on in the account: who it is and whether it has the cloud. */
@@ -244,6 +264,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
   })
   const threadListeners = new Set<(heard: AccountListNotice) => void>()
+  const runtimeListeners = new Set<() => void>()
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
     secrets: secrets.secrets,
@@ -295,8 +316,12 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onAccountLinked: () => {
       for (const listener of threadListeners) listener("linked")
     },
+    onRuntimeLinked: () => {
+      for (const listener of runtimeListeners) listener()
+    },
     onRequest: request,
     sessions,
+    ...(advertising && { advertising }),
     // With the cloud entitlement, this Mac answers its account's other devices and the cloud through the same
     // dispatcher as its own windows: the same schemas, the same refusals, the same logs.
     runtime: {
@@ -351,6 +376,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       return state.status === "signed-in" ? state.account.id : undefined
     },
     session: () => cloud.session(),
+    sourceProjectControl: (input) => cloud.sourceProjectControl(input),
     deviceId: () => cloud.deviceId(),
     cloudBlocked: () => cloud.signInsBlocked(),
     createThread: (threadId, repository, options) => cloud.createThread(threadId, repository, options),
@@ -382,6 +408,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     unwaitMessage: (session, id) => cloud.unwaitMessage(session, id),
     claimWaiting: (session, id) => cloud.claimWaiting(session, id),
     reportSessions: () => cloud.reportSessions(),
+    advertise: (advertisement) => cloud.advertise(advertisement),
     liveSent: () => cloud.liveSent(),
     devices: () => cloud.devices(),
     cloudHarnesses: () => cloud.cloudHarnesses(),
@@ -392,9 +419,19 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       put: (repository, file) => cloud.putCarriedFile(repository, file),
       remove: (repository, path) => cloud.removeCarriedFiles(repository, path),
     },
+    borrow: {
+      snapshot: (since) => cloud.borrowSnapshot(since),
+      grants: () => cloud.borrowGrants(),
+      answer: (ask, answer) => cloud.answerBorrowAsk(ask, answer),
+      revoke: (grant) => cloud.revokeBorrowGrant(grant),
+    },
     onThreadListings: (listener) => {
       threadListeners.add(listener)
       return () => threadListeners.delete(listener)
+    },
+    onRuntimeLinked: (listener) => {
+      runtimeListeners.add(listener)
+      return () => runtimeListeners.delete(listener)
     },
     leaving: (why) => cloud.leaving(why),
     accountHeard: () => cloud.accountHeard(),

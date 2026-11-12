@@ -347,8 +347,17 @@ export class LiveTransfers {
         }
       }
       // A record its harness keeps closed goes on in a new session with the
-      // whole conversation; any other record that won't reopen refuses.
-      if (verdict?.kind === "closed") reconnect = false
+      // whole conversation, and so does one its harness has no record of here
+      // (`lost`), the active one or a pick of it: refusing that dropped every
+      // message sent to it. Any other record that won't reopen refuses.
+      const lost = verdict?.kind === "unavailable" && verdict.lost === true && (!target || target === control.activeBindingId)
+      if (lost)
+        hostLog("transfer", "a session its harness can't find goes on as a new one with the whole conversation", {
+          conversation: source.session.id,
+          harness: transfer.input.provider,
+          binding: currentBinding?.id ?? "",
+        })
+      if (verdict?.kind === "closed" || lost) reconnect = false
       else if ((reconnect || target) && !prior) throw reconnectError(verdict)
       const tuning =
         transfer.input.tuning ??
@@ -829,6 +838,7 @@ function messageOf(transfer: ContextTransfer, createdAt: number, fields: Pick<Li
     displayText: transfer.input.displayText ?? transfer.input.text,
     attachments: transfer.input.attachments,
     ...transfer.input.grants && { grants: transfer.input.grants },
+    ...transfer.input.notification && { notification: transfer.input.notification },
     ...fields,
   })
 }

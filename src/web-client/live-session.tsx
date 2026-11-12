@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
 import { AcpPanel } from "@/components/viewer/acp-panel"
+import { ConversationSkeleton } from "@/components/viewer/conversation-skeleton"
 import { ShowAgentsContext } from "@/components/viewer/show-agents"
 import { Composer as DeskComposer } from "@/components/composer/composer"
 import { TranscriptEndContext, type TranscriptEnd } from "@/components/transcript/transcript-end"
@@ -26,6 +27,7 @@ import { useReplyHold } from "./replies"
 import { useWide } from "./route"
 import { PhoneSteps } from "./steps"
 import { SwitchLines } from "./thread-chips"
+import { TranscriptLoading } from "./transcript-loading"
 
 const NO_RECORDS: never[] = []
 
@@ -58,9 +60,17 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
   useEffect(() => {
     if (hydrated) resumeOutbox(conversation)
   }, [hydrated, conversation])
+  // What it held paints before it's read again: a conversation listed anew is no longer `hydrated`, but keeps its turns.
+  const drawn = useAcp((state) => state.activeKey === conversation && (state.conversations[conversation]?.projection?.exchanges.length ?? 0) > 0)
+  const syncing = useSyncing((state) => state.conversation === conversation)
+  // Nothing of it on this page yet, while it's opened and first read from its owner: the transcript's loader over it,
+  // never an empty column under the bar. Over it, not instead of it: the transcript is mounted when its turns arrive, as
+  // a held one is, so it lands them at its end as it always has. Once read, an empty conversation is its own empty
+  // transcript.
+  const loading = !active || (!drawn && !hydrated && syncing)
   const live = useRef<HTMLDivElement>(null)
   const deskLive = useRef<HTMLDivElement>(null)
-  useOpenReading(conversation, desk ? deskLive : live, hydrated)
+  useOpenReading(conversation, desk ? deskLive : live, hydrated, drawn, syncing)
   const [away, setAway] = useState(false)
   const [jump, setJump] = useState<{ to: (() => void) | null }>({ to: null })
   const end = useMemo<TranscriptEnd>(() => ({ away: setAway, bind: (to) => setJump({ to }) }), [])
@@ -104,7 +114,15 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
     return (
       <PromptNoteContext value={note}>
         <div ref={deskLive} className="desk-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
-          {active ? <AcpPanel /> : <div className="flex-1" />}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {active ? <AcpPanel /> : null}
+            {/* The desktop's own placeholder, in the transcript's column, as the desktop opens a conversation. */}
+            {loading ? (
+              <div className="absolute inset-0" aria-busy aria-label="Opening the conversation">
+                <ConversationSkeleton />
+              </div>
+            ) : null}
+          </div>
           {active ? <DeskComposer /> : null}
         </div>
       </PromptNoteContext>
@@ -116,7 +134,10 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
           <CompactPresentationContext value={compact}>
           <ShowAgentsContext value={showAgents}>
           <div ref={live} className="web-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
-            {active ? <AcpPanel asks={false} compact /> : <div className="flex-1" />}
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              {active ? <AcpPanel asks={false} compact /> : null}
+              {loading ? <TranscriptLoading className="absolute inset-0" /> : null}
+            </div>
             <WebDock
               conversation={conversation}
               harness={harness}
@@ -143,16 +164,13 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
  * How long opening the conversation took to show its newest turn, and to catch up with it, for the page's readings:
  * from what this page already held of it, or from the network.
  */
-function useOpenReading(conversation: string, live: RefObject<HTMLDivElement | null>, hydrated: boolean): void {
+function useOpenReading(conversation: string, live: RefObject<HTMLDivElement | null>, hydrated: boolean, drawn: boolean, syncing: boolean): void {
   const reading = useRef<{ opened: ReturnType<typeof openingThread>; kept: boolean } | null>(null)
   useEffect(() => {
     const opened = openingThread()
     reading.current = { opened, kept: (acpStore.get().conversations[conversation]?.projection?.exchanges.length ?? 0) > 0 }
     return () => opened.close()
   }, [conversation])
-  // What it held paints before it's read again: a conversation listed anew is no longer `hydrated`, but keeps its turns.
-  const drawn = useAcp((state) => state.activeKey === conversation && (state.conversations[conversation]?.projection?.exchanges.length ?? 0) > 0)
-  const syncing = useSyncing((state) => state.conversation === conversation)
   useEffect(() => {
     const held = reading.current
     if (!held || !(drawn || hydrated)) return

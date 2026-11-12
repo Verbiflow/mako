@@ -134,6 +134,11 @@ export interface Resident {
   idleTimer?: ReturnType<typeof setTimeout>
   /** Intentional transport teardown; prompts accepted during it wake afterwards. */
   hibernating?: Promise<void>
+  /**
+   * A model, reasoning or fast its own harness's session takes from the next message on (a move to the harness it's on,
+   * `moveOn`): the process running now was started on what it had, so the next message that names none carries this.
+   */
+  retuned?: SessionSettings
   /** One coalesced resume for every prompt that arrives while hibernated. */
   waking?: Promise<void>
   /** At most one automatic account reopen for an input proven unsent. */
@@ -220,6 +225,8 @@ export interface ConversationChildren {
   edgeWritten?(op: string): void
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
+  /** Whether the conversation hears its Thread's Fins move: its Thread's newest Session's. Its Fins hold no other. */
+  showsFins?(conversation: string): boolean
   /** Stops one of them, by its Thread: false when it isn't the conversation's or has nothing running. */
   stopChild(conversation: string, child: string): Promise<boolean>
   /** One of the conversation's requests settled. */
@@ -228,8 +235,8 @@ export interface ConversationChildren {
   inputDelivered?(conversation: string, input: Pick<LiveRequest, "id" | "text" | "actor"> & Partial<Pick<LiveRequest, "digest" | "continues" | "goal">>, delivery: "turn" | "steer"): void
   /** Whether the conversation's Thread is an Apex: it has Fins or queued spawns, or was started as one. */
   isApex(conversation: string): boolean
-  /** What an Apex hears before a message the person sends it: its Fins as they stand and how to route it (`frontDoorNote`); nothing for any other message or Thread. */
-  frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
+  /** The person's front door, or the precedence of newer instructions that overtook an agent's queued message. */
+  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance?: boolean): string[]
   /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
   ruleLines(conversation: string): RoleRuleLines
   /** Whether a turn of the conversation a usage limit cut may go on now: a Fin's takes a place as anything else does. */
@@ -249,6 +256,10 @@ export function launchAccount(resident: Resident, harness: string): () => string
   }
 }
 export interface Dependencies {
+  /** This host's start on its data root (`takeHostStart`), which its epoch carries; none, an epoch no window orders. */
+  start?: import("../base/host-start.js").HostStart
+  /** The host has begun to stop, though these conversations haven't yet (a stop while the host still starts): reads in slices end. */
+  stopping?(): boolean
   /** This machine's build slots now, for the note a heavy suite started while each is in use hears (`build-slots-full`). */
   builds?(): CallThread["builds"]
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */

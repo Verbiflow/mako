@@ -1,3 +1,4 @@
+import { stoppingSignal } from "../base/host-stopping.js"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
 import { z } from "zod"
@@ -59,6 +60,7 @@ export async function groupHoldsNothingAlive(group: number): Promise<boolean> {
  * their steps through this.
  */
 export async function runProcessGroup(command: string, args: string[], options: GroupRunOptions): Promise<GroupRunResult> {
+  options = { ...options, signal: stoppingSignal(options.signal) }
   options.signal?.throwIfAborted()
   const grace = options.graceMs ?? GROUP_STOP_GRACE_MS
   const child = spawn(command, args, {

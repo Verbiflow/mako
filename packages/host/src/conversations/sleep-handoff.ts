@@ -1,4 +1,5 @@
-import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { hostSpawn } from "../base/host-command.js"
+import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -6,6 +7,7 @@ import { createInterface } from "node:readline"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { trackProviderChild } from "../base/provider-children.js"
+import { endChildInput, writeChildInput } from "@mako/sessions/child-input"
 
 /**
  * How long the helper holds a sleep for the host (`mako-sleep-watch --hold`). macOS waits at most 30 seconds for an
@@ -35,9 +37,11 @@ export type SleepHandOffOptions = {
 /**
  * Hands agents at work to the cloud as this Mac goes to sleep. A native helper (`native/sleep-watch-macos`) hears
  * the sleep before it happens and holds it while the host hands each working Thread off (rule 3 of moves made the
- * release small); it lets the Mac sleep once the host answers, or once its hold runs out. A Thread that can't be
- * released in that time stays here untouched, its turn going on when the Mac wakes (rule 4). Runs only while the
- * person's choice is on.
+ * release small), one in the project folder onto its own branch first; it lets the Mac sleep once the host answers,
+ * or once its hold runs out. A Thread that can't be released in that time stays here with its turns paused, so it
+ * reads idle for Continue in the cloud from another device, and goes on here once the Mac wakes and hears its account
+ * (rule 4, `CloudMoves.unpark`). A shutdown hands off the same way (`machineLeaving`). Runs only while the person's
+ * choice is on.
  */
 export class SleepHandOff {
   readonly #options: SleepHandOffOptions
@@ -59,7 +63,7 @@ export class SleepHandOff {
 
   stop(): void {
     this.#stopped = true
-    this.#child?.stdin.end()
+    if (this.#child) endChildInput(this.#child)
     this.#child?.kill()
     this.#child = undefined
   }
@@ -69,7 +73,7 @@ export class SleepHandOff {
     const enabled = await this.#options.enabled()
     if (!enabled) {
       if (this.#child) hostLog("handoff", "the sleep watch stopped: handing off on sleep is off")
-      this.#child?.stdin.end()
+      if (this.#child) endChildInput(this.#child)
       this.#child = undefined
       return
     }
@@ -117,13 +121,14 @@ export class SleepHandOff {
     } catch (error) {
       hostWarn("handoff", "agents at work couldn't be handed off as this Mac slept", { error: errorMessage({ error }) })
     }
-    if (!child.stdin.destroyed) child.stdin.write(`allow ${id}\n`)
+    // A watch gone by now lets the Mac sleep anyway, and its `exit` starts another.
+    writeChildInput(child, `allow ${id}\n`).catch(() => {})
     hostLog("handoff", "this Mac may sleep", { ms: Date.now() - began })
   }
 }
 
 function spawnHelper(path: string, args: readonly string[]): ChildProcessWithoutNullStreams {
-  return spawnProcess(path, args, { stdio: ["pipe", "pipe", "pipe"] })
+  return hostSpawn(path, args, { stdio: ["pipe", "pipe", "pipe"] })
 }
 
 /** The helper's name, in a packaged app's `Contents/MacOS` and in a checkout's build of it. */

@@ -28,8 +28,6 @@ const reads = [
   "mako:launch-prewarm",
   /** The Threads at work here a handoff would take, and the person's choice for sleep, as they stand. */
   "mako:handoff-candidates",
-  /** Agents' asks to move their Thread, as they stand. */
-  "mako:thread-move-asks",
   "mako:handoff-settings",
   "mako:conversation-settings",
   /** Where keeping this Mac awake stands; reads what `KeepAwake` holds. */
@@ -130,6 +128,8 @@ const reads = [
   "mako:agents-list",
   "mako:agents-read",
   "mako:agents-wait",
+  /** What this host offers as a place for Fins, as it stands. */
+  "mako:agents-capabilities",
   /** Simulators' setup line as it stands, re-read when asked; changes nothing on this Mac. */
   "mako:simulator-setup",
   /** What the hosts run, who holds each simulator, a page or console read, and a screenshot (`contracts/simulators.ts`). */
@@ -172,6 +172,8 @@ const reads = [
   "mako:cloud-sign-ins",
   /** A project's carried files and where each stands in the cloud, read, never sent. */
   "mako:cloud-carried-files",
+  /** A project's Setup: what each place reads of itself and what the broker grants, read, never changed. */
+  "mako:setup",
   /** Who the account's own GitHub token belongs to, read from the cloud; never the token. */
   "mako:github-token",
   /** Who the account's cloud commits and pull requests are authored as, read from the cloud. */
@@ -207,6 +209,7 @@ const reads = [
   "mako:skills-discover",
   "mako:skills-resolve",
   "mako:automations",
+  "mako:automation-context",
   "mako:external-editors",
   "mako:default-commit-prompt",
   "mako:native-requests",
@@ -261,7 +264,14 @@ const replays = [
   "mako:agents-report",
   "mako:agents-send",
   "mako:agents-answer",
+  "mako:agents-settle",
   "mako:agents-stop",
+  /** A start for an Apex on another device is settled by its op: a repeat answers the same Fin. */
+  "mako:agents-place",
+  /** A placed Fin's notice is kept once by its report's ID: a repeat is heard as the same one. */
+  "mako:agents-notice",
+  /** A stop of a placed start is kept by the start's op: a repeat stops nothing more and answers the same. */
+  "mako:agents-cancel",
   /** The moved message's id names the one it becomes; a message already moved is withdrawn once. */
   "mako:agents-redirect",
   /** The person's message to a Fin is settled by its request id: a repeat answers the first delivery. */
@@ -292,8 +302,14 @@ const replays = [
   "mako:thread-return",
   /** `ThreadMoveTool.move`: the move is named by the caller's key, so a repeat joins it or answers how it went. */
   "mako:threads-move",
-  /** `ThreadMoveTool.answer`: the ask's id; an answered ask ignores a repeat. */
-  "mako:thread-move-ask-answer",
+  /** `ThreadActTool.act`: named by the caller's key, as Rename and Archive are by their operation. */
+  "mako:threads-act",
+  /** `SettingsTool.call`: a read, or a setting set to a value; asked twice, the same end state. */
+  "mako:settings-act",
+  /** `HarnessTool.act`: a repeat under its key gets the first outcome (`OnceByKey`), and after a restart an install under way refuses a second and one done is the same end state. */
+  "mako:harnesses-act",
+  /** `AgentAskGate.answer`: the ask's id; an answered ask ignores a repeat. */
+  "mako:agent-ask-answer",
   /** Whether a machine has its folder for a move only reads. */
   "mako:move-ready",
   /** A move staged again stages the same, or what the device sent since: nothing of it is the machine's own yet. */

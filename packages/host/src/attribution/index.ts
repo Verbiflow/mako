@@ -31,7 +31,7 @@ import { ChildCalls } from "./child-calls.js"
 import { LiveActivity, reportedEffect } from "./live-activity.js"
 import { within } from "./paths.js"
 import { gitRepository, nodeFileSystem, watcherEvents, type SystemHistory, type TreeWatcher } from "./ports.js"
-import { changes, hunks, partition, restorable, shares, storedView, turnChanges, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
+import { changes, countTurnInSlices, hunks, partition, restorable, shares, storedView, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
 import { lostVersions, restoreVersion } from "./recovery.js"
 import { threadTrees, type ThreadTree } from "./thread-tree.js"
 import { runningIn, turnOnlyPair, turnWriters, undoPlan, type ShownPair, type UndoPlan } from "./turn-lines.js"
@@ -226,6 +226,8 @@ export interface Attribution {
   shares(checkout: string, thread: string): CheckoutShares
   /** Every change heard so far journaled. */
   settled(): Promise<void>
+  /** Every change heard so far journaled, without waiting on rescans for lost events: what a turn's count waits for. */
+  heard(): Promise<void>
   /**
    * Track each repository of `checkout` if nothing has yet, so a move can
    * divide it; what it holds uncommitted then is journaled as before tracking.
@@ -248,10 +250,10 @@ export interface Attribution {
   threadChanges(thread: string): ThreadChangeSummary
   /**
    * Count what a Thread's turn changed, from the journal as it stands
-   * (`turnChanges`); `settling` while its entries may still be given
-   * another author. Undefined while the journal isn't open.
+   * (`countingTurn`, a slice at a time); `settling` while its entries may
+   * still be given another author. Undefined while the journal isn't open.
    */
-  countTurn(thread: string, turn: string, state: TurnChanges["state"]): TurnChanges | undefined
+  countTurn(thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined>
   /** Whether every change by `at` has its author for good, so a turn that ended then can be counted once and for all. */
   settledThrough(at: number): boolean
   /** Keep a turn's summary beside the entries, for "changes made" to sum. */
@@ -648,7 +650,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       // This host's own sessions are in its catalog; a follower's come through `followers()`.
       sessions: () => undefined,
       track: trackRoot,
-      settled: () => tracker.settled(),
+      settled: (options) => tracker.settled(options),
       readBack: async (where, budgetMs) => {
         await tracker.settled()
         return readBack(where, budgetMs)
@@ -819,6 +821,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     partition: (checkout, thread, options) => partition(view(), checkout, thread, options),
     shares: (checkout, thread) => shares(view(), checkout, thread),
     settled: () => journal.writes.settled(),
+    heard: () => journal.writes.settled({ rescans: false }),
     async track(checkout) {
       const found = await locate(deps.git, checkout).catch(() => null)
       const roots = found ? [found.root] : await projectRepositories(deps.git, checkout).then((result) => ("roots" in result ? result.roots : []), () => [])
@@ -839,9 +842,9 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       const current = view()
       return threadTotals(current.store.turnChangesOf(thread), changes(current, thread))
     },
-    countTurn: (thread, turn, state) => {
+    countTurn: async (thread, turn, state) => {
       if (!local && !reader) return undefined
-      return turnChanges(view(), thread, turn, state)
+      return countTurnInSlices(view(), thread, turn, state)
     },
     settledThrough: (at) => !view().store.unsettledThrough(at + TRAIL_MS),
     counted: (summary, session) => journal.writes.counted(summary, session),
