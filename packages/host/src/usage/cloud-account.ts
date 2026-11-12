@@ -49,6 +49,8 @@ import {
   CLOUD_ENTITLEMENT,
   servesDeviceRuntime,
   QUIET_PROJECT_LINK_VERSION,
+  QUIET_OTHERS_LINK_VERSION,
+  QUIET_PROJECT_FROM_LINK_VERSION,
 } from "@mako/protocol"
 import {
   CloudBrowserSessionSchema,
@@ -1037,30 +1039,37 @@ export class CloudAccounts {
    * generations, and the checkpoint the cloud acknowledged, which the account may continue it from while this Mac is
    * quiet. It releases nothing. The same note again is the same note. A gateway that takes no notes yet answers 404:
    * `unserved`, and nothing is continued. A Thread's `project` goes only to a gateway whose link last agreed
-   * `QUIET_PROJECT_LINK_VERSION`: one before refuses the whole note, so to any other the Thread goes without it.
+   * `QUIET_PROJECT_LINK_VERSION`, and its `others` and `projectFrom` only to one that agreed 26: one before refuses the
+   * whole note, so to any other the Thread goes without them. `record` is handed the very note that's about to go, as it
+   * goes, before it does: what a going-away records (`CloudReadiness.noted`) is exactly what was sent, whatever version
+   * the link agreed meanwhile. One that fails sends nothing.
    */
-  async quiet(note: QuietNote): Promise<QuietAnswer | "unserved"> {
+  async quiet(note: QuietNote, record?: (sent: QuietNote) => Promise<void>): Promise<QuietAnswer | "unserved"> {
     const deviceId = await this.deviceId()
     if (!deviceId) throw new CloudAccountError("This Mac isn't signed in to Mako.")
-    const response = await this.#call("devices.quiet", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/quiet`, QuietNoteSchema.parse(this.#noteFor(note)), false, [404])
+    const sent = QuietNoteSchema.parse(this.#noteFor(note))
+    await record?.(sent)
+    const response = await this.#call("devices.quiet", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/quiet`, sent, false, [404])
     if (response.status === 404) return "unserved"
     return QuietAnswerSchema.parse(await response.json())
   }
 
-  /** The note as `quiet` sends it to this gateway now: what a going-away records it named (`CloudReadiness.noted`). */
-  asSent(note: QuietNote): QuietNote {
-    return this.#noteFor(note)
-  }
-
-  /** The note as this gateway takes it: a Thread's `project` only where its link agreed the version that carries it. */
+  /** The note as this gateway takes it: a Thread's `project`, `others` and `projectFrom` each only where its link agreed the version that carries it. */
   #noteFor(note: QuietNote): QuietNote {
-    if ((this.#agreed ?? 0) >= QUIET_PROJECT_LINK_VERSION || !note.threads.some((thread) => thread.project !== undefined)) return note
-    this.#options.log?.("a quiet note's project folders left out: the gateway's link hasn't agreed them", { agreed: this.#agreed ?? "none" })
+    const agreed = this.#agreed ?? 0
+    const project = agreed >= QUIET_PROJECT_LINK_VERSION || !note.threads.some((thread) => thread.project !== undefined)
+    const others = agreed >= QUIET_OTHERS_LINK_VERSION || !note.threads.some((thread) => thread.others !== undefined)
+    // The folder `project` mirrors goes only with `project`, to a gateway that places Sessions by it.
+    const from = (project && agreed >= QUIET_PROJECT_FROM_LINK_VERSION) || !note.threads.some((thread) => thread.projectFrom !== undefined)
+    if (project && others && from) return note
+    this.#options.log?.("a quiet note's project folders left out: the gateway's link hasn't agreed them", { agreed: this.#agreed ?? "none", ...(!project && { project: "left out" }), ...(!others && { others: "left out" }), ...(!from && { projectFrom: "left out" }) })
     return {
       ...note,
       threads: note.threads.map((thread) => {
         const without = { ...thread }
-        delete without.project
+        if (!project) delete without.project
+        if (!others) delete without.others
+        if (!from) delete without.projectFrom
         return without
       }),
     }

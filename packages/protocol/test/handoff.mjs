@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { test } from "node:test"
 import { OwnerAnswerSchema, OwnerAskSchema, ParkedTurnSchema, QuietAnswerSchema, QuietNoteSchema, autoContinueOp } from "../dist/handoff.js"
 import { continueCloudThread } from "../dist/continues.js"
-import { QUIET_PROJECT_LINK_VERSION } from "../dist/version.js"
+import { QUIET_OTHERS_LINK_VERSION, QUIET_PROJECT_FROM_LINK_VERSION, QUIET_PROJECT_LINK_VERSION } from "../dist/version.js"
 
 const session = randomUUID()
 const note = () => ({ note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", sessions: [{ session, generation: 4 }], checkpoint: { version: 1, sha256: "a".repeat(64), bytes: 409, head: "b".repeat(40), branch: "mako/fix", index: "c".repeat(40), work: "d".repeat(40), standby: "t-standby" } }] })
@@ -74,6 +74,27 @@ test("the note's checkpoint is the whole checkpoint the arrival applies, with it
   assert.equal(QuietNoteSchema.safeParse(noStandby).success, false, "where it was sent is named")
 })
 
+test("a project folder's Thread names each other repository with its own checkpoint", () => {
+  const other = (name) => ({ path: `/Users/someone/worktrees/fix/${name}`, url: `https://github.com/acme/${name}`, branch: "mako/fix", checkpoint: { version: 1, sha256: "e".repeat(64), bytes: 300, head: "f".repeat(40), branch: "mako/fix", index: "1".repeat(40), work: "2".repeat(40) } })
+  const two = note()
+  two.threads[0].others = [other("web")]
+  assert.equal(QuietNoteSchema.safeParse(two).success, true)
+  assert.equal(QuietNoteSchema.safeParse(note()).success, true, "a single repository names none")
+  const relative = note()
+  relative.threads[0].others = [{ ...other("web"), path: "web" }]
+  assert.equal(QuietNoteSchema.safeParse(relative).success, false, "its path is where it sits, whole")
+  const notGitHub = note()
+  notGitHub.threads[0].others = [{ ...other("web"), url: "git@github.com:acme/web.git" }]
+  assert.equal(QuietNoteSchema.safeParse(notGitHub).success, false, "a GitHub repository a machine clones over https")
+  const hashOnly = note()
+  hashOnly.threads[0].others = [{ ...other("web"), checkpoint: { sha256: "e".repeat(64) } }]
+  assert.equal(QuietNoteSchema.safeParse(hashOnly).success, false, "the whole checkpoint, as the arrival applies it")
+  const many = note()
+  many.threads[0].others = Array.from({ length: 32 }, (_, i) => other(`r${i}`))
+  assert.equal(QuietNoteSchema.safeParse(many).success, false, "at most 31")
+  assert.equal(QUIET_OTHERS_LINK_VERSION, 26, "sent only to a gateway whose link agreed them")
+})
+
 
 test("a project folder's Thread names its project worktree, absolute and at most 4,096 characters; a note without it still reads", () => {
   const project = note()
@@ -88,4 +109,10 @@ test("a project folder's Thread names its project worktree, absolute and at most
   const longest = note()
   longest.threads[0].project = `/${"a".repeat(4_095)}`
   assert.equal(QuietNoteSchema.safeParse(longest).success, true)
+  // The device folder it mirrors, by which each Session is placed: absolute too, and sent at 26.
+  const from = note()
+  Object.assign(from.threads[0], { project: "/Users/ada/.mako/worktrees/shop-1a2b/fix", projectFrom: "/Users/ada/shop" })
+  assert.equal(QuietNoteSchema.safeParse(from).success, true)
+  assert.equal(QuietNoteSchema.safeParse({ ...from, threads: [{ ...from.threads[0], projectFrom: "shop" }] }).success, false, "absolute")
+  assert.equal(QUIET_PROJECT_FROM_LINK_VERSION, 26)
 })

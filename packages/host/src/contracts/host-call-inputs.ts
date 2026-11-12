@@ -2037,6 +2037,24 @@ const inputs = {
           })
           .optional(),
         carry: z.object({ sha256: z.string(), bytes: z.number() }).optional(),
+        others: z
+          .array(
+            z.object({
+              path: z.string(),
+              url: z.string(),
+              checkpoint: z.object({
+                version: z.literal(1),
+                sha256: z.string(),
+                bytes: z.number(),
+                head: z.string(),
+                index: z.string(),
+                work: z.string(),
+                branch: z.string().optional(),
+              }),
+              branch: z.string().optional(),
+            })
+          )
+          .optional(),
       }),
     ]),
   "mako:move-depart": () =>

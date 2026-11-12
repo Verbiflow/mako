@@ -1177,12 +1177,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const leaveProjectFolder = async (session: string, op: string) => {
     const id = SessionIdSchema.safeParse(session)
     const thread = id.success ? threads.store?.sessionPlacement(id.data)?.thread : undefined
-    const acknowledged = thread && (await late.readiness?.acknowledged(thread))
+    // With what the note this continue came from carried (by its op), and nothing a later note recorded.
+    const acknowledged = thread && (await late.readiness?.acknowledged(thread, op))
     const attribution = late.attribution
     if (!thread || !acknowledged || !attribution) return
     const repositories = acknowledged.acknowledged.map((each) => ({ root: each.root, versions: each.versions ?? [] }))
-    // Only if the cloud has all of it: it went on from the first repository's very checkpoint, and the going-away note
-    // carried that and every other repository's with a change of the Thread's. A continue on a clone of the branch the
+    // Only if the cloud has all of it: it went on from the first repository's very checkpoint, and the going-away note it
+    // came from (by its op, never a later note's) carried that and every other repository's with a change of the Thread's. A continue on a clone of the branch the
     // device last pushed, or a repository the note left out or acknowledged since, doesn't have the Thread's changes
     // there, and taking them out here would lose them: then all of it stays.
     const state = await late.cloud?.continueState?.(session, op).catch(() => undefined)
@@ -1430,15 +1431,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     goingAway: {
       flush: async (working, by) => late.readiness?.flush(working, by),
       checkpoint: async (thread) => late.readiness?.noteCheckpoint(thread),
+      others: async (thread) => (await late.readiness?.noteOthers(thread)) ?? [],
       project: async (thread) => late.readiness?.noteProject(thread),
-      sending: async (note) => {
-        const sent = late.cloud?.asSent?.(note) ?? note
-        await late.readiness?.noted(sent)
-        return sent
-      },
-      quiet: async (note) => {
+      projectFrom: async (thread) => late.readiness?.noteProjectFrom(thread),
+      noted: async (sent) => late.readiness?.noted(sent),
+      refused: async (note, threads) => late.readiness?.refused(note, threads),
+      quiet: async (note, record) => {
         if (!late.cloud?.quiet) throw new Error("This Mac isn't signed in to Mako Cloud.")
-        return late.cloud.quiet(note)
+        return late.cloud.quiet(note, record)
       },
       accepted: async (note, sessions) => late.awayNotes?.noted(note, sessions),
       goneQuiet: (why) => late.cloud?.leaving?.(why),

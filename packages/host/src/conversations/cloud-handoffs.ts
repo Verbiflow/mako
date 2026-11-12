@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { z } from "zod"
-import { PARKED_PER_THREAD_MAX, QUIET_THREADS_MAX, type AcknowledgedCheckpoint, type QuietAnswer, type QuietNote, type QuietRefusal, type QuietThread } from "@mako/protocol/handoff"
+import { PARKED_PER_THREAD_MAX, QUIET_OTHERS_MAX, QUIET_THREADS_MAX, type QuietRepository, type AcknowledgedCheckpoint, type QuietAnswer, type QuietNote, type QuietRefusal, type QuietThread } from "@mako/protocol/handoff"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { goesOff, SHUTDOWN_HOLD_MS, type HandOffCandidate, type HandOffResult, type HandOffSettings, type ThreadHandOff, type ThreadMoveOutcome } from "../contracts/cloud-threads.js"
@@ -40,19 +40,26 @@ export type CloudHandOffsOptions = {
   goingAway?: {
     flush(working: WorkingThread[], by: number): Promise<void>
     checkpoint(thread: string): Promise<AcknowledgedCheckpoint | undefined>
+    /** A project folder's other repositories, each with its acknowledged checkpoint (`CloudReadiness.noteOthers`). */
+    others?(thread: string): Promise<QuietRepository[]>
     /**
      * Where the Thread's Sessions open on the machine when that isn't its standby's folder (`CloudReadiness.noteProject`):
      * a project folder's project worktree. Named only beside the checkpoint, whose standby it's around; the account
      * leaves it out for a gateway that doesn't take it (`CloudAccount.quiet`).
      */
     project?(thread: string): Promise<string | undefined>
+    /** With `project`: the folder of this Mac's it mirrors, by which the account places each Session there (`CloudReadiness.noteProjectFrom`). */
+    projectFrom?(thread: string): Promise<string | undefined>
     /**
-     * The note as it will go, recorded before it does (`CloudReadiness.noted`): which checkpoints each Thread's names,
-     * after anything the gateway doesn't take is left out. The way back takes a Thread's changes out of the project
-     * folder only where the note carried them. Without it, the note goes as it was made and nothing is recorded.
+     * Records the note as it goes (`CloudReadiness.noted`): which checkpoints each Thread's carried, after the account
+     * left out what its gateway doesn't take. The way back takes a Thread's changes out of the project folder only where
+     * the note carried them. Without it, nothing is recorded, and nothing leaves.
      */
-    sending?(note: QuietNote): Promise<QuietNote>
-    quiet(note: QuietNote): Promise<QuietAnswer | "unserved">
+    noted?(sent: QuietNote): Promise<void>
+    /** The account took none of these Threads of the note (it refused them, or took no notes): their record of it goes. */
+    refused?(note: string, threads: readonly string[]): Promise<void>
+    /** Sends the note (`CloudAccount.quiet`), handing `record` the very note that goes, before it does. */
+    quiet(note: QuietNote, record?: (sent: QuietNote) => Promise<void>): Promise<QuietAnswer | "unserved">
     /**
      * These Sessions wait for the account's word from now (`AwayNotes.noted`): every one paused, as soon as it is, so no
      * message queued meanwhile runs one before the note is answered; then those the account took, or every one if its
@@ -197,15 +204,18 @@ export class CloudHandOffs {
       const listed = rows ? each.gone.sessions.filter((session) => rows.has(session.session)) : each.gone.sessions
       if (!listed.length) continue
       const checkpoint = await goingAway.checkpoint(each.gone.thread)
+      // The others only beside the first's: their arrival is laid over the first's, all or nothing.
+      const others = checkpoint ? ((await goingAway.others?.(each.gone.thread)) ?? []).slice(0, QUIET_OTHERS_MAX) : []
       const project = checkpoint && (await goingAway.project?.(each.gone.thread))
+      const projectFrom = project && (await goingAway.projectFrom?.(each.gone.thread))
       const parked = each.gone.parked.slice(0, PARKED_PER_THREAD_MAX).map(({ stopped, ...turn }) => ({ ...turn, ...stopped.length && { stopped } }))
-      threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint }, ...project && { project } })
+      threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint }, ...others.length && { others }, ...project && { project }, ...projectFrom && { projectFrom } })
     }
     const note: QuietNote = { note: handOff, reason: why, at: Date.now(), threads: threads.slice(0, QUIET_THREADS_MAX) }
     let heard: NoteHeard
     try {
-      const sent = goingAway.sending ? await goingAway.sending(note) : note
-      heard = await answeredBy(goingAway.quiet(sent), deadline)
+      const record = goingAway.noted && ((sent: QuietNote) => goingAway.noted!(sent))
+      heard = await answeredBy(goingAway.quiet(note, record), deadline)
     } catch (error) {
       hostWarn("handoff", "the account didn't hear this Mac go away; its Threads wait here, paused", { why, error: errorMessage({ error }) })
       heard = { kind: "unanswered" }
@@ -219,6 +229,10 @@ export class CloudHandOffs {
     // had, and an owner ask lets them go if it wasn't. Only a gateway that takes no notes (`unserved`) took none.
     const taken = heard.kind === "answered" ? new Set(heard.answer.threads.filter((each) => each.accepted).map((each) => each.thread))
       : heard.kind === "unanswered" ? new Set(note.threads.map((each) => each.thread)) : new Set<string>()
+    // Only the Threads the account took keep this note's record: nothing is continued from it for the rest.
+    const untaken = note.threads.filter((each) => !taken.has(each.thread)).map((each) => each.thread)
+    if (untaken.length)
+      await goingAway.refused?.(note.note, untaken).catch((error: Error) => hostWarn("handoff", "a refused note's record couldn't be dropped; no continue comes from it", { error: error.message }))
     try {
       await goingAway.accepted(note.note, note.threads.filter((each) => taken.has(each.thread)).flatMap((each) => each.sessions))
     } catch (error) {
