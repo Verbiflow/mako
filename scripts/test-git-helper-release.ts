@@ -1,6 +1,6 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
+import { execFileSync, type spawn } from "node:child_process"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -33,17 +33,15 @@ const runner = helper.runner()
 let spawned = 0
 let collected = 0
 const children = new FinalizationRegistry<number>(() => { collected++ })
+// SAFETY: the runner's own `spawn` (`GitHelper.runner`), called with the arguments `Git` gave it, and its child
+// handed back as it is: the same overloads it already answers to, as the helper's own wrapper declares them.
+const noting = ((...args: Parameters<typeof runner.spawn>) => {
+  const child = runner.spawn(...args)
+  children.register(child, spawned++)
+  return child
+}) as typeof spawn
 // The helper's runner, noting each child it hands out so its collection can be counted.
-const git = new Git({
-  processes: {
-    spawn: (...args: Parameters<typeof runner.spawn>) => {
-      const child = runner.spawn(...args)
-      children.register(child, spawned++)
-      return child
-    },
-    close: (...args: Parameters<typeof runner.close>) => runner.close(...args),
-  },
-})
+const git = new Git({ processes: { spawn: noting, close: (child, first) => runner.close(child, first) } })
 
 try {
   for (let run = 0; run < RUNS; run++) {
