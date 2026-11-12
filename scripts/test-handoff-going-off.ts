@@ -18,6 +18,7 @@ import { encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { CloudHandOffs, machineLeaving, workingThreads } from "@mako/host/conversations/cloud-handoffs"
 import { CloudMoves, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
+import { CloudReadiness } from "@mako/host/conversations/cloud-readiness"
 import { SleepHandOff } from "@mako/host/conversations/sleep-handoff"
 import { WorkspaceMoves } from "@mako/host/workspaces/moves"
 import { moveSource, ThreadWorktreeMoves } from "@mako/host/workspaces/thread-worktree-moves"
@@ -36,8 +37,10 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
  *   changes (the person's stay in the project folder, untouched), and its paused turn goes on in the cloud;
  * - the Thread in its own worktree goes the same way, its turn going on in the cloud;
  * - neither turn goes on here.
- * Out of time (the cloud slow to ready its machine), both stay with their turns paused, so they read idle for Continue
- * in the cloud from another device, and go on here once this Mac hears its account again (`unpark`).
+ * Kept ready while they work (`CloudReadiness`), each move takes the cloud Thread standing by for it: the one in the
+ * project folder stands by at the worktree its move would make, named ahead with nothing made of it. Out of time (the
+ * cloud slow to ready its machine), both stay with their turns paused, so they read idle for Continue in the cloud from
+ * another device, and go on here once this Mac hears its account again (`unpark`).
  */
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-going-off-")))
 const git = new Git()
@@ -65,7 +68,7 @@ const script: Script = async (turn) => {
 }
 
 /** What the stand-in cloud saw of each move: the hand-over's calls, in order, and its answer. */
-type Moved = { channels: string[]; continued: string[]; answer?: MoveAnswer }
+type Moved = { cloudThread: string; channels: string[]; continued: string[]; answer?: MoveAnswer }
 
 async function host(name: string, options: { readyNever?: boolean } = {}) {
   const base = join(root, name)
@@ -159,6 +162,9 @@ async function host(name: string, options: { readyNever?: boolean } = {}) {
 
   // The cloud: one answer per move, the first; a machine that takes the Thread claims it.
   const moved = new Map<string, Moved>()
+  /** Each cloud Thread made, and where; and each checkpoint sent, by cloud Thread. */
+  const made: Array<{ threadId: string; folder: string; url: string; standby: boolean }> = []
+  const checkpoints: string[] = []
   const steps: Array<{ conversation: string; kind: string }> = []
   const account: ReturnType<CloudMovesOptions["account"]> = {
     token: async () => "token",
@@ -166,21 +172,27 @@ async function host(name: string, options: { readyNever?: boolean } = {}) {
     id: async () => "acct",
     session: () => { throw new Error("no session in this test") },
     deviceId: async () => randomUUID(),
-    createThread: async () => ({ ready: false }),
+    createThread: async (threadId, repository, making) => {
+      made.push({ threadId, folder: making?.folder ?? "", url: repository.url, standby: making?.standby === true })
+      return { ready: false }
+    },
     askBases: async () => undefined,
-    sendCheckpoint: async () => ({ sent: true }),
+    sendCheckpoint: async (threadId) => {
+      checkpoints.push(threadId)
+      return { sent: true }
+    },
     handOverMove: async (_threadId, move, request: MoveHandOverRequest) => {
       const calls = request.operations.map((text) => fromHostOperation(decodeOperation(text))).flatMap((call) => (call.kind === "call" ? [call] : []))
       const continued = calls.filter((call) => call.channel === "mako:live-continue-turn").map((call) => ContinuedSchema.parse(call.args[2]).continues)
       const answer: MoveAnswer = { kind: "claimed", move, at: Date.now(), sessions: request.claim.sessions.map((session) => ({ id: session.id, generation: session.generation + 1 })) }
-      if (!moved.has(move)) moved.set(move, { channels: calls.map((call) => call.channel), continued, answer })
+      if (!moved.has(move)) moved.set(move, { cloudThread: _threadId, channels: calls.map((call) => call.channel), continued, answer })
       return { move, phase: "arriving" as const, step: 0, of: request.operations.length, since: Date.now(), attempt: 1 }
     },
     refuseMove: async (_threadId, move, reason) => {
       const known = moved.get(move)?.answer
       if (known) return known
       const refused: MoveAnswer = { kind: "refused", move, at: Date.now(), reason }
-      moved.set(move, { channels: [], continued: [], answer: refused })
+      moved.set(move, { cloudThread: _threadId, channels: [], continued: [], answer: refused })
       return refused
     },
     moveAnswer: async (_threadId, move) => moved.get(move)?.answer,
@@ -207,8 +219,14 @@ async function host(name: string, options: { readyNever?: boolean } = {}) {
     snapshot: (id) => world.live.snapshot(id),
     checkout: (id) => worktrees.threadCheckout(id),
     ownBranch,
+    planned: (id) => threadMoves.planned(id),
+    ready: { take: (thread, folder, repository) => readiness.take(thread, folder, repository) },
     archived: (id) => archived.has(id),
-    repositoryOf: async (folder) => ({ url: "https://github.com/octocat/Hello-World", branch: sh(folder, "branch", "--show-current") }),
+    // As the host's `folderRepository` reads one: the origin's repository, and the branch there its branch tracks.
+    repositoryOf: async (folder) => {
+      const upstream = await git.output(folder, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).catch(() => "")
+      return { url: "https://github.com/octocat/Hello-World", ...upstream.startsWith("origin/") && { branch: upstream.slice("origin/".length) } }
+    },
     sendRecords: async (_link, paths) => paths.map(() => ({ harness: "claude", nativeId: "n", versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1, holdings: {} })),
     cloud: {
       adopt: async () => {},
@@ -228,6 +246,20 @@ async function host(name: string, options: { readyNever?: boolean } = {}) {
     step: (conversation, _move, step) => void steps.push({ conversation, kind: step.kind }),
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
   })
+  // Threads at work kept ready, as the host keeps them while handing off on sleep is on: a round runs when a test asks.
+  const working = () => workingThreads({ live: world.live, threads: world.store, cloud: () => false })
+  const readiness: CloudReadiness = new CloudReadiness({
+    file: join(base, "cloud", "ready.json"),
+    git,
+    scratch: join(base, "cloud", "ready"),
+    account: () => account,
+    enabled: async () => true,
+    working,
+    leaving: (thread) => cloudMoves.leaving(thread),
+    plan: (id) => cloudMoves.readyPlan(id),
+    sendRecords: async (_link, paths) => paths.map(() => ({ harness: "claude", nativeId: "n", versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1, holdings: {} })),
+    newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
+  })
   const handOffs = new CloudHandOffs({
     file: join(base, "cloud", "handoff.json"),
     working: () => workingThreads({ live: world.live, threads: world.store, cloud: () => false }),
@@ -245,7 +277,7 @@ async function host(name: string, options: { readyNever?: boolean } = {}) {
     return conversation
   }
   /** Starts a long turn in `conversation` and waits until it runs. */
-  const working = async (conversation: string) => {
+  const startWork = async (conversation: string) => {
     const request = world.say(conversation, LONG)
     await until("the turn to run", () => world.live.snapshot(conversation)?.session.status === "running")
     return request
@@ -254,7 +286,7 @@ async function host(name: string, options: { readyNever?: boolean } = {}) {
     await world.close()
     await tracker.close?.()
   }
-  return { base, project, world, worktrees, ownBranch, cloudMoves, handOffs, moved, steps, personWrites, agentWrites, thread, working, close }
+  return { base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, moved, made, checkpoints, steps, personWrites, agentWrites, thread, working: startWork, close }
 }
 
 type Host = Awaited<ReturnType<typeof host>>
@@ -275,14 +307,39 @@ async function atWork(h: Host) {
   return { inProject, inWorktree, turns }
 }
 
+/**
+ * A round of keeping Threads at work ready, as the host runs one every half minute: each stands by in the cloud, the one
+ * in the project folder at the worktree its move would make, named with nothing made of it and no checkout sent ahead
+ * of it, since there is none yet.
+ */
+async function keptReady(h: Host, work: Awaited<ReturnType<typeof atWork>>) {
+  const branches = sh(h.project, "branch", "--list", "mako/*")
+  const planned = await h.threadMoves.planned(work.inProject)
+  assert.ok(planned, "the project folder's Thread names the worktree its move would make")
+  await h.readiness.refresh()
+  assert.equal(sh(h.project, "branch", "--list", "mako/*"), branches, "naming it made no branch")
+  assert.ok(!existsSync(planned.folder), "and no folder")
+  const inProject = h.made.find((each) => each.standby && each.folder === planned.folder)
+  assert.ok(inProject, "a cloud Thread stands by at that worktree")
+  assert.ok(!h.checkpoints.includes(inProject.threadId), "with no checkout sent ahead of it")
+  const inWorktree = h.made.find((each) => each.standby && each.folder === h.worktrees.threadCheckout(work.inWorktree)?.path)
+  assert.ok(inWorktree && h.checkpoints.includes(inWorktree.threadId), "the Thread in its own worktree stands by too, its checkout sent ahead")
+  return { planned, standing: [inProject.threadId, inWorktree.threadId] }
+}
+
 /** Both Threads went to the cloud: their paused turns go on there, never here, and only its own changes went with the one from the project folder. */
-async function wentToTheCloud(h: Host, way: string, work: Awaited<ReturnType<typeof atWork>>): Promise<void> {
+async function wentToTheCloud(h: Host, way: string, work: Awaited<ReturnType<typeof atWork>>, ready?: Awaited<ReturnType<typeof keptReady>>): Promise<void> {
   await until(`${way}: both moves claimed`, () => [...h.moved.values()].filter((each) => each.answer?.kind === "claimed").length === 2)
   const continued = [...h.moved.values()].flatMap((each) => each.continued)
   assert.deepEqual(continued.sort(), [work.turns.inProject, work.turns.inWorktree].sort(), `${way}: each paused turn goes on in the cloud`)
   for (const each of h.moved.values()) assert.ok(each.channels.indexOf("mako:move-arrive") < each.channels.indexOf("mako:live-continue-turn"), `${way}: after the Thread arrives`)
   await until(`${way}: both Threads the cloud's`, () => [work.inProject, work.inWorktree].every((id) => h.world.store.execution(SessionIdSchema.parse(h.world.store.journalPlacement(id)!.session))?.state === "elsewhere"))
+  if (ready) {
+    assert.deepEqual([...h.moved.values()].map((each) => each.cloudThread).sort(), [...ready.standing].sort(), `${way}: each move took the cloud Thread kept ready for it: ${JSON.stringify({ made: h.made, folders: [h.worktrees.threadCheckout(work.inProject)?.path, h.worktrees.threadCheckout(work.inWorktree)?.path] })}`)
+    assert.equal(h.made.filter((each) => !each.standby && !ready.standing.includes(each.threadId)).length, 0, `${way}: and made none of its own`)
+  }
   const moved = h.world.live.snapshot(work.inProject)!.session.cwd
+  if (ready) assert.equal(h.worktrees.threadCheckout(work.inProject)?.path, ready.planned.folder, `${way}: the worktree it went onto is the one named ahead`)
   assert.notEqual(moved, h.project, `${way}: the Thread from the project folder works on its own branch now`)
   assert.equal(h.worktrees.threadCheckout(work.inProject)?.path, moved, `${way}: in its own worktree`)
   assert.notEqual(sh(moved, "branch", "--show-current"), "main")
@@ -333,19 +390,21 @@ try {
   {
     const h = await host("sleep")
     const work = await atWork(h)
+    const ready = await keptReady(h, work)
     await sleeps(h, 20_000)
-    await wentToTheCloud(h, "sleep", work)
+    await wentToTheCloud(h, "sleep", work, ready)
     await h.close()
   }
 
-  // As this Mac shuts down: the cloud hears it go quiet only once the handoff answered.
+  // As this Mac shuts down, within the shutdown's own hold: the cloud hears it go quiet only once the handoff answered.
   {
     const h = await host("shutdown")
     const work = await atWork(h)
+    const ready = await keptReady(h, work)
     const quiet: string[] = []
-    await machineLeaving("shutdown", { handOffs: h.handOffs, enabled: async () => true, quiet: (why) => void quiet.push(`${why} after ${[...h.moved.values()].length} moves`), holdMs: 15_000 })
+    await machineLeaving("shutdown", { handOffs: h.handOffs, enabled: async () => true, quiet: (why) => void quiet.push(`${why} after ${[...h.moved.values()].length} moves`) })
     assert.deepEqual(quiet, ["quit after 2 moves"], "quiet once both Threads were handed over")
-    await wentToTheCloud(h, "shutdown", work)
+    await wentToTheCloud(h, "shutdown", work, ready)
     await h.close()
   }
 
@@ -365,6 +424,29 @@ try {
     const before = h.world.prompts.length
     await h.cloudMoves.unpark()
     await until("both turns to go on here", () => h.world.prompts.slice(before).filter((prompt) => conversations(work).includes(prompt.conversation)).length === 2)
+    await h.close()
+  }
+  // A project folder of two repositories: named ahead, its Thread's worktree is the first repository's, by path, where the
+  // move then makes it; a folder of one repository alone inside isn't named, its worktree being laid out otherwise.
+  {
+    const h = await host("two")
+    const folder = join(h.base, "two")
+    for (const name of ["web", "api"]) {
+      const remote = join(h.base, `${name}.git`)
+      sh(h.base, "init", "--bare", "--quiet", remote)
+      sh(h.base, "clone", "--quiet", remote, join(folder, name))
+      writeFileSync(join(folder, name, "a.txt"), `${name}\n`)
+      sh(join(folder, name), "add", ".")
+      sh(join(folder, name), "commit", "--quiet", "-m", "base")
+    }
+    const planned = await h.worktrees.plannedCheckout(randomUUID(), folder, "Both sides")
+    assert.ok(planned && !existsSync(planned.folder), "named, with nothing made")
+    assert.equal(planned.repository, realpathSync(join(folder, "api")), "the first repository by its worktree's path")
+    await h.worktrees.prepareFork(randomUUID(), randomUUID(), folder, "Both sides")
+    assert.ok(existsSync(join(planned.folder, ".git")), "the move makes that very worktree")
+    mkdirSync(join(h.base, "one"))
+    sh(h.base, "clone", "--quiet", join(h.base, "web.git"), join(h.base, "one", "web"))
+    assert.equal(await h.worktrees.plannedCheckout(randomUUID(), join(h.base, "one"), "Alone"), undefined)
     await h.close()
   }
   console.log("PASS: as this Mac sleeps and as it shuts down, a Thread at work in the project folder goes onto its own branch as itself with only its own changes and on to the cloud, as one in its own worktree does, each paused turn going on there; out of time, both wait paused, idle for Continue in the cloud, and go on here once the Mac is back")

@@ -409,6 +409,81 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
   }
 }
 
+/** A table this late means the child is stuck; it's ended and the caller reads its own. */
+const TABLE_ASK_MS = 20_000
+
+/**
+ * The process table read in a watcher child of its own, so `ps`'s spawn and its wait leave the host's loop: what
+ * reads the apps' marks and traces asks every few seconds while an app runs, and on a busy Mac one spawn from the
+ * host's thread held it for seconds. The child starts at the first ask and goes after `IDLE_MS` without one; one that
+ * doesn't answer in time is ended with what it had, and the next ask starts another.
+ */
+export function childProcessTable(script = defaultChildScript()): () => Promise<string> {
+  let child: ChildProcess | undefined
+  let nextId = 1
+  let idle: NodeJS.Timeout | undefined
+  const pending = new Map<number, { child: ChildProcess; settle(text: string): void; fail(error: Error): void; timer: NodeJS.Timeout }>()
+
+  const end = (gone: ChildProcess, error: Error) => {
+    if (child === gone) child = undefined
+    gone.kill()
+    for (const [id, request] of pending) {
+      if (request.child !== gone) continue
+      pending.delete(id)
+      clearTimeout(request.timer)
+      request.fail(error)
+    }
+  }
+
+  const rest = (current: ChildProcess) => {
+    current.unref()
+    current.channel?.unref()
+    clearTimeout(idle)
+    idle = setTimeout(() => {
+      if (pending.size || child !== current) return
+      child = undefined
+      current.kill()
+    }, IDLE_MS)
+    idle.unref()
+  }
+
+  const running = () => {
+    clearTimeout(idle)
+    if (child) return child
+    const next = hostFork(script, [], {
+      execPath: headlessNodeExecutable(),
+      execArgv: script.endsWith(".ts") ? process.execArgv : [],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
+    })
+    child = next
+    next.on("message", (raw) => {
+      const reply = WatcherReplySchema.safeParse(raw)
+      if (!reply.success || !("id" in reply.data)) return
+      const request = pending.get(reply.data.id)
+      if (!request) return
+      pending.delete(reply.data.id)
+      clearTimeout(request.timer)
+      if (reply.data.t === "table") request.settle(reply.data.text)
+      else request.fail(new Error(reply.data.t === "failed" ? reply.data.message : `Unexpected reply ${reply.data.t}`))
+      if (![...pending.values()].some((other) => other.child === next)) rest(next)
+    })
+    next.once("exit", () => end(next, new Error("The process table's reader stopped")))
+    next.once("error", (error) => end(next, error))
+    return next
+  }
+
+  return () => new Promise<string>((settle, fail) => {
+    const current = running()
+    current.ref()
+    current.channel?.ref()
+    const id = nextId++
+    const timer = setTimeout(() => end(current, new Error(`The process table's reader didn't answer within ${Math.round(TABLE_ASK_MS / 1000)} seconds`)), TABLE_ASK_MS)
+    pending.set(id, { child: current, settle, fail, timer })
+    sendToChild(current, { t: "table", id }).catch((error: Error) => end(current, error))
+  })
+}
+
 /**
  * Delivery measured now, in a child of its own that ends with it: how late
  * `beats` writes to a fresh folder are heard, one after another. Empty when

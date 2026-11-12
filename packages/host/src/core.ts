@@ -1124,6 +1124,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       await following
       return moved.session.id
     },
+    // Where that branch's worktree would be now, made nothing of: a Thread at work there is kept ready at it.
+    planned: async (id) => late.movers?.worktreeMoves?.planned(id),
     // What it carries besides its checkout: the paths outside it the journal ties to it, and its file history.
     outside: (thread) => late.attribution?.changes(thread).outside.filter((entry) => entry.evidence === "strong").map(({ path, access, secret }) => ({ path, access, secret })) ?? [],
     history: (thread) => late.attribution?.threadHistory(thread),

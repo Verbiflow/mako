@@ -1901,6 +1901,17 @@ registerToolView("bash", { summary, body, icon }) // transcript rows
 registerSurface({ id, label, icon, render, minWidth, reading, useOffered }) // stage companions
 ```
 
+No pane is left blank on the stage. The viewer's panes hold only the chat and
+documents they can draw (`shownPanes`, on every write to the store), so a pane
+left with neither goes; a chat pane beside the focused one whose Session left its
+Thread goes too (`watchSessionPanes`), and one whose Thread the window doesn't
+list says so with Close. A pane with nothing to show says so with Close
+(`EmptyPane`). When the stage stays laid out wrong for 3 s (panes short of the
+workbench, a composer above its pane's bottom, a pane showing nothing) the desk
+logs `Stage layout off` once with the window's, workbench's and each pane's size
+and what each shows (`stage-layout-watch.ts`), carried to the host's log as
+row-check's warnings are. `test:stage-panes-ui` holds both.
+
 The stage's surfaces — Changes, Files, Terminal, Control, Agents —
 are all registered through `registerSurface` on exactly the same footing as
 anything a plugin would add. One reading surface opens in the right rail at
@@ -4090,7 +4101,12 @@ the cloud. One a Mac going off couldn't release in time stays with its turns
 paused (`goesOff`, `parked-turns` beside the moves' plans), so it reads idle
 for Continue in the cloud from another device; a continue this Mac joins
 carries those turns there, and otherwise they go on here once the Mac hears
-its account (`CloudMoves.unpark`, on `ownerChecked`).
+its account (`CloudMoves.unpark`, on `ownerChecked`). While a Thread in the
+project folder works, it's kept ready like one in its own worktree
+(`CloudReadiness`): its cloud Thread stands by at the worktree its move would
+make, named ahead from the same names a move tries and with nothing made
+(`ThreadWorktreeService.plannedCheckout`), so a handoff takes a machine
+already up rather than one it boots.
 `test-handoff-going-off.ts` runs it on the host's own parts with scripted
 harnesses and a stand-in cloud. A Thread's name is the
 list's to say too: no batch carries it, and a followed conversation once kept

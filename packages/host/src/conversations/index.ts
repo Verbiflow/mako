@@ -235,7 +235,12 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     ...(deps.start && { start: deps.start }),
     threads: threads.store ?? undefined,
     mcpSnapshot: deps.mcpSnapshot,
-    workspaceSnapshots: new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots")),
+    workspaceSnapshots: (() => {
+      const snapshots = new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots"))
+      // A turn whose workspace nothing changed in since the last checkpoint goes to its agent on that checkpoint.
+      snapshots.followHistory(workspaces.fileHistory)
+      return snapshots
+    })(),
     rewindWriters: deps.rewindWriters,
     checkpoint: (path, provider) => {
       const sourceProvider = provider ?? catalog.ref(path)?.harness

@@ -177,6 +177,13 @@ export function closeWorkbenchPane(paneId: string): void {
 export function watchSessionPanes(): () => void {
   const settle = () => {
     const state = viewerStore.get()
+    // A pane beside the focused one whose Session is gone (its Thread closed, archived or moved) goes with it, rather
+    // than staying on screen to say so.
+    const gone = state.panes.find((pane) => pane.id !== state.focusedPaneId && pane.session && isGone(pane.session))
+    if (gone && state.panes.length > 1) {
+      closeWorkbenchPane(gone.id)
+      return
+    }
     const focused = state.panes.find((pane) => pane.id === state.focusedPaneId)
     if (!focused?.session) return
     const now = onScreenSession()
@@ -224,6 +231,14 @@ function savedLayout(): SavedLayout {
   } catch {
     return {}
   }
+}
+
+/**
+ * A Session the window knows is gone: its Thread's tabs are read and it isn't among them. A Thread the window doesn't
+ * list (a Fin's, one still loading) proves nothing, and its pane keeps its notice with Close instead.
+ */
+function isGone(session: PaneSession): boolean {
+  return arrived(session) === "gone" || (currentThreadTabs(session.thread).length > 0 && !tabFor(session))
 }
 
 /** Whether `session` can be shown yet; false once it is known to be gone. */

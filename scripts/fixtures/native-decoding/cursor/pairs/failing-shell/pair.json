@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.2.0"
+    "version": "1.3.1"
   },
   "about": "Run `grep -q Monday notes.md` in the shell and tell me from its exit code whether notes.md mentions Monday. A shell command that exits non-zero, which the harness may report as completed.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-4b4abd901416c871db46d14fa0c14c3e70fb1f758b72a65233b59cb1efe0ad28/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-40a61482c2bbaf8fab5a2ba662cd4de1b71cc1a71abdaae283ce1b07ec481efa/store.db",
       "known": []
     }
   ]
