@@ -64,6 +64,8 @@ const { values } = parseArgs({
     fins: { type: "string", default: "0" },
     "node-arg": { type: "string", multiple: true },
     gc: { type: "boolean", default: false },
+    idle: { type: "boolean", default: false },
+    "idle-only": { type: "boolean", default: false },
   },
 })
 const say = (line: string) => process.stderr.write(`${line}\n`)
@@ -185,6 +187,30 @@ try {
     if (Date.now() > deadline) throw new Error("the host hasn't read its catalog within three minutes")
   }
   say(`host ready in ${Math.round(performance.now() - began)} ms`)
+
+  // `--idle`: the host on this world with nothing at work and no window, settled 30 s, then its own CPU over 60 s, as
+  // the perf proof of 2026-11-12 measured it; `--idle-only` stops there.
+  let idle: { hostPercent: number; from: number; to: number } | undefined
+  if (values.idle || values["idle-only"]) {
+    const cpuSeconds = () => {
+      const time = spawnSync("ps", ["-o", "time=", "-p", hostPid], { encoding: "utf8" }).stdout.trim()
+      return time.split(":").reduce((sum, part) => sum * 60 + Number(part), 0)
+    }
+    await delay(30_000)
+    const [fromCpu, from] = [cpuSeconds(), Date.now()]
+    await delay(60_000)
+    const [toCpu, to] = [cpuSeconds(), Date.now()]
+    idle = { hostPercent: Math.round(((toCpu - fromCpu) / ((to - from) / 1000)) * 1000) / 10, from, to }
+    say(`idle: the host used ${idle.hostPercent}% of a core`)
+  }
+  if (values["idle-only"]) {
+    clearInterval(footprint)
+    clearInterval(series)
+    host.kill("SIGTERM")
+    await Promise.race([exited, delay(60_000)])
+    if (values.out) writeFileSync(values.out, JSON.stringify({ scale: values.scale, host: hostScript, nodeArgs, idle }, null, 2))
+    await finish(0)
+  }
 
   // The Fins at work: the Apexes with Fins, and every Fin.
   const working = world.checkouts.filter((checkout, index) => checkout.fin || index < scale.fins.length)
@@ -331,7 +357,7 @@ try {
   const report = {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
     ...answers, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
-    nodeArgs, ...rss && { rss }, ...gc && { gc },
+    nodeArgs, ...idle && { idle }, ...rss && { rss }, ...gc && { gc },
     ...profile && {
       profile,
       slices: { count: found.length, totalMs: found.reduce((sum, slice) => sum + slice.ms, 0), longest: [...found].sort((a, b) => b.ms - a.ms).slice(0, 15) },
