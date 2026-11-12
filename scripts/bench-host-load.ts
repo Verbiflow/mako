@@ -21,7 +21,8 @@ import { scriptedModel } from "./scripted-model.ts"
  * project, 95 apps with 24 running, some 850 processes, a rail of sessions). Its Fins work all through: each edits
  * files in its worktrees a few times a second and appends the call to its transcript, builds now and then and runs
  * tests that churn the temporary folder. Three windows ask what the renderer asks (the worktrees' summaries every
- * half minute and as focus moves between them, the apps' marks and each followed folder's app every four seconds).
+ * half minute and as focus moves between them, the apps' marks once, then as the host pushes them, and each followed
+ * folder's app every half minute).
  * Meanwhile a prober of its own asks `/health` every 20 ms and reads a list every 100 ms, each timed to its answer.
  *
  * A shared runner's speed varies by several times between runs, so the limits are calibrated in the same run: a
@@ -181,9 +182,12 @@ try {
   for (let w = 0; w < windows; w += 1) {
     ask("mako:worktree-summaries")
     timers.push(setInterval(() => ask("mako:worktree-summaries"), 30_000))
-    timers.push(setInterval(() => ask("mako:thread-app-marks"), 4_000))
+    // The marks are read once, then pushed by the host's sampler as they change (`ThreadAppSampler`); each followed
+    // folder's app is read again on each push and otherwise every 30 s (`thread-app-host.ts`). A world whose apps hold
+    // still pushes nothing, so the 30 s look stands for the pushes too.
+    ask("mako:thread-app-marks")
     const mine = followed.slice(w * 3, w * 3 + 3)
-    timers.push(setInterval(() => mine.forEach((cwd) => ask("mako:thread-app", cwd)), 4_000))
+    timers.push(setInterval(() => mine.forEach((cwd) => ask("mako:thread-app", cwd)), 30_000))
   }
   // Focus moving between windows: each focus refreshes that window's summaries.
   timers.push(setInterval(() => ask("mako:worktree-summaries"), 10_000))

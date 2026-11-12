@@ -1,4 +1,5 @@
 import parcel, { type AsyncSubscription } from "@parcel/watcher"
+import { execFile } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
@@ -23,6 +24,10 @@ process.on("message", (raw) => {
   const request = WatcherRequestSchema.safeParse(raw)
   if (!request.success) return
   const { id } = request.data
+  if (request.data.t === "table") {
+    void readTable(id).catch((error) => reply({ t: "failed", id, message: error instanceof Error ? error.message : String(error) }))
+    return
+  }
   if (request.data.t === "mark" || request.data.t === "since" || request.data.t === "probe") {
     const asked = request.data
     void (asked.t === "mark" ? mark(id) : asked.t === "probe" ? probe(id, asked.beats) : since(id, asked.mark, asked.roots, asked.ignore, asked.exclude ?? [], asked.perFolder)).catch((error) =>
@@ -411,3 +416,19 @@ process.on("exit", () => {
 
 // The host is gone, or let this child go: nothing here outlives it.
 process.on("disconnect", () => process.exit(0))
+
+/** At most this much of `ps`'s output, as the host's own read allows. */
+const TABLE_BYTES = 16 * 1024 * 1024
+/** A `ps` this slow is stuck; the host reads its own table instead. */
+const TABLE_MS = 15_000
+
+/** The process table, for the host to parse: one `ps` per ask, in this child's process group, ended with it. */
+async function readTable(id: number): Promise<void> {
+  const text = await new Promise<string>((done, fail) => {
+    execFile("ps", ["-A", "-o", "pid=,ppid=,pgid=,rss=,lstart=,command="], { env: { ...process.env, LC_ALL: "C" }, maxBuffer: TABLE_BYTES, timeout: TABLE_MS }, (error, stdout) => {
+      if (error) fail(error)
+      else done(stdout)
+    })
+  })
+  reply({ t: "table", id, text })
+}
