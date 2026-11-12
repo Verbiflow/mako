@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.12.28"
+    "version": "3000.12.43"
   },
   "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#salt-alto",
+      "path": ".local/share/devin/cli/sessions.db#ancient-liquid",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/1a957311-20a9-4cbc-ac1c-5c887725c5b4.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/853c9bc1-45c2-43f1-a9d3-90e3b52a45bb.db",
       "known": [
         {
           "side": "-",
