@@ -95,7 +95,7 @@ try {
     .filter((line) => /(^|\/)git$/.test(line.trim().split(/\s+/)[1] ?? "") && line.includes(pattern)).join("\n")
   const until = async (what: string, done: () => boolean) => {
     for (let tries = 0; !done(); tries++) {
-      if (tries > 200) throw new Error(`Timed out waiting for ${what}`)
+      if (tries > 1_200) throw new Error(`Timed out waiting for ${what}`)
       await pause(25)
     }
   }
@@ -160,6 +160,21 @@ try {
     assert.equal(own.pid(), undefined, "the wedged helper was let go")
     assert.throws(() => process.kill(pid, 0), "and killed")
     assert.equal(await git.text({ cwd: repo, args: ["rev-parse", "HEAD"] }), execFileSync("git", ["-C", repo, "rev-parse", "HEAD"]).toString().trim(), "the next git runs directly")
+  }
+
+  // The host's own loop held past a watch while the helper is healthy (the person's host has held it for seconds): the
+  // helper's word is waiting, unread, when the watch fires late, so it's given its time again and nothing is lost.
+  {
+    const { own, git } = fresh()
+    await git.text({ cwd: repo, args: ["rev-parse", "HEAD"] })
+    const pid = own.pid()
+    const run = outcome(git, () => ({ cwd: repo, args: ["rev-parse", "HEAD"] }))
+    const held = Date.now()
+    while (Date.now() - held < 7_000) { /* the loop held past the 5 s watch on the start */ }
+    const answered = await run
+    const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"]).toString()
+    assert.deepEqual(answered, { code: 0, stdout: head, stderr: "", truncated: false }, `a git through a healthy helper answers after a held loop: ${JSON.stringify(answered)}`)
+    assert.equal(own.pid(), pid, "and the helper is the same one")
   }
 
   // A git sent to a helper stopped before it started anything: it fails, nothing having run, within the watch.

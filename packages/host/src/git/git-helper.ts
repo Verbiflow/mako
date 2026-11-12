@@ -23,6 +23,8 @@ const RETRY_MAX_MS = 5 * 60_000
 const SPAWN_WATCH_MS = 5_000
 /** Nor one that hasn't said a `git` ended this long after a stop was asked: the runner's own stop takes at most 5 s. */
 const CLOSE_WATCH_MS = 8_000
+/** A watch that fires later than this past its time fired after the host's own loop was held, not the helper. */
+const WATCH_LATE_MS = 1_000
 /** A `git` the helper started, lost with it, is waited for this long before its result is said unknown. */
 const ORPHAN_WAIT_MS = 60_000
 
@@ -282,9 +284,18 @@ export class GitHelper {
   }
 
   /** Waits `ms` for the helper to say `what` of `child`; a helper that doesn't is wedged. */
-  #watch(child: HelperChild, what: string, ms: number): void {
+  #watch(child: HelperChild, what: string, ms: number, again = true): void {
     clearTimeout(child.watch)
-    child.watch = setTimeout(() => this.#wedged(`it didn't say ${what} of git ${child.command} within ${ms} ms`), ms)
+    const due = performance.now() + ms
+    child.watch = setTimeout(() => {
+      // A watch that fires late fired after a held loop: the helper's word may be waiting, unread, behind it. It's given
+      // the same time again, once, so a healthy helper is never taken for wedged because the host's own loop stalled.
+      if (again && performance.now() - due > WATCH_LATE_MS) {
+        hostLog("git", "a helper watch fired late; it waits once more", { command: child.command, lateMs: Math.round(performance.now() - due) })
+        return this.#watch(child, what, ms, false)
+      }
+      this.#wedged(`it didn't say ${what} of git ${child.command} within ${ms} ms`)
+    }, ms)
     child.watch.unref?.()
   }
 
