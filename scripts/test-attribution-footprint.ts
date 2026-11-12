@@ -334,6 +334,36 @@ test("a change between a segment's cut and its read reaches the turn that just s
   }
 })
 
+test("another app's container is never stat-ed or read, even when a call named it: macOS would ask the person each time", async () => {
+  const world = await footprintWorld()
+  const { fs, tracker, reader, verdicts, mark } = world
+  const touched: string[] = []
+  const stat = fs.stat.bind(fs)
+  const read = fs.read.bind(fs)
+  fs.stat = async (path) => (touched.push(path), stat(path))
+  fs.read = async (path) => (touched.push(path), read(path))
+  try {
+    const chat = "/h/Library/Group Containers/group.net.example.chat/Message/db.sqlite"
+    const notes = "/h/Library/Containers/com.example.notes/Data/notes.json"
+    const read1 = "/h/Library/Containers/com.example.reader/Data/prefs.plist"
+    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/h/work/app" }))
+    await reader.settled()
+    reader.activity(mark("T1", { kind: "call", id: "c1", edge: "start", turn: "t1", named: [chat, notes, read1, "/h/work/app/a.ts"] }))
+    fs.write(chat, "x")
+    fs.write(notes, "{}")
+    fs.write("/h/work/app/a.ts", "x")
+    reader.activity(mark("T1", { kind: "call", id: "c1", edge: "end", turn: "t1" }))
+    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
+    await reader.settled()
+    assert.equal(described(verdicts.get(chat)), "out noise")
+    assert.equal(verdicts.get(notes) && "group" in verdicts.get(notes)! ? verdicts.get(notes)!.group : undefined, "/h/Library/Containers/com.example.notes")
+    assert.deepEqual(touched.filter((path) => path.includes("/Library/")), [])
+    assert.deepEqual(tracker.footprint("T1").map((entry) => entry.path), ["/h/work/app/a.ts"])
+  } finally {
+    await world.close()
+  }
+})
+
 test("a path a call names through a link is the path the history reports", async () => {
   const clock = new FakeClock()
   const events = new FakeEventSource()

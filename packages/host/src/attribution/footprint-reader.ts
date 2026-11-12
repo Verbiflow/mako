@@ -18,6 +18,7 @@ import {
 import type { JournalStore } from "./journal-store.js"
 import { NoiseBaseline } from "./noise-baseline.js"
 import { within } from "./paths.js"
+import { otherAppsData } from "../base/other-apps-data.js"
 import { rootLinks } from "./ports.js"
 
 /*
@@ -464,8 +465,17 @@ export class FootprintReader {
     const explain = this.deps.options.explain
     const decided = (path: string, verdict: PathVerdict) => explain?.({ thread: trail.thread, turn: trail.turn }, path, verdict)
     const turn = new Turn()
+    // Another app's container is never stat-ed or read here, even when the turn's calls named it: macOS would ask the
+    // person whether Mako may access that app's data, on every turn that touched it. The Fin's own call already read it.
+    const home = this.deps.options.home
     for (const path of [...trail.paths].sort()) {
       await turn.share()
+      const sealed = otherAppsData(path, home)
+      if (sealed) {
+        exclusions.add("noise", sealed, 1, "another app's data")
+        decided(path, { rule: "noise", group: sealed, why: "another app's data" })
+        continue
+      }
       const verdict = classify(path, input, rules)
       if (!verdict.kept) {
         exclusions.add(verdict.rule, verdict.group, 1, verdict.why)
@@ -488,7 +498,7 @@ export class FootprintReader {
     }
     // Paths its calls named that didn't change: read, or written to what they already held.
     for (const [path, access] of trail.named) {
-      if (trail.paths.has(path)) continue
+      if (trail.paths.has(path) || otherAppsData(path, home)) continue
       const folder = rules.find(path)
       if (folder?.rule === "tracked" || folder?.rule === "store" || staticNoise(path, this.deps.options.home, this.deps.options.roots)) continue
       if ((await this.deps.ports.fs.stat(path))?.kind !== "file") continue
