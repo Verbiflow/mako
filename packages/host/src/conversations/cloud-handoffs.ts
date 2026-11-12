@@ -53,6 +53,12 @@ export type CloudHandOffsOptions = {
      * note goes once the flush is done.
      */
     rows?(): Promise<ReadonlyMap<string, string>>
+    /**
+     * The account hears this Mac go quiet at once (`CloudAccount.leaving`, its runtime's `going-quiet`), once the note is
+     * out: the account continues a noted Thread only once its device is quiet, and a sleep's own word of it (the desktop's
+     * `suspend`) may come after the network is gone, or not at all.
+     */
+    goneQuiet?(why: "sleep" | "quit"): void
   }
   /** Why this Mac can't hand off now (signed out of the cloud); undefined when it can. */
   unavailable(): Promise<string | undefined>
@@ -204,6 +210,7 @@ export class CloudHandOffs {
     } catch (error) {
       hostWarn("handoff", "the Sessions the account may continue couldn't be kept; they go on here when this Mac is back", { error: errorMessage({ error }) })
     }
+    goingAway.goneQuiet?.(why === "sleep" ? "sleep" : "quit")
     const accepted = taken.size
     hostLog("handoff", "agents at work paused as this Mac went away", {
       why,

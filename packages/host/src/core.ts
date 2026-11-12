@@ -1351,6 +1351,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         return late.cloud.quiet(note)
       },
       accepted: async (note, sessions) => late.awayNotes?.noted(note, sessions),
+      goneQuiet: (why) => late.cloud?.leaving?.(why),
       // The account takes a note only for Sessions it lists as this Mac's and idle: read here until the paused turns are.
       rows: async () => {
         const cloud = late.cloud
