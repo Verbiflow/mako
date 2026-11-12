@@ -63,6 +63,8 @@ const ReadyEntrySchema = z.object({
   sent: MoveCheckpointSchema.optional(),
   /** A Thread in the main checkout: its own changes, one per repository, as the cloud last acknowledged them. */
   acknowledged: z.array(AcknowledgedSchema).optional(),
+  /** A project folder's Thread: its project worktree, where its Sessions open on the machine (`noteProject`). */
+  project: z.string().optional(),
   at: z.number(),
 })
 type ReadyEntry = z.infer<typeof ReadyEntrySchema>
@@ -80,7 +82,17 @@ export type TakenReady = { cloudThread: string; checkpoint?: string }
 /** What a move of a Thread would carry, read as its plan reads it: refused when it couldn't move. */
 /** `planned`: a Thread in the main checkout, kept ready at the worktree its move would make, which isn't there yet. */
 /** `repositories`: with `planned`, the main checkout's repositories it works in and the branch its move would make. */
-export type ReadyPlan = { thread: string; folder: string; repository: CloudRepository; paths: string[]; harness: string; planned?: true; repositories?: { root: string; branch: string }[] }
+export type ReadyPlan = {
+  thread: string
+  folder: string
+  repository: CloudRepository
+  paths: string[]
+  harness: string
+  planned?: true
+  repositories?: { root: string; branch: string }[]
+  /** A project folder of several repositories: its project worktree, around `folder` (the first one's), where its Sessions work. */
+  project?: string
+}
 
 /**
  * The record of changes as readiness reads it. The host's: `heard` and `settled` are both the journal's `heard` (what
@@ -273,6 +285,14 @@ export class CloudReadiness {
     return whole && { ...whole, standby: entry.cloudThread }
   }
 
+  /**
+   * Where a going-away says `thread`'s Sessions open on the machine, when that isn't its standby's folder: a project
+   * folder's project worktree, around the first repository's worktree its standby holds. Only beside a standby.
+   */
+  async noteProject(thread: string): Promise<string | undefined> {
+    return (await this.#load())[thread]?.project
+  }
+
   /** What the cloud acknowledged of a Thread in the main checkout, by repository, for its going-away to name. */
   async acknowledged(thread: string): Promise<{ cloudThread: string; acknowledged: Acknowledged[] } | undefined> {
     await this.#rounds.get(thread)?.catch(() => undefined)
@@ -392,6 +412,8 @@ export class CloudReadiness {
         withFreshLink(() => account.threadRecords(ready.cloudThread), (link) => this.#options.sendRecords(link, plan.paths)),
       ])
       ready.at = Date.now()
+      if (plan.project) ready.project = plan.project
+      else delete ready.project
       if (checkpoint) ready.checkpoint = checkpoint
       await this.#save()
       if (revision !== undefined) this.#broughtUp.set(working.thread, { conversationId: working.conversationId, revision, at: ready.at })

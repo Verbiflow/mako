@@ -492,8 +492,14 @@ function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled
  * (a turn, starting, waking, reconnecting): the Fins are theirs, not the session's. Past about twenty rows it scrolls inside itself;
  * rows are drawn as they scroll into view, so a crew of forty costs what a screenful does. Each row reads its own
  * Fin's entry alone, so a step changing repaints that row, not this card.
+ *
+ * Memoized by hand: `useVirtualizer` keeps the React Compiler off this file, so without it the card drew again with
+ * every batch its transcript streamed, its virtualizer's options set anew each time, as long a stretch of a phone's
+ * frame as the streamed words were.
  */
-export function CrewCard({
+export const CrewCard = memo(CrewCardBody)
+
+function CrewCardBody({
   compact = false,
   fallback = null,
   thread: shownThread,
