@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { test } from "node:test"
 import { OwnerAnswerSchema, OwnerAskSchema, ParkedTurnSchema, QuietAnswerSchema, QuietNoteSchema, autoContinueOp } from "../dist/handoff.js"
 import { continueCloudThread } from "../dist/continues.js"
+import { QUIET_PROJECT_LINK_VERSION } from "../dist/version.js"
 
 const session = randomUUID()
 const note = () => ({ note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", sessions: [{ session, generation: 4 }], checkpoint: { version: 1, sha256: "a".repeat(64), bytes: 409, head: "b".repeat(40), branch: "mako/fix", index: "c".repeat(40), work: "d".repeat(40), standby: "t-standby" } }] })
@@ -73,3 +74,18 @@ test("the note's checkpoint is the whole checkpoint the arrival applies, with it
   assert.equal(QuietNoteSchema.safeParse(noStandby).success, false, "where it was sent is named")
 })
 
+
+test("a project folder's Thread names its project worktree, absolute and at most 4,096 characters; a note without it still reads", () => {
+  const project = note()
+  project.threads[0].project = "/Users/ada/.mako/worktrees/shop-1a2b/fix"
+  assert.equal(QuietNoteSchema.safeParse(project).success, true)
+  assert.equal(QUIET_PROJECT_LINK_VERSION, 25, "sent only to a gateway whose link agreed it")
+  for (const bad of ["", "shop/fix", `/${"a".repeat(4_096)}`]) {
+    const refused = note()
+    refused.threads[0].project = bad
+    assert.equal(QuietNoteSchema.safeParse(refused).success, false, `refused: ${bad.slice(0, 12)}`)
+  }
+  const longest = note()
+  longest.threads[0].project = `/${"a".repeat(4_095)}`
+  assert.equal(QuietNoteSchema.safeParse(longest).success, true)
+})

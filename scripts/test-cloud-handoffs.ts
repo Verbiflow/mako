@@ -337,6 +337,17 @@ try {
     await unnamed.refresh()
     assert.deepEqual(made.slice(asked), [{ threadId: "t-unnamed", standby: true, standsByFor: "local-1" }], "the standby there is named, and no other made")
     assert.equal(JSON.parse(readFileSync(join(root, "unnamed.json"), "utf8")).threads["local-1"].cloudThread, "t-unnamed")
+    assert.equal(await unnamed.noteProject("local-1"), undefined, "a Thread in one repository's checkout names no project")
+    // A project folder's Thread: kept ready at its first repository's worktree, its Sessions in the project worktree around
+    // it, which a going-away names; once its plan names none, neither does the note.
+    let projectFolder: string | undefined = join(root, "worktrees", "shop", "both-sides")
+    const inProject = new CloudReadiness({ file: join(root, "project.json"), git, scratch: join(root, "project-scratch"), account: () => account, enabled: async () => true, working: () => [{ conversationId: "c-2", thread: "local-2", harness: "codex" }], leaving: () => false, plan: async () => ({ thread: "local-2", folder, repository, paths: [], harness: "codex", ...projectFolder && { project: projectFolder } }), sendRecords: async () => [], newCloudThread: () => "t-project" })
+    await inProject.refresh()
+    assert.equal(await inProject.noteProject("local-2"), projectFolder)
+    assert.equal(await inProject.noteProject("local-9"), undefined, "nothing for a Thread not kept ready")
+    projectFolder = undefined
+    await inProject.refresh()
+    assert.equal(await inProject.noteProject("local-2"), undefined)
     assert.deepEqual(await readiness.take("local-1", folder, repository), { cloudThread: standing, checkpoint: checkpoints.at(-1) }, "the move takes the cloud Thread standing by, with the checkpoint last sent, which the cloud keeps")
     assert.equal(await readiness.take("local-1", folder, repository), undefined, "once")
     const before = made.length

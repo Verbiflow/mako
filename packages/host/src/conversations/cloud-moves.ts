@@ -485,10 +485,10 @@ export class CloudMoves {
       if (!planned) throw new Error("The worktree its own branch would have can't be named now, so it isn't kept ready.")
       const { url } = await this.#options.repositoryOf(planned.repository)
       const repositories = planned.repositories.map((root) => ({ root, branch: planned.branch }))
-      return { thread: weighed.thread, folder: planned.folder, repository: { url }, paths: weighed.sessions.map((session) => session.path), harness: weighed.sessions[0]?.harness ?? "", planned: true, repositories }
+      return { thread: weighed.thread, folder: planned.folder, repository: { url }, paths: weighed.sessions.map((session) => session.path), harness: weighed.sessions[0]?.harness ?? "", planned: true, repositories, ...planned.project && { project: planned.project } }
     }
     const plan = await this.#plan(conversationId, MoveIdSchema.parse(randomUUID()), { why: "asked" })
-    return { thread: plan.thread, folder: plan.folder, repository: plan.repository, paths: plan.sessions.map((session) => session.path), harness: plan.sessions[0]?.harness ?? "" }
+    return { thread: plan.thread, folder: plan.folder, repository: plan.repository, paths: plan.sessions.map((session) => session.path), harness: plan.sessions[0]?.harness ?? "", ...plan.project && { project: plan.project } }
   }
 
   /**

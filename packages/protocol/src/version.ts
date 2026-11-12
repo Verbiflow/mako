@@ -37,9 +37,10 @@ export const PROTOCOL_VERSION = 1
  * what the runtime's Thread borrows as it changes. 22 lets a `sessions` row say its Session's place among its
  * Thread's Sessions (`order`, `SESSION_ORDER_VERSION`). 23 takes a device runtime's `advertise`: what it can serve
  * and its room. 24 carries the sessions a device lends: `source-ask`, `lent` and `lent-ended` to it, and its
- * `lease-beat`. Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * `lease-beat`. 25 says the gateway takes a project folder Thread's `project` in a device's quiet note
+ * (`QUIET_PROJECT_LINK_VERSION`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 24
+export const LINK_VERSION = 25
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -151,6 +152,13 @@ export const ADVERTISE_LINK_VERSION = 23
  * for them, and serves no session, since nothing could keep one alive.
  */
 export const LEND_LINK_VERSION = 24
+
+/**
+ * The first link version whose gateway takes a quiet note's Thread naming its `project` (`handoff.ts`), where its
+ * Sessions open on the machine. Nothing on the link itself changes: the note goes over HTTP, and a gateway before it
+ * refuses a note carrying one (its schema is strict), so a device sends it only once its link agreed this.
+ */
+export const QUIET_PROJECT_LINK_VERSION = 25
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake
