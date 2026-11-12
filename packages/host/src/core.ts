@@ -1131,18 +1131,25 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const thread = id.success ? threads.store?.sessionPlacement(id.data)?.thread : undefined
     return (thread ? threads.store?.threadSessions(thread) ?? [] : []).filter((each) => each.session === session).flatMap((each) => each.journals)
   })
-  const leaveProjectFolder = async (session: string) => {
+  const leaveProjectFolder = async (session: string, op: string) => {
     const id = SessionIdSchema.safeParse(session)
     const thread = id.success ? threads.store?.sessionPlacement(id.data)?.thread : undefined
     const acknowledged = thread && (await late.readiness?.acknowledged(thread))
     const attribution = late.attribution
     if (!thread || !acknowledged || !attribution) return
     const repositories = acknowledged.acknowledged.map((each) => ({ root: each.root, versions: each.versions ?? [] }))
-    const left = await checkoutLeave.leave(thread, repositories[0]!.root, repositories, {
-      heard: () => attribution.heard(),
-      partition: (checkout, of) => attribution.partitionOffLoop(checkout, of),
-      mako: (write) => attribution.mako(write),
-    })
+    // Only if the cloud went on from the very checkpoint it acknowledged: a continue that arrived on a clone of the branch
+    // the device last pushed doesn't have the Thread's changes, and taking them out here would lose them.
+    const state = await late.cloud?.continueState?.(session, op).catch(() => undefined)
+    const fromOurs = state?.start !== undefined && acknowledged.acknowledged.some((each) => each.checkpoint.sha256 === state.start?.sha256)
+    const left = fromOurs
+      ? await checkoutLeave.leave(thread, repositories[0]!.root, repositories, {
+        heard: () => attribution.heard(),
+        partition: (checkout, of) => attribution.partitionOffLoop(checkout, of),
+        mako: (write) => attribution.mako(write),
+      })
+      : { kind: "stayed" as const, paths: repositories.flatMap((each) => each.versions.map((version) => version.path)).sort() }
+    if (!fromOurs) hostLog("leaving", "a Thread the cloud took keeps its changes in the project folder: the cloud didn't go on from them", { thread, op, start: state?.start?.sha256 ?? "none" })
     // Nothing of the Thread's sits in the project folder unannounced: its row says what stayed, and the commits the cloud took.
     const unpushed = acknowledged.acknowledged.reduce((sum, each) => sum + each.unpushed, 0)
     if (left.kind === "stayed" || unpushed) {
@@ -1152,7 +1159,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   }
   const cloudMoves = cloudConversations && new CloudMoves({
     awayHeld: (session) => late.awayNotes?.holds(session),
-    joinedAway: (session) => void leaveProjectFolder(session).catch((error: Error) => hostWarn("leaving", "a Thread the cloud took couldn't leave the project folder; its changes stay", { session, error: error.message })),
+    joinedAway: (session, op) => void leaveProjectFolder(session, op).catch((error: Error) => hostWarn("leaving", "a Thread the cloud took couldn't leave the project folder; its changes stay", { session, error: error.message })),
     folder: join(environment.dataRoot, "cloud", "moves"),
     git,
     account: () => late.cloud,
