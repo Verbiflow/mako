@@ -323,10 +323,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
       checkpoint: (thread) => readiness.noteCheckpoint(thread),
       others: (thread) => readiness.noteOthers(thread),
       // As the host's: the note as it goes, recorded first, which alone may leave the project folder later.
-      sending: async (note) => {
-        await readiness.noted(note)
-        return note
-      },
+      noted: (sent) => readiness.noted(sent),
       project: (thread) => readiness.noteProject(thread),
       projectFrom: (thread) => readiness.noteProjectFrom(thread),
       rows: async () => {
@@ -339,7 +336,9 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
         }
         return rows
       },
-      quiet: async (note) => {
+      quiet: async (note, record) => {
+        // As the account's: the very note that goes is recorded before it does.
+        await record?.(note)
         notes.push(QuietNoteSchema.parse(note))
         order.push("note")
         // Before the account answers, a message arrives for a parked conversation (a Fin's report): it mustn't run.

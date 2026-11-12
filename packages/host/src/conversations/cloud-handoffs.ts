@@ -51,12 +51,13 @@ export type CloudHandOffsOptions = {
     /** With `project`: the folder of this Mac's it mirrors, by which the account places each Session there (`CloudReadiness.noteProjectFrom`). */
     projectFrom?(thread: string): Promise<string | undefined>
     /**
-     * The note as it will go, recorded before it does (`CloudReadiness.noted`): which checkpoints each Thread's names,
-     * after anything the gateway doesn't take is left out. The way back takes a Thread's changes out of the project
-     * folder only where the note carried them. Without it, the note goes as it was made and nothing is recorded.
+     * Records the note as it goes (`CloudReadiness.noted`): which checkpoints each Thread's carried, after the account
+     * left out what its gateway doesn't take. The way back takes a Thread's changes out of the project folder only where
+     * the note carried them. Without it, nothing is recorded, and nothing leaves.
      */
-    sending?(note: QuietNote): Promise<QuietNote>
-    quiet(note: QuietNote): Promise<QuietAnswer | "unserved">
+    noted?(sent: QuietNote): Promise<void>
+    /** Sends the note (`CloudAccount.quiet`), handing `record` the very note that goes, before it does. */
+    quiet(note: QuietNote, record?: (sent: QuietNote) => Promise<void>): Promise<QuietAnswer | "unserved">
     /**
      * These Sessions wait for the account's word from now (`AwayNotes.noted`): every one paused, as soon as it is, so no
      * message queued meanwhile runs one before the note is answered; then those the account took, or every one if its
@@ -211,8 +212,8 @@ export class CloudHandOffs {
     const note: QuietNote = { note: handOff, reason: why, at: Date.now(), threads: threads.slice(0, QUIET_THREADS_MAX) }
     let heard: NoteHeard
     try {
-      const sent = goingAway.sending ? await goingAway.sending(note) : note
-      heard = await answeredBy(goingAway.quiet(sent), deadline)
+      const record = goingAway.noted && ((sent: QuietNote) => goingAway.noted!(sent))
+      heard = await answeredBy(goingAway.quiet(note, record), deadline)
     } catch (error) {
       hostWarn("handoff", "the account didn't hear this Mac go away; its Threads wait here, paused", { why, error: errorMessage({ error }) })
       heard = { kind: "unanswered" }

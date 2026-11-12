@@ -90,9 +90,7 @@ export interface CloudAccount {
    */
   sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string, sent?: (bytes: number) => void): Promise<{ sent: boolean }>
   /** This Mac going away, with the Threads the account may continue meanwhile (`CloudAccounts.quiet`); `unserved` from a gateway that takes no notes yet. */
-  quiet?(note: QuietNote): Promise<QuietAnswer | "unserved">
-  /** The note as this gateway takes it now, less what its link hasn't agreed (`CloudAccounts.asSent`): what `quiet` is given. */
-  asSent?(note: QuietNote): QuietNote
+  quiet?(note: QuietNote, record?: (sent: QuietNote) => Promise<void>): Promise<QuietAnswer | "unserved">
   /** Who owns each Session this Mac holds, asked as it's back (`CloudAccounts.owner`); `unserved` from a gateway that doesn't answer it yet. */
   owner?(ask: OwnerAsk): Promise<OwnerAnswer | "unserved">
   /**
@@ -403,8 +401,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     checkPlan: () => cloud.checkPlan(),
     signIns: async () => sync?.current(),
     sendCheckpoint: (threadId, checkpoint, file, sent) => cloud.sendCheckpoint(threadId, checkpoint, file, sent),
-    quiet: (note) => cloud.quiet(note),
-    asSent: (note) => cloud.asSent(note),
+    quiet: (note, record) => cloud.quiet(note, record),
     owner: (ask) => cloud.owner(ask),
     handOverMove: (threadId, move, request) => cloud.handOverMove(threadId, move, request),
     refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),

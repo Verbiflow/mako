@@ -1275,7 +1275,7 @@ test("a quiet note names a project folder's project worktree only to a gateway w
   const last = () => QuietNoteSchema.parse(cloud.notes.at(-1)).threads[0]!
   // Before any runtime link has agreed a version, nothing says the gateway takes it.
   const unlinked = await signedIn(cloud)
-  await unlinked.accounts.quiet(unlinked.accounts.asSent(note(project)))
+  await unlinked.accounts.quiet(note(project))
   assert.equal(cloud.notes.length, 1)
   assert.equal(last().project, undefined, "never sent blind")
   unlinked.accounts.close()
@@ -1288,24 +1288,21 @@ test("a quiet note names a project folder's project worktree only to a gateway w
   const older = await signedIn(cloud, { runtime: before, onRuntimeLinked: () => { linked += 1 } })
   await waitFor(() => linked === 1, "the older link enrolled")
   const sent = note(project)
-  await older.accounts.quiet(older.accounts.asSent(sent))
+  const recorded: QuietNote[] = []
+  await older.accounts.quiet(sent, async (each) => void recorded.push(each))
   const { project: _left, ...rest } = sent.threads[0]!
   assert.deepEqual(cloud.notes.at(-1), { ...sent, threads: [rest] }, "only the project left out")
-  assert.deepEqual(older.accounts.asSent(sent), cloud.notes.at(-1), "what a going-away records is the note as it went")
-  // `quiet` sends the note it's given: the filtering is `asSent`'s alone, so what's recorded is what goes.
-  const asGiven = note(project)
-  await older.accounts.quiet(asGiven)
-  assert.deepEqual(cloud.notes.at(-1), asGiven, "not filtered a second time")
+  assert.deepEqual(recorded, [cloud.notes.at(-1)], "what a going-away records is the note as it went")
   older.accounts.close()
   // A gateway whose link agreed it: named, and still once the link has dropped (a Mac going away often has none).
   let agreed = 0
   const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { agreed += 1 } })
   await waitFor(() => agreed === 1, "the link enrolled")
-  await mac.accounts.quiet(mac.accounts.asSent(note(project)))
+  await mac.accounts.quiet(note(project))
   assert.equal(last().project, project)
   mac.accounts.leaving("sleep")
   await waitFor(() => cloud.runtimes().length === 0, "the link closed for the sleep")
-  await mac.accounts.quiet(mac.accounts.asSent(note(project)))
+  await mac.accounts.quiet(note(project))
   assert.equal(last().project, project, "the version its link last agreed")
   mac.accounts.close()
 })
@@ -1326,7 +1323,7 @@ test("a quiet note names a project folder's other repositories only to a gateway
   let linked = 0
   const older = await signedIn(cloud, { runtime: projectOnly, onRuntimeLinked: () => { linked += 1 } })
   await waitFor(() => linked === 1, "the older link enrolled")
-  await older.accounts.quiet(older.accounts.asSent(note()))
+  await older.accounts.quiet(note())
   assert.equal(last().project, project, "the project, which it takes")
   assert.equal(last().others, undefined, "never the others sent blind")
   assert.equal(last().projectFrom, undefined, "nor the folder the project mirrors")
@@ -1335,10 +1332,43 @@ test("a quiet note names a project folder's other repositories only to a gateway
   let agreed = 0
   const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { agreed += 1 } })
   await waitFor(() => agreed === 1, "the link enrolled")
-  await mac.accounts.quiet(mac.accounts.asSent(note()))
+  await mac.accounts.quiet(note())
   assert.equal(last().project, project)
   assert.deepEqual(last().others, others)
   assert.equal(last().projectFrom, projectFrom)
+  mac.accounts.close()
+})
+
+test("a going-away records the very note that goes, though the link agreed a lower version after the note was made", async () => {
+  const project = "/Users/ada/.mako/worktrees/shop/both-sides"
+  const checkpoint = { version: 1 as const, sha256: "e".repeat(64), bytes: 300, head: "f".repeat(40), branch: "mako/both-sides", index: "1".repeat(40), work: "2".repeat(40) }
+  const note: QuietNote = { note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", project, projectFrom: "/Users/ada/shop", others: [{ path: `${project}/web`, url: "https://github.com/acme/web", checkpoint }], sessions: [{ session: randomUUID(), generation: 1 }] }] }
+  const cloud = await fakeCloud()
+  // A gateway that agrees 26, then, on the link's next enrolment, 25: as one rolled back between the note and its send.
+  let max = QUIET_OTHERS_LINK_VERSION
+  const rolling: CloudRuntime = {
+    serve: (link, { runtimeId, credential, threads }) =>
+      serveRuntime(link, { runtimeId, build: "test", credential, threads, versions: { min: 1, max }, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true }) }),
+  }
+  let linked = 0
+  const mac = await signedIn(cloud, { runtime: rolling, onRuntimeLinked: () => { linked += 1 } })
+  await waitFor(() => linked === 1, "enrolled at 26")
+  // The note is made while the link agrees 26 (readiness names the others); the link then agrees 25 before it goes.
+  max = QUIET_OTHERS_LINK_VERSION - 1
+  mac.accounts.leaving("sleep")
+  await waitFor(() => cloud.runtimes().length === 0, "the link closed")
+  mac.accounts.wake()
+  await waitFor(() => linked === 2 && cloud.runtimes().length === 1, "enrolled again, at 25")
+  const recorded: QuietNote[] = []
+  await mac.accounts.quiet(note, async (each) => void recorded.push(each))
+  const went = QuietNoteSchema.parse(cloud.notes.at(-1))
+  assert.equal(went.threads[0]!.others, undefined, "the others left out, as a gateway at 25 takes it")
+  assert.equal(went.threads[0]!.project, project, "the project, which 25 takes")
+  assert.deepEqual(recorded, [cloud.notes.at(-1)], "recorded is exactly what went: no others the record would claim")
+  // A record that can't be kept sends nothing: the way back would have no word of what went.
+  const before = cloud.notes.length
+  await assert.rejects(mac.accounts.quiet(note, async () => { throw new Error("disk full") }), /disk full/)
+  assert.equal(cloud.notes.length, before, "nothing sent")
   mac.accounts.close()
 })
 
