@@ -1296,8 +1296,9 @@ export class LiveConversations {
     return this.transfers.settled(transferId)
   }
 
-  discoverNativePaths(): void {
-    this.sources.discoverNativePaths()
+  /** Each conversation's native file as the catalog lists it now, or (`only`) those bound to one session's alone. */
+  discoverNativePaths(only?: { harness: string; nativeId: string }): void {
+    this.sources.discoverNativePaths(only)
   }
 
   editQueued(id: string, input: QueuedPromptEdit): LiveSnapshot {
