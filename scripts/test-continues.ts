@@ -143,7 +143,7 @@ try {
   // A Mac back from sleep joins the continue: it releases the Thread at the account's generation and confirms the
   // cloud's claim, so the Thread runs in the cloud and never here; asked again, nothing more happens.
   const start = { version: 1 as const, sha256: "a".repeat(64), bytes: 10, head: "b".repeat(40), index: "c".repeat(40), work: "d".repeat(40), branch: "webhooks" }
-  const harness = (answer: () => MoveAnswer | undefined, continued: () => ContinueState | undefined, busy: string[] = [], calls?: Array<{ channel: string; args: readonly unknown[] }>) => {
+  const harness = (answer: () => MoveAnswer | undefined, continued: () => ContinueState | undefined, busy: string[] = [], calls?: Array<{ channel: string; args: readonly unknown[] }>, here: string[] = []) => {
     const steps: ThreadMoveStep[] = []
     const adopted: string[] = []
     const carriedOn: string[] = []
@@ -205,13 +205,13 @@ try {
           return encodeRuntimeValue(null)
         },
       },
-      live: { handOff: async () => undefined, continueTurn: () => undefined, waitingPrompts: () => [], carried: () => undefined },
+      live: { handOff: async () => undefined, continueTurn: (_conversation, input) => void here.push(input.continues), waitingPrompts: () => [], carried: () => undefined },
       remembered: () => null,
       step: (_conversation, _move, step) => void steps.push(step),
       ended: (move) => void ended.add(move),
       newCloudThread: () => "t-unused",
     }
-    return { moves: new CloudMoves(options), steps, adopted, carriedOn, ended, folder: options.folder }
+    return { moves: new CloudMoves(options), steps, adopted, carriedOn, ended, folder: options.folder, here }
   }
   const listed = { op, phase: "continued" as const, from: mac, by: phone, cloudThread, at: new Date(clock).toISOString() }
   // A joined continue has run its course here once its move ended, however it ended.
@@ -285,6 +285,10 @@ try {
       ...state("arriving"), op: refusedOp, thread: back.thread,
       sessions: [{ session: back.session, conversation: second, harness: "codex", nativeId: "n-2", generation: g, folder: checkout }],
     }))
+    // A turn this Mac parked for the Thread as it went off: refused, it goes on here at once, not at the next owner check.
+    mkdirSync(refusing.folder, { recursive: true })
+    const parkedTurn = randomUUID()
+    writeFileSync(join(refusing.folder, "parked-turns"), JSON.stringify({ version: 1, turns: [{ move: randomUUID(), thread: back.thread, conversationId: second, requestId: parkedTurn, stopped: [], at: Date.now() }] }))
     refusing.moves.joinContinue(back.session, { ...listed, op: refusedOp, phase: "arriving" })
     await new Promise((resolve) => setTimeout(resolve, 5))
     await settle(refusing, refusedOp)
@@ -293,6 +297,23 @@ try {
     assert.equal(execution?.generation, g + 2)
     assert.deepEqual(refusing.steps.at(-1), { kind: "kept-here", reason: "Codex couldn't start in the cloud" })
     assert.deepEqual(refusing.adopted, [])
+    assert.deepEqual(refusing.here, [parkedTurn], "the parked turn goes on here")
+    assert.deepEqual(z.object({ turns: z.array(z.unknown()) }).parse(JSON.parse(readFileSync(join(refusing.folder, "parked-turns"), "utf8"))).turns, [])
+  }
+
+  // A continue that failed while this Mac was away: nothing went anywhere, and the parked turn goes on here at once.
+  {
+    const failedOp = randomUUID()
+    const third = randomUUID()
+    const stayed = threads.registerJournal({ conversationId: third, createdAt: clock++, harness: "codex", bindings: [{ provider: "codex", nativeId: "n-3", path: "/codex/n-3.jsonl" }] }, threads.person())
+    const failing = harness(() => undefined, () => ({ ...state("failed"), op: failedOp, thread: stayed.thread, reason: "The cloud is full" }))
+    mkdirSync(failing.folder, { recursive: true })
+    const parkedTurn = randomUUID()
+    writeFileSync(join(failing.folder, "parked-turns"), JSON.stringify({ version: 1, turns: [{ move: randomUUID(), thread: stayed.thread, conversationId: third, requestId: parkedTurn, stopped: [], at: Date.now() }] }))
+    failing.moves.joinContinue(stayed.session, { ...listed, op: failedOp, phase: "arriving" })
+    await settle(failing, failedOp)
+    assert.equal(threads.execution(stayed.session)?.state, "here")
+    assert.deepEqual(failing.here, [parkedTurn], "the parked turn goes on here")
   }
   console.log("PASS: a continue in the cloud is the device's own move composed by the account (host calls this host takes, its store's handoff, the host's IDs); a machine with no checkpoint starts from its clone and says so, once; a Mac back from sleep joins it at the account's generation and confirms the claim, takes a refusal back, and gives up nothing while it works or its generation differs")
   threads.close()
