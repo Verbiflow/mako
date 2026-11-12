@@ -82,6 +82,8 @@ type WebHost = Awaited<ReturnType<typeof startWebHost>>
 const HELD_WAKES_AFTER_START_MS = 2_000
 /** A project whose checkout this host couldn't read, or let go of, is asked about again at most this often. */
 const HEAD_ASK_AGAIN_MS = 60_000
+/** How long attribution's read of the catalog stands with nothing said to move it (`cataloguedRows`). */
+const CATALOGUED_FRESH_MS = 30_000
 
 /** What the host gives its core: the socket, the method table, and the domains that load on their own. */
 /** When a stop still running says where it is: well before the 15 s a machine's agent or a test waits for it. */
@@ -284,7 +286,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (shell.closing()) return
     const limits = spent(event)
     if (limits) emit(limits)
-    if (event.type === "threads" || event.type === "thread-ref") late.conversations?.live.discoverNativePaths()
+    // A row's change can move only its own session's file: only conversations bound to it look again.
+    if (event.type === "threads") late.conversations?.live.discoverNativePaths()
+    else if (event.type === "thread-ref") late.conversations?.live.discoverNativePaths({ harness: event.ref.harness, nativeId: event.ref.nativeId })
     if (event.type === "thread-run" && event.run.status !== "running") late.conversations?.native.ready(event.run.path)
     // Git status is recomputed after every turn and on focus, which is exactly
     // when HEAD could have moved — so the commit trigger rides on it rather than
@@ -460,6 +464,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // Who changed what in every checkout a Thread works in. It catches up on its own, after the host is up.
   const unfollowEffects = fixtureDesk ? undefined : liveToolEffects.subscribe((reported) => late.attribution?.effects(reported.conversation, reported.call))
   const unfollowBounds = fixtureDesk ? undefined : liveCallBounds.subscribe((bounds) => late.attribution?.bounds(bounds))
+  // The catalog as attribution reads it, at every record and every footprint: placed whole once, then kept until the
+  // catalog says something moved or the Thread store changed (a placement), and at most `CATALOGUED_FRESH_MS`, for what
+  // moves without either (a worktree's origin). Placed again at each read, it was a tenth of the host's allocation.
+  let catalogued: { rows: ThreadRef[]; stores: readonly string[] | undefined; version: string | undefined; at: number } | undefined
+  if (!fixtureDesk) catalog.subscribe(() => { catalogued = undefined })
+  const cataloguedRows = () => {
+    const version = store?.version()
+    if (!catalogued || catalogued.version !== version || Date.now() - catalogued.at > CATALOGUED_FRESH_MS)
+      catalogued = { rows: catalog.list(), stores: undefined, version, at: Date.now() }
+    return catalogued
+  }
   if (!fixtureDesk) void openAttribution({
     dataRoot: environment.dataRoot,
     userRoot: environment.userRoot,
@@ -471,9 +486,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     deliveryLagMs: () => watchReadings.lagMs(),
     watchGitDir: (folder, moved) => watchOutsideGitDir(folder, moved),
     jobs,
-    stores: () => harnessStores(catalog.list().map((ref) => ref.path)),
+    stores: () => {
+      const held = cataloguedRows()
+      return held.stores ??= harnessStores(held.rows.map((ref) => ref.path))
+    },
     children: catalog.childSource,
-    catalogued: () => catalog.list(),
+    catalogued: () => cataloguedRows().rows,
     running: () => catalog.activity(),
     placement: (conversation) => store?.journalPlacement(conversation),
     session: (conversation) => {
