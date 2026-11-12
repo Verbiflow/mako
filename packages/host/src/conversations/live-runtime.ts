@@ -23,7 +23,7 @@ import type {
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
 import type { ChildSource, ThreadPage } from "@mako/sessions"
-import type { SessionSettings } from "@mako/sessions/settings"
+import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import type {
   ProviderBinding,
   ResumeVerdict,
@@ -256,6 +256,8 @@ export function launchAccount(resident: Resident, harness: string): () => string
   }
 }
 export interface Dependencies {
+  /** The models a harness offers as its catalog last read them; undefined while it hasn't been read. */
+  heldModels?(harness: string): readonly SessionModel[] | undefined
   /** This host's start on its data root (`takeHostStart`), which its epoch carries; none, an epoch no window orders. */
   start?: import("../base/host-start.js").HostStart
   /** The host has begun to stop, though these conversations haven't yet (a stop while the host still starts): reads in slices end. */

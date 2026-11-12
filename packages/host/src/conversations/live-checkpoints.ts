@@ -161,7 +161,6 @@ export class LiveCheckpoints {
     this.changes.ended(resident, requestId)
     const snapshots = this.host.dependencies.workspaceSnapshots
     if (!snapshots) return
-    const generation = resident.generation
     const release = this.hold(resident)
     void snapshots
       .endRun(requestId)
@@ -176,7 +175,7 @@ export class LiveCheckpoints {
         })
       )
       .then((after) => {
-        if (generation !== resident.generation) return
+        // Still its turn's end after a wake or a relaunch moved the generation on; a request rewound away takes it with it.
         // Over before the batch that says it goes: what reads the conversation's work as its batch comes (the
         // account's list) reads it at rest, and no later batch would say so.
         release()
@@ -193,10 +192,10 @@ export class LiveCheckpoints {
       .catch((error) => this.host.storageFailed(resident, { error }))
       .finally(() => {
         release()
-        if (generation === resident.generation) {
-          this.host.drain(resident)
-          this.host.residencyChanged(resident)
-        }
+        // Whatever moved the generation meanwhile (a wake, a relaunch) drained while this held the queue: what waits goes now.
+        // On 2026-11-11 a steer's message sat 15 minutes after Claude's stop woke its session during a slow snapshot.
+        this.host.drain(resident)
+        this.host.residencyChanged(resident)
       })
   }
 
