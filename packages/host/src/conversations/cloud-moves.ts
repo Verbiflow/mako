@@ -516,6 +516,8 @@ export class CloudMoves {
     if (!state) throw new Error("The account has no record of this continue.")
     if (state.phase === "failed") {
       hostLog("continues", "a continue in the cloud failed while this Mac was off; the Thread stays here", { move, session, reason: state.reason ?? "" })
+      // Nothing took it elsewhere: what it paused as this Mac went off goes on here now, not at the next owner check.
+      await this.#goOnHere((turn) => turn.thread === state.thread)
       return { kind: "kept-here", reason: state.reason ?? "It didn't continue in the cloud." }
     }
     const thread = ThreadIdSchema.parse(state.thread)
@@ -1106,6 +1108,8 @@ export class CloudMoves {
     }
     const paused = plan.handingOff?.paused ?? []
     await this.#stayed(plan.move, plan.thread, plan.handingOff, paused, plan.sessions.map((session) => session.conversationId))
+    // A continue the cloud refused leaves the Thread here: what it paused as this Mac went off goes on here now.
+    if (plan.continued) await this.#goOnHere((turn) => turn.thread === plan.thread)
     plan.phase = "kept-here"
     plan.reason = reason
     await this.#write(plan)
@@ -1160,9 +1164,14 @@ export class CloudMoves {
       return id.success && !this.leaving(thread) &&
         threads.threadSessions(id.data).every(({ session }) => (threads.execution(session)?.state ?? "here") === "here" && !this.joining(session))
     }
+    await this.#goOnHere((turn) => here(turn.thread))
+  }
+
+  /** Each parked turn `taken` names goes on here, as Mako's, and is parked no more. */
+  async #goOnHere(taken: (turn: Parked) => boolean): Promise<void> {
     const going: Parked[] = []
     await this.#changeParked((parked) => parked.filter((turn) => {
-      if (!here(turn.thread)) return true
+      if (!taken(turn)) return true
       going.push(turn)
       return false
     }))
