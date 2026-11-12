@@ -17,6 +17,7 @@ import type { Entry } from "@mako/sessions/entries"
 import { StepsStopped } from "@mako/sessions/slices"
 import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { clearAutoContinue } from "./live-auto-continue.js"
+import { JournalReaders } from "./journal-readers.js"
 import { LiveJournal, journalIds, storedRequest } from "./live-journal.js"
 import { backfillMemory } from "./live-ledger.js"
 import { conversationControl, residentOf, type Dependencies, type Resident } from "./live-runtime.js"
@@ -116,6 +117,8 @@ export class LiveRecords {
   private bulkSaid = new Set<string>()
   private sweepTimer?: ReturnType<typeof setTimeout>
   private stopped = false
+  /** Where journals read in a slice at a time are read: off the loop (`JournalReaders`). */
+  private readonly readers = new JournalReaders()
 
   /** Writes a journal's WAL header off the host's thread before reading it in commits (`WalPrimer`). */
   private readonly primer = new WalPrimer()
@@ -265,7 +268,7 @@ export class LiveRecords {
     const started = performance.now()
     let previous: LiveSnapshot | null
     try {
-      previous = await journal.readSliced(() => this.stopping())
+      previous = await journal.readSliced(() => this.stopping(), (path, withLog) => this.readers.read(path, withLog))
     } catch (error) {
       journal.discard()
       // Cut by the host's stop: not read, and nothing's wrong with it.
@@ -600,6 +603,7 @@ export class LiveRecords {
     this.primer.stop()
     clearTimeout(this.sweepTimer)
     this.sweepTimer = undefined
+    void this.readers.stop()
   }
 
   clear(): void {

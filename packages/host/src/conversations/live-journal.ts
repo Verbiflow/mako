@@ -44,7 +44,7 @@ import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
 import { sharedBase } from "./shared-entries.js"
 import { EntryPager, type PagedRows, type PagedTable } from "./paged-entries.js"
-import { atOnce, inSlices, type Steps } from "@mako/sessions/slices"
+import { atOnce, inSlices, StepsStopped, type Steps } from "@mako/sessions/slices"
 import { holdDue, holdOf, sooner, transferDue } from "../contracts/request-hold.js"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
@@ -349,27 +349,43 @@ export function readBase(db: DatabaseSync): StoredBase | null {
 
 /** `readBase` as `Steps`: its rows are read and parsed `ROWS_PER_STEP` at a time. */
 function* readBaseSteps(db: DatabaseSync): Steps<StoredBase | null> {
+  return storedBaseOf(yield* baseRowSteps(db))
+}
+
+/**
+ * The base row and its entries' rows, read and parsed: plain data, so a reader (`JournalReaders`) can read them and
+ * hand them over. A base an earlier build kept in the base row is handed over as that row says it.
+ */
+type BaseRows = { kind: "rows"; page: Omit<z.infer<typeof BaseHeaderRowSchema>, "entryRows">; entries: Entry[] } | { kind: "value"; value: unknown }
+
+function* baseRowSteps(db: DatabaseSync): Steps<BaseRows | null> {
   const row = db.prepare("SELECT value FROM base WHERE id=1").get()
   if (!row) return null
-  const value = JSON.parse(RowSchema.parse(row).value)
+  const value: unknown = JSON.parse(RowSchema.parse(row).value)
   if (value === null) return null
   const header = BaseHeaderRowSchema.safeParse(value)
-  if (header.success) {
-    const { entryRows, ...page } = header.data
-    const entries: Entry[] = []
-    const rows = db.prepare("SELECT id, value FROM base_entries WHERE id >= ? AND id < ? ORDER BY id")
-    for (let from = 0; from < entryRows; from += ROWS_PER_STEP) {
-      for (const stored of rows.all(from, Math.min(from + ROWS_PER_STEP, entryRows))) {
-        const entry = BaseEntryRowSchema.parse(stored)
-        if (entry.id !== entries.length) throw new Error(`The journal's history is missing entry ${entries.length}`)
-        entries.push(EntrySchema.parse(JSON.parse(entry.value)))
-      }
-      if (entries.length !== Math.min(from + ROWS_PER_STEP, entryRows)) break
-      yield
+  if (!header.success) return { kind: "value", value }
+  const { entryRows, ...page } = header.data
+  const entries: Entry[] = []
+  const rows = db.prepare("SELECT id, value FROM base_entries WHERE id >= ? AND id < ? ORDER BY id")
+  for (let from = 0; from < entryRows; from += ROWS_PER_STEP) {
+    for (const stored of rows.all(from, Math.min(from + ROWS_PER_STEP, entryRows))) {
+      const entry = BaseEntryRowSchema.parse(stored)
+      if (entry.id !== entries.length) throw new Error(`The journal's history is missing entry ${entries.length}`)
+      entries.push(EntrySchema.parse(JSON.parse(entry.value)))
     }
-    if (entries.length !== entryRows) throw new Error(`The journal's history holds ${entries.length} of its ${entryRows} entries`)
-    return { base: { ...page, entries } }
+    if (entries.length !== Math.min(from + ROWS_PER_STEP, entryRows)) break
+    yield
   }
+  if (entries.length !== entryRows) throw new Error(`The journal's history holds ${entries.length} of its ${entryRows} entries`)
+  return { kind: "rows", page, entries }
+}
+
+/** The base `rows` say, as `readBase` gives it back. */
+function storedBaseOf(rows: BaseRows | null): StoredBase | null {
+  if (!rows) return null
+  if (rows.kind === "rows") return { base: { ...rows.page, entries: rows.entries } }
+  const { value } = rows
   const flat = BaseSchema.safeParse(value)
   if (flat.success) return { base: flat.data, whole: true }
   const grouped = MessageBaseSchema.parse(value)
@@ -380,6 +396,88 @@ function* readBaseSteps(db: DatabaseSync): Steps<StoredBase | null> {
   const entryIndex = (message: number) => start + starts[Math.max(0, Math.min(message - start, grouped.entries.length))]!
   const total = entryIndex(Math.min(grouped.total, start + grouped.entries.length)) + Math.max(0, grouped.total - start - grouped.entries.length)
   return { base: { ...grouped, entries, total }, entryIndex, whole: true }
+}
+
+/**
+ * Everything a journal's rows hold that its snapshot is made of, read and parsed (`journalRowSteps`): plain data,
+ * read here or on a reader (`JournalReaders`) and made into the snapshot by the journal that owns the file.
+ */
+export interface JournalRows {
+  metadata: string
+  revision: number
+  blocks: Entry[]
+  appends: { block: number; value: AppendValue }[]
+  base: BaseRows | null
+  requests: LiveRequest[]
+  order: string[] | undefined
+  harnessTurns: z.infer<typeof HarnessTurnSchema>[]
+  /** Mako's log, when it was asked for, and whether it holds anything. */
+  log: MakoLogEntry[] | undefined
+  logBegun: boolean
+}
+
+/** How often a read on a reader looks whether its host is stopping. */
+const STOP_LOOK_MS = 20
+
+/** Reads a journal file's rows elsewhere than the loop (`JournalReaders.read`); `withLog` reads Mako's log too. */
+export type JournalReader = (path: string, withLog: boolean) => Promise<JournalRows | null>
+
+/** A journal's rows, `ROWS_PER_STEP` at a time; null for one with nothing kept yet. Run in one read transaction. */
+export function* journalRowSteps(db: DatabaseSync, withLog: boolean): Steps<JournalRows | null> {
+  const metadata = metadataRow(db)
+  if (!metadata) return null
+  const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
+  const blocks: Entry[] = []
+  const blockRows = db.prepare("SELECT id, value FROM blocks WHERE id > ? ORDER BY id LIMIT ?")
+  for (let last = -1; ;) {
+    const rows = blockRows.all(last, ROWS_PER_STEP)
+    for (const row of rows) {
+      const block = BlockRowSchema.parse(row)
+      blocks.push(EntrySchema.parse(JSON.parse(block.value)))
+      last = block.id
+    }
+    if (rows.length < ROWS_PER_STEP) break
+    yield
+  }
+  const appends = db.prepare("SELECT block_id, value FROM block_appends ORDER BY block_id, sequence").all().map((value) => {
+    const row = AppendRowSchema.parse(value)
+    return { block: row.block_id, value: AppendValueSchema.parse(JSON.parse(row.value)) }
+  })
+  const base = yield* baseRowSteps(db)
+  const requests: LiveRequest[] = []
+  const requestRows = db.prepare("SELECT rowid AS at, value FROM requests WHERE rowid > ? ORDER BY rowid LIMIT ?")
+  for (let last = -1; ;) {
+    const rows = requestRows.all(last, ROWS_PER_STEP)
+    for (const row of rows) {
+      const request = RowAtSchema.parse(row)
+      requests.push(LiveRequestSchema.parse(JSON.parse(request.value)))
+      last = request.at
+    }
+    if (rows.length < ROWS_PER_STEP) break
+    yield
+  }
+  const orderRow = db.prepare("SELECT keys FROM request_order WHERE id=1").get()
+  const order = orderRow ? z.array(z.string()).safeParse(JSON.parse(RowKeysSchema.parse(orderRow).keys)).data : undefined
+  const harnessTurns = db.prepare("SELECT value FROM harness_turns ORDER BY rowid").all()
+    .map((row) => HarnessTurnSchema.parse(JSON.parse(RowSchema.parse(row).value)))
+  const logBegun = Boolean(db.prepare("SELECT 1 AS found FROM log LIMIT 1").get())
+  const log = withLog ? yield* makoLogRowSteps(db) : undefined
+  return { metadata, revision, blocks, appends, base, requests, order, harnessTurns, log, logBegun }
+}
+
+function* makoLogRowSteps(db: DatabaseSync): Steps<MakoLogEntry[]> {
+  const entries: MakoLogEntry[] = []
+  const rows = db.prepare("SELECT seq, at, kind, value, origin, schema FROM log WHERE seq > ? ORDER BY seq LIMIT ?")
+  for (let last = 0; ;) {
+    const read = rows.all(last, ROWS_PER_STEP * 4)
+    for (const row of read) {
+      const entry = LogRowSchema.parse(row)
+      entries.push({ ...entry, value: LogValueSchema.parse(JSON.parse(entry.value)) })
+      last = entry.seq
+    }
+    if (read.length < ROWS_PER_STEP * 4) return entries
+    yield
+  }
 }
 
 function itemsIn(message: DecodedEntry): number {
@@ -763,55 +861,60 @@ export class LiveJournal {
    * the host goes on: a journal of 150MB read at once held the loop for a
    * third of a second. Nothing else may use this journal until it resolves.
    */
-  readSliced(stopping?: () => boolean): Promise<LiveSnapshot | null> {
-    return inSlices(this.reading(), undefined, stopping)
+  readSliced(stopping?: () => boolean, reader?: JournalReader): Promise<LiveSnapshot | null> {
+    if (!reader) return inSlices(this.reading(), undefined, stopping)
+    // Its rows are read and parsed on a reader, off the loop; the snapshot is made here, a slice at a time. Nothing
+    // writes the file meanwhile: nothing else may use this journal until this resolves, and this host is its writer.
+    // A stop ends the wait at once, as it ends a read on the loop at its next step; the reader's rows go unused.
+    let watching: ReturnType<typeof setInterval> | undefined
+    const stopped = new Promise<never>((_, reject) => {
+      if (!stopping) return
+      watching = setInterval(() => { if (stopping()) reject(new StepsStopped()) }, STOP_LOOK_MS)
+      watching.unref?.()
+    })
+    stopped.catch(() => undefined)
+    return Promise.race([reader(this.path, !this.log), stopped]).finally(() => clearInterval(watching)).then(
+      (rows) => inSlices(this.fromRows(rows), undefined, stopping),
+      (error) => {
+        if (error instanceof StepsStopped) throw error
+        hostWarn("journal", "a journal's reader failed; it's read here instead", { path: this.path, error: errorMessage({ error }) })
+        return inSlices(this.reading(), undefined, stopping)
+      })
   }
 
   /** `read` as `Steps`, its rows read and parsed `ROWS_PER_STEP` at a time, in one read transaction. */
   private *reading(): Steps<LiveSnapshot | null> {
     this.db.exec("BEGIN")
-    let snapshot: LiveSnapshot | null
+    let rows: JournalRows | null
     try {
-      snapshot = yield* this.readRows()
+      rows = yield* journalRowSteps(this.db, !this.log)
       this.db.exec("COMMIT")
     } catch (error) {
       if (this.db.isTransaction) this.db.exec("ROLLBACK")
       throw error
     }
-    if (!snapshot) return null
-    const begun = Boolean(this.log) || Boolean(this.db.prepare("SELECT 1 AS found FROM log LIMIT 1").get())
-    this.log ??= foldMakoLog(yield* this.makoLogSteps())
+    return yield* this.fromRows(rows)
+  }
+
+  /** The snapshot `rows` make, with Mako's log brought up to them. */
+  private *fromRows(rows: JournalRows | null): Steps<LiveSnapshot | null> {
+    if (!rows) return null
+    const snapshot = yield* this.readRows(rows)
+    const begun = Boolean(this.log) || rows.logBegun
+    this.log ??= foldMakoLog(rows.log ?? (yield* this.makoLogSteps()))
     this.reconcile(snapshot, begun)
     return snapshot
   }
 
-  private *readRows(): Steps<LiveSnapshot | null> {
-    const metadataValue = this.metadata()
-    if (!metadataValue) return null
-    const stored = MetadataSchema.parse(JSON.parse(metadataValue))
-    const metadata = { ...stored, revision: Math.max(stored.revision, this.revision()) }
-    const blocks: Entry[] = []
-    const blockRows = this.db.prepare("SELECT id, value FROM blocks WHERE id > ? ORDER BY id LIMIT ?")
-    for (let last = -1; ;) {
-      const rows = blockRows.all(last, ROWS_PER_STEP)
-      for (const row of rows) {
-        const block = BlockRowSchema.parse(row)
-        blocks.push(EntrySchema.parse(JSON.parse(block.value)))
-        last = block.id
-      }
-      if (rows.length < ROWS_PER_STEP) break
-      yield
-    }
+  private *readRows(rows: JournalRows): Steps<LiveSnapshot> {
+    const stored = MetadataSchema.parse(JSON.parse(rows.metadata))
+    const metadata = { ...stored, revision: Math.max(stored.revision, rows.revision) }
+    const { blocks } = rows
     const tails = new Map<number, AppendValue[]>()
-    for (const value of this.db
-      .prepare(
-        "SELECT block_id, value FROM block_appends ORDER BY block_id, sequence"
-      )
-      .all()) {
-      const row = AppendRowSchema.parse(value)
-      const parts = tails.get(row.block_id) ?? []
-      parts.push(AppendValueSchema.parse(JSON.parse(row.value)))
-      tails.set(row.block_id, parts)
+    for (const { block, value } of rows.appends) {
+      const parts = tails.get(block) ?? []
+      parts.push(value)
+      tails.set(block, parts)
     }
     for (const [index, parts] of tails) {
       let block = blocks[index]
@@ -823,31 +926,16 @@ export class LiveJournal {
       }
       if (block) blocks[index] = block
     }
-    const read = yield* readBaseSteps(this.db)
+    const read = storedBaseOf(rows.base)
     // Until the next commit writes both, the base row and `baseLiveStart` stay in messages.
     this.messageBase = Boolean(read?.entryIndex)
     this.rowsNamed = Boolean(read && !read.whole)
     // The rows hold what was read; merged again below, an entry that reads the same keeps the object its row holds.
     if (read && !read.whole) this.baseRows = [...read.base.entries]
     const baseLiveStart = read?.entryIndex && metadata.baseLiveStart !== undefined ? read.entryIndex(metadata.baseLiveStart) : metadata.baseLiveStart
-    const requests: LiveRequest[] = []
-    const requestRows = this.db.prepare("SELECT rowid AS at, value FROM requests WHERE rowid > ? ORDER BY rowid LIMIT ?")
-    for (let last = -1; ;) {
-      const rows = requestRows.all(last, ROWS_PER_STEP)
-      for (const row of rows) {
-        const request = RowAtSchema.parse(row)
-        requests.push(LiveRequestSchema.parse(JSON.parse(request.value)))
-        last = request.at
-      }
-      if (rows.length < ROWS_PER_STEP) break
-      yield
-    }
-    const order = this.ordered ? z.array(z.string()).safeParse(JSON.parse(RowKeysSchema.parse(this.db.prepare("SELECT keys FROM request_order WHERE id=1").get()).keys)).data : undefined
+    const { requests, harnessTurns } = rows
+    const order = this.ordered ? rows.order : undefined
     if (order) inOrder(requests, order)
-    const harnessTurns = this.db
-      .prepare("SELECT value FROM harness_turns ORDER BY rowid")
-      .all()
-      .map((row) => HarnessTurnSchema.parse(JSON.parse(RowSchema.parse(row).value)))
     // A base an earlier build kept unmerged reads as every other reading of it does.
     const base = read
       ? yield* sharedBase(read.base, (yield* mergedBaseSteps(read.base, blocks, metadata.baseCoveredBlocks ?? 0, baseLiveStart, { cutOff: cutOffRequests(requests) })).base)
@@ -1200,19 +1288,8 @@ export class LiveJournal {
     return atOnce(this.makoLogSteps())
   }
 
-  private *makoLogSteps(): Steps<MakoLogEntry[]> {
-    const entries: MakoLogEntry[] = []
-    const rows = this.db.prepare("SELECT seq, at, kind, value, origin, schema FROM log WHERE seq > ? ORDER BY seq LIMIT ?")
-    for (let last = 0; ;) {
-      const read = rows.all(last, ROWS_PER_STEP * 4)
-      for (const row of read) {
-        const entry = LogRowSchema.parse(row)
-        entries.push({ ...entry, value: LogValueSchema.parse(JSON.parse(entry.value)) })
-        last = entry.seq
-      }
-      if (read.length < ROWS_PER_STEP * 4) return entries
-      yield
-    }
+  private makoLogSteps(): Steps<MakoLogEntry[]> {
+    return makoLogRowSteps(this.db)
   }
 
   /**
