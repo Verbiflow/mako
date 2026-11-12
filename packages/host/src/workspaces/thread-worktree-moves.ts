@@ -9,6 +9,7 @@ import type { WorkspaceConversations } from "./conversations.js"
 import type { MoveHaste, WorkspaceMoveHold, WorkspaceMoveTarget } from "../contracts/workspace-moves.js"
 import { outcomeSentences } from "./worktree-move.js"
 import type { MoveSource, WorkspaceMoves } from "./moves.js"
+import type { PlannedCheckout } from "./thread-worktrees.js"
 
 type WorkspaceMoved = Extract<HostEvent, { type: "workspace-moved" }>
 
@@ -18,7 +19,7 @@ export interface ThreadWorktreeMoveDeps {
     /** The Thread's checkout, once its worktree is made (`ThreadWorktreeService`). */
     threadCheckout(conversationId: string): { path: string } | undefined
     /** The worktree a move onto its own branch would make now, with nothing made (`ThreadWorktreeService.plannedCheckout`). */
-    plannedCheckout?(conversationId: string, cwd: string, name: string | undefined): Promise<{ folder: string; repository: string } | undefined>
+    plannedCheckout?(conversationId: string, cwd: string, name: string | undefined): Promise<PlannedCheckout | undefined>
     ofConversation(conversationId: string): { branch: string } | undefined
   }
   /** The Thread a conversation's journal is placed in. */
@@ -136,7 +137,7 @@ export class ThreadWorktreeMoves {
    * The worktree this conversation's move onto its own branch, as the Session it begins with, would make now: from the
    * folder around it and its companions (`project`), named by its title, as `carry` makes it. Nothing is made.
    */
-  planned(id: string): Promise<{ folder: string; repository: string } | undefined> {
+  planned(id: string): Promise<PlannedCheckout | undefined> {
     const session = this.deps.conversations.session(id)
     if (!session || !this.deps.worktrees.plannedCheckout) return Promise.resolve(undefined)
     return this.deps.worktrees.plannedCheckout(id, this.project(id) ?? session.cwd, session.title)

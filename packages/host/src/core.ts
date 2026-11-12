@@ -202,6 +202,8 @@ interface LateParts {
   agentAsks?: AgentAskGate
   /** The worktrees here of Threads that run in the cloud, following them at each turn's end. */
   cloudFollow?: CloudFollow
+  /** Keeps Threads at work ready to move, and takes their checkpoints as they write (`CloudReadiness`). */
+  readiness?: CloudReadiness
   /** This host's Sessions on the account's list: told again when one is archived here. */
   sessions?: SessionPublisher
   /** The keys of the account's archived cloud Threads' Sessions, told to every window (`ThreadArchives.account`). */
@@ -459,7 +461,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   late.fileHistory = workspaces.fileHistory
   // Who changed what in every checkout a Thread works in. It catches up on its own, after the host is up.
-  const unfollowEffects = fixtureDesk ? undefined : liveToolEffects.subscribe((reported) => late.attribution?.effects(reported.conversation, reported.call))
+  const unfollowEffects = fixtureDesk ? undefined : liveToolEffects.subscribe((reported) => {
+    late.attribution?.effects(reported.conversation, reported.call)
+    // A call that may have written: the Thread's checkpoint follows a few seconds later, when it's kept ready.
+    if (reported.call.status !== "refused" && reported.call.effects.some((effect) => effect.kind !== "read")) late.readiness?.wrote(reported.conversation)
+  })
   const unfollowBounds = fixtureDesk ? undefined : liveCallBounds.subscribe((bounds) => late.attribution?.bounds(bounds))
   if (!fixtureDesk) void openAttribution({
     dataRoot: environment.dataRoot,
@@ -1005,6 +1011,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     rewindWriters: (paths, since) => late.attribution?.rewindWriters(paths, since),
     suspendTools: (bindingId, conversationId) => residency.suspend(bindingId, conversationId),
     settled: (id) => {
+      late.readiness?.settled(id)
       late.movers?.moves.settled(id)
       late.movers?.leaves.settled(id)
       late.threadMoves?.settled(id)
@@ -1340,8 +1347,20 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       plan: (conversationId) => cloudMoves.readyPlan(conversationId),
       sendRecords: (link, paths) => catalog.sendRecords(link, paths),
       newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
+      // Never the journal's full settle (rescans held the loop for seconds, #583), nor a partition on this thread.
+      ledger: () => {
+        const attribution = late.attribution
+        return attribution && {
+          heard: () => attribution.heard(),
+          settled: () => attribution.heard(),
+          track: (checkout) => attribution.track(checkout),
+          head: (repository) => attribution.head(repository),
+          partition: (checkout, thread) => attribution.partitionOffLoop(checkout, thread),
+        }
+      },
     })
     readinessOnce = readiness
+    late.readiness = readiness
     shell.jobs.every("keep Threads at work ready to move", READY_EVERY_MS, () => readiness.refresh())
   }
   // This Mac kept awake while its agents work: a turn, background work or a subagent, never a wait on the person, and never a Fin that sits open.
