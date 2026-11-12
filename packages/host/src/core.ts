@@ -472,14 +472,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   const unfollowBounds = fixtureDesk ? undefined : liveCallBounds.subscribe((bounds) => late.attribution?.bounds(bounds))
   // The catalog as attribution reads it, at every record and every footprint: placed whole once, then kept until the
-  // catalog says something moved or the Thread store changed (a placement), and at most `CATALOGUED_FRESH_MS`, for what
-  // moves without either (a worktree's origin). Placed again at each read, it was a tenth of the host's allocation.
+  // catalog says something moved or a placement in the Thread store did (`placementVersion`; the store's `version`
+  // moves on every write, which threw it away at each), and at most `CATALOGUED_FRESH_MS`, for what moves without
+  // either (a worktree's origin). Placed again at each read, it was a tenth of the host's allocation.
   let catalogued: { rows: ThreadRef[]; stores: readonly string[] | undefined; version: string | undefined; at: number } | undefined
   if (!fixtureDesk) catalog.subscribe(() => { catalogued = undefined })
   const cataloguedRows = () => {
-    const version = store?.version()
-    if (!catalogued || catalogued.version !== version || Date.now() - catalogued.at > CATALOGUED_FRESH_MS)
-      catalogued = { rows: catalog.list(), stores: undefined, version, at: Date.now() }
+    if (!catalogued || catalogued.version !== store?.placementVersion() || Date.now() - catalogued.at > CATALOGUED_FRESH_MS) {
+      const rows = catalog.list()
+      // Read after the list: what placing it remembered for the first time is in the version it's kept under.
+      catalogued = { rows, stores: undefined, version: store?.placementVersion(), at: Date.now() }
+    }
     return catalogued
   }
   if (!fixtureDesk) void openAttribution({

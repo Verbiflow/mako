@@ -764,6 +764,8 @@ export class ThreadStore {
   private readonly realPath: (path: string) => string
   private depth = 0
   private readonly placements = new Map<string, ThreadPlacement>()
+  /** Moves whenever a placement this store holds is new, changed or forgotten (`placementVersion`). */
+  private placementEpoch = 0
   /** The cache keys holding each Session, so a logged change forgets only those. */
   private readonly keysBySession = new Map<string, Set<string>>()
   private readonly executions = new Map<string, SessionExecution>()
@@ -1441,6 +1443,16 @@ export class ThreadStore {
   }
 
   /** Moves with every write to this store, this host's or another's, without reading a table. */
+  /**
+   * Where the store's placements stand: moves when a row's Thread or Session is new, changes or is forgotten here, or
+   * another host commits, never on this host's other writes (`version` moves on every one). For a reader that holds
+   * rows placed by it, such as attribution's catalog, which `version` threw away at every Thread's write.
+   */
+  placementVersion(): string {
+    this.syncVersion()
+    return `${this.reopened}:${this.dataVersion}:${this.placementEpoch}`
+  }
+
   version(): string {
     this.syncVersion()
     // Connection's own counters: a snapshot reopened on a newer file starts them again, so the reopening has to count.
@@ -3435,6 +3447,8 @@ export class ThreadStore {
   }
 
   private remember(key: string, placed: ThreadPlacement): void {
+    const before = this.placements.get(key)
+    if (before?.thread !== placed.thread || before.session !== placed.session) this.placementEpoch += 1
     this.placements.set(key, placed)
     const keys = this.keysBySession.get(placed.session)
     if (keys) keys.add(key)
@@ -3442,11 +3456,13 @@ export class ThreadStore {
   }
 
   private forgetSession(session: string): void {
+    this.placementEpoch += 1
     for (const key of this.keysBySession.get(session) ?? []) this.placements.delete(key)
     this.keysBySession.delete(session)
   }
 
   private forgetPlacements(): void {
+    this.placementEpoch += 1
     this.placements.clear()
     this.keysBySession.clear()
   }
