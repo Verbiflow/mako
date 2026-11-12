@@ -89,6 +89,8 @@ export interface WorldLaunch {
 
 export interface WorldOptions {
   root: string
+  /** Whether a conversation's next request waits before it runs (`LiveDependencies.ownerCheck`), as the host's `ownerHold` says. */
+  ownerCheck?: ConstructorParameters<typeof LiveConversations>[0]["ownerCheck"]
   script: Script
   budget?: TreeBudget
   /** Each event the host sends its windows, as it sends it. */
@@ -284,6 +286,7 @@ export class AgentsWorld {
     }))
     const live = new LiveConversations({
       ...(this.options.stopping && { stopping: this.options.stopping }),
+      ...(this.options.ownerCheck && { ownerCheck: this.options.ownerCheck }),
       appPath: this.root,
       root: join(this.root, "journals"),
       driver: (provider) => drivers.get(provider),

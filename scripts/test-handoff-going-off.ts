@@ -17,6 +17,7 @@ import { fromHostOperation } from "@mako/host/contracts/host-operations"
 import { encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { AwayNotes } from "@mako/host/conversations/away-notes"
+import { ownerHold } from "@mako/host/conversations/owner-check"
 import { CloudHandOffs, machineLeaving, workingThreads } from "@mako/host/conversations/cloud-handoffs"
 import { CloudMoves, parkedContinuation, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
 import { CloudReadiness } from "@mako/host/conversations/cloud-readiness"
@@ -69,7 +70,7 @@ const script: Script = async (turn) => {
 /** What the stand-in cloud saw of each move: the hand-over's calls, in order, and its answer. */
 type Moved = { cloudThread: string; channels: string[]; continued: string[]; answer?: MoveAnswer }
 
-async function host(name: string, options: { readyNever?: boolean; unserved?: boolean; unanswered?: boolean } = {}) {
+async function host(name: string, options: { readyNever?: boolean; unserved?: boolean; unanswered?: boolean; queueDuringNote?: boolean } = {}) {
   const base = join(root, name)
   const project = join(base, "project")
   const remote = join(base, "remote.git")
@@ -82,7 +83,13 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
   sh(project, "commit", "--quiet", "-m", "base")
   sh(project, "push", "--quiet", "origin", "main")
 
-  const world = new AgentsWorld({ root: join(base, "host"), script, elsewhere: true })
+  // As the host's: a request of a conversation whose Session waits for the account's word runs only once it's let go.
+  const world: AgentsWorld = new AgentsWorld({
+    root: join(base, "host"),
+    script,
+    elsewhere: true,
+    ownerCheck: ownerHold({ account: () => undefined, moves: () => undefined, session: (id) => world.store.journalPlacement(id)?.session, away: (session) => away?.holds(session) }),
+  })
   // The attribution journal over the project folder, on a scripted clock: what a move takes is the Thread's own.
   const clock = new FakeClock(Date.now())
   const events = new FakeEventSource()
@@ -175,6 +182,8 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
   /** The conversations the account lists as this Mac's; its first read of them is before it heard their turns pause. */
   const listed = new Set<string>()
   let rowReads = 0
+  let queuedDuringNote: { conversation: string; request: string } | undefined
+  let ranDuringNote = 0
   const steps: Array<{ conversation: string; kind: string }> = []
   const account: ReturnType<CloudMovesOptions["account"]> = {
     token: async () => "token",
@@ -309,6 +318,13 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
       quiet: async (note) => {
         notes.push(QuietNoteSchema.parse(note))
         order.push("note")
+        // Before the account answers, a message arrives for a parked conversation (a Fin's report): it mustn't run.
+        if (options.queueDuringNote) {
+          const target = [...listed][0]!
+          queuedDuringNote = { conversation: target, request: world.say(target, "A Fin's report arrives") }
+          await pause(500)
+          ranDuringNote = world.prompts.filter((prompt) => prompt.conversation === target && prompt.text.includes("Fin's report")).length
+        }
         if (options.unserved) return "unserved"
         // The note reached the account, but its answer never reached this Mac before it went off.
         if (options.unanswered) throw new Error("the answer was lost as this Mac went off")
@@ -338,7 +354,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     await tracker.close?.()
   }
   const owner = (says: (ask: OwnerAsk) => OwnerAnswer) => (ownerSays = says)
-  return { listed, rowReads: () => rowReads, base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, awayNotes, owner, joined, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
+  return { listed, rowReads: () => rowReads, duringNote: () => ({ queued: queuedDuringNote, ran: ranDuringNote }), base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, awayNotes, owner, joined, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
 }
 
 type Host = Awaited<ReturnType<typeof host>>
@@ -501,6 +517,9 @@ try {
     const id = work.inProject
     const placed = h.world.store.journalPlacement(id)!
     const turn = h.notes[0]!.threads.find((each) => each.thread === placed.thread)!.parked![0]!
+    // Both sends land on the host the Thread runs on, the cloud Thread's, which holds nothing for this Mac's going away:
+    // here, the same host with that hold cleared, its parked turns left parked.
+    await h.awayNotes.noted(randomUUID(), [])
     const send = () => h.world.live.continueTurn(id, { requestId: turn.continuation, reason: "handed-off", continues: turn.request, actor: { kind: "service", name: "handoff" } })
     const before = h.world.prompts.length
     send() // the account's continue, from the note
@@ -509,6 +528,24 @@ try {
     await pause(300)
     assert.equal(h.world.prompts.slice(before).filter((prompt) => prompt.conversation === id).length, 1, "it ran once")
     assert.equal(h.world.live.snapshot(id)!.requests.filter((request) => request.id === turn.continuation).length, 1, "one continuation request")
+    await h.close()
+  }
+
+  // A message queued for a parked conversation between the pause and the account's answer waits, as the parked turn does,
+  // until the account says whose the Session is.
+  {
+    const h = await host("queued", { queueDuringNote: true })
+    const work = await atWork(h)
+    await keptReady(h, work)
+    await sleeps(h, 20_000)
+    const { queued, ran } = h.duringNote()
+    assert.ok(queued, "a message came while the note was out")
+    assert.equal(ran, 0, "it didn't run before the account answered")
+    await pause(300)
+    assert.ok(!h.world.prompts.some((prompt) => prompt.text.includes("Fin's report")), "nor after, while the account may continue the Thread")
+    h.owner((ask) => ({ sessions: ask.sessions.map((each) => ({ session: each.session, answer: "yours" as const, generation: each.generation })) }))
+    await h.awayNotes.ask()
+    await until("the message to run once the account says the Session is this Mac's", () => h.world.prompts.some((prompt) => prompt.conversation === queued!.conversation && prompt.text.includes("Fin's report")))
     await h.close()
   }
 
