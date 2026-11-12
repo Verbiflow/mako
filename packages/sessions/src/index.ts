@@ -113,6 +113,7 @@ export {
   cursorSdkAgentIdForDirectory,
   cursorSdkDirectoryName,
   readCursorSdkAgent,
+  readCursorSdkAgentRoot,
   type CursorSdkAgentRecord,
   type CursorSdkImport,
 } from "./providers/cursor-sdk-index.js"
