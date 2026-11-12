@@ -1477,6 +1477,22 @@ that keeps the session only pins its binding (`ProviderBinding.account`,
 of the harness it leaves, so it works on a Fin stopped, ended, failed or out of
 usage, keeping its Thread, name, edge, worktree, branch and reports. Its rules
 beside a Stop and a hold are in `docs/delivery-queue.md`, rules 10 to 12.
+A same-harness target that names a model, reasoning or fast retunes the
+session: its binding and settings take it, and the next message naming none
+carries it into the running process (`Resident.retuned`); `agents_move` to
+the harness a Fin is on does this when it names one, held to that catalog as
+a start is, and says "already" only when it names nothing. Onto another
+harness, the selection goes only as far as the target lists it
+(`HarnessProfiles.carried`, `carriedTuning`): another harness's encoding
+(Cursor's `claude-opus-5-5[context=1m,fast=false]`) goes as the model it
+names, a model the target doesn't list goes as nothing, so the target runs
+its own default. A message to a Fin whose session's records were never
+located (`ResumeVerdict` `unavailable` with `lost`) goes on in a new session
+of that harness with the whole conversation, as a record kept closed does,
+and `agents_send` answers only once the session opened: a reopening that
+fails is refused with why, one waiting to go again says so, never "takes it
+now" (`Agents.reopening`). `npm run test:fin-reopen` reproduces each on a
+scratch host.
 `agents_start` and `agents_send` attach another Thread as a person's `@` chip
 does (`context: [{ thread }]`, a ref, a Thread ID or a Fin's name; `agents_list`
 `scope: threads` finds a ref). What can be attached can be read and exported, so

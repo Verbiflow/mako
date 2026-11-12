@@ -5036,7 +5036,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.deps.archived?.(conversation)) return { refused: "conflict", why: `${name} was archived, which ends its work for good: the person can restore it, and then it can move.` }
     const from = session.harness
     const label = this.deps.harnessLabel(input.harness)
-    if (from === input.harness) return { child: edge.child, name, from, harness: from, state: "here", hears: `${name} is on ${label} already.` }
+    const retunes = input.model !== undefined || input.reasoning !== undefined || input.fast !== undefined
+    if (from === input.harness && !retunes) return { child: edge.child, name, from, harness: from, state: "here", hears: `${name} is on ${label} already.` }
+    if (from === input.harness) return this.retune(apex, edge, conversation, input, op, wanted)
     if (this.inTurn(conversation)) return { refused: "conflict", why: `${name} is at work on ${this.deps.harnessLabel(from)}: it can move once its turn ends, or agents_stop stops it now.` }
     const own = this.tierOf(apex)
     const allowed = childAccess(own, edge.asked.access) ?? own
@@ -5079,6 +5081,37 @@ export class Agents implements AgentOperations, ConversationChildren {
         : `${name} runs nothing until your next message, which goes there with its whole conversation.`
     const runsOn = decided.settings?.model
     return { child: edge.child, name, from, harness: input.harness, state: outcome ? "moved" : "moving", ...(runsOn && { runsOn }), ...(note && { note }), hears }
+  }
+
+  /**
+   * `agents_move` to the harness a Fin is on, naming a model, reasoning or fast: it stays in its session there and runs
+   * on that from its next turn (`LiveConversations.moveOn`'s retune), the choice held to the harness's catalog as a
+   * start's is. Its edge says what it runs on now.
+   */
+  private async retune(apex: Apex, edge: ThreadParent, conversation: string, input: AgentsMoveInput, op: string, wanted: () => boolean): Promise<AgentMoved | AgentRefused> {
+    const { name } = edge
+    const harness = input.harness
+    const label = this.deps.harnessLabel(harness)
+    const cwd = this.deps.live.session(conversation)?.cwd
+    const decided = await this.tuningOf(apex, harness, { ...(cwd && { cwd }), ...(input.model && { model: input.model }), ...(input.reasoning && { reasoning: input.reasoning }), ...(input.fast !== undefined && { fast: input.fast }) })
+    if ("refused" in decided) return { refused: "unknown-model", why: decided.refused }
+    if (!decided.settings) return { refused: "unknown-model", why: `${label} offers no model choice to change ${name} to.` }
+    const moveId = namedUuid(`${op}\n${edge.child}`)
+    try {
+      const snapshot = await this.deps.continueOn(conversation, { kind: "move", move: { id: moveId, to: { harness, tuning: decided.settings } } }, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, wanted)
+      if (!snapshot) return { refused: "conflict", why: `${name} stays as it was: a Stop or a turn came before it changed. Ask again once its turn ends.` }
+    } catch (error) {
+      return { refused: "unavailable", why: `${name} stays as it was on ${label}: ${errorMessage({ error })}` }
+    }
+    const moved = this.store()!.moveEdge(edge.child, { harness, ...(edge.asked.access && { access: edge.asked.access }), ...(input.model && { model: input.model }), ...(input.reasoning && { reasoning: input.reasoning }), ...(input.fast !== undefined && { fast: input.fast }) }, { source: decided.source, ...(decided.note && { note: decided.note }) })
+    hostLog("agents", "retuned", { op, child: edge.child, harness, model: decided.settings.model ?? "" })
+    this.forget(edge.parent)
+    this.childMoved(moved ?? edge, false)
+    const runsOn = decided.settings.model
+    return {
+      child: edge.child, name, from: harness, harness, state: "moved", ...(runsOn && { runsOn }), ...(decided.note && { note: decided.note }),
+      hears: `${name} stays in its ${label} session and runs on ${runsOn ?? "the new choice"} from its next turn.`,
+    }
   }
 
   /** A harness's account at its limit, in the words a start's refusal and a move's both say it. */
@@ -5487,17 +5520,56 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (this.messageHold(conversation) || !this.deps.live.atWork(conversation)) return queued
       return { delivery: "turn", hears: `${taken.cut ? `Mako stopped ${name}'s run and resumed` : "Mako resumed"} its session here; ${name} takes it as its next turn.` }
     }
-    if (ready === "idle") return queue()
+    if (ready === "idle") return this.reopening(conversation, name, request, queue())
     if (want === "interrupt") {
       if (!this.deps.live.interrupt(conversation, request, message, attachments, actor, written.grants, attaching.notification))
         return queue(`it had no turn running to stop, and something was already queued ahead of this.`)
       this.resumeFin(conversation, request)
       return { delivery: "interrupt", hears: `Mako stopped ${name}'s turn; this message starts its next one, ahead of anything queued for it.` }
     }
-    if (want === "queue") return queue()
+    if (want === "queue") return this.reopening(conversation, name, request, queue())
     const queued = queue()
     const steered = await this.steerInto(conversation, name, request, message, attachments)
     return "why" in steered ? { ...queued, hears: `${name} hears it when its current turn ends, as its next message: ${steered.why}` } : steered
+  }
+
+  /**
+   * A message to a Fin with no session open here reopens it: a wake of its native session, or a transfer that resumes
+   * it or hands a new one the conversation (`LiveConversations.submit`). It's taken only once that session opens and
+   * the message goes, so the answer waits for that, at most `SWITCH_WAIT_MS`: one whose session couldn't open is
+   * refused with why, and one still opening says so. Neither is ever said as taken. A Fin whose session is open
+   * answers at once, as it did.
+   */
+  private async reopening(conversation: string, name: string, request: string, delivered: Delivered): Promise<Delivered | AgentRefused> {
+    const transferOf = () => this.deps.live.held(conversation)?.control?.transfers.find((each) => each.input.id === request)
+    const requestOf = () => this.deps.live.held(conversation)?.requests.find((each) => each.id === request)
+    const opening = () => {
+      const transfer = transferOf()
+      if (transfer) return transfer.state.kind === "queued" || transfer.state.kind === "preparing"
+      const session = this.deps.live.session(conversation)
+      return requestOf()?.status === "queued" && (session?.status === "starting" || session?.connection === "starting" || session?.connection === "hibernated")
+    }
+    if (!opening()) return delivered
+    const deadline = Date.now() + SWITCH_WAIT_MS
+    while (opening() && Date.now() < deadline && !this.stopped) await new Promise((resolve) => setTimeout(resolve, 25))
+    const transfer = transferOf()
+    const asked = requestOf()
+    const failed = transfer && (transfer.state.kind === "failed" || transfer.state.kind === "uncertain") ? transfer.state.error
+      : !transfer && asked?.status === "failed" ? asked.error ?? this.deps.live.session(conversation)?.error ?? "its session didn't open."
+        : undefined
+    if (failed !== undefined) {
+      hostWarn("agents", "a message didn't reach its Fin: its session couldn't be opened", { conversation, request, error: failed })
+      return { refused: "unavailable", why: `${name} didn't get this: Mako couldn't open its session. ${failed}` }
+    }
+    if (opening())
+      return { delivery: "queued", hears: `Mako is still opening ${name}'s session: ${name} takes this as its next turn once it opens. agents_read says whether it did.` }
+    // A cause that clears by itself (`transientCause`): the message waits, saved, and goes again at its time.
+    const retry = transfer?.retry ?? asked?.retry
+    if (retry && (transfer ? transfer.state.kind === "queued" : asked?.status === "held"))
+      return { delivery: "queued", hears: `Mako couldn't open ${name}'s session yet (${retry.reason}). This is saved and goes again by itself at ${new Date(retry.at).toISOString()}; agents_read says whether it did.` }
+    if (transfer?.state.kind === "accepted" || (asked && asked.status !== "queued" && asked.status !== "held"))
+      return { delivery: "turn", hears: `Mako opened ${name}'s session again; ${name} takes it as its next turn.` }
+    return this.queuedDelivery(conversation, name, this.ready(conversation))
   }
 
   /** Waits, at most `SWITCH_WAIT_MS`, for a conversation's provider switch or reopening to settle; false if it hasn't. */

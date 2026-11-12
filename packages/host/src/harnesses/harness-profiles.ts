@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises"
-import { resolveHarnessTuning, withCatalogDefaults } from "./harness-models.js"
+import { carriedTuning, resolveHarnessTuning, withCatalogDefaults } from "./harness-models.js"
 import type { NativeRunOptions } from "./native-runner.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderHost } from "./host.js"
@@ -167,6 +167,22 @@ export class HarnessProfiles {
     if (profile.configurationError)
       hostWarn("discovery", "send used the last discovered catalogue", { harness, model: tuning.model, error: profile.configurationError })
     return resolveHarnessTuning(profile, tuning)
+  }
+
+  /**
+   * A selection made on another harness, as this one lists it: its model by this catalog's own identity (another
+   * harness's encoding of it, `claude-opus-5-5[context=1m,fast=false]`, by the model it names), with only the options
+   * that model has and values it takes. A model this catalog doesn't list goes as nothing, so the harness runs its
+   * own default rather than refusing every send. With no catalog to hold it to, only a model another harness encoded
+   * is dropped. Undefined in, undefined out.
+   */
+  async carried(harness: string, cwd: string | undefined, tuning: SessionSettings | undefined): Promise<SessionSettings | undefined> {
+    if (!tuning?.model) return tuning
+    const profile = await this.forSend(harness, cwd).catch(() => undefined)
+    const fit = carriedTuning(profile?.available ? profile.models : undefined, tuning)
+    if (fit?.model !== tuning.model)
+      hostLog("discovery", "a carried model was fitted to its harness", { harness, model: tuning.model, ...(fit?.model && { to: fit.model }) })
+    return fit
   }
 
   /**
