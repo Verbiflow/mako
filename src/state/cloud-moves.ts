@@ -342,6 +342,13 @@ export function awayHeld(conversations: readonly string[]): void {
   cloudMovesStore.set((state) => ({ ...state, awayHeld: Object.fromEntries(conversations.map((id) => [id, true as const])) }))
 }
 
+/** Which conversations wait for the account now, read once a window opens; `away-held` events keep it after. */
+export async function loadAwayHeld(): Promise<void> {
+  if (!hasBridge()) return
+  const held = await getMako().awayHeldConversations().catch(() => undefined)
+  if (held) awayHeld(held)
+}
+
 /** Runs the Thread of `conversationId` here, whatever the account did while this Mac was away. */
 export async function runHereAnyway(conversationId: string): Promise<void> {
   if (!hasBridge()) return

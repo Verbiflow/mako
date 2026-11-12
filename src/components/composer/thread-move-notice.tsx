@@ -9,7 +9,7 @@ import { returnNotice } from "@/lib/restore-plan"
 import { MoveSteps as Steps } from "./move-steps"
 import { activeAcp, useAcp } from "@/state/acp"
 import { application } from "@/state/application"
-import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, checkMoveAgain, dismissCheckoutStayed, dismissFailedMove, dismissFollowStopped, runHereAnyway, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, retryFailedMove, updateThen, useCloudMoves, whileAwaySentence, type HarnessUpdating } from "@/state/cloud-moves"
+import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, checkMoveAgain, dismissCheckoutStayed, dismissFailedMove, dismissFollowStopped, loadAwayHeld, runHereAnyway, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, retryFailedMove, updateThen, useCloudMoves, whileAwaySentence, type HarnessUpdating } from "@/state/cloud-moves"
 
 /** A move's steps in the order they're taken, each in the words its step says. */
 const STEPS = [
@@ -83,6 +83,10 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   const stopped = useCloudMoves((state) => (key ? state.followStopped[key] : undefined))
   const held = useCloudMoves((state) => (key ? state.awayHeld[key] === true : false))
   const stayed = useCloudMoves((state) => (key ? state.checkoutStayed[key] : undefined))
+  // A window opened after this Mac came back hears which Threads still wait for the account.
+  useEffect(() => {
+    void loadAwayHeld()
+  }, [])
   const updating = useCloudMoves((state) => (key ? state.updating[key] : undefined))
   const check = useCloudMoves((state) => (key ? state.harnesses[key] : undefined))
   // A harness the person updates outside Mako (another app's, a command) is weighed again as they come back to the window.

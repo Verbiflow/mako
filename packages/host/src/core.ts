@@ -1926,6 +1926,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           const [onSleep] = args as [boolean]
           return { handled: true, value: encodeRuntimeValue(await cloudHandOffs.setOnSleep(onSleep)) }
         }
+        if (channel === "mako:handoff-away-held") return { handled: true, value: encodeRuntimeValue(heldConversations(late.awayNotes?.held() ?? [])) }
         if (channel === "mako:handoff-run-here") {
           // SAFETY: the dispatcher parsed this call's arguments with `mako:handoff-run-here`'s schema before routing it.
           const [conversationId] = args as [string]

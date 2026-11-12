@@ -486,6 +486,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     setHandOffOnSleep: (onSleep: boolean) => invokeTrustedHost<HandOffSettings>("mako:handoff-settings-set", onSleep),
     /** The Thread of a conversation held since this Mac went away runs here now, whatever the account did meanwhile; answers how many of its Sessions it let go. */
     runHandedOffHere: (conversationId: string) => invokeTrustedHost<number>("mako:handoff-run-here", conversationId),
+    /** The conversations whose Thread waits for the account's word since this Mac went away, as `away-held` says them. */
+    awayHeldConversations: () => invokeTrustedHost<string[]>("mako:handoff-away-held"),
     /** Whether this Mac is kept awake while agents work, the person's choice for it, and what's held now. */
     keepAwake: () => invokeTrustedHost<KeepAwakeState>("mako:keep-awake"),
     setKeepAwake: (change: Partial<KeepAwakeSettings>) => invokeTrustedHost<KeepAwakeState>("mako:keep-awake-set", change),

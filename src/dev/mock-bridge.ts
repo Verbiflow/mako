@@ -3222,6 +3222,7 @@ export function installMockBridge() {
       return { onSleep }
     },
     /** A Thread held for the account's word since this Mac went away runs here: nothing waits any more. */
+    awayHeldConversations: async (): Promise<string[]> => [],
     runHandedOffHere: async (): Promise<number> => {
       emit({ type: "away-held", conversations: [] })
       return 1
