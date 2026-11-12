@@ -287,6 +287,23 @@ function receipts(): void {
   threads.close()
 }
 
+/** A reader of placed rows keeps them while `placementVersion` holds: another write leaves it, a placement moves it. */
+function placementVersion(): void {
+  const threads = store("placement-version")
+  const placed = threads.resolveRefs([row("opencode", "pv-1", "/opencode/pv-1")], catalog).get("/opencode/pv-1")
+  assert.ok(placed)
+  const settled = threads.placementVersion()
+  const written = threads.version()
+  threads.renameThread({ operationId: randomUUID(), thread: placed.thread, title: "Parser", actor: threads.person() })
+  assert.notEqual(threads.version(), written, "a rename is a write")
+  assert.equal(threads.placementVersion(), settled, "but places nothing")
+  threads.resolveRefs([row("opencode", "pv-1", "/opencode/pv-1")], catalog)
+  assert.equal(threads.placementVersion(), settled, "a row placed already is the same placement")
+  threads.resolveRefs([row("opencode", "pv-2", "/opencode/pv-2")], catalog)
+  assert.notEqual(threads.placementVersion(), settled, "a new row's placement moves it")
+  threads.close()
+}
+
 function threadGroups(): void {
   const path = join(root, "groups.sqlite")
   const threads = new ThreadStore(path, { now })
@@ -561,6 +578,7 @@ try {
   handoffAndCatalogFirst()
   conflicts()
   receipts()
+  placementVersion()
   threadGroups()
   manyAtOnce()
   twoHosts()
