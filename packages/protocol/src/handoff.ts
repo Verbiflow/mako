@@ -12,8 +12,8 @@ import { ThreadIdSchema } from "./ids.js"
  *   acknowledged. It releases nothing: the device still owns every Session, and the account may continue one later,
  *   from that checkpoint, while the device stays quiet.
  * - `owner` (`POST /v1/devices/:deviceId/owner`): the device is back, and asks who owns each Session it holds before it
- *   runs any. The account answers each one `yours` (at a generation, which a give-back raised), `departed` (another
- *   owner took it, and the continue that did), or `unknown`.
+ *   runs any. The account answers each one `yours` (at the generation the account holds, the device's own, a
+ *   give-back included), `departed` (another owner took it, and the continue that did), or `unknown`.
  *
  * A Session's owner and generation are the account's one record (`ListedSession.runsOn`, `generation`): every change
  * of owner is a compare-and-set on it, so a continue and a device that came back can't both win.
@@ -69,8 +69,9 @@ export const OwnerAskSchema = z.object({ sessions: z.array(SessionAt).max(OWNER_
 export type OwnerAsk = z.infer<typeof OwnerAskSchema>
 
 /**
- * The account's word on one Session. `yours`: the device runs it, at `generation`, which is the device's own unless a
- * continue gave it back (then two on), and the device takes it. `departed`: another owner holds it, at `generation`;
+ * The account's word on one Session. `yours`: the device runs it, at `generation`, the device's own: a continue that
+ * gives it back restores the generation it had, so the device never takes one from the account. `departed`: another
+ * owner holds it, at `generation`;
  * `op` and `cloudThread` name the continue that took it, which the device joins and never runs it here. `unknown`:
  * the account never listed it.
  */
