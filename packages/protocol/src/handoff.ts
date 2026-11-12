@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { namedUuid } from "./continues.js"
 import { ThreadIdSchema } from "./ids.js"
-import { MoveCheckpointSchema } from "./moves.js"
+import { CarriedPathSchema, MoveCheckpointSchema } from "./moves.js"
 
 /**
  * A device going away and coming back, as its account hears it, so a Thread at work there goes on in the cloud with
@@ -53,12 +53,32 @@ export const ParkedTurnSchema = z.object({
 }).strict()
 export type ParkedTurn = z.infer<typeof ParkedTurnSchema>
 
+/** At most this many other repositories of a project folder in one Thread of a note: a project's limit, less its first. */
+export const QUIET_OTHERS_MAX = 31
+
+/**
+ * Another repository of a Thread's project folder, beside the first its cloud Thread is made for: where it sits in
+ * the Thread's folder (`path`, as the machine lays it out), the GitHub repository a machine clones it from, the branch,
+ * and the checkpoint of the Thread's own changes in it that the cloud acknowledged on the same standby as the first's.
+ * The arrival clones it when it isn't there and applies its checkpoint, all or nothing with the first, as a move's
+ * carry does (`MoveCarryRepositorySchema`).
+ */
+export const QuietRepositorySchema = z.object({
+  path: CarriedPathSchema,
+  url: z.string().regex(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+  branch: z.string().min(1).max(250).optional(),
+  checkpoint: MoveCheckpointSchema,
+}).strict()
+export type QuietRepository = z.infer<typeof QuietRepositorySchema>
+
 export const QuietThreadSchema = z.object({
   thread: ThreadIdSchema,
   sessions: z.array(SessionAt).min(1).max(OWNER_SESSIONS_MAX),
   checkpoint: AcknowledgedCheckpointSchema.optional(),
   /** The Thread's turns parked as the device went away, for the continue to send on; absent from devices before it. */
   parked: z.array(ParkedTurnSchema).max(PARKED_PER_THREAD_MAX).optional(),
+  /** The project folder's other repositories, each with its own checkpoint (`QuietRepository`); absent from devices before it. */
+  others: z.array(QuietRepositorySchema).max(QUIET_OTHERS_MAX).optional(),
 }).strict()
 export type QuietThread = z.infer<typeof QuietThreadSchema>
 

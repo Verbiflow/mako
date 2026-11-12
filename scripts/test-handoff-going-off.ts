@@ -2,14 +2,14 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
 import { randomBytes, randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { z } from "zod"
 import { Git } from "@mako/git"
 import { decodeOperation } from "@mako/protocol"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
-import type { MoveAnswer, MoveHandOverRequest } from "@mako/protocol/moves"
+import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest } from "@mako/protocol/moves"
 import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
 import { partition, shares, type JournalView } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
@@ -27,6 +27,7 @@ import { WorkspaceMoves } from "@mako/host/workspaces/moves"
 import { moveSource, ThreadWorktreeMoves } from "@mako/host/workspaces/thread-worktree-moves"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import type { MoveLedger } from "@mako/host/workspaces/worktree-move"
+import { applyMoveCheckpoint } from "@mako/host/workspaces/move-checkpoint"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -70,18 +71,25 @@ const script: Script = async (turn) => {
 /** What the stand-in cloud saw of each move: the hand-over's calls, in order, and its answer. */
 type Moved = { cloudThread: string; channels: string[]; continued: string[]; answer?: MoveAnswer }
 
-async function host(name: string, options: { readyNever?: boolean; unserved?: boolean; unanswered?: boolean; queueDuringNote?: boolean } = {}) {
+async function host(name: string, options: { readyNever?: boolean; unserved?: boolean; unanswered?: boolean; queueDuringNote?: boolean; repositories?: string[] } = {}) {
   const base = join(root, name)
   const project = join(base, "project")
   const remote = join(base, "remote.git")
   mkdirSync(base, { recursive: true })
-  sh(base, "init", "--bare", "--quiet", remote)
-  sh(base, "clone", "--quiet", remote, project)
-  writeFileSync(join(project, "app.ts"), "export const app = 1\n")
-  writeFileSync(join(project, "person.ts"), "export const person = 1\n")
-  sh(project, "add", ".")
-  sh(project, "commit", "--quiet", "-m", "base")
-  sh(project, "push", "--quiet", "origin", "main")
+  /** A repository: its remote, and a clone of it at `folder` holding app.ts and person.ts. */
+  const repository = (folder: string, bare: string) => {
+    sh(base, "init", "--bare", "--quiet", bare)
+    sh(base, "clone", "--quiet", bare, folder)
+    writeFileSync(join(folder, "app.ts"), "export const app = 1\n")
+    writeFileSync(join(folder, "person.ts"), "export const person = 1\n")
+    sh(folder, "add", ".")
+    sh(folder, "commit", "--quiet", "-m", "base")
+    sh(folder, "push", "--quiet", "origin", "main")
+  }
+  // A project folder of several repositories, each beside the others in it; else the project is one repository.
+  if (options.repositories) for (const each of options.repositories) repository(join(project, each), join(base, `${each}.git`))
+  else repository(project, remote)
+  const roots = options.repositories ? options.repositories.map((each) => join(project, each)) : [project]
 
   // As the host's: a request of a conversation whose Session waits for the account's word runs only once it's let go.
   const world: AgentsWorld = new AgentsWorld({
@@ -97,7 +105,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     { fs: nodeFileSystem(), events, clock, storage: join(base, "journal"), device: "going-off" },
     { repository: async (path) => gitRepository(git, path) },
   )
-  await tracker.track({ id: "project", path: project, kind: "workspace" })
+  for (const [index, each] of roots.entries()) await tracker.track({ id: index ? `project-${index}` : "project", path: each, kind: "workspace" })
   const view: JournalView = { store: tracker.store, roots: () => tracker.rootStates().values(), author: (seq) => tracker.authorOf(seq) }
   const ledger: MoveLedger = {
     settled: () => tracker.settled(),
@@ -196,9 +204,11 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
       return { ready: false }
     },
     askBases: async () => undefined,
-    sendCheckpoint: async (threadId, checkpoint) => {
+    sendCheckpoint: async (threadId, checkpoint, file) => {
       checkpoints.push(threadId)
       acknowledged.push({ threadId, sha256: checkpoint.sha256 })
+      // Kept as the cloud keeps it, by its hash, for a test to lay it over a clone.
+      copyFileSync(file, join(base, `bundle-${checkpoint.sha256}`))
       return { sent: true }
     },
     handOverMove: async (_threadId, move, request: MoveHandOverRequest) => {
@@ -249,7 +259,8 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     // As the host's `folderRepository` reads one: the origin's repository, and the branch there its branch tracks.
     repositoryOf: async (folder) => {
       const upstream = await git.output(folder, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).catch(() => "")
-      return { url: "https://github.com/octocat/Hello-World", ...upstream.startsWith("origin/") && { branch: upstream.slice("origin/".length) } }
+      const url = options.repositories ? `https://github.com/acme/${basename(await git.output(folder, ["rev-parse", "--show-toplevel"]).catch(() => folder))}` : "https://github.com/octocat/Hello-World"
+      return { url, ...upstream.startsWith("origin/") && { branch: upstream.slice("origin/".length) } }
     },
     sendRecords: async (_link, paths) => paths.map(() => ({ harness: "claude", nativeId: "n", versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1, holdings: {} })),
     cloud: {
@@ -305,6 +316,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     goingAway: {
       flush: (working, by) => readiness.flush(working, by),
       checkpoint: (thread) => readiness.noteCheckpoint(thread),
+      others: (thread) => readiness.noteOthers(thread),
       rows: async () => {
         rowReads += 1
         order.push("rows")
@@ -355,7 +367,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     await tracker.close?.()
   }
   const owner = (says: (ask: OwnerAsk) => OwnerAnswer) => (ownerSays = says)
-  return { listed, rowReads: () => rowReads, duringNote: () => ({ queued: queuedDuringNote, ran: ranDuringNote }), base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, awayNotes, owner, joined, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
+  return { roots, listed, rowReads: () => rowReads, duringNote: () => ({ queued: queuedDuringNote, ran: ranDuringNote }), base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, awayNotes, owner, joined, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
 }
 
 type Host = Awaited<ReturnType<typeof host>>
@@ -551,6 +563,43 @@ try {
     await h.close()
   }
 
+  // A Thread in a project folder of two repositories that changed both, beside the person's edit in one: the note names
+  // the first's checkpoint and the other's, each with the Thread's change in its own repository and never the person's.
+  {
+    const h = await host("two-repositories", { repositories: ["api", "web"] })
+    const [api, web] = h.roots
+    assert.ok(api && web, "both repositories")
+    const id = await h.thread("codex", "Both sides")
+    await h.personWrites(join(api, "person.ts"), "export const person = 2 // the person's, uncommitted\n")
+    const turn = await h.working(id)
+    await h.agentWrites(id, turn, join(api, "own.ts"), "export const api = 1 // the agent's\n")
+    await h.agentWrites(id, turn, join(web, "own.ts"), "export const web = 1 // the agent's\n")
+    h.listed.add(id)
+    await h.readiness.refresh()
+    await sleeps(h, 20_000)
+    const note = h.notes.at(-1)!
+    const named = note.threads.find((each) => each.thread === h.world.store.journalPlacement(id)!.thread)!
+    assert.ok(named.checkpoint, "the first repository's checkpoint")
+    assert.equal(named.others?.length, 1, "and the other's beside it")
+    const other = named.others![0]!
+    assert.equal(other.url, "https://github.com/acme/web")
+    assert.ok(other.path.endsWith("/web") && !other.path.startsWith(h.project), "laid out where its worktree would be, not the project folder")
+    /** A checkpoint laid over a fresh clone of its repository's remote, as a machine's arrival does. */
+    const laid = async (bare: string, checkpoint: MoveCheckpoint, name: string) => {
+      const clone = join(h.base, `machine-${name}`)
+      sh(h.base, "clone", "--quiet", bare, clone)
+      await applyMoveCheckpoint(git, clone, join(h.base, `bundle-${checkpoint.sha256}`), checkpoint)
+      return (path: string) => (existsSync(join(clone, path)) ? readFileSync(join(clone, path), "utf8") : null)
+    }
+    const { standby: _standby, ...first } = named.checkpoint
+    const onApi = await laid(join(h.base, "api.git"), first, "api")
+    assert.equal(onApi("own.ts"), "export const api = 1 // the agent's\n", "the Thread's change in the first repository")
+    assert.equal(onApi("person.ts"), "export const person = 1\n", "never the person's")
+    const onWeb = await laid(join(h.base, "web.git"), other.checkpoint, "web")
+    assert.equal(onWeb("own.ts"), "export const web = 1 // the agent's\n", "the Thread's change in the other repository")
+    await h.close()
+  }
+
   // A Session the account doesn't list as this Mac's: its Thread is left out of the note, not refused whole.
   {
     const h = await host("unlisted")
@@ -614,7 +663,8 @@ try {
     const planned = await h.worktrees.plannedCheckout(randomUUID(), folder, "Both sides")
     assert.ok(planned && !existsSync(planned.folder), "named, with nothing made")
     assert.equal(planned.repository, realpathSync(join(folder, "api")), "the first repository by its worktree's path")
-    assert.deepEqual([...planned.repositories].sort(), [realpathSync(join(folder, "api")), realpathSync(join(folder, "web"))], "both repositories, for each one's own checkpoint")
+    assert.deepEqual(planned.repositories.map((each) => each.root).sort(), [realpathSync(join(folder, "api")), realpathSync(join(folder, "web"))], "both repositories, for each one's own checkpoint")
+    assert.ok(planned.repositories.every((each) => each.folder.startsWith(dirname(planned.folder))), "each with the folder its worktree would have")
     await h.worktrees.prepareFork(randomUUID(), randomUUID(), folder, "Both sides")
     assert.ok(existsSync(join(planned.folder, ".git")), "the move makes that very worktree")
     assert.equal(sh(planned.folder, "symbolic-ref", "--short", "HEAD"), planned.branch, "on the branch named ahead, which a checkpoint carries")

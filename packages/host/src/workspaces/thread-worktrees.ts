@@ -315,8 +315,8 @@ export interface PlannedCheckout {
   repository: string
   /** The branch the worktree would be on, in every repository. */
   branch: string
-  /** Every repository of the main checkout the Thread works in: one, or a project folder's. */
-  repositories: string[]
+  /** Every repository of the main checkout the Thread works in (one, or a project folder's), and the folder its worktree would have. */
+  repositories: Array<{ root: string; folder: string }>
 }
 
 export class ThreadWorktreeService {
@@ -483,7 +483,7 @@ export class ThreadWorktreeService {
     const path = join(parent, slug)
     const roots = found.roots.map((root) => ({ root, folder: repoRoot ? path : join(path, relative(source, root)) })).sort((left, right) => left.folder.localeCompare(right.folder))
     const [first] = roots
-    return first && { folder: first.folder, repository: first.root, branch: `${BRANCH_PREFIX}${slug}`, repositories: roots.map((each) => each.root) }
+    return first && { folder: first.folder, repository: first.root, branch: `${BRANCH_PREFIX}${slug}`, repositories: roots.map(({ root, folder }) => ({ root, folder })) }
   }
 
   /**

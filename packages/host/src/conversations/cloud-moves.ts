@@ -486,7 +486,8 @@ export class CloudMoves {
       const planned = await this.#options.planned(conversationId)
       if (!planned) throw new Error("The worktree its own branch would have can't be named now, so it isn't kept ready.")
       const { url } = await this.#options.repositoryOf(planned.repository)
-      const repositories = planned.repositories.map((root) => ({ root, branch: planned.branch }))
+      // Each repository with where its worktree would be and its GitHub repository: a going-away names the others so.
+      const repositories = await Promise.all(planned.repositories.map(async ({ root, folder }) => ({ root, folder, branch: planned.branch, url: (await this.#options.repositoryOf(root)).url })))
       return { thread: weighed.thread, folder: planned.folder, repository: { url }, paths: weighed.sessions.map((session) => session.path), harness: weighed.sessions[0]?.harness ?? "", planned: true, repositories }
     }
     const plan = await this.#plan(conversationId, MoveIdSchema.parse(randomUUID()), { why: "asked" })

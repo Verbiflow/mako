@@ -3,6 +3,7 @@ import { dirname, join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
 import { MoveCheckpointSchema, type MoveCheckpoint } from "@mako/protocol/moves"
+import type { QuietRepository } from "@mako/protocol/handoff"
 import { withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -49,6 +50,9 @@ const AcknowledgedSchema = z.object({
   left: z.array(z.object({ path: z.string(), why: z.string() })),
   /** Each file the checkpoint holds of the Thread's, by content address, null for one it deleted (`ThreadCheckpoint.versions`). */
   versions: z.array(z.object({ path: z.string(), ref: z.string().nullable() })).optional(),
+  /** Where it sits in the Thread's folder, as the machine lays it out, and its GitHub repository: a going-away names the others so. */
+  folder: z.string().optional(),
+  url: z.string().optional(),
   at: z.number(),
 })
 export type Acknowledged = z.infer<typeof AcknowledgedSchema>
@@ -80,7 +84,7 @@ export type TakenReady = { cloudThread: string; checkpoint?: string }
 /** What a move of a Thread would carry, read as its plan reads it: refused when it couldn't move. */
 /** `planned`: a Thread in the main checkout, kept ready at the worktree its move would make, which isn't there yet. */
 /** `repositories`: with `planned`, the main checkout's repositories it works in and the branch its move would make. */
-export type ReadyPlan = { thread: string; folder: string; repository: CloudRepository; paths: string[]; harness: string; planned?: true; repositories?: { root: string; branch: string }[] }
+export type ReadyPlan = { thread: string; folder: string; repository: CloudRepository; paths: string[]; harness: string; planned?: true; repositories?: { root: string; branch: string; folder?: string; url?: string }[] }
 
 /**
  * The record of changes as readiness reads it. The host's: `heard` and `settled` are both the journal's `heard` (what
@@ -272,6 +276,19 @@ export class CloudReadiness {
     return whole && { ...whole, standby: entry.cloudThread }
   }
 
+  /**
+   * The other repositories a going-away names for a Thread in a project folder: each but the first with the checkpoint
+   * the cloud acknowledged of it, where it sits in the Thread's folder and its GitHub repository. One without a place or
+   * a GitHub repository can't be laid out on a machine, so it isn't named; its changes stay here.
+   */
+  async noteOthers(thread: string): Promise<QuietRepository[]> {
+    const entry = (await this.#load())[thread]
+    return (entry?.acknowledged ?? []).slice(1).flatMap((each) => {
+      const url = each.url && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(each.url) ? each.url : undefined
+      return each.folder && url ? [{ path: each.folder, url, ...each.checkpoint.branch && { branch: each.checkpoint.branch }, checkpoint: each.checkpoint }] : []
+    })
+  }
+
   /** What the cloud acknowledged of a Thread in the main checkout, by repository, for its going-away to name. */
   async acknowledged(thread: string): Promise<{ cloudThread: string; acknowledged: Acknowledged[] } | undefined> {
     await this.#rounds.get(thread)?.catch(() => undefined)
@@ -421,7 +438,7 @@ export class CloudReadiness {
     const fingerprints = new Map<string, string>()
     let sent: string | undefined
     const acknowledged = [...entry.acknowledged ?? []]
-    for (const { root, branch } of plan.repositories) {
+    for (const { root, branch, folder, url } of plan.repositories) {
       const partition = await ledger.partition(root, thread)
       const fingerprint = `${branch}\n${threadFingerprint(ledger.head(root), partition, root)}`
       const kept = acknowledged.findIndex((each) => each.root === root)
@@ -436,7 +453,7 @@ export class CloudReadiness {
         const taken = await capture({ git: this.#options.git, ledger, thread, repoRoot: root, branch, folder: scratch, partition })
         if (kept < 0 || acknowledged[kept]!.checkpoint.sha256 !== taken.checkpoint.sha256) {
           await account.sendCheckpoint(entry.cloudThread, taken.checkpoint, taken.file)
-          const now: Acknowledged = { root, checkpoint: taken.checkpoint, unpushed: taken.unpushed, left: taken.left, versions: taken.versions, at: Date.now() }
+          const now: Acknowledged = { root, checkpoint: taken.checkpoint, unpushed: taken.unpushed, left: taken.left, versions: taken.versions, ...folder && { folder }, ...url && { url }, at: Date.now() }
           if (kept >= 0) acknowledged[kept] = now
           else acknowledged.push(now)
           entry.acknowledged = acknowledged

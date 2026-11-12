@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { z } from "zod"
-import { PARKED_PER_THREAD_MAX, QUIET_THREADS_MAX, type AcknowledgedCheckpoint, type QuietAnswer, type QuietNote, type QuietRefusal, type QuietThread } from "@mako/protocol/handoff"
+import { PARKED_PER_THREAD_MAX, QUIET_OTHERS_MAX, QUIET_THREADS_MAX, type QuietRepository, type AcknowledgedCheckpoint, type QuietAnswer, type QuietNote, type QuietRefusal, type QuietThread } from "@mako/protocol/handoff"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { goesOff, SHUTDOWN_HOLD_MS, type HandOffCandidate, type HandOffResult, type HandOffSettings, type ThreadHandOff, type ThreadMoveOutcome } from "../contracts/cloud-threads.js"
@@ -40,6 +40,8 @@ export type CloudHandOffsOptions = {
   goingAway?: {
     flush(working: WorkingThread[], by: number): Promise<void>
     checkpoint(thread: string): Promise<AcknowledgedCheckpoint | undefined>
+    /** A project folder's other repositories, each with its acknowledged checkpoint (`CloudReadiness.noteOthers`). */
+    others?(thread: string): Promise<QuietRepository[]>
     quiet(note: QuietNote): Promise<QuietAnswer | "unserved">
     /**
      * These Sessions wait for the account's word from now (`AwayNotes.noted`): every one paused, as soon as it is, so no
@@ -185,8 +187,10 @@ export class CloudHandOffs {
       const listed = rows ? each.gone.sessions.filter((session) => rows.has(session.session)) : each.gone.sessions
       if (!listed.length) continue
       const checkpoint = await goingAway.checkpoint(each.gone.thread)
+      // The others only beside the first's: their arrival is laid over the first's, all or nothing.
+      const others = checkpoint ? ((await goingAway.others?.(each.gone.thread)) ?? []).slice(0, QUIET_OTHERS_MAX) : []
       const parked = each.gone.parked.slice(0, PARKED_PER_THREAD_MAX).map(({ stopped, ...turn }) => ({ ...turn, ...stopped.length && { stopped } }))
-      threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint } })
+      threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint }, ...others.length && { others } })
     }
     const note: QuietNote = { note: handOff, reason: why, at: Date.now(), threads: threads.slice(0, QUIET_THREADS_MAX) }
     let heard: NoteHeard
