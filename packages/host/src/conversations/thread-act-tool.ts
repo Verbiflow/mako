@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { machineCall, NOT_THE_PERSON } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentAskWant } from "../contracts/agent-asks.js"
@@ -69,6 +70,7 @@ export class ThreadActTool {
 }
 
 /** `mako:threads-act`. */
-export function declareThreadActMethods(methods: MethodTable, tool: () => ThreadActTool | undefined): void {
-  methods.handle("mako:threads-act", (caller: AgentCaller, input: ThreadActInput) => tool()?.act(caller, input) ?? { refused: "unavailable", why: "This host doesn't act on Threads." })
+export function declareThreadActMethods(methods: MethodTable, tool: () => Pick<ThreadActTool, "act"> | undefined): void {
+  methods.handle("mako:threads-act", (caller: AgentCaller, input: ThreadActInput) =>
+    caller.kind === "person" && machineCall() ? { refused: "not-yours" as const, why: NOT_THE_PERSON } : tool()?.act(caller, input) ?? { refused: "unavailable", why: "This host doesn't act on Threads." })
 }

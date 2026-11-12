@@ -32,7 +32,8 @@ import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_L
 import { attribute, authorOf, claim, Evidence, LEAD_MS, reaches as reachesChange, TRAIL_MS, type Interval, type ObservedChange, type Reach } from "./evidence.js"
 import { WorkingSets } from "./working-set.js"
 import { StatCache } from "./stat-cache.js"
-import { JournalStore, wholeChange, type FileState, type Recency, type StatRow, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
+import { collectPlanOffThread, JournalReader } from "./journal-reader.js"
+import { JournalStore, wholeChange, type FileState, type Recency, type StatRow, type ActivityKey, type Collected, type Row, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
 import { diffLines, splitLines } from "./line-diff.js"
 import { applyHunks, BASE, baseMap, onlyBase, presentLines, presentRuns, rebase, UNKNOWN, withKnownWriters, withWriter, writers, type Run } from "./line-map.js"
 import { FootprintReader, type FootprintOptions } from "./footprint-reader.js"
@@ -156,6 +157,10 @@ const RESCAN_MAX_MS = 10 * 60_000
 const RESCAN_QUIET_MS = 15 * 60_000
 /** After each rescan, any root's next waits this many times as long as it ran: rescans take at most a twentieth of the time. */
 const RESCAN_REST = 19
+/** Blobs dropped in one transaction of a collection: the owner's other writes wait no longer than that. */
+const COLLECT_BATCH = 200
+/** Rows of activity scanned at once for what changed in a gap: about 15 ms on a journal the size of the person's. */
+const ACTIVITY_PAGE = 2_000
 /** How many times `whatWasHeard` journals what flushing turned up (a folder that came stands for its files) before it answers. */
 const HEARD_PASSES = 3
 /** Spacing past which a root is reported as rescanned less often because its losses keep coming. */
@@ -300,6 +305,8 @@ const GIT_HEAD = /^\.git\/(HEAD|index|packed-refs|ORIG_HEAD|logs\/HEAD|refs\/hea
  */
 export class LaptopTracker implements AttributionTracker {
   readonly store: JournalStore
+  /** Reads too big for this thread, on a worker of their own. */
+  private readonly reader: JournalReader
   private readonly ports: TrackerPorts
   private readonly options: TrackerOptions
   private readonly states = new Map<string, RootState>()
@@ -341,6 +348,7 @@ export class LaptopTracker implements AttributionTracker {
     this.ports = ports
     this.options = options
     this.store = store
+    this.reader = new JournalReader(store.path)
     this.evidence = new Evidence(new WorkingSets((thread) => store.activityOfThread(thread)))
     this.seq = store.lastSeq()
     if (options.footprint)
@@ -1008,8 +1016,10 @@ export class LaptopTracker implements AttributionTracker {
     started = performance.now()
     const at = this.now()
     let slowest = 0
-    // Changes found after lost events could have happened any time in the gap, which memory may no longer hold.
-    const gapEvidence = state.gap && prepared.some(({ how }) => how !== "event") ? evidenceOf(this.store.activityBetween(state.gap.from - TRAIL_MS, at), this.evidence.worked) : undefined
+    // Changes found after lost events could have happened any time in the gap, which memory may no longer hold: the
+    // journal's activity is read for the stretch they could have happened in, a page at a time between other work.
+    const lostFrom = state.gap ? this.lostFrom(state, prepared, renamed, at) : undefined
+    const gapEvidence = lostFrom !== undefined ? evidenceOf(await this.activityOverlapping(lostFrom - TRAIL_MS, at), this.evidence.worked) : undefined
     // A burst (a build's output, a copied folder) is journaled a slice at a time: each change is attributed as it's recorded.
     const slice = new Slice(this.slicing)
     try {
@@ -1047,6 +1057,61 @@ export class LaptopTracker implements AttributionTracker {
     this.scheduleSettle()
     // A change proved as it was recorded can make a later one there someone else's.
     this.reattribute()
+  }
+
+  /**
+   * The earliest a change found after lost events could have happened, of those `record` will attribute: a file
+   * whose content changed (or that moved), found by a rescan rather than heard. Each is attributed only by the
+   * activity overlapping its own lost span (`lostSpan`, bounded by its modification time) and its own time, so
+   * reading the whole gap's activity, days of it after a long one, read nothing more: on the person's journal
+   * (175,857 calls and turns) it held the host's loop for 2.7 s. Undefined when none needs it.
+   */
+  private lostFrom(state: RootState, prepared: readonly { item: Observed; how: ObservedBy; before: { ref: ContentRef | null } }[], renamed: ReadonlyMap<string, string>, at: number): number | undefined {
+    const gap = state.gap
+    if (!gap) return undefined
+    let earliest: number | undefined
+    for (const { item, how, before } of prepared) {
+      if (how === "event") continue
+      const from = renamed.get(item.path)
+      if (!from && before.ref === (item.kind === "file" ? item.ref : null)) continue
+      const written = item.stat && !from ? millis(item.stat.mtimeNs) : undefined
+      const span = lostSpan(gap.from, at, written)
+      // Content from before the gap is put on nobody by its timing.
+      if (span === "before") continue
+      const changedAt = written === undefined ? at : Math.min(at, Math.max(at - SETTLE_MS - this.lateMs(), written))
+      earliest = Math.min(earliest ?? Infinity, span.from, changedAt)
+    }
+    return earliest
+  }
+
+  /**
+   * The journal's activity overlapping `[from, to]`, read by the journal's reader off this thread, then parsed a page
+   * at a time. Where the reader can't (it failed, or took too long), found and read here a page at a time instead.
+   */
+  private async activityOverlapping(from: number, to: number): Promise<StoredActivity[]> {
+    let rows: readonly Row[] | undefined
+    try {
+      rows = await this.reader.activityOverlapping(from, to)
+    } catch (error) {
+      this.log("the journal's reader couldn't read; reading here", { error: error instanceof Error ? error.message : String(error) })
+    }
+    const found: StoredActivity[] = []
+    if (rows) {
+      for (let first = 0; first < rows.length; first += ACTIVITY_PAGE) {
+        if (first) await new Promise<void>((resolve) => setImmediate(resolve))
+        found.push(...this.store.activityOfRows(rows.slice(first, first + ACTIVITY_PAGE)))
+      }
+      return found
+    }
+    let after: ActivityKey | undefined
+    for (;;) {
+      const page = this.store.activityTimes(after, ACTIVITY_PAGE)
+      const overlapping = page.filter((item) => item.start <= to && (item.end === null || item.end >= from))
+      if (overlapping.length) found.push(...this.store.activityOfKeys(overlapping))
+      if (page.length < ACTIVITY_PAGE) return found
+      after = page.at(-1)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
   }
 
   /** The paths not inside a repository nested in this root (a submodule): those are its files, not this root's. */
@@ -1332,6 +1397,16 @@ export class LaptopTracker implements AttributionTracker {
         this.store.saveFile(next)
       }
     }
+    // The contents the transaction reads, read off this thread first: on a big journal each read waits on the disk.
+    const wanted: ContentRef[] = []
+    for (const path of paths) {
+      const file = state.files.get(path)
+      const row = state.stats.get(path)
+      if (file) wanted.push(...[file.current, file.base].filter((ref): ref is ContentRef => Boolean(ref)))
+      else if (row?.ref) wanted.push(row.ref)
+    }
+    const fetched = await this.reader.blobs(wanted).catch(() => new Map<string, Uint8Array>())
+    const blob = (ref: ContentRef) => fetched.get(ref) ?? this.store.blob(ref)
     let landed = 0
     this.store.transaction(() => {
       for (const path of paths) {
@@ -1361,7 +1436,7 @@ export class LaptopTracker implements AttributionTracker {
         if (!file) {
           if (!row) continue
           // A clean file's content is the commit it was clean against; pin it before the base moves.
-          const old = row.ref ? this.store.blob(row.ref) : earlier.get(path)
+          const old = row.ref ? blob(row.ref) : earlier.get(path)
           const current = row.ref ?? keep(path, old)
           if (current === ref) continue
           if (current !== row.ref) {
@@ -1374,8 +1449,8 @@ export class LaptopTracker implements AttributionTracker {
           save({ root: root.id, path, base: ref, baseSeq: this.seq, current, text, map })
           continue
         }
-        const current = file.current ? this.store.blob(file.current) : undefined
-        const before = file.base ? this.store.blob(file.base) : new Uint8Array()
+        const current = file.current ? blob(file.current) : undefined
+        const before = file.base ? blob(file.base) : new Uint8Array()
         // A file the commit doesn't have (one Git doesn't track yet, or whose deletion the disk didn't take) rebases onto nothing: every line it has stays uncommitted.
         if (file.text && current && before && (!bytes || isText(bytes))) {
           const known = file.base ? this.store.committedAuthors(root.id, path, file.base) : undefined
@@ -2054,6 +2129,33 @@ export class LaptopTracker implements AttributionTracker {
     return this.store.collect(this.now() - retention, this.options.budgetBytes ?? 2 * 1024 ** 3)
   }
 
+  /**
+   * `collect`, its reading on a worker with a connection of its own and its deletes here a batch at a time, leaving
+   * this thread free: what this connection writes meanwhile is kept whatever the reading found. At most
+   * `COLLECT_MOST` blobs a pass.
+   */
+  async collectOffThread(): Promise<Collected & { ms: number }> {
+    const started = performance.now()
+    const retainAfter = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
+    this.store.touching()
+    try {
+      const plan = await collectPlanOffThread(this.store.path, retainAfter, this.options.budgetBytes ?? 2 * 1024 ** 3)
+      let dropped = 0
+      let bytes = 0
+      for (let first = 0; first < plan.refs.length && !this.closed; first += COLLECT_BATCH) {
+        if (first) await new Promise<void>((resolve) => setImmediate(resolve))
+        const batch = this.store.dropPlanned(plan.refs.slice(first, first + COLLECT_BATCH))
+        dropped += batch.dropped
+        bytes += batch.bytes
+      }
+      if (!this.closed) this.store.dropOld(retainAfter)
+      return { dropped, bytes, ms: Math.round(performance.now() - started) }
+    } finally {
+      this.store.untouched()
+    }
+  }
+
+
   private flushed(flush: Flush): void {
     this.flushes.push(flush)
     if (this.flushes.length > 200) this.flushes.shift()
@@ -2089,6 +2191,7 @@ export class LaptopTracker implements AttributionTracker {
     await this.settled()
     this.closed = true
     this.footprints?.close()
+    this.reader.close()
     clearTimeout(this.settleTimer)
     for (const state of this.states.values()) this.unlisten(state)
     await Promise.all([...this.states.values()].map((state) => state.chain))

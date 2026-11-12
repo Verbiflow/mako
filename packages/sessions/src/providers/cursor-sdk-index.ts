@@ -481,6 +481,26 @@ export function readCursorSdkAgent(
   }
 }
 
+/**
+ * The root an agent's next turn continues from (`latest_checkpoint_ref_json`), by its primary key alone: null when the
+ * index has no such agent, `{}` before its first turn ends. `readCursorSdkAgent` lists every run with it, which a
+ * turn's end on the host's thread can't afford on an index of millions of events.
+ */
+export function readCursorSdkAgentRoot(stores: NativeStores, indexPath: string, agentId: string): { rootId?: string } | null {
+  const database = openReadOnly(stores, indexPath)
+  if (!database) return null
+  try {
+    const agent = database.prepare("SELECT latest_checkpoint_ref_json FROM agents WHERE agent_id = ?").get(agentId)
+    if (!agent) return null
+    const rootId = checkpointBlobId(text(agent["latest_checkpoint_ref_json"]))
+    return rootId ? { rootId } : {}
+  } catch {
+    return null
+  } finally {
+    database.close()
+  }
+}
+
 /** What the index says about one agent, reduced to a comparable stamp. */
 export interface CursorSdkAgentStamp {
   revision: string

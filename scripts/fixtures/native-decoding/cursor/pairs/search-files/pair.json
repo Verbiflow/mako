@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.2.0"
+    "version": "1.3.1"
   },
   "about": "Without the shell, use your file search tools to find the Markdown files in this project, then search them for the word Friday and tell me which ones mention it. A file search matching in two files of three, one in a subdirectory, then the answer naming them.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-d148c1abd5251909a61ee2acd66d9e2b14cff921b53a68fa7488f73e91a0a8a7/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-53b80a550721e6eca9c575d755b0af4cc3437b0e853b7146f05a1528e0f3137f/store.db",
       "known": []
     }
   ]

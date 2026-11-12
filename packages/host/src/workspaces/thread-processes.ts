@@ -277,6 +277,11 @@ export interface ThreadProcessDependencies {
   containers?: () => Promise<ContainerLook | undefined>
   /** How long a stopped process has after SIGTERM before SIGKILL; `STOP_GRACE_MS` without it. */
   stopGraceMs?: number
+  /**
+   * `ps`'s output for the looks that only show or measure (`sharedProcessTable`), read off the host's loop
+   * (`childProcessTable`); without it, or when it fails, the table is read here.
+   */
+  readTable?: () => Promise<string>
   now?: () => number
 }
 
@@ -322,6 +327,7 @@ export class ThreadProcesses {
   private sharedOverview: { at: number; apps: Promise<AppOverview[]> } | undefined
   private readonly containers: () => Promise<ContainerLook | undefined>
   private readonly exitListeners = new Set<(app: AppKey, key: string) => void>()
+  private readonly changeListeners = new Set<() => void>()
   /** By `runTag`: a run's process that SIGKILL didn't end (`unending`). */
   private readonly unended = new Map<string, string>()
   /** By `runTag`: runs being stopped, whose detached children end with them, with every process seen to be theirs (`stopTree`). */
@@ -370,6 +376,12 @@ export class ThreadProcesses {
       await this.save(app, runs)
     })
     return { started, refused }
+  }
+
+  /** Hears that this host started or signalled a process, or changed a run's record: a look now would see something new. */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener)
+    return () => this.changeListeners.delete(listener)
   }
 
   /** Hears each run this host started once its whole process tree is gone, as soon as it can tell: a build slot it held goes then. */
@@ -829,7 +841,8 @@ export class ThreadProcesses {
   private sharedProcessTable(): Promise<Row[]> {
     const known = this.sharedTable
     if (known && performance.now() - known.at < SHARED_TABLE_MS) return known.rows
-    const shared = { at: performance.now(), rows: processTable() }
+    const read = this.dependencies.readTable
+    const shared = { at: performance.now(), rows: read ? read().then(parseTable, () => processTable()) : processTable() }
     this.sharedTable = shared
     shared.rows.catch(() => {
       if (this.sharedTable === shared) this.sharedTable = undefined
@@ -847,6 +860,7 @@ export class ThreadProcesses {
   private tableChanged(): void {
     this.sharedTable = undefined
     this.sharedOverview = undefined
+    for (const listener of this.changeListeners) listener()
   }
 
   private async measure(): Promise<MemoryLook> {
@@ -1296,6 +1310,8 @@ export class ThreadProcesses {
     const temporary = `${path}.${process.pid}.tmp`
     await writeFile(temporary, JSON.stringify({ runs }, null, 2), { mode: 0o600 })
     await rename(temporary, path)
+    this.sharedOverview = undefined
+    for (const listener of this.changeListeners) listener()
   }
 
   /** One change at a time per app, across every host on this Mac. */
@@ -1410,6 +1426,11 @@ async function processTable(): Promise<Row[]> {
     env: { ...process.env, LC_ALL: "C" },
     maxBuffer: PROCESS_TABLE_BYTES,
   })
+  return parseTable(stdout)
+}
+
+/** `ps -A -o pid=,ppid=,pgid=,rss=,lstart=,command=` read in the C locale, as rows. */
+function parseTable(stdout: string): Row[] {
   const rows: Row[] = []
   for (const line of stdout.split("\n")) {
     const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s*(.*)$/.exec(line)

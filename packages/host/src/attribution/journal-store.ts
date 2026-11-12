@@ -189,6 +189,7 @@ const ActivityRow = z.object({
   // A journal opened read-only from before these columns has neither.
   status: CallStatusSchema.nullable().optional(), run: z.string().nullable().optional(),
 })
+const ActivityTimesRow = z.object({ session: z.string(), kind: z.enum(["turn", "call", "background"]), id: z.string(), started_at: z.number(), ended_at: z.number().nullable() })
 const Count = z.object({ count: z.number() })
 const ThreadChangeRow = z.object({ seq: z.number(), moved: z.number() })
 const ChangeSeqRow = z.object({ change_seq: z.number() })
@@ -245,6 +246,13 @@ const CarriedActivityRow = z.object({
 })
 const CarriedPathRow = z.object({ journal: z.string(), kind: z.enum(["write", "name"]), seq: z.number(), at: z.number(), path: z.string(), to_path: z.string().nullable() })
 const Size = z.object({ bytes: z.number().nullable(), count: z.number() })
+
+/** A call's, turn's or background work's key in the journal. */
+export interface ActivityKey {
+  session: string
+  kind: StoredActivity["kind"]
+  id: string
+}
 
 export interface StoredActivity {
   kind: "turn" | "call" | "background"
@@ -389,6 +397,63 @@ function lineAuthors(row: z.infer<typeof BlobRow> | undefined): Int32Array | und
  */
 export const JOURNAL_FORMAT = createHash("sha256").update(`${SCHEMA_VERSION}\n${MIGRATION}\n${JSON.stringify(ADDED_COLUMNS)}`).digest("hex").slice(0, 16)
 
+/** At most this many blobs go in one pass collected off the host's thread: the rest go on the next. */
+export const COLLECT_MOST = 20_000
+
+/** Blobs a pass of collection drops, oldest first, and what the store held before it. */
+export interface CollectPlan {
+  refs: { ref: string; bytes: number }[]
+  before: { count: number; bytes: number }
+}
+
+/**
+ * Which kept content `JournalStore.collect` drops, read in one transaction on any connection to the journal, a
+ * read-only one included (a worker's): blobs behind no uncommitted line and no entry younger than `retainAfter`,
+ * then, while the store is past `budget` bytes, the oldest of the younger ones. At most `most`.
+ */
+export function collectPlan(db: DatabaseSync, retainAfter: number, budget: number, most = Infinity): CollectPlan {
+  const size = () => {
+    const row = Size.parse(db.prepare("SELECT sum(length(data)) AS bytes, count(*) AS count FROM blobs").get())
+    return { count: row.count, bytes: row.bytes ?? 0 }
+  }
+  // One snapshot throughout; inside a caller's transaction, that one.
+  const own = !db.isTransaction
+  if (own) db.exec("BEGIN")
+  try {
+    const before = size()
+    db.exec(`CREATE TEMP TABLE IF NOT EXISTS live_refs (ref TEXT PRIMARY KEY) WITHOUT ROWID; DELETE FROM live_refs; INSERT OR IGNORE INTO live_refs ${LIVE_REFS};`)
+    const limit = Number.isFinite(most) ? most : -1
+    const refs = db.prepare(`SELECT ref, length(data) AS bytes FROM blobs WHERE ref NOT IN (SELECT ref FROM live_refs) AND ref NOT IN (
+      SELECT before FROM entries WHERE at >= ?1 AND before IS NOT NULL UNION SELECT after FROM entries WHERE at >= ?1 AND after IS NOT NULL) ORDER BY at LIMIT ?2`)
+      .all(retainAfter, limit).map((row) => RefBytes.parse(row))
+    let left = before.bytes - refs.reduce((sum, item) => sum + item.bytes, 0)
+    if (left > budget && refs.length < (Number.isFinite(most) ? most : Infinity)) {
+      const doomed = new Set(refs.map((item) => item.ref))
+      for (const value of db.prepare("SELECT ref, length(data) AS bytes FROM blobs WHERE ref NOT IN (SELECT ref FROM live_refs) ORDER BY at").iterate()) {
+        if (left <= budget || refs.length >= most) break
+        const row = RefBytes.parse(value)
+        if (doomed.has(row.ref)) continue
+        refs.push(row)
+        left -= row.bytes
+      }
+    }
+    return { refs, before }
+  } finally {
+    if (own) db.exec("ROLLBACK")
+  }
+}
+
+/** Content behind an uncommitted line: never collected. */
+const LIVE_REFS = `SELECT base FROM files WHERE base IS NOT NULL UNION SELECT current FROM files WHERE current IS NOT NULL
+    UNION SELECT e.before FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.before IS NOT NULL
+    UNION SELECT e.after FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.after IS NOT NULL
+    UNION SELECT ref FROM stats WHERE ref IS NOT NULL`
+/** The same, without the stat cache's (a million rows): what a drop checks again, the stat cache's being in `touched`. */
+const LIVE_FILE_REFS = `SELECT base FROM files WHERE base IS NOT NULL UNION SELECT current FROM files WHERE current IS NOT NULL
+    UNION SELECT e.before FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.before IS NOT NULL
+    UNION SELECT e.after FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.after IS NOT NULL`
+const RefBytes = z.object({ ref: z.string(), bytes: z.number() })
+
 /**
  * What changed for each Thread, kept by triggers so every writer is counted, a host of another build and a bulk update
  * alike. Not in `MIGRATION`: the shared journal's folder is named for that (`SHARED_FORMAT`), so a change there would
@@ -452,7 +517,8 @@ export interface ThreadVersion {
 }
 
 /** A row as SQLite returns it, before its schema reads it. */
-type Row = Record<string, SQLOutputValue>
+/** A row as SQLite gives it, here or on another connection (a worker's). */
+export type Row = Record<string, SQLOutputValue>
 
 /** Content kept by address: how many versions, and their compressed bytes. */
 export interface BlobSize {
@@ -471,6 +537,8 @@ export interface JournalCounts {
 
 export class JournalStore {
   readonly path: string
+  /** Refs written while a collection planned off this connection runs (`touching`). */
+  private touched: Set<string> | undefined
   readonly id: string
   readonly device: string
   private readonly db: DatabaseSync
@@ -553,6 +621,7 @@ export class JournalStore {
   }
 
   insertEntry(entry: Omit<StoredEntry, "seq">): number {
+    if (this.touched) for (const ref of [entry.before, entry.after]) if (ref) this.touched.add(ref)
     const named = "author" in entry.author ? entry.author.author : null
     const result = this.statement(`INSERT INTO entries (at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores,
       certainty, thread, session, turn, author, settled, git, map) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -754,6 +823,7 @@ export class JournalStore {
   }
 
   saveFile(state: FileState): void {
+    if (this.touched) for (const ref of [state.base, state.current]) if (ref) this.touched.add(ref)
     this.statement("INSERT OR REPLACE INTO files (root, path, base, base_seq, current, text, map) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(state.root, state.path, state.base, state.baseSeq, state.current, state.text ? 1 : 0, encodeMap(state.map))
   }
@@ -777,6 +847,7 @@ export class JournalStore {
   }
 
   saveStat(root: string, path: string, row: StatRow): void {
+    if (row.ref) this.touched?.add(row.ref)
     this.statement("INSERT OR REPLACE INTO stats (root, path, dev, ino, size, mode, mtime_ns, ctime_ns, ref, checked_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(root, path, row.dev, row.ino, row.size, row.mode, row.mtimeNs, row.ctimeNs, row.ref, row.checkedNs)
   }
@@ -795,6 +866,7 @@ export class JournalStore {
 
   /** Keep `bytes` by address, compressed; a second write of the same content costs a lookup. */
   putBlob(ref: ContentRef, bytes: Uint8Array, at: number): void {
+    this.touched?.add(ref)
     if (this.hasBlob(ref)) return
     this.statement("INSERT OR IGNORE INTO blobs (ref, size, at, data) VALUES (?, ?, ?, ?)").run(ref, bytes.byteLength, at, compress(bytes))
   }
@@ -840,6 +912,36 @@ export class JournalStore {
   /** Activity that overlaps `[from, to]`. */
   activityBetween(from: number, to: number): StoredActivity[] {
     return this.statement("SELECT * FROM activity WHERE started_at <= ? AND (ended_at IS NULL OR ended_at >= ?)").all(to, from).map((row) => this.activityOf(row))
+  }
+
+  /**
+   * Up to `limit` activity keys after `after` in key order, with when each started and ended: a page of a scan of
+   * the whole table that reads no row's text. Nothing indexes when activity ended, and building an index on the
+   * person's journal (175,857 rows, 152 MB) held the loop 3.3 s, so a stretch of time is found by scanning in pages.
+   */
+  activityTimes(after: ActivityKey | undefined, limit: number): (ActivityKey & { start: number; end: number | null })[] {
+    const rows = after
+      ? this.statement("SELECT session, kind, id, started_at, ended_at FROM activity WHERE (session, kind, id) > (?, ?, ?) ORDER BY session, kind, id LIMIT ?")
+          .all(after.session, after.kind, after.id, limit)
+      : this.statement("SELECT session, kind, id, started_at, ended_at FROM activity ORDER BY session, kind, id LIMIT ?").all(limit)
+    return rows.map((row) => {
+      const parsed = ActivityTimesRow.parse(row)
+      return { session: parsed.session, kind: parsed.kind, id: parsed.id, start: parsed.started_at, end: parsed.ended_at }
+    })
+  }
+
+  /** Activity rows read elsewhere (`JournalReader`), as this store reads its own. */
+  activityOfRows(rows: readonly Row[]): StoredActivity[] {
+    return rows.map((row) => this.activityOf(row))
+  }
+
+  /** The activity of these keys still in the journal, in their order. */
+  activityOfKeys(keys: readonly ActivityKey[]): StoredActivity[] {
+    const read = this.statement("SELECT * FROM activity WHERE session=? AND kind=? AND id=?")
+    return keys.flatMap((key) => {
+      const row = read.get(key.session, key.kind, key.id)
+      return row ? [this.activityOf(row)] : []
+    })
   }
 
   /** One call's, turn's or background work's activity. */
@@ -1187,34 +1289,58 @@ export class JournalStore {
    * Drop kept content no one needs: blobs behind no uncommitted line and no
    * entry younger than `retainAfter`; then, while the store is past
    * `budget` bytes, the oldest of those younger ones too. Content behind an
-   * uncommitted line is never dropped.
+   * uncommitted line is never dropped. On this connection, all at once:
+   * `collectPlan` on a worker's and `dropPlanned` here leave this thread free.
    */
   collect(retainAfter: number, budget: number): Collected {
-    const live = `SELECT base FROM files WHERE base IS NOT NULL UNION SELECT current FROM files WHERE current IS NOT NULL
-      UNION SELECT e.before FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.before IS NOT NULL
-      UNION SELECT e.after FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.after IS NOT NULL
-      UNION SELECT ref FROM stats WHERE ref IS NOT NULL`
-    const before = this.blobSize()
     this.statement("DELETE FROM footprint_turns WHERE at < ?").run(retainAfter)
     this.statement("DELETE FROM moves WHERE at < ?").run(retainAfter)
-    this.transaction(() => {
-      this.db.exec(`CREATE TEMP TABLE IF NOT EXISTS live_refs (ref TEXT PRIMARY KEY) WITHOUT ROWID; DELETE FROM live_refs; INSERT OR IGNORE INTO live_refs ${live};`)
-      this.statement(`DELETE FROM blobs WHERE ref NOT IN (SELECT ref FROM live_refs) AND ref NOT IN (
-        SELECT before FROM entries WHERE at >= ?1 AND before IS NOT NULL UNION SELECT after FROM entries WHERE at >= ?1 AND after IS NOT NULL)`).run(retainAfter)
-      let size = this.blobSize().bytes
-      if (size > budget) {
-        const candidates = this.statement("SELECT ref, length(data) AS bytes FROM blobs WHERE ref NOT IN (SELECT ref FROM live_refs) ORDER BY at").all()
-        const drop = this.statement("DELETE FROM blobs WHERE ref=?")
-        for (const value of candidates) {
-          if (size <= budget) break
-          const row = z.object({ ref: z.string(), bytes: z.number() }).parse(value)
-          drop.run(row.ref)
-          size -= row.bytes
+    return this.transaction(() => {
+      const plan = collectPlan(this.db, retainAfter, budget)
+      const drop = this.statement("DELETE FROM blobs WHERE ref=?")
+      for (const { ref } of plan.refs) drop.run(ref)
+      return { dropped: plan.refs.length, bytes: plan.refs.reduce((sum, item) => sum + item.bytes, 0) }
+    })
+  }
+
+  /**
+   * Note every ref written from now until `untouched`: content a collection planned on an older snapshot (a worker's)
+   * may drop only if nothing here wrote it since. Every write that names content goes through `putBlob`, `saveStat`,
+   * `saveFile` or `insertEntry`, and only the owner's connection writes.
+   */
+  touching(): void {
+    this.touched = new Set()
+  }
+
+  untouched(): void {
+    this.touched = undefined
+  }
+
+  /** Drop planned blobs nothing wrote since `touching` began and no uncommitted line holds now; the count and bytes dropped. */
+  dropPlanned(refs: readonly { ref: string; bytes: number }[]): Collected {
+    const touched = this.touched ?? new Set<string>()
+    const candidates = refs.filter((item) => !touched.has(item.ref))
+    if (!candidates.length) return { dropped: 0, bytes: 0 }
+    return this.transaction(() => {
+      const live = new Set(this.statement(LIVE_FILE_REFS).all().map((row) => Object.values(row)[0]))
+      const drop = this.statement("DELETE FROM blobs WHERE ref=?")
+      let dropped = 0
+      let bytes = 0
+      for (const item of candidates) {
+        if (live.has(item.ref)) continue
+        if (Number(drop.run(item.ref).changes)) {
+          dropped++
+          bytes += item.bytes
         }
       }
+      return { dropped, bytes }
     })
-    const after = this.blobSize()
-    return { dropped: before.count - after.count, bytes: before.bytes - after.bytes }
+  }
+
+  /** What a collection deletes besides content: footprint turns and moves past retention. */
+  dropOld(retainAfter: number): void {
+    this.statement("DELETE FROM footprint_turns WHERE at < ?").run(retainAfter)
+    this.statement("DELETE FROM moves WHERE at < ?").run(retainAfter)
   }
 
   /** A number that changes whenever anything is written to the journal, by this connection or another: what a cache of what it holds is keyed by. */

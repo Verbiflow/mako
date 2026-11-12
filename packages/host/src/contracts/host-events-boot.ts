@@ -104,6 +104,11 @@ export type HostEventBody =
   | { type: "cloud-machine-notice"; conversationIds: string[]; notice: import("@mako/protocol/saves").ThreadMachineNotice }
   /** An agent's tool changed this device's worktrees; windows read them again. */
   | { type: "worktrees-changed" }
+  /**
+   * Every app on this Mac that isn't stopped, as the sidebar marks them, said when anything about the apps changed:
+   * their marks, a run's state, a check or an install ending. Windows read a followed folder's app again on it.
+   */
+  | { type: "thread-app-marks"; marks: import("./thread-app.js").AppMark[] }
   /** An agent's tool pushed, opened or merged a pull request; windows read GitHub and the worktrees' summaries again. */
   | { type: "github-changed" }
   /** Agents' requests to move onto their Thread's own branch, and the projects that always allow it. */

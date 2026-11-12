@@ -786,9 +786,15 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     await local?.readBack()
   }, { firstAfterMs: 60_000 })
   deps.jobs.every("tell the owner this Mako's sessions", 10 * 60_000, tellSessions, { firstAfterMs: 10 * 60_000 })
-  deps.jobs.every("collect attribution content", 60 * 60_000, () => {
-    const dropped = local?.tracker.collect()
-    if (dropped?.dropped) hostLog("attribution", "content collected", dropped)
+  // On a worker with a connection of its own: on the host's thread it held the loop 2.4 to 3.9 s an hour.
+  deps.jobs.every("collect attribution content", 60 * 60_000, async () => {
+    const tracker = local?.tracker
+    if (!tracker) return
+    const collected = await tracker.collectOffThread().catch((error: Error) => {
+      hostWarn("attribution", "kept content could not be collected; trying again next hour", { error: error.message })
+      return undefined
+    })
+    if (collected?.dropped) hostLog("attribution", "content collected", { ...collected })
   })
   deps.jobs.every("let go of idle attribution roots", 6 * 60 * 60_000, async () => {
     // A repository let go is tracked again on the next turn there.

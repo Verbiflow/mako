@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { machineCall, NOT_THE_PERSON } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
@@ -84,6 +85,7 @@ export class SettingsTool {
 }
 
 /** `mako:settings-act`. */
-export function declareSettingsMethods(methods: MethodTable, tool: () => SettingsTool | undefined): void {
-  methods.handle("mako:settings-act", (caller: AgentCaller, input: SettingsInput) => tool()?.call(caller, input) ?? { refused: "unavailable", why: "This host has no settings to change." })
+export function declareSettingsMethods(methods: MethodTable, tool: () => Pick<SettingsTool, "call"> | undefined): void {
+  methods.handle("mako:settings-act", (caller: AgentCaller, input: SettingsInput) =>
+    caller.kind === "person" && machineCall() ? { refused: "no-thread" as const, why: NOT_THE_PERSON } : tool()?.call(caller, input) ?? { refused: "unavailable", why: "This host has no settings to change." })
 }

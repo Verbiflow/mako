@@ -33,7 +33,7 @@ export type SimulatorBlocker =
   | "not-built"
   /** Another Mac of the person's that isn't connected now, or didn't answer in time. */
   | "unreachable"
-  /** Another Mac of the person's that doesn't offer its simulators to the account's other devices. */
+  /** Another Mac of the person's that lends this caller no simulator: its Thread holds no lease of one there. */
   | "not-offered"
 
 export type SimulatorAvailability = { ready: true } | { ready: false; blocker: SimulatorBlocker; why: string; fix?: string }
@@ -108,6 +108,8 @@ export interface SimulatorClaim {
   /** When its holder last acted: a claim idle for `CLAIM_IDLE_MS` lets go. */
   lastAt: number
   generation: number
+  /** The lease another place's agent holds it under: only that lease drives it, and its end lets it go. */
+  lease?: string
 }
 
 export interface ListedSimulator extends SimulatorSummary {
@@ -135,10 +137,10 @@ export interface SimulatorVia {
  * another Thread or another project. The person may take any simulator over; an agent may act only on one its
  * Thread holds.
  *
- * A call from another of the person's devices carries `via` (stamped here) and, for an agent, the Thread the calling
- * Mac already resolved (`agent`): that Session isn't on this Mac, so the calling Mac's word of who it is is what this
- * Mac trusts, under the gateway's account check. Project consent was that Mac's to check; this Mac checks that it
- * offers its simulators at all.
+ * A call from another place (one of the person's devices, or a cloud Thread's machine) carries `via` (stamped here)
+ * and, for an agent, the Thread the calling place already resolved (`agent`): that Session isn't on this Mac. This Mac
+ * answers an agent's call only under a live session lease it serves for that Thread, borrowed from that same place
+ * (`via`), checked on every call: the person's grant is the consent, and the lease is the offer.
  */
 export type SimulatorCaller =
   | { kind: "agent"; session: string; via?: SimulatorVia; agent?: SimulatorAgent }
@@ -208,7 +210,7 @@ export type SimulatorRefusalReason =
   | "unsupported"
   /** The simulator's Mac isn't connected now, or didn't answer in time. */
   | "unreachable"
-  /** The simulator's Mac doesn't offer its simulators to the account's other devices. */
+  /** The simulator's Mac lends this caller no simulator: its Thread holds no session lease there. */
   | "not-offered"
 
 export interface SimulatorRefused {

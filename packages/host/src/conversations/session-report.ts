@@ -512,6 +512,7 @@ export const REPORT_WORK = "tell the account this host's Sessions"
 export class SessionPublisher {
   readonly #reporter = new SessionReporter()
   readonly #rows: () => readonly ReportedSession[] | undefined
+  readonly #rowsOf: ((conversations: ReadonlySet<string>) => readonly ReportedSession[] | undefined) | undefined
   readonly #now: () => number
   #current: SessionLink | undefined
   /** The link the last report went out on: a link not reported on yet is told every row. */
@@ -519,7 +520,14 @@ export class SessionPublisher {
   /** What the gateway said is watched on `link`, and the live form each one's watchers read where that's above 1. */
   #watching: { link: RuntimeLink; conversations: ReadonlySet<string>; forms: Readonly<Record<string, LiveForm>> } | undefined
   #dirty = true
+  /**
+   * Conversations whose batches came since the last report, when nothing else changed: only their rows are worked out
+   * again (`rowsOf`). Every batch of every working conversation is one, so the whole list isn't rebuilt each second.
+   */
+  readonly #touched = new Set<string>()
   #reportedAt = Number.NEGATIVE_INFINITY
+  /** When the whole list was last worked out: at least every `SWEEP_MS`, for what moves without an event. */
+  #wholeAt = Number.NEGATIVE_INFINITY
   #listed: readonly ReportedSession[] | undefined
   readonly #reportNow: (() => void) | undefined
   readonly #sent: (() => void) | undefined
@@ -556,6 +564,11 @@ export class SessionPublisher {
   constructor(options: {
     rows: () => readonly ReportedSession[] | undefined
     /**
+     * The rows of these conversations alone, as `rows` would make them: a batch reworks its own conversation's row, never
+     * the whole list. Without it, every batch reworks the whole list.
+     */
+    rowsOf?: (conversations: ReadonlySet<string>) => readonly ReportedSession[] | undefined
+    /**
      * What a list shows of one conversation now (`conversationShown`), read when its batch comes: a batch that moved it
      * is reported on the next turn of the event loop. Without it, every batch waits for the tick.
      */
@@ -576,6 +589,7 @@ export class SessionPublisher {
     schedule?: (run: () => void, afterMs: number) => void
   }) {
     this.#rows = options.rows
+    this.#rowsOf = options.rowsOf
     this.#shown = options.shown
     this.#now = options.now ?? Date.now
     this.#reportNow = options.reportNow
@@ -612,6 +626,11 @@ export class SessionPublisher {
    */
   showsChanged(): void {
     this.#dirty = true
+    this.#rowShowsChanged()
+  }
+
+  /** What a list shows of a conversation already touched (`#touch`) changed: reported as `showsChanged` is, its row alone. */
+  #rowShowsChanged(): void {
     this.#urgent = true
     const reportNow = this.#reportNow
     if (this.#shownAsked || !reportNow || !this.#current) return
@@ -631,10 +650,14 @@ export class SessionPublisher {
     this.#current = current
     if (!current || current.served.version < SESSIONS_VERSION) return
     const now = this.#now()
-    if (!this.#urgent && (now - this.#reportedAt < REPORT_MS || (!this.#dirty && now - this.#reportedAt < SWEEP_MS))) return
-    const all = this.#rows()
+    const changed = this.#dirty || this.#touched.size > 0
+    if (!this.#urgent && (now - this.#reportedAt < REPORT_MS || (!changed && now - this.#reportedAt < SWEEP_MS))) return
+    const some = this.#dirty || now - this.#wholeAt >= SWEEP_MS ? undefined : this.#withRowsOf(this.#touched)
+    const all = some ?? this.#rows()
     if (!all) return
+    if (!some) this.#wholeAt = now
     this.#listed = all
+    this.#touched.clear()
     const rows = rowsForLink(all, current.served.version)
     this.#dirty = false
     this.#urgent = false
@@ -652,6 +675,28 @@ export class SessionPublisher {
       this.#reporter.forget()
       this.#reportedLink = undefined
     }
+  }
+
+  /**
+   * The list as last worked out with the rows of `conversations` worked out again, in place; undefined when it can't
+   * be (no list yet, no `rowsOf`), and the whole list is worked out instead.
+   */
+  #withRowsOf(conversations: ReadonlySet<string>): readonly ReportedSession[] | undefined {
+    const listed = this.#listed
+    if (!listed || !this.#rowsOf) return undefined
+    const fresh = this.#rowsOf(conversations)
+    if (!fresh) return undefined
+    const bySession = new Map(fresh.map((row) => [row.session, row]))
+    const rows: ReportedSession[] = []
+    for (const row of listed) {
+      const again = bySession.get(row.session)
+      if (again) {
+        rows.push(again)
+        bySession.delete(row.session)
+      } else if (!conversations.has(row.conversation)) rows.push(row)
+    }
+    rows.push(...bySession.values())
+    return rows
   }
 
   /**
@@ -743,7 +788,7 @@ export class SessionPublisher {
    */
   event(channel: RuntimeEventChannel, event: RuntimeEvent): void {
     if (channel !== "event") return
-    if (event.type === "live-batch") this.#dirty = true
+    if (event.type === "live-batch") this.#touch(event.conversation)
     const conversation = event.conversation
     // Watched on the last link the gateway named it on: numbered and kept, sent now if that link is the one up.
     if (!conversation || !this.#watching?.conversations.has(conversation)) return
@@ -793,9 +838,15 @@ export class SessionPublisher {
       return
     }
     if (event.type !== "live-batch") return
-    this.#dirty = true
+    this.#touch(event.batch.id)
     this.#sawBatch(event.batch.id, event.batch.trace)
     if (this.#watching?.conversations.has(event.batch.id)) this.event("event", encodeRuntimeEvent(event))
+  }
+
+  /** A batch of `conversation` came: its row alone is worked out again, or the whole list for a batch of none. */
+  #touch(conversation: string | undefined): void {
+    if (conversation) this.#touched.add(conversation)
+    else this.#dirty = true
   }
 
   /** A conversation's batch came: whether it moved what a list shows of it, which then goes at once (`showsChanged`). */
@@ -814,14 +865,14 @@ export class SessionPublisher {
       this.#finsAsked = true
       this.#schedule(() => {
         this.#finsAsked = false
-        this.showsChanged()
+        this.#rowShowsChanged()
       }, FINS_COALESCE_MS)
       return
     }
     if (before && shown.promptedAt !== before.promptedAt)
       hostLog("sync", "a message the person sent goes on its row at once, and every rail moves its project", { conversation, promptedAt: shown.promptedAt, ...(trace && { trace }) })
     this.#changedAt.set(conversation, this.#now())
-    this.showsChanged()
+    this.#rowShowsChanged()
   }
 
   /** The current link, when another device watches `conversation` on it. */
