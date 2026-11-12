@@ -4101,7 +4101,12 @@ the cloud. One a Mac going off couldn't release in time stays with its turns
 paused (`goesOff`, `parked-turns` beside the moves' plans), so it reads idle
 for Continue in the cloud from another device; a continue this Mac joins
 carries those turns there, and otherwise they go on here once the Mac hears
-its account (`CloudMoves.unpark`, on `ownerChecked`).
+its account (`CloudMoves.unpark`, on `ownerChecked`). While a Thread in the
+project folder works, it's kept ready like one in its own worktree
+(`CloudReadiness`): its cloud Thread stands by at the worktree its move would
+make, named ahead from the same names a move tries and with nothing made
+(`ThreadWorktreeService.plannedCheckout`), so a handoff takes a machine
+already up rather than one it boots.
 `test-handoff-going-off.ts` runs it on the host's own parts with scripted
 harnesses and a stand-in cloud. A Thread's name is the
 list's to say too: no batch carries it, and a followed conversation once kept
