@@ -29,6 +29,8 @@ const reads = [
   /** The Threads at work here a handoff would take, and the person's choice for sleep, as they stand. */
   "mako:handoff-candidates",
   "mako:handoff-settings",
+  /** The conversations held since this Mac went away; reads what `AwayNotes` holds. */
+  "mako:handoff-away-held",
   "mako:conversation-settings",
   /** Where keeping this Mac awake stands; reads what `KeepAwake` holds. */
   "mako:keep-awake",

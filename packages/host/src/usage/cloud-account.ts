@@ -1047,6 +1047,11 @@ export class CloudAccounts {
     return QuietAnswerSchema.parse(await response.json())
   }
 
+  /** The note as `quiet` sends it to this gateway now: what a going-away records it named (`CloudReadiness.noted`). */
+  asSent(note: QuietNote): QuietNote {
+    return this.#noteFor(note)
+  }
+
   /** The note as this gateway takes it: a Thread's `project` only where its link agreed the version that carries it. */
   #noteFor(note: QuietNote): QuietNote {
     if ((this.#agreed ?? 0) >= QUIET_PROJECT_LINK_VERSION || !note.threads.some((thread) => thread.project !== undefined)) return note

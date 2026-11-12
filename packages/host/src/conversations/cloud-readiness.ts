@@ -1,3 +1,4 @@
+import type { QuietNote } from "@mako/protocol/handoff"
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { z } from "zod"
@@ -47,6 +48,8 @@ const AcknowledgedSchema = z.object({
   checkpoint: MoveCheckpointSchema,
   unpushed: z.number().int().nonnegative(),
   left: z.array(z.object({ path: z.string(), why: z.string() })),
+  /** Each file the checkpoint holds of the Thread's, by content address, null for one it deleted (`ThreadCheckpoint.versions`). */
+  versions: z.array(z.object({ path: z.string(), ref: z.string().nullable() })).optional(),
   at: z.number(),
 })
 export type Acknowledged = z.infer<typeof AcknowledgedSchema>
@@ -61,6 +64,11 @@ const ReadyEntrySchema = z.object({
   sent: MoveCheckpointSchema.optional(),
   /** A Thread in the main checkout: its own changes, one per repository, as the cloud last acknowledged them. */
   acknowledged: z.array(AcknowledgedSchema).optional(),
+  /**
+   * The last going-away note's word on this Thread: each checkpoint it carried, by hash. Only what went in it may leave
+   * the project folder once the cloud went on (`leavable`); a checkpoint acknowledged after it didn't go.
+   */
+  noted: z.object({ note: z.string(), sha256: z.array(z.string()) }).optional(),
   /** A project folder's Thread: its project worktree, where its Sessions open on the machine (`noteProject`). */
   project: z.string().optional(),
   at: z.number(),
@@ -278,6 +286,7 @@ export class CloudReadiness {
     const entry = (await this.#load())[thread]
     if (!entry) return undefined
     // A worktree's whole checkout, or a Thread in the main checkout's own changes in its first repository.
+    // Only ever one the cloud acknowledged: each is kept the moment its send answered, never before.
     const whole = entry.acknowledged?.[0]?.checkpoint ?? (entry.sent?.sha256 === entry.checkpoint ? entry.sent : undefined)
     return whole && { ...whole, standby: entry.cloudThread }
   }
@@ -291,10 +300,26 @@ export class CloudReadiness {
   }
 
   /** What the cloud acknowledged of a Thread in the main checkout, by repository, for its going-away to name. */
-  async acknowledged(thread: string): Promise<{ cloudThread: string; acknowledged: Acknowledged[] } | undefined> {
+  async acknowledged(thread: string): Promise<{ cloudThread: string; acknowledged: Acknowledged[]; noted?: string[] } | undefined> {
     await this.#rounds.get(thread)?.catch(() => undefined)
     const entry = (await this.#load())[thread]
-    return entry?.acknowledged?.length ? { cloudThread: entry.cloudThread, acknowledged: entry.acknowledged } : undefined
+    return entry?.acknowledged?.length ? { cloudThread: entry.cloudThread, acknowledged: entry.acknowledged, ...entry.noted && { noted: entry.noted.sha256 } } : undefined
+  }
+
+  /**
+   * A going-away note as it goes (`CloudHandOffs`, after the account left out what its gateway doesn't take): each of
+   * its Threads kept ready here records the checkpoints it carried, which alone may leave the project folder later.
+   */
+  async noted(note: QuietNote): Promise<void> {
+    const entries = await this.#load()
+    let changed = false
+    for (const thread of note.threads) {
+      const entry = entries[thread.thread]
+      if (!entry) continue
+      entry.noted = { note: note.note, sha256: thread.checkpoint ? [thread.checkpoint.sha256] : [] }
+      changed = true
+    }
+    if (changed) await this.#save()
   }
 
   /** A round a write or a turn's end asked for failed: it's tried again `RETRY_MS` later, `RETRIES` times at most. */
@@ -456,7 +481,7 @@ export class CloudReadiness {
         const taken = await capture({ git: this.#options.git, ledger, thread, repoRoot: root, branch, folder: scratch, partition })
         if (kept < 0 || acknowledged[kept]!.checkpoint.sha256 !== taken.checkpoint.sha256) {
           await account.sendCheckpoint(entry.cloudThread, taken.checkpoint, taken.file)
-          const now: Acknowledged = { root, checkpoint: taken.checkpoint, unpushed: taken.unpushed, left: taken.left, at: Date.now() }
+          const now: Acknowledged = { root, checkpoint: taken.checkpoint, unpushed: taken.unpushed, left: taken.left, versions: taken.versions, at: Date.now() }
           if (kept >= 0) acknowledged[kept] = now
           else acknowledged.push(now)
           entry.acknowledged = acknowledged
@@ -485,7 +510,11 @@ export class CloudReadiness {
   /** The checkout's checkpoint, sent when it changed since the last; answers its hash when it went. */
   async #sendCheckpoint(account: ReadinessAccount, entry: ReadyEntry): Promise<string | undefined> {
     const sent = await this.#sendWorktreeCheckpoint(account, entry)
-    if (sent) entry.sent = sent
+    // Both at once, the moment the cloud holds it: a going-away read between them (its flush cut short) names this.
+    if (sent) {
+      entry.sent = sent
+      entry.checkpoint = sent.sha256
+    }
     return sent?.sha256
   }
 

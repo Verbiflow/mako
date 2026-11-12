@@ -768,7 +768,9 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:handoff-settings", () => noHandOffs)
   const setNoHandOffs: (onSleep: boolean) => HandOffSettings = () => noHandOffs
   methods.handle("mako:handoff-settings-set", setNoHandOffs)
-  const runNothingHere: (thread: string) => number = () => 0
+  const holdsNothing: () => string[] = () => []
+  methods.handle("mako:handoff-away-held", holdsNothing)
+  const runNothingHere: (conversationId: string) => number = () => 0
   methods.handle("mako:handoff-run-here", runNothingHere)
   /** Keeping this Mac awake while agents work: on a person's Mac `KeepAwake` answers first; elsewhere there's no Mac to keep. */
   const noKeepAwake: KeepAwakeState = { settings: { on: false, lidClosed: false }, hold: { kind: "rest" }, unavailable: "This Mako doesn't keep a Mac awake." }

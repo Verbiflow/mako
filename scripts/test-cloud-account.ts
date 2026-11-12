@@ -1290,6 +1290,7 @@ test("a quiet note names a project folder's project worktree only to a gateway w
   await older.accounts.quiet(sent)
   const { project: _left, ...rest } = sent.threads[0]!
   assert.deepEqual(cloud.notes.at(-1), { ...sent, threads: [rest] }, "only the project left out")
+  assert.deepEqual(older.accounts.asSent(sent), cloud.notes.at(-1), "what a going-away records is the note as it went")
   older.accounts.close()
   // A gateway whose link agreed it: named, and still once the link has dropped (a Mac going away often has none).
   let agreed = 0

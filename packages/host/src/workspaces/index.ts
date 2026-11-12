@@ -60,6 +60,7 @@ export { AutomationLaunches, AutomationNotStartedError } from "./automation-laun
 export { checkoutConversations } from "./checkout-conversations.js"
 export { WorkspaceClients } from "./clients.js"
 export { applyMoveCheckpoint, captureMoveCheckpoint, MoveCheckpointError, verifyMoveCheckpoint } from "./move-checkpoint.js"
+export { CheckoutLeave, cloudHasAll, type LeaveLedger, type LeaveOutcome, type LeftRepository } from "./leave-checkout.js"
 export { captureThreadCheckpoint, threadFingerprint, ThreadCheckpointRefused, type ThreadCheckpoint, type ThreadCheckpointInput } from "./thread-checkpoint.js"
 export { captureCarry, cloneRepository, openCarry, placeOutside, planOutsideReturn, readOutside, returnOutside, type OpenedCarry, type OutsideCandidate, type OutsideReturned } from "./move-carry.js"
 export { mergeReturned, unchangedSince } from "./move-merge.js"

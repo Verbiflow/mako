@@ -29,7 +29,9 @@ import { ACCESS_TIER_NAMES, accessModeId } from "@mako/host/contracts/access"
  * relay on `--relay-port`, so `offline` takes it off the network as a closed lid does, its host still running.
  *
  * Every turn asks for one word ("Reply with the single word X."), and the scripted model says it back: the words it
- * heard are the turns that ran on this Mac, and a turn that ran anywhere else never reaches it.
+ * heard are the turns that ran on this Mac, and a turn that ran anywhere else never reaches it. A held turn (`hold`)
+ * first has its agent write `agent-<word>.md` in its Session's folder, a change of the Thread's own for a checkpoint
+ * or a move to carry, then holds mid-way.
  *
  * With `--opencode <version>`, that version of OpenCode is installed in the root and first on the host's `PATH`, else
  * it runs the person's. Give it the version the cloud's machines run: a Session goes to the cloud only from a version
@@ -138,6 +140,8 @@ const moving = (text: string): ScriptedReply | undefined => {
   if (!text.includes(file)) return { call: { id: `call_sleep_${token}`, name: "shell", arguments: { command: `sleep 300 && echo ${token} > ${file}`, timeout: 600_000 } } }
   return undefined
 }
+/** The file a held turn's agent writes before it holds, in its Session's folder: `agent-<word>.md`. */
+const agentFile = (word: string) => `agent-${word}.md`
 /** A word `hold` asks for: its turn stays mid-way here, the model answering only after this long. */
 const HELD = "HOLD"
 const HELD_MS = 15 * 60_000
@@ -147,6 +151,8 @@ const model = await scriptedModel({
     if (move) return move
     const word = [...text.matchAll(ONE_WORD)].at(-1)?.[1]
     if (!word) return { text: "OK" }
+    // A held turn writes a file of the agent's own first (`agentFile`), a change the Thread's checkpoint carries, then holds.
+    if (word.startsWith(HELD) && !text.includes(agentFile(word))) return { call: { id: `call_write_${word}`, name: "write", arguments: { path: agentFile(word), content: `written by the agent in ${word}\n` } } }
     heard.push(word)
     if (word.startsWith(HELD)) return new Promise((resolve) => setTimeout(() => resolve({ text: word }), HELD_MS).unref())
     return { text: word }
@@ -432,8 +438,13 @@ for await (const line of createInterface({ input: process.stdin })) {
       }
       const request = randomUUID()
       await call("mako:live-prompt", [conversation, request, `Reply with the single word ${word}.`, []])
-      for (const deadline = Date.now() + 2 * 60_000; !heard.includes(word); await new Promise((resolve) => setTimeout(resolve, 200)))
+      for (const deadline = Date.now() + 2 * 60_000; !heard.includes(word); await new Promise((resolve) => setTimeout(resolve, 200))) {
         if (Date.now() > deadline) throw new Error(`the held turn never reached the model: ${JSON.stringify(await read(conversation))}`)
+        // Below full access the harness asks before its agent writes its file: the person allows it, as for a move.
+        const asked = PermissionsSchema.parse(await call("mako:live-snapshot", [conversation])).permissions[0]
+        const allow = asked?.options.find((option) => option.kind === "allow_once") ?? asked?.options[0]
+        if (asked && allow) await call("mako:live-permission", [conversation, asked.id, { kind: "choice", optionId: allow.optionId }]).catch(() => undefined)
+      }
       say("HOLDING", JSON.stringify({ request, ...await read(conversation) }))
     } else if (command === "person") {
       const [file, ...text] = rest

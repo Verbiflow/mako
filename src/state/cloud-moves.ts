@@ -29,6 +29,10 @@ interface CloudMovesState {
    * `ownBranch`: a Thread in the main checkout that went onto its own branch first, so its steps begin with that one.
    */
   moving: Record<string, { move: string; step: ThreadMoveStep; handOff?: boolean; ownBranch?: boolean; checking?: boolean }>
+  /** Conversations whose Thread waits to hear from the account since this Mac went away (`away-held`): it runs nowhere here. */
+  awayHeld: Record<string, true>
+  /** A Thread the cloud took while this Mac was away, whose own files stayed in the project folder (`checkout-stayed`). */
+  checkoutStayed: Record<string, { paths: string[]; unpushed: number }>
   /** Confirmed refusals stay with the conversation until dismissed or another move starts. */
   failedMoves: Record<string, { move: string; reason: string; handOff: boolean; continued: boolean }>
   /** A Thread coming back from the cloud, by the conversation it was asked from (`thread-return-step`). */
@@ -64,7 +68,7 @@ interface CloudMovesState {
  */
 export type HarnessUpdating = { after: "move" | "back"; handOff?: boolean; harnesses: string[]; at: number; failed?: { harness: string; reason: string } }
 
-export const cloudMovesStore = createStore<CloudMovesState>({ moves: {}, moving: {}, failedMoves: {}, returning: {}, outdated: {}, missing: {}, harnesses: {}, updating: {}, followStopped: {} })
+export const cloudMovesStore = createStore<CloudMovesState>({ moves: {}, moving: {}, awayHeld: {}, checkoutStayed: {}, failedMoves: {}, returning: {}, outdated: {}, missing: {}, harnesses: {}, updating: {}, followStopped: {} })
 export const useCloudMoves = createHook(cloudMovesStore)
 
 /** Where a moved conversation's folder is, as the cloud router names a cloud Thread's (`CLOUD_FOLDER_WHERE`). */
@@ -333,6 +337,33 @@ export function landedSentence(landed: ReturnLanded | undefined): string | undef
 }
 
 /** The person keeps the Thread in the cloud with their changes here: its notice goes; its Cloud chip still brings it back. */
+/** The conversations whose Thread waits for the account since this Mac went away, the whole list as the host says it. */
+export function awayHeld(conversations: readonly string[]): void {
+  cloudMovesStore.set((state) => ({ ...state, awayHeld: Object.fromEntries(conversations.map((id) => [id, true as const])) }))
+}
+
+/** Which conversations wait for the account now, read once a window opens; `away-held` events keep it after. */
+export async function loadAwayHeld(): Promise<void> {
+  if (!hasBridge()) return
+  const held = await getMako().awayHeldConversations().catch(() => undefined)
+  if (held) awayHeld(held)
+}
+
+/** Runs the Thread of `conversationId` here, whatever the account did while this Mac was away. */
+export async function runHereAnyway(conversationId: string): Promise<void> {
+  if (!hasBridge()) return
+  await getMako().runHandedOffHere(conversationId)
+}
+
+/** A Thread the cloud took left files of its own in the project folder. */
+export function checkoutStayed(event: { conversation: string; paths: string[]; unpushed: number }): void {
+  cloudMovesStore.set((state) => ({ ...state, checkoutStayed: { ...state.checkoutStayed, [event.conversation]: { paths: event.paths, unpushed: event.unpushed } } }))
+}
+
+export function dismissCheckoutStayed(conversationId: string): void {
+  cloudMovesStore.set((state) => ({ ...state, checkoutStayed: without(state.checkoutStayed, conversationId) }))
+}
+
 export function dismissFollowStopped(conversationId: string): void {
   cloudMovesStore.set((state) => ({ ...state, followStopped: without(state.followStopped, conversationId) }))
 }

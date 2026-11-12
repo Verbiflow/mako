@@ -65,6 +65,11 @@ export interface ThreadCheckpoint {
   file: string
   /** Paths relative to the repository whose Thread version the checkpoint holds, deletions included. */
   took: string[]
+  /**
+   * Each of those files as the checkpoint has it, by its content address (`contentRef`), null for one it deleted: what
+   * a Mac back from going away compares its checkout with before it takes the Thread's changes out of it.
+   */
+  versions: Array<{ path: string; ref: string | null }>
   /** What the Thread changed that the checkpoint leaves out, and why. */
   left: { path: string; why: LeftOut }[]
   /**
@@ -99,7 +104,7 @@ const split = (bytes: Buffer) => bytes.toString("utf8").split("\0").filter(Boole
  * Each path's blob at HEAD, with its mode. Its bytes are as stored: where a filter or line endings make the file on
  * disk differ, a Thread version that is HEAD's whole file reads as neither side, and the file is left out and named.
  */
-async function atHead(git: Git, repoRoot: string, head: string, paths: readonly string[]): Promise<Map<string, { bytes: Buffer; mode: number }>> {
+export async function atHead(git: Git, repoRoot: string, head: string, paths: readonly string[]): Promise<Map<string, { bytes: Buffer; mode: number }>> {
   const found = new Map<string, { bytes: Buffer; mode: number }>()
   if (!paths.length) return found
   const modes = new Map<string, number>()
@@ -194,7 +199,7 @@ async function settledBy(ledger: Pick<MoveLedger, "settled">, by: number | undef
 }
 
 /** The repository's own files of a partition: a partition reaches every tracked root around or inside the folder. */
-function own(result: Partition, repoRoot: string): PartitionFile[] {
+export function own(result: Partition, repoRoot: string): PartitionFile[] {
   const roots = new Set(result.roots.filter((root) => root.path === repoRoot).map((root) => root.root))
   return result.files.filter((file) => roots.has(file.root))
 }
@@ -262,7 +267,8 @@ export async function captureThreadCheckpoint(input: ThreadCheckpointInput): Pro
     const workCommit = await commitIn(git, store, tree, head, "work", true)
     const { checkpoint, file } = await writeCheckpoint(git, repoRoot, store, input.folder, { head, index: indexCommit, work: workCommit, branch: input.branch }, MOVE_CHECKPOINT_MAX_BYTES, true)
     const unpushed = Number(await text(git, { cwd: repoRoot, args: ["rev-list", "--count", head, "--not", "--remotes"], read: true }))
-    return { checkpoint, file, unpushed, took: changes.map((change) => change.path).sort(), left: left.sort((a, b) => a.path.localeCompare(b.path)), ms: performance.now() - started }
+    const versions = changes.map((change) => ({ path: change.path, ref: change.bytes ? contentRef(change.bytes) : null })).sort((a, b) => a.path.localeCompare(b.path))
+    return { checkpoint, file, unpushed, versions, took: changes.map((change) => change.path).sort(), left: left.sort((a, b) => a.path.localeCompare(b.path)), ms: performance.now() - started }
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }
