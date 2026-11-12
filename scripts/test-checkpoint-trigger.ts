@@ -62,7 +62,7 @@ function world(options: { roots?: string[]; captureMs?: number; deaf?: boolean }
     const file = join(input.folder, "checkpoint.bundle")
     writeFileSync(file, content)
     const checkpoint: MoveCheckpoint = { version: 1, sha256, bytes: content.length, head: "a".repeat(40), index: "b".repeat(40), work: sha256.slice(0, 40), branch: input.branch }
-    return { checkpoint, file, took: ["a.ts"], left: [], unpushed: 2, ms: 1 }
+    return { checkpoint, file, took: ["a.ts"], versions: [{ path: "a.ts", ref: `sha256:${sha256}` }], left: [], unpushed: 2, ms: 1 }
   }
   const account: ReadinessAccount = {
     createThread: async () => ({ ready: false }),

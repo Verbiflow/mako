@@ -47,6 +47,8 @@ const AcknowledgedSchema = z.object({
   checkpoint: MoveCheckpointSchema,
   unpushed: z.number().int().nonnegative(),
   left: z.array(z.object({ path: z.string(), why: z.string() })),
+  /** Each file the checkpoint holds of the Thread's, by content address, null for one it deleted (`ThreadCheckpoint.versions`). */
+  versions: z.array(z.object({ path: z.string(), ref: z.string().nullable() })).optional(),
   at: z.number(),
 })
 export type Acknowledged = z.infer<typeof AcknowledgedSchema>
@@ -431,7 +433,7 @@ export class CloudReadiness {
         const taken = await capture({ git: this.#options.git, ledger, thread, repoRoot: root, branch, folder: scratch, partition })
         if (kept < 0 || acknowledged[kept]!.checkpoint.sha256 !== taken.checkpoint.sha256) {
           await account.sendCheckpoint(entry.cloudThread, taken.checkpoint, taken.file)
-          const now: Acknowledged = { root, checkpoint: taken.checkpoint, unpushed: taken.unpushed, left: taken.left, at: Date.now() }
+          const now: Acknowledged = { root, checkpoint: taken.checkpoint, unpushed: taken.unpushed, left: taken.left, versions: taken.versions, at: Date.now() }
           if (kept >= 0) acknowledged[kept] = now
           else acknowledged.push(now)
           entry.acknowledged = acknowledged

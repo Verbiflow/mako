@@ -95,6 +95,10 @@ export type HostEventBody =
    * nothing more is laid over it, and the way back merges both. Said for each of its conversations here.
    */
   | { type: "thread-follow-stopped"; conversations: string[]; folders: string[]; at: number }
+  /** The conversations whose Sessions wait for the account's word since this Mac went away (`AwayNotes`), the whole list each time. */
+  | { type: "away-held"; conversations: string[] }
+  /** A Thread the cloud took while this Mac was away left these files of its own in the project folder: not as the cloud has them. */
+  | { type: "checkout-stayed"; conversation: string; paths: string[]; unpushed: number }
   | { type: "thread-return-step"; conversationId: string; move: string; step: ThreadReturnStep }
   /**
    * The cloud's word on a cloud Thread's work, as its object says it in the Thread's stream, only when the person's own

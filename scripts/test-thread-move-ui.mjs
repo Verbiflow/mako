@@ -1192,6 +1192,23 @@ async function checkWindow() {
   await toastShot("return-merged", "Back on this Mac")
   assert.match(await evaluate(`[...document.querySelectorAll('[data-sonner-toast]')].map((node) => node.innerText).join('\\n')`), /Your edits to todo\.md stayed\. retry\.ts has conflict markers: you both changed it\. The agent knows\. You changed state\.json meanwhile, so yours stayed\. billing-sync couldn't be written back: permission denied\.[\s\S]*Open the cloud's copy/)
 
+  // Back from going away: the Thread on screen held for the account's word, run here by the person; then one Mako
+  // Cloud went on with, whose own files stayed in the project folder and which took commits not yet pushed.
+  const awayKey = await evaluate(`import('/src/state/acp-state.ts').then(async ({ acpStore }) => {
+    const key = acpStore.get().activeKey
+    ;(await import('/src/state/cloud-moves.ts')).awayHeld([key])
+    return key
+  })`)
+  await until(`document.querySelector('[data-thread-away="held"]') !== null`, "the Thread held for the account")
+  assert.match(await text('[data-thread-away]'), /Waiting to hear from Mako Cloud[\s\S]*Paused while this Mac was away[\s\S]*Run it here/)
+  await both("away-held", ['[data-thread-away]', '[data-run-place]'])
+  await clickText('[data-thread-away]', "Run it here")
+  await until(`document.querySelector('[data-thread-away]') === null`, "run here: nothing waits")
+  await evaluate(`import('/src/state/cloud-moves.ts').then((moves) => moves.checkoutStayed({ conversation: ${JSON.stringify(awayKey)}, paths: ["src/billing.ts", "retry.ts", "todo.md"], unpushed: 2 }))`)
+  await until(`document.querySelector('[data-thread-away="stayed"]') !== null`, "what stayed in the project folder")
+  assert.match(await text('[data-thread-away]'), /3 of its files stayed in your project folder[\s\S]*2 unpushed commits went to Mako Cloud/)
+  await both("checkout-stayed", ['[data-thread-away]', '[data-run-place]'])
+
   // 7. Settings: handing off as this Mac sleeps, and what quitting does while agents work.
   await evaluate(`window.dispatchEvent(new CustomEvent("mako:settings", { detail: "account" })), true`)
   await until(`document.querySelector('[data-handoff-settings]') !== null && document.querySelector('[data-handoff-settings] [role="switch"]')?.getAttribute('aria-checked') === 'true'`, "the handoff settings, on by default")

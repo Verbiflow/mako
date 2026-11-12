@@ -92,7 +92,7 @@ import {
 } from "@/state/threads"
 import { acp, acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
 import { cloudStepped, worktreeMade, worktreeStepped } from "@/state/acp-start"
-import { followStopped, threadMoveStepped, threadReturnStepped } from "@/state/cloud-moves"
+import { awayHeld, checkoutStayed, followStopped, threadMoveStepped, threadReturnStepped } from "@/state/cloud-moves"
 import { threadContinueStepped } from "@/state/cloud-continues"
 import { machineNoticed } from "@/state/cloud-machines"
 import { cloudArchiveStepped } from "@/state/cloud-archive"
@@ -278,6 +278,14 @@ function apply(event: HostEvent) {
   }
   if (event.type === "thread-continue-step") {
     threadContinueStepped(event.conversationId, event.op, event.step)
+    return
+  }
+  if (event.type === "away-held") {
+    awayHeld(event.conversations)
+    return
+  }
+  if (event.type === "checkout-stayed") {
+    checkoutStayed(event)
     return
   }
   if (event.type === "thread-follow-stopped") {

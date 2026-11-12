@@ -3221,8 +3221,11 @@ export function installMockBridge() {
       emit({ type: "handoff-settings", settings: { onSleep } })
       return { onSleep }
     },
-    /** The mock holds no Thread for its account after going away: nothing to let go. */
-    runHandedOffHere: async (): Promise<number> => 0,
+    /** A Thread held for the account's word since this Mac went away runs here: nothing waits any more. */
+    runHandedOffHere: async (): Promise<number> => {
+      emit({ type: "away-held", conversations: [] })
+      return 1
+    },
     /** A fixture's way back: its steps a moment apart, as a real one takes them. */
     threadReturn: async (conversationId: string, move: string, options?: ThreadReturnOptions) => {
       returnCalls.push(conversationId)

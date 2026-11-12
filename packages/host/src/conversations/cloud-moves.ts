@@ -229,6 +229,8 @@ export type CloudMovesOptions = {
   folder: string
   git: Git
   account(): CloudAccount | undefined
+  /** A continue this Mac joined took the Session's Thread to the cloud: what it left in the main checkout may leave it (`CheckoutLeave`). */
+  joinedAway?(session: string): void
   /** Since when a Session waits for the account's word after a going-away the account took (`AwayNotes.holds`): its parked turns don't go on here meanwhile. */
   awayHeld?(session: string): number | undefined
   threads(): {
@@ -538,6 +540,7 @@ export class CloudMoves {
     this.#milestones.set(move, { released: deferred(), handed: deferred() })
     const work = this.#joined(session, move).then((outcome) => {
       if (outcome.kind === "moved" || outcome.kind === "kept-here") this.#joinedContinues.add(move)
+      if (outcome.kind === "moved") this.#options.joinedAway?.(session)
       return outcome
     }, (error: Error): ThreadMoveOutcome => {
       hostWarn("continues", "a continue in the cloud couldn't be joined here yet", { move, session, cloudThread: listed.cloudThread, error: errorMessage({ error }) })

@@ -34,7 +34,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
+import { CheckoutLeave, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -1117,8 +1117,38 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     label: (harness) => opened.harnessLabel(harness),
   })
   // A person's Mac moves its Threads to the cloud (`mako:thread-move`); a machine takes them (`mako:move-arrive`).
+  // A Thread the account continued while this Mac was away: its changes leave the main checkout only if every file is as
+  // the cloud has it; otherwise they stay, and its row says so (`CheckoutLeave`).
+  const checkoutLeave = new CheckoutLeave(join(environment.dataRoot, "cloud", "leaving"), git, (message, facts) => hostLog("leaving", message, facts))
+  void checkoutLeave.resume(undefined).catch((error: Error) => hostWarn("leaving", "a rewrite of the project folder cut short couldn't be settled", { error: error.message }))
+  /** The conversations of these Sessions, as a window shows them. */
+  const heldConversations = (sessions: readonly string[]) => sessions.flatMap((session) => {
+    const id = SessionIdSchema.safeParse(session)
+    const thread = id.success ? threads.store?.sessionPlacement(id.data)?.thread : undefined
+    return (thread ? threads.store?.threadSessions(thread) ?? [] : []).filter((each) => each.session === session).flatMap((each) => each.journals)
+  })
+  const leaveProjectFolder = async (session: string) => {
+    const id = SessionIdSchema.safeParse(session)
+    const thread = id.success ? threads.store?.sessionPlacement(id.data)?.thread : undefined
+    const acknowledged = thread && (await late.readiness?.acknowledged(thread))
+    const attribution = late.attribution
+    if (!thread || !acknowledged || !attribution) return
+    const repositories = acknowledged.acknowledged.map((each) => ({ root: each.root, versions: each.versions ?? [] }))
+    const left = await checkoutLeave.leave(thread, repositories[0]!.root, repositories, {
+      heard: () => attribution.heard(),
+      partition: (checkout, of) => attribution.partitionOffLoop(checkout, of),
+      mako: (write) => attribution.mako(write),
+    })
+    // Nothing of the Thread's sits in the project folder unannounced: its row says what stayed, and the commits the cloud took.
+    const unpushed = acknowledged.acknowledged.reduce((sum, each) => sum + each.unpushed, 0)
+    if (left.kind === "stayed" || unpushed) {
+      const paths = left.kind === "stayed" ? left.paths : []
+      for (const conversation of threads.store?.threadSessions(thread).flatMap((each) => each.journals) ?? []) emit({ type: "checkout-stayed", conversation, paths, unpushed })
+    }
+  }
   const cloudMoves = cloudConversations && new CloudMoves({
     awayHeld: (session) => late.awayNotes?.holds(session),
+    joinedAway: (session) => void leaveProjectFolder(session).catch((error: Error) => hostWarn("leaving", "a Thread the cloud took couldn't leave the project folder; its changes stay", { session, error: error.message })),
     folder: join(environment.dataRoot, "cloud", "moves"),
     git,
     account: () => late.cloud,
@@ -1181,6 +1211,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       deviceId: async () => late.cloud?.deviceId(),
       join: (session, listed) => cloudMoves.joinContinue(session, listed),
       released: unpark,
+      changed: (sessions) => emit({ type: "away-held", conversations: heldConversations(sessions) }),
     })
     // Asked again while any waits and the account couldn't answer: on the account's next link too, through the owner check.
     shell.jobs.every("ask the account whose the Sessions held as this Mac went away are", 30_000, async () => {
@@ -1879,9 +1910,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         }
         if (channel === "mako:handoff-run-here") {
           // SAFETY: the dispatcher parsed this call's arguments with `mako:handoff-run-here`'s schema before routing it.
-          const [thread] = args as [string]
-          const id = ThreadIdSchema.safeParse(thread)
-          const sessions = id.success ? (threads.store?.threadSessions(id.data) ?? []).map((each) => each.session) : []
+          const [conversationId] = args as [string]
+          const thread = threads.store?.journalPlacement(conversationId)?.thread
+          const sessions = thread ? (threads.store?.threadSessions(thread) ?? []).map((each) => each.session) : []
           return { handled: true, value: encodeRuntimeValue((await late.awayNotes?.runHere(sessions)) ?? 0) }
         }
         if (channel === "mako:handoff") {

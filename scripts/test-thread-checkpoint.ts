@@ -14,6 +14,7 @@ import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
 import { partition, type JournalView, type Partition } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { applyMoveCheckpoint } from "@mako/host/workspaces/move-checkpoint"
+import { CheckoutLeave } from "@mako/host/workspaces/leave-checkout"
 import { captureThreadCheckpoint, type ThreadCheckpointInput } from "@mako/host/workspaces/thread-checkpoint"
 
 /*
@@ -299,3 +300,77 @@ test("refused: a checkout mid-merge, one with no commits, and a journal that has
   f.sh(empty, "init", "-q")
   await assert.rejects(f.capture({ repoRoot: empty }), { name: "ThreadCheckpointRefused", kind: "no-commits" })
 })
+
+/** T1 edits a line of a shared file, makes a file and deletes one; T2 and the person edit beside it. Nothing left out. */
+async function plainEdits(f: Fixture) {
+  const { clock, write, mark, call, abs } = f
+  clock.advance(1_000)
+  mark("turn", "T1", "p1", "start")
+  await call("T1", "p1", "p1c1", [{ kind: "modify", path: abs("shared.ts"), edits: [{ old: "line 3\n", new: "line 3 by T1\n" }] }], () => write("shared.ts", lines(30, { 3: "line 3 by T1" })))
+  await call("T1", "p1", "p1c2", [{ kind: "create", path: abs("src/new1.ts"), content: "export const one = 1\n" }], () => write("src/new1.ts", "export const one = 1\n"))
+  await call("T1", "p1", "p1c3", [{ kind: "delete", path: abs("gone.ts") }], () => {
+    rmSync(abs("gone.ts"))
+    f.events.changed(abs("gone.ts"))
+  })
+  mark("turn", "T1", "p1", "end")
+  clock.advance(1_000)
+  mark("turn", "T2", "p2", "start")
+  await call("T2", "p2", "p2c1", [{ kind: "modify", path: abs("shared.ts"), edits: [{ old: "line 15\n", new: "line 15 by T2\n" }] }], () => write("shared.ts", lines(30, { 3: "line 3 by T1", 15: "line 15 by T2" })))
+  mark("turn", "T2", "p2", "end")
+  clock.advance(5_000)
+  write("person.ts", "export const p = 2\n")
+  write("shared.ts", lines(30, { 3: "line 3 by T1", 15: "line 15 by T2", 30: "line 30 by the person" }))
+  await f.tracker.settled()
+  clock.advance(15_000)
+  f.tracker.sweep()
+}
+
+const leaveLedger = (f: Fixture) => ({ ...f.ledger, heard: () => f.tracker.settled(), partition: (checkout: string, thread: string) => f.ledger.partition(checkout, thread), mako: (write: Parameters<typeof f.tracker.mako>[0]) => f.tracker.mako(write) })
+
+test("back from going away, a Thread the cloud took leaves the project folder: only its own changes, all at once", async () => {
+  const f = await fixture("leave")
+  await plainEdits(f)
+  const taken = await f.capture()
+  assert.deepEqual(taken.versions.map((each) => each.path), ["gone.ts", "shared.ts", "src/new1.ts"])
+  const leave = new CheckoutLeave(join(f.base, "leaving"), runner, () => {})
+  const outcome = await leave.leave("T1", f.repo, [{ root: f.repo, versions: taken.versions }], leaveLedger(f))
+  assert.equal(outcome.kind, "left", JSON.stringify(outcome))
+  const at = (path: string) => (existsSync(f.abs(path)) ? readFileSync(f.abs(path), "utf8") : null)
+  assert.equal(at("shared.ts"), lines(30, { 15: "line 15 by T2", 30: "line 30 by the person" }), "T1's line went; T2's and the person's stay")
+  assert.equal(at("src/new1.ts"), null, "the file it made went")
+  assert.equal(at("gone.ts"), "export const gone = 1\n", "the file it deleted is back")
+  assert.equal(at("person.ts"), "export const p = 2\n", "the person's file as they left it")
+  assert.equal(await leave.stayed("T1"), undefined)
+  assert.ok(outcome.kind === "left" && f.git("rev-parse", "--verify", outcome.backup), "the project folder before it is kept")
+})
+
+test("a file of the Thread's someone touched since: nothing leaves, and what stayed is kept for its row", async () => {
+  const f = await fixture("stay")
+  await plainEdits(f)
+  const taken = await f.capture()
+  const before = files(f.repo)
+  f.clock.advance(2_000)
+  f.write("src/new1.ts", "export const one = 1 // and the person's note\n")
+  await f.tracker.settled()
+  const ledger = leaveLedger(f)
+  const leave = new CheckoutLeave(join(f.base, "leaving"), runner, () => {})
+  const outcome = await leave.leave("T1", f.repo, [{ root: f.repo, versions: taken.versions }], ledger)
+  assert.equal(outcome.kind, "stayed")
+  assert.ok(outcome.kind === "stayed" && outcome.paths.includes("src/new1.ts"), JSON.stringify(outcome))
+  const after = files(f.repo)
+  before.set("src/new1.ts", after.get("src/new1.ts")!)
+  assert.deepEqual(after, before, "nothing else changed")
+  assert.ok((await new CheckoutLeave(join(f.base, "leaving"), runner, () => {}).stayed("T1"))?.includes("src/new1.ts"), "kept on disk for the row")
+})
+
+test("a change of the Thread's the cloud never got (left out of its checkpoint): nothing leaves", async () => {
+  const f = await fixture("never-got")
+  await edits(f)
+  const taken = await f.capture()
+  const leave = new CheckoutLeave(join(f.base, "leaving"), runner, () => {})
+  const outcome = await leave.leave("T1", f.repo, [{ root: f.repo, versions: taken.versions }], leaveLedger(f))
+  assert.equal(outcome.kind, "stayed")
+  assert.ok(outcome.kind === "stayed" && outcome.paths.includes("huge.bin"), "the file too large to carry stays, and so does the rest")
+  assert.equal(readFileSync(f.abs("shared.ts"), "utf8"), lines(30, { 3: "line 3 by T1", 15: "line 15 by T2", 30: "line 30 by the person" }))
+})
+

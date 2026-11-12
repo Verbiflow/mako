@@ -484,8 +484,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** Whether agents at work go to the cloud as this Mac sleeps, and whether it can. */
     handOffSettings: () => invokeTrustedHost<HandOffSettings>("mako:handoff-settings"),
     setHandOffOnSleep: (onSleep: boolean) => invokeTrustedHost<HandOffSettings>("mako:handoff-settings-set", onSleep),
-    /** A Thread held since this Mac went away runs here now, whatever the account did meanwhile; answers how many of its Sessions it let go. */
-    runHandedOffHere: (thread: string) => invokeTrustedHost<number>("mako:handoff-run-here", thread),
+    /** The Thread of a conversation held since this Mac went away runs here now, whatever the account did meanwhile; answers how many of its Sessions it let go. */
+    runHandedOffHere: (conversationId: string) => invokeTrustedHost<number>("mako:handoff-run-here", conversationId),
     /** Whether this Mac is kept awake while agents work, the person's choice for it, and what's held now. */
     keepAwake: () => invokeTrustedHost<KeepAwakeState>("mako:keep-awake"),
     setKeepAwake: (change: Partial<KeepAwakeSettings>) => invokeTrustedHost<KeepAwakeState>("mako:keep-awake-set", change),

@@ -25,6 +25,8 @@ export type AwayNotesOptions = {
   join(session: string, listed: ListedContinue): void
   /** Sessions let go here: each parked turn of theirs goes on here (`CloudMoves.unpark`). */
   released(): void
+  /** The held Sessions changed: windows hear which conversations wait (`away-held`). */
+  changed?(sessions: readonly string[]): void
   now?(): number
 }
 
@@ -129,7 +131,13 @@ export class AwayNotes {
     await this.#save()
   }
 
+  /** The Sessions held now. */
+  held(): string[] {
+    return this.#held?.sessions.map((each) => each.session) ?? []
+  }
+
   #save(): Promise<void> {
+    this.#options.changed?.(this.held())
     const write = this.#writing.then(async () => {
       await mkdir(dirname(this.#options.file), { recursive: true })
       const tmp = `${this.#options.file}.tmp`
