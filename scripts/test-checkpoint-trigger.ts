@@ -265,7 +265,9 @@ test("going away: the last changes are captured and sent by the deadline, and th
   await w.readiness.flush(working, Date.now() + 2_000)
   assert.equal(w.captures.at(-1)?.content, "v-away", "the turn's last edit, heard or not")
   const named = await w.readiness.noteCheckpoint("local-1")
-  assert.deepEqual(named, { sha256: w.sent.at(-1)!.sha256, standby: "t-standby" })
+  assert.equal(named?.sha256, w.sent.at(-1)!.sha256)
+  assert.equal(named?.standby, "t-standby")
+  assert.ok(named?.head && named.index && named.work && named.branch === "mako/fix", "whole, as the arrival applies it")
 })
 
 test("going away waits no longer than its deadline for a slow capture", async () => {
