@@ -1347,6 +1347,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         return late.cloud.quiet(note)
       },
       accepted: async (note, sessions) => late.awayNotes?.noted(note, sessions),
+      // The account takes a note only for Sessions it lists as this Mac's and idle: read here until the paused turns are.
+      rows: async () => {
+        const cloud = late.cloud
+        const [device, listed] = await Promise.all([cloud?.deviceId(), cloud?.sessionListings?.()])
+        if (!device || !listed) throw new Error("This Mac's rows can't be read from the account now.")
+        return new Map(listed.sessions.filter((row) => row.runsOn.kind === "device" && row.runsOn.deviceId === device).map((row) => [row.session, row.state]))
+      },
     },
     changed: (settings) => {
       emit({ type: "handoff-settings", settings })
