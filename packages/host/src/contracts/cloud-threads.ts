@@ -102,9 +102,22 @@ export type MoveSent = { bytes: number; of: number }
 /**
  * A move of a Thread whose agents may be working (rule 2 of moves): each running turn is paused, the Thread moves,
  * and the turn continues where it lands. `why` says who asked: the person (`asked`), a quit with agents running, or
- * this Mac going to sleep, when it must be released by `releaseBy` (wall-clock ms) or stay here untouched.
+ * this Mac going to sleep or shutting down, when it must be released by `releaseBy` (wall-clock ms). One a Mac going
+ * off couldn't release in time stays here with its turns paused (`goesOff`), for Continue in the cloud from another
+ * device, and goes on here once this Mac hears its account again (`CloudMoves.unpark`).
  */
-export type ThreadHandOff = { why: "asked" | "quit" | "sleep"; releaseBy?: number }
+export type ThreadHandOff = { why: "asked" | "quit" | "sleep" | "shutdown"; releaseBy?: number }
+
+/**
+ * How long a shutdown is held for its handoff: the desktop app delays the shutdown while the host answers
+ * (`machineLeaving`), and the host's own stop waits for what's still under way as long again at most.
+ */
+export const SHUTDOWN_HOLD_MS = 10_000
+
+/** Whether a handoff is this Mac going off: asleep or shut down, it can't carry on a turn it paused. */
+export function goesOff(handOff: Pick<ThreadHandOff, "why"> | undefined): boolean {
+  return handOff?.why === "sleep" || handOff?.why === "shutdown"
+}
 
 /** A Thread of this Mac's whose agents are working, as a quit or a sleep would hand it to the cloud. */
 export type HandOffCandidate = {

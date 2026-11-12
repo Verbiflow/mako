@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { createServer } from "node:http"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
@@ -12,6 +12,7 @@ import { decodeOperation } from "@mako/protocol"
 import { cloudRuntimeOf as protocolRuntimeOf, continueCloudThread, continueHandOver, namedUuid as protocolUuid, type ContinueState } from "@mako/protocol/continues"
 import type { MoveAnswer } from "@mako/protocol/moves"
 import { fromHostOperation } from "@mako/host/contracts/host-operations"
+import { encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { CloudMoves, MovePlanSchema, cloudRuntimeOf, namedUuid, onBranchHere, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
 import { arriveMove, MoveArrivalInputSchema, type MoveArrivalDeps } from "@mako/host/conversations/move-arrival"
 import type { ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
@@ -142,7 +143,7 @@ try {
   // A Mac back from sleep joins the continue: it releases the Thread at the account's generation and confirms the
   // cloud's claim, so the Thread runs in the cloud and never here; asked again, nothing more happens.
   const start = { version: 1 as const, sha256: "a".repeat(64), bytes: 10, head: "b".repeat(40), index: "c".repeat(40), work: "d".repeat(40), branch: "webhooks" }
-  const harness = (answer: () => MoveAnswer | undefined, continued: () => ContinueState | undefined, busy: string[] = []) => {
+  const harness = (answer: () => MoveAnswer | undefined, continued: () => ContinueState | undefined, busy: string[] = [], calls?: Array<{ channel: string; args: readonly unknown[] }>) => {
     const steps: ThreadMoveStep[] = []
     const adopted: string[] = []
     const carriedOn: string[] = []
@@ -196,7 +197,14 @@ try {
       checkout: () => ({ path: checkout, worktrees: [{ path: checkout }] }),
       repositoryOf: async () => ({ url: "https://github.com/ana/api", branch: "webhooks" }),
       sendRecords: async () => { throw new Error("a joined continue sends nothing: the account had it all") },
-      cloud: { adopt: async (each) => void adopted.push(`${each.conversationId} ${each.threadId}`), callThread: async () => { throw new Error("nothing is asked of the machine") } },
+      cloud: {
+        adopt: async (each) => void adopted.push(`${each.conversationId} ${each.threadId}`),
+        callThread: async (_thread, channel, args) => {
+          if (!calls) throw new Error("nothing is asked of the machine")
+          calls.push({ channel, args })
+          return encodeRuntimeValue(null)
+        },
+      },
       live: { handOff: async () => undefined, continueTurn: () => undefined, waitingPrompts: () => [], carried: () => undefined },
       remembered: () => null,
       step: (_conversation, _move, step) => void steps.push(step),
@@ -230,7 +238,13 @@ try {
 
   {
     const claimed: MoveAnswer = { kind: "claimed", move: op, at: clock, sessions: [{ id: placed.session, generation: generation + 2 }] }
-    const joined = harness(() => claimed, () => state("continued", { start }))
+    const calls: Array<{ channel: string; args: readonly unknown[] }> = []
+    const joined = harness(() => claimed, () => state("continued", { start }), [], calls)
+    // A turn this Mac paused as it went to sleep and couldn't hand off in time, parked for the Thread, goes on in the
+    // cloud with the continue, as Mako's (`CloudMoves.unpark` would have continued it here).
+    const parked = randomUUID()
+    mkdirSync(joined.folder, { recursive: true })
+    writeFileSync(join(joined.folder, "parked-turns"), JSON.stringify({ version: 1, turns: [{ move: randomUUID(), thread: placed.thread, conversationId: conversation, requestId: parked, stopped: ["npm run dev"], at: Date.now() }] }))
     joined.moves.joinContinue(placed.session, listed)
     joined.moves.joinContinue(placed.session, listed)
     await new Promise((resolve) => setTimeout(resolve, 5))
@@ -242,6 +256,8 @@ try {
     assert.deepEqual(joined.carriedOn, [op], "the account was asked to carry it on, once")
     assert.deepEqual(joined.adopted, [`${conversation} ${cloudThread}`], "followed here as the cloud's, as a moved Thread is")
     assert.deepEqual(joined.steps.map((step) => step.kind), ["resuming", "moved"])
+    assert.deepEqual(calls.map(({ channel, args }) => [channel, args[0], args[2]]), [["mako:live-continue-turn", conversation, { reason: "handed-off", continues: parked, stopped: ["npm run dev"] }]], "the parked turn goes on in the cloud")
+    assert.deepEqual(z.object({ turns: z.array(z.unknown()) }).parse(JSON.parse(readFileSync(join(joined.folder, "parked-turns"), "utf8"))).turns, [], "and is parked here no more")
     const plan = MovePlanSchema.parse(JSON.parse(readFileSync(join(joined.folder, `${op}.json`), "utf8")))
     assert.equal(plan.phase, "started")
     assert.deepEqual(plan.checkpoint, start, "weighed against what the cloud began with, as a move is against what it sent")

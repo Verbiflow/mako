@@ -43,8 +43,12 @@ import { makoViews, type ThreadRef } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { busySinceLastAsk } from "./base/machine-load.js"
+import { Advertiser, ADVERTISE_EVERY_MS } from "./base/advertiser.js"
+import { deviceProbe, probeCapabilities, type SimulatorFacts } from "./base/capabilities.js"
+import { LentHere } from "./base/lent.js"
+import { setupStep } from "./contracts/simulator-setup.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, type CloudSignInPlace, type PrefetchOutcome, harnessLabel } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, CliReadings, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import type { GitHubPerson } from "./contracts/github-person.js"
@@ -58,7 +62,7 @@ import { ControlResidency, controlLine, openControl, declareControlMethods, cont
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
+import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
 import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
@@ -177,6 +181,8 @@ const trace = (stage: string) => {
 /** Parts of the core built further down `openCore`; reached before then only through `?.`, by a caller that came early. */
 interface LateParts {
   conversations?: Conversations
+  /** What this Mac can serve another place and its room, said to borrowing's brokers (`Advertiser`). */
+  advertiser?: Advertiser
   movers?: WorkspaceMovers
   agentServers?: ConversationMcp
   controlService?: ControlService
@@ -704,11 +710,21 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     own: () => finDefaults.reading().limit,
     ...(finSlots() !== undefined && { fixed: finSlots()! }),
   })
-  declareFinDefaultMethods(methods, finDefaults, () => finCapacity.reading(), () => finCapacity.changed())
+  // What this Mac runs for another place's Threads under borrowing's leases: each holds one of its Fins' places.
+  const lent = new LentHere()
+  lent.subscribe(() => {
+    late.conversations?.agents?.capacityChanged()
+    late.advertiser?.roomChanged()
+  })
+  declareFinDefaultMethods(methods, finDefaults, () => {
+    const reading = finCapacity.reading()
+    return lent.count() ? { ...reading, lent: lent.words() } : reading
+  }, () => finCapacity.changed())
   // Every check run holds one of the builds capacity keeps room for, and the rest wait their turn.
   const buildSlots = new BuildSlots(() => finCapacity.builds())
   finCapacity.subscribe(() => buildSlots.changed())
   late.cloud = declareCloudAccountMethods(methods, {
+    advertising: { current: () => late.advertiser?.current() },
     accessChoices: {
       heard: (answer) => void late.cloud?.id().then((account) => account && accessChoices.heard({ account, ...answer }), () => undefined),
       again: () => void accessChoices.sync(),
@@ -781,7 +797,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         // A message that waited in the account for one of this Mac's Sessions while it was off: sent here now, under
         // its own ID, through the same call a window's send makes, so it runs once however often it's heard.
         continued: (session, listed) => late.cloudMoves?.joinContinue(session, listed),
-        ownerChecked: () => late.conversations?.live.moves.ownerChecked(),
+        ownerChecked: () => {
+          late.conversations?.live.moves.ownerChecked()
+          // Turns paused as this Mac went off, for a Thread still here, go on now (`CloudMoves.unpark`).
+          void late.cloudMoves?.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
+        },
         takeWaiting: async (message, claim) => {
           const store = threads.store
           const live = late.conversations?.live
@@ -877,6 +897,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     ...(!fixtureDesk && { account: () => late.cloud }),
     finDefaults,
     finCapacity,
+    lent: () => lent.count(),
     builds: () => buildSlots.reading(),
     invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     // A new conversation is on the account's list before its harness has started.
@@ -933,7 +954,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const attribution = late.attribution
       return attribution && {
         placement: (conversation) => threads.store?.journalPlacement(conversation),
-        flushed: () => attribution.settled(),
+        // A turn's count waits only for what was heard: never for checkouts rescanned whole after lost events.
+        flushed: () => attribution.heard(),
         countTurn: (thread, turn, state) => attribution.countTurn(thread, turn, state),
         settledThrough: (at) => attribution.settledThrough(at),
         counted: (summary, session) => attribution.counted(summary, session),
@@ -962,6 +984,53 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // tells them it hears: the notices they kept for it come now, not at their next retry.
   late.cloud?.onRuntimeLinked?.(() => opened.agents?.knock())
   const { live, runs, native } = opened
+  // What this Mac can serve another place (its OS, Xcode, simulators, emulators, GPU, CLIs) and its room, said to the
+  // account's broker on its runtime link and to its own: on a change, as the link enrols, and hourly. Only what the
+  // person lends is said, by the grants that stand here and at the account. A cloud machine and a fixture desk lend nothing.
+  if (config.machineAgentFd === undefined && !fixtureDesk) {
+    const simulatorFacts = async (): Promise<SimulatorFacts | undefined> => {
+      const [listed, setup] = await Promise.all([control.simulators.list({ kind: "person" }), control.simulatorSetup.read()])
+      if ("refused" in listed) return undefined
+      const here = listed.hosts.find((host) => host.kind === "local")
+      if (!here) return undefined
+      const xcode = setupStep(setup, "xcode")?.xcode?.version
+      return { ios: here.platforms.ios, simulators: listed.simulators.filter((simulator) => simulator.hostId === here.id), ...(xcode && { xcode }) }
+    }
+    const brokers = async () => {
+      const saved = await secrets.borrowing()
+      return [workspaces.worktrees?.borrowing.borrowing, saved].filter((broker) => broker !== undefined)
+    }
+    const clis = new CliReadings({ installed: () => harnesses.updates.snapshot(), processes: providerHost.discovery })
+    const advertiser = new Advertiser({
+      probe: () => probeCapabilities(deviceProbe(simulatorFacts, () => clis.read())),
+      lending: async () => {
+        const [here, account] = await Promise.all([
+          brokers().then((found) => Promise.all(found.map((broker) => broker.grants()))),
+          late.cloud?.borrow?.grants().catch(() => null),
+        ])
+        return [...here.flat(), ...(account ?? [])]
+      },
+      devices: async () => {
+        const [found, account] = await Promise.all([brokers(), late.cloud?.deviceId().catch(() => undefined)])
+        return [...found.map((broker) => broker.device), ...(account ? [account] : [])]
+      },
+      room: () => {
+        const capacity = finCapacity.reading()
+        return { slots: { used: opened.agents?.workingHere() ?? 0, of: capacity.atOnce }, load: capacity.why }
+      },
+      sinks: [
+        (advertisement) => late.cloud?.advertise?.(advertisement) ?? false,
+        async ({ capabilities, slots }) => {
+          await Promise.all((await brokers()).map((broker) => broker.advertise(capabilities, slots)))
+        },
+      ],
+      log: (message, fields) => hostLog("borrowing", message, fields),
+    })
+    late.advertiser = advertiser
+    jobs.every("advertise what this Mac can serve", ADVERTISE_EVERY_MS / 12, () => advertiser.probe(), { firstAfterMs: 10_000 })
+    jobs.every("advertise this Mac's room", 15_000, () => advertiser.roomChanged())
+    jobs.every("advertise what this Mac can serve, hourly", ADVERTISE_EVERY_MS / 4, () => advertiser.due())
+  }
   // A message held until a time (a usage limit's reset) sends itself within a tick of it, across restarts.
   // Held messages' times: one timer, armed for the soonest (`LiveConversations.armWakes`), once the host has started.
   setTimeout(() => live.armWakes(), HELD_WAKES_AFTER_START_MS).unref()
@@ -987,11 +1056,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     checkout: (id) => workspaces.worktrees?.threadCheckout(id),
     // A Thread in the main checkout goes onto its own branch first, as the person's "Move to its own branch" does, its
     // companions following; its agent isn't told, since nothing starts a turn on the way to the cloud.
-    ownBranch: async (id) => {
+    ownBranch: async (id, options) => {
       const movers = late.movers
       const worktreeMoves = movers?.worktreeMoves
       if (!movers || !worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")
-      const { moved, following } = await movers.moves.moveNow(id, () => worktreeMoves.carry(id, { lead: true, tell: false }))
+      const { moved, following } = await movers.moves.moveNow(id, () => worktreeMoves.carry(id, { lead: true, tell: false, ...options?.asItself && { asItself: true } }))
       await following
       return moved.session.id
     },
@@ -1553,7 +1622,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     wake,
     leaving: (source) => {
       hostLog("host", "leaving", { source })
-      late.cloud?.leaving?.(source === "suspend" ? "sleep" : "quit")
+      return machineLeaving(source, {
+        handOffs: cloudHandOffs || undefined,
+        enabled: async () => cloudHandOffs ? (await cloudHandOffs.onSleep()) && !(await handOffUnavailable()) : false,
+        quiet: (why) => late.cloud?.leaving?.(why),
+      })
     },
     jobs: shell.jobs,
     subscribed: shell.subscribed,
@@ -1766,7 +1839,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     lifecycleBlocked: () => application.lifecycle.blocked,
     async stop() {
       // A stop that runs long says where it is and what it waits on, so a host killed for it leaves the reason logged.
-      let step = "closing the record of changes"
+      let step = "waiting for a handoff under way"
+      // A shutdown's handoff goes on as the system stops the host: what it still sends to the cloud, its hold at most.
+      await cloudHandOffs?.underWay(Date.now() + SHUTDOWN_HOLD_MS)
+      step = "closing the record of changes"
       const slow = STOP_SLOW_MS.map((ms) => setTimeout(() => hostWarn("lifecycle", "stopping is slow", { ms, step, on: shell.work.openWork?.().join(", ") || "no named work" }), ms))
       try {
         jobs.stop()

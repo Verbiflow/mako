@@ -37,9 +37,11 @@ export type SleepHandOffOptions = {
 /**
  * Hands agents at work to the cloud as this Mac goes to sleep. A native helper (`native/sleep-watch-macos`) hears
  * the sleep before it happens and holds it while the host hands each working Thread off (rule 3 of moves made the
- * release small); it lets the Mac sleep once the host answers, or once its hold runs out. A Thread that can't be
- * released in that time stays here untouched, its turn going on when the Mac wakes (rule 4). Runs only while the
- * person's choice is on.
+ * release small), one in the project folder onto its own branch first; it lets the Mac sleep once the host answers,
+ * or once its hold runs out. A Thread that can't be released in that time stays here with its turns paused, so it
+ * reads idle for Continue in the cloud from another device, and goes on here once the Mac wakes and hears its account
+ * (rule 4, `CloudMoves.unpark`). A shutdown hands off the same way (`machineLeaving`). Runs only while the person's
+ * choice is on.
  */
 export class SleepHandOff {
   readonly #options: SleepHandOffOptions

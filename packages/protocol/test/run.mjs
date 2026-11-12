@@ -1,3 +1,4 @@
+import "./wire-version-migration.mjs"
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import { runGatewayConformance, runMediaConformance, runSshConformance } from "../dist/conformance.js"
@@ -36,6 +37,7 @@ import {
   PORT_BODY_LIMIT,
   PORTS_VERSION,
   QUIET_VERSION,
+  ADVERTISE_LINK_VERSION,
   decodePortHead,
   encodePortHead,
   MediaTooLargeError,
@@ -112,7 +114,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 22)
+    assert.equal(SUPPORTED_VERSIONS.max, 23)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -606,6 +608,32 @@ describe("a runtime served through serveRuntime", () => {
     assert.equal(lines.filter((line) => line.event === "going-quiet").length, 1)
     assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "going-quiet", reason: "sign-out" })), { type: "going-quiet", reason: "sign-out" })
     assert.throws(() => decodeRuntimeFrame(JSON.stringify({ type: "going-quiet", reason: "bored" })), WireError)
+    older.close()
+    await gateway.close()
+  })
+
+  test("a device says what it can serve and its room on a link that knows the frame; never a value, and an older link never hears it", async () => {
+    const gateway = createFakeGateway()
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-mac", build: "test", handle: async (operation) => answer(operation, null) })
+    const advertisement = {
+      capabilities: [
+        { capability: "macos", version: "26.1", attributes: { arch: "arm64" } },
+        { capability: "ios-simulator", version: "26.1", attributes: { runtime: "iOS 26.1", device: "iPhone 17 Pro", form: "phone" } },
+      ],
+      slots: { used: 2, of: 6 },
+      load: "14 cores, 36 GB",
+      at: 1_000,
+    }
+    assert.equal(runtime.advertise(advertisement), true)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.deepEqual(gateway.advertisements("d-mac"), [advertisement])
+    const older = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-old", build: "test", versions: { min: 1, max: ADVERTISE_LINK_VERSION - 1 }, handle: async (operation) => answer(operation, null) })
+    assert.equal(older.advertise(advertisement), false, "a gateway before version 23 routes nothing to it by capability")
+    assert.deepEqual(gateway.advertisements("d-old"), [])
+    assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "advertise", ...advertisement })), { type: "advertise", ...advertisement })
+    const token = { capability: "cli", attributes: { command: "gh" }, token: "ghp_x" }
+    assert.throws(() => decodeRuntimeFrame(JSON.stringify({ type: "advertise", ...advertisement, capabilities: [token] })), WireError, "a capability carries names, never a value")
+    runtime.close()
     older.close()
     await gateway.close()
   })
@@ -2372,7 +2400,7 @@ describe("a Session continued in the cloud while its device is off", () => {
     assert.ok(LINK_VERSION >= FIN_STATES_VERSION)
     assert.equal(BORROW_LINK_VERSION, 21)
     assert.equal(SESSION_ORDER_VERSION, 22)
-    assert.equal(LINK_VERSION, SESSION_ORDER_VERSION)
+    assert.ok(LINK_VERSION >= SESSION_ORDER_VERSION)
     const { runsOn: _runsOn, listedAt: _listedAt, ...reported } = row
     const fin = (name, state) => ({ thread: "2b3c4d5e-6f70-4182-9a3b-4c5d6e7f8091", name, harness: "cursor", state, startedAt: "2026-11-04T21:46:08.000Z" })
     const apex = { ...reported, fins: [fin("li-openoutreach", { kind: "queued", reason: "place-full", ahead: 2 }), fin("li-protocol", { kind: "working", step: "Reading README.md" }), fin("li-flage", { kind: "ended", outcome: "done" })] }

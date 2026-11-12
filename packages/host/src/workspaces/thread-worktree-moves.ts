@@ -144,14 +144,15 @@ export class ThreadWorktreeMoves {
    * to move, a message to carry on there; the rest start no turn. The
    * person's own move (`input`) is announced by the window that made it,
    * which also archives what it leaves. `bring`: the person chose to bring
-   * what might be the Thread's and what nobody can be named for too.
+   * what might be the Thread's and what nobody can be named for too. `asItself`: it goes as the same session or not
+   * at all, never as a fork, as a handoff's paused turn needs to go on in that session.
    */
-  async carry(id: string, how: { lead: boolean; tell: boolean; after?: string; input?: ForkInput; bring?: boolean }): Promise<LiveSnapshot> {
+  async carry(id: string, how: { lead: boolean; tell: boolean; after?: string; input?: ForkInput; bring?: boolean; asItself?: boolean }): Promise<LiveSnapshot> {
     const source = this.deps.conversations.snapshot(id)
     if (!source) throw new Error("The conversation closed before it could move onto its own branch.")
     const title = source.session.title || "Untitled conversation"
     const last = source.requests.filter((request) => request.status === "completed").at(-1)
-    const input = how.input ?? (last && {
+    const input = how.input ?? (how.asItself || !last ? undefined : {
       id: randomUUID(),
       provider: source.session.harness,
       point: { kind: "run", requestId: last.id },
@@ -162,6 +163,7 @@ export class ThreadWorktreeMoves {
     // With no answer to fork from, it can still go as itself.
     const { conversation, moved, outcome, relocated } = await this.move(id, input, how.lead ? this.project(id) : undefined, how.bring).catch((error: Error) => {
       if (input) throw error
+      if (how.asItself) throw new Error(`It couldn't go onto its own branch as the same session. ${error.message}`)
       throw new Error(how.lead
         ? `The agent's turn didn't finish, so it didn't move onto its own branch. ${error.message} Move it from the composer once it has an answer.`
         : `“${title}” stayed in the main checkout. ${error.message}`)

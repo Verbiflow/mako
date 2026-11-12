@@ -387,6 +387,13 @@ Fin but couldn't be stamped stays pending, and the next start finds it under
 its request and stamps it. The answer is the Fin's next message, and
 until its next report its row says who answered (`working.answered`). `test:fin-decisions` holds the matrix,
 `test:fin-decision-ui` the surfaces (`?mock&app=apex&fins=decisions`).
+"Needs you" is never the whole of it: a Fin's rail row says what it waits on
+under its name (`askWords`, else `childLine`), its tab's tip says it, and the
+Fin opened from that row draws its ask with its answers above its own composer
+(`FinAsks`, read from its Apex's roster and answered through the Apex), or a
+line saying on what when nothing there can answer it; an approval its own
+conversation holds keeps that conversation's one card. `test:needs-you-ui`
+holds it at a 1352 × 847 desk window.
 New explicit report questions carry `retainsQuestion`: later narration,
 notice delivery, and reads do not resolve them. `ThreadStore.openReportAsks`
 derives pending questions from report IDs, exact answer claims and explicit
@@ -1477,6 +1484,22 @@ that keeps the session only pins its binding (`ProviderBinding.account`,
 of the harness it leaves, so it works on a Fin stopped, ended, failed or out of
 usage, keeping its Thread, name, edge, worktree, branch and reports. Its rules
 beside a Stop and a hold are in `docs/delivery-queue.md`, rules 10 to 12.
+A same-harness target that names a model, reasoning or fast retunes the
+session: its binding and settings take it, and the next message naming none
+carries it into the running process (`Resident.retuned`); `agents_move` to
+the harness a Fin is on does this when it names one, held to that catalog as
+a start is, and says "already" only when it names nothing. Onto another
+harness, the selection goes only as far as the target lists it
+(`HarnessProfiles.carried`, `carriedTuning`): another harness's encoding
+(Cursor's `claude-opus-5-5[context=1m,fast=false]`) goes as the model it
+names, a model the target doesn't list goes as nothing, so the target runs
+its own default. A message to a Fin whose session's records were never
+located (`ResumeVerdict` `unavailable` with `lost`) goes on in a new session
+of that harness with the whole conversation, as a record kept closed does,
+and `agents_send` answers only once the session opened: a reopening that
+fails is refused with why, one waiting to go again says so, never "takes it
+now" (`Agents.reopening`). `npm run test:fin-reopen` reproduces each on a
+scratch host.
 `agents_start` and `agents_send` attach another Thread as a person's `@` chip
 does (`context: [{ thread }]`, a ref, a Thread ID or a Fin's name; `agents_list`
 `scope: threads` finds a ref). What can be attached can be read and exported, so
@@ -4063,7 +4086,24 @@ going to sleep, shutting down, quitting or signing out says so on its runtime's
 link first (`going-quiet`, link version 8; `mako:machine-leaving` from the
 desktop app's `suspend` and `shutdown`), and the link stays closed until the
 wake (`CloudLink.quiet`), so its device is quiet at once rather than after
-missed heartbeats; `test-cloud-account.ts` covers it. A Thread's name is the
+missed heartbeats; `test-cloud-account.ts` covers it. The cloud hears it only once
+the handoff under way answered (`machineLeaving`): agents at work go to the
+cloud as a Mac goes off, as it sleeps (the sleep watch holds the sleep,
+`SleepHandOff`), as it shuts down (the desktop app tells the host on
+`powerMonitor`'s `shutdown`, prevented until Mako quits, and the host hands
+off within `SHUTDOWN_HOLD_MS`, its own stop waiting for what's still under
+way as long again; a quit's Apple event fires no `shutdown`, and isn't held,
+since a quit held during a shutdown reads as refusing it) and from the quit
+sheet (`CloudHandOffs`). A Thread
+in the project folder is paused first and goes onto its own branch as the
+same session with only its own changes (`ownBranch`'s `asItself`), then to
+the cloud. One a Mac going off couldn't release in time stays with its turns
+paused (`goesOff`, `parked-turns` beside the moves' plans), so it reads idle
+for Continue in the cloud from another device; a continue this Mac joins
+carries those turns there, and otherwise they go on here once the Mac hears
+its account (`CloudMoves.unpark`, on `ownerChecked`).
+`test-handoff-going-off.ts` runs it on the host's own parts with scripted
+harnesses and a stand-in cloud. A Thread's name is the
 list's to say too: no batch carries it, and a followed conversation once kept
 its old one on a second Mac while the phone showed the rename. The
 account's archived cloud Threads are said only from a list the account
