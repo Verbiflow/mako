@@ -550,6 +550,8 @@ jobs:
         with:
           electron: "false"
       - run: npx tsgo -b packages/host
+      # Its fixtures end with it however it ends: killed, exited or signalled.
+      - run: npm run test:host-load-world
       - run: npm run bench:host-load -- --scale today --peak-limit-mb 1500 --cpu-prof "$RUNNER_TEMP/host-load-profile"
 
   # Codex's own sandbox on the setup the daily harness bump records Codex with, at the tested build: workspace-write
