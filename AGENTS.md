@@ -387,6 +387,13 @@ Fin but couldn't be stamped stays pending, and the next start finds it under
 its request and stamps it. The answer is the Fin's next message, and
 until its next report its row says who answered (`working.answered`). `test:fin-decisions` holds the matrix,
 `test:fin-decision-ui` the surfaces (`?mock&app=apex&fins=decisions`).
+"Needs you" is never the whole of it: a Fin's rail row says what it waits on
+under its name (`askWords`, else `childLine`), its tab's tip says it, and the
+Fin opened from that row draws its ask with its answers above its own composer
+(`FinAsks`, read from its Apex's roster and answered through the Apex), or a
+line saying on what when nothing there can answer it; an approval its own
+conversation holds keeps that conversation's one card. `test:needs-you-ui`
+holds it at a 1352 × 847 desk window.
 New explicit report questions carry `retainsQuestion`: later narration,
 notice delivery, and reads do not resolve them. `ThreadStore.openReportAsks`
 derives pending questions from report IDs, exact answer claims and explicit

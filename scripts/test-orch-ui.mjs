@@ -110,7 +110,7 @@ async function check() {
   // The rail lists the Apex once, and of its Fins only those that need the person, under it.
   const children = await evaluate("window.apexScene.children().map((agent) => agent.title)")
   assert.equal(children.length, 12)
-  const nested = await evaluate(`(() => { const rail = document.querySelector('.thread-jump-scope').cloneNode(true); const asking = [...rail.querySelectorAll('[data-asking-fin]')].map((node) => node.querySelector('.flex-1').textContent); rail.querySelectorAll('[data-asking-fin]').forEach((node) => node.remove()); return { text: rail.innerText, asking } })()`)
+  const nested = await evaluate(`(() => { const rail = document.querySelector('.thread-jump-scope').cloneNode(true); const asking = [...rail.querySelectorAll('[data-asking-fin]')].map((node) => node.querySelector('[data-asking-title]').textContent); rail.querySelectorAll('[data-asking-fin]').forEach((node) => node.remove()); return { text: rail.innerText, asking } })()`)
   assert.deepEqual(nested.asking.sort(), ["Quiet-hours push wording", "Sheet motion on iPad"], "the Fins that need the person hang under the Apex")
   for (const title of children) assert.ok(!nested.text.includes(title), `the rail lists no other Fin: ${title}`)
   assert.equal(await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-fin-pips]')].length"), 1, "one Apex row wears the pips")
