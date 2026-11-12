@@ -304,6 +304,10 @@ try {
     await readiness.refresh()
     await readiness.refresh()
     assert.equal(new Set(made.map((each) => each.threadId)).size, 1, "one cloud Thread stands by")
+    // What a going-away names for it: the worktree's checkpoint the cloud acknowledged, whole, on that cloud Thread.
+    const named = await readiness.noteCheckpoint("local-1")
+    assert.equal(named?.sha256, checkpoints.at(-1), "the last checkpoint the cloud acknowledged")
+    assert.ok(named?.head && named.work && named.standby === made[0]!.threadId, "whole, on the cloud Thread standing by")
     assert.ok(made.every((each) => each.standby), "standing by: no machine until a move")
     assert.equal(checkpoints.length, 1, "the checkout goes once while it's unchanged")
     assert.equal(records.length, 2, "records each round, only what's new")

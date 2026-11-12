@@ -25,7 +25,7 @@ const EVERY_MS = 300
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const repository: CloudRepository = { url: "https://github.com/octocat/Hello-World" }
 
-function world(options: { roots?: string[]; captureMs?: number; deaf?: boolean } = {}) {
+function world(options: { roots?: string[]; captureMs?: number; deaf?: boolean; sendMs?: number } = {}) {
   const roots = options.roots ?? ["/project/api"]
   const dir = mkdtempSync(join(tmpdir(), "mako-checkpoint-trigger-"))
   /** What the record of changes holds of the Thread's files, by repository: the test edits it. */
@@ -71,6 +71,7 @@ function world(options: { roots?: string[]; captureMs?: number; deaf?: boolean }
         failSends -= 1
         throw new Error("the gateway didn't answer")
       }
+      if (options.sendMs) await sleep(options.sendMs)
       sent.push({ cloudThread, sha256: checkpoint.sha256 })
       return { sent: true }
     },
@@ -277,5 +278,22 @@ test("going away waits no longer than its deadline for a slow capture", async ()
   await w.readiness.flush(working, Date.now() + 200)
   assert.ok(Date.now() - began < 600, `back in ${Date.now() - began} ms`)
   assert.equal(await w.readiness.noteCheckpoint("local-1"), undefined, "nothing acknowledged yet: the note names none")
+})
+
+test("going away cut short mid-send names the last checkpoint the cloud holds, never the one still on its way", async () => {
+  const w = world({ sendMs: 300 })
+  w.readiness.wrote("c-1")
+  await sleep(AFTER_WRITE_MS + 450)
+  const held = await w.readiness.noteCheckpoint("local-1")
+  assert.ok(held, "v0 acknowledged")
+  const working = [...w.working]
+  w.write("/project/api", "v-late")
+  w.working.length = 0
+  // The flush's cap comes while v-late's send is still on its way.
+  await w.readiness.flush(working, Date.now() + 150)
+  assert.equal(w.captures.at(-1)?.content, "v-late", "captured")
+  assert.deepEqual(await w.readiness.noteCheckpoint("local-1"), held, "the note names v0, which the cloud holds")
+  await sleep(400)
+  assert.equal((await w.readiness.noteCheckpoint("local-1"))?.sha256, w.sent.at(-1)!.sha256, "once its send answers, v-late")
 })
 

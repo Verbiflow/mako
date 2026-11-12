@@ -272,6 +272,7 @@ export class CloudReadiness {
     const entry = (await this.#load())[thread]
     if (!entry) return undefined
     // A worktree's whole checkout, or a Thread in the main checkout's own changes in its first repository.
+    // Only ever one the cloud acknowledged: each is kept the moment its send answered, never before.
     const whole = entry.acknowledged?.[0]?.checkpoint ?? (entry.sent?.sha256 === entry.checkpoint ? entry.sent : undefined)
     return whole && { ...whole, standby: entry.cloudThread }
   }
@@ -482,7 +483,11 @@ export class CloudReadiness {
   /** The checkout's checkpoint, sent when it changed since the last; answers its hash when it went. */
   async #sendCheckpoint(account: ReadinessAccount, entry: ReadyEntry): Promise<string | undefined> {
     const sent = await this.#sendWorktreeCheckpoint(account, entry)
-    if (sent) entry.sent = sent
+    // Both at once, the moment the cloud holds it: a going-away read between them (its flush cut short) names this.
+    if (sent) {
+      entry.sent = sent
+      entry.checkpoint = sent.sha256
+    }
     return sent?.sha256
   }
 
