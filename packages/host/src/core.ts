@@ -530,43 +530,49 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const agents = late.conversations?.agents
     return backgroundWork(held.session, agents ? withChildren(held.nativeAgents, agents.roster(id)) : held.nativeAgents)?.count
   }
+  // The account's rows of this Mac's Sessions: every one, or (`only`) those of a few conversations whose batches came, with
+  // no native row, which no batch moves.
+  const reportedRows = (only?: ReadonlySet<string>) => {
+    const live = late.conversations?.live
+    const store = threads.store
+    // Until the catalog's first discovery is in, its rows would say this Mac has no sessions but Mako's own.
+    if (!live || !store || !catalog.ready()) return undefined
+    const activity = catalog.activity()
+    const made = store.worktrees()
+    const make = () => ownedSessions({
+      summaries: () => live.summaries(only),
+      native: () => only ? [] : (windowRows ??= catalog.recent(windowStart(Date.now()))),
+      activity: (path) => activity[path],
+      work: () => application.lifecycle.snapshot().work,
+      waitingOn: (id) => live.waitingOn(id),
+      hidden: () => new Set(threads.archives.snapshot().keys),
+      lastMoved: (id, revision) => live.lastMoved(id, revision),
+      placement: (id) => store.journalPlacement(id),
+      sessionOrder: (placed) => sessionOrderIn(store.thread(placed.thread)?.sessions, placed.session),
+      childThread: (thread) => listedUnderApex(store.edges().of(thread)),
+      executions: (ids) => store.executionsOf(ids),
+      titles: (ids) => store.titlesOf(ids),
+      forks: (ids) => store.forksOf(ids),
+      moving: (thread) => movesUnderWay.of(thread),
+      worktree: (folder) => {
+        const found = worktreeAt(made, folder)
+        const project = found && projectFolder(made, folder)
+        return found && project ? { project, branch: found.worktree.branch } : undefined
+      },
+      head: listedHead,
+      repository: (folder) => repositories.of(folder),
+      background: heldWork,
+      asking: (id) => finAsking(late.conversations?.agents?.personAsk(id)),
+      asked: (id) => live.askWaiting(id),
+      fins: (id) => listedFins(late.conversations?.agents?.roster(id)),
+      now: Date.now,
+    })
+    // The folders a whole making asks for are the ones read again (`listing`); a few rows' making leaves them as they are.
+    return only ? make() : repositories.listing(make)
+  }
   const sessions = new SessionPublisher({
-    rows: () => {
-      const live = late.conversations?.live
-      const store = threads.store
-      // Until the catalog's first discovery is in, its rows would say this Mac has no sessions but Mako's own.
-      if (!live || !store || !catalog.ready()) return undefined
-      const activity = catalog.activity()
-      const made = store.worktrees()
-      return repositories.listing(() => ownedSessions({
-        summaries: () => live.summaries(),
-        native: () => (windowRows ??= catalog.recent(windowStart(Date.now()))),
-        activity: (path) => activity[path],
-        work: () => application.lifecycle.snapshot().work,
-        waitingOn: (id) => live.waitingOn(id),
-        hidden: () => new Set(threads.archives.snapshot().keys),
-        lastMoved: (id, revision) => live.lastMoved(id, revision),
-        placement: (id) => store.journalPlacement(id),
-        sessionOrder: (placed) => sessionOrderIn(store.thread(placed.thread)?.sessions, placed.session),
-        childThread: (thread) => listedUnderApex(store.edges().of(thread)),
-        executions: (ids) => store.executionsOf(ids),
-        titles: (ids) => store.titlesOf(ids),
-        forks: (ids) => store.forksOf(ids),
-        moving: (thread) => movesUnderWay.of(thread),
-        worktree: (folder) => {
-          const found = worktreeAt(made, folder)
-          const project = found && projectFolder(made, folder)
-          return found && project ? { project, branch: found.worktree.branch } : undefined
-        },
-        head: listedHead,
-        repository: (folder) => repositories.of(folder),
-        background: heldWork,
-        asking: (id) => finAsking(late.conversations?.agents?.personAsk(id)),
-        asked: (id) => live.askWaiting(id),
-        fins: (id) => listedFins(late.conversations?.agents?.roster(id)),
-        now: Date.now,
-      }))
-    },
+    rows: () => reportedRows(),
+    rowsOf: (conversations) => reportedRows(conversations),
     // What a list shows of one conversation, read as each of its batches comes, by the rule its row is made with: a
     // batch that moved it is reported at once. It reads only what memory holds.
     shown: (id) => {
@@ -1265,6 +1271,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       account: () => late.cloud,
       enabled: async () => (await cloudHandOffs.onSleep()) && !(await handOffUnavailable()),
       working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations?.has(id) ?? false }),
+      revision: (conversationId) => live.held(conversationId)?.revision,
       leaving: (thread) => cloudMoves.leaving(thread),
       plan: (conversationId) => cloudMoves.readyPlan(conversationId),
       sendRecords: (link, paths) => catalog.sendRecords(link, paths),

@@ -421,9 +421,10 @@ export class LiveConversations {
     return this.records.listing()
   }
 
-  summaries(): LiveSummary[] {
+  /** Every conversation's summary as a list shows it, or those of `only` alone. */
+  summaries(only?: ReadonlySet<string>): LiveSummary[] {
     const agents = this.dependencies.agents?.()
-    const listing = this.records.listing()
+    const listing = only ? this.records.listing().filter((summary) => only.has(summary.session.id)) : this.records.listing()
     const away = this.threads.runningElsewhere(listing.map((summary) => summary.session.id))
     return listing.map((summary) => {
       const children = agents ? rollup(agents.roster(summary.session.id)) : undefined

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { join } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
-import { cursorSdkAgentIdForDirectory, cursorSdkIndexPath, readCursorSdkAgent } from "@mako/sessions"
+import { cursorSdkAgentIdForDirectory, cursorSdkIndexPath, readCursorSdkAgentRoot } from "@mako/sessions"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import { readLegacyStoreSnapshot } from "./legacy-store.js"
@@ -66,14 +66,17 @@ export function cursorSdkCheckpoint(stores: NativeStores, stateRoot: string, dir
   const index = cursorSdkIndexPath(stateRoot)
   const agentId = cursorSdkAgentIdForDirectory(stores, index, directoryName)
   if (!agentId) return undefined
-  const record = readCursorSdkAgent(stores, index, agentId)
+  // Read at every Cursor turn's end on the host's thread: the agent's root by its key, and the store's blobs counted
+  // only for a binding saved in the older form. Listing its runs and counting every blob held it 60-400 ms on a 2.7 GB
+  // index.
+  const record = readCursorSdkAgentRoot(stores, index, agentId)
   if (!record) return undefined
   const root = record.rootId ?? null
   let db: DatabaseSync | undefined
   try {
     db = stores.open(join(stateRoot, "agents", directoryName, "store.db"))
-    const count = blobCount(db)
     if (previous === undefined || previous.startsWith(SDK_HEAD)) return `${SDK_HEAD}${digest([agentId, root])}`
+    const count = blobCount(db)
     if (count === null) return digest([agentId, root, count])
     const newest = RowidSchema.parse(db.prepare("SELECT max(rowid) AS rowid FROM blobs").get()).rowid ?? count
     for (let counted = count; counted <= newest; counted += 1)
