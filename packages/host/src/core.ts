@@ -1321,7 +1321,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       flush: async (working, by) => late.readiness?.flush(working, by),
       checkpoint: async (thread) => late.readiness?.noteCheckpoint(thread),
       quiet: async (note) => {
-        if (!late.cloud) throw new Error("This Mac isn't signed in to Mako Cloud.")
+        if (!late.cloud?.quiet) throw new Error("This Mac isn't signed in to Mako Cloud.")
         return late.cloud.quiet(note)
       },
     },

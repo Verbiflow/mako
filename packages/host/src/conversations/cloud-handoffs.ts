@@ -30,7 +30,7 @@ export type CloudHandOffsOptions = {
     /** Waits until `deadline` at most for every move running here to settle; answers how many still run (`CloudMoves.settled`). */
     settled(deadline: number): Promise<number>
     /** The Thread's turns paused and parked as this Mac goes away, nothing of it moved (`CloudMoves.goAway`). */
-    goAway(conversationId: string, goingAway: string, handOff: ThreadHandOff): Promise<{ thread: string; sessions: Array<{ session: string; generation: number }>; parked: number }>
+    goAway?(conversationId: string, goingAway: string, handOff: ThreadHandOff): Promise<{ thread: string; sessions: Array<{ session: string; generation: number }>; parked: number }>
   }
   /**
    * What a Mac going away (a sleep, a shutdown) takes: each Thread's last changes sent (`CloudReadiness.flush`), the
@@ -102,7 +102,7 @@ export class CloudHandOffs {
   }
 
   async #handOff(handOff: string, why: ThreadHandOff["why"], releaseBy?: number): Promise<HandOffResult[]> {
-    if ((why === "sleep" || why === "shutdown") && this.#options.goingAway) return this.#goAway(this.#options.goingAway, handOff, why, releaseBy)
+    if ((why === "sleep" || why === "shutdown") && this.#options.goingAway && this.#options.moves.goAway) return this.#goAway(this.#options.goingAway, handOff, why, releaseBy)
     const began = performance.now()
     const unavailable = await this.#options.unavailable()
     const working = this.#options.working().filter(({ thread }) => !this.#options.moves.leaving(thread))
@@ -142,7 +142,7 @@ export class CloudHandOffs {
     const handing: ThreadHandOff = { why, ...releaseBy !== undefined && { releaseBy } }
     const parked = await Promise.all(working.map(async (each) => {
       try {
-        return { ...each, gone: await this.#options.moves.goAway(each.conversationId, handOff, handing) }
+        return { ...each, gone: await this.#options.moves.goAway!(each.conversationId, handOff, handing) }
       } catch (error) {
         return { ...each, error: errorMessage({ error }) }
       }

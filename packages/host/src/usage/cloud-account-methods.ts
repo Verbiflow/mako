@@ -90,7 +90,7 @@ export interface CloudAccount {
    */
   sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string, sent?: (bytes: number) => void): Promise<{ sent: boolean }>
   /** This Mac going away, with the Threads the account may continue meanwhile (`CloudAccounts.quiet`); `unserved` from a gateway that takes no notes yet. */
-  quiet(note: QuietNote): Promise<QuietAnswer | "unserved">
+  quiet?(note: QuietNote): Promise<QuietAnswer | "unserved">
   /**
    * A move this Mac released, handed to the cloud to carry through once it sent what only it has: the cloud arrives
    * it, claims it (or refuses it), and starts it (`CloudAccounts.handOverMove`).
