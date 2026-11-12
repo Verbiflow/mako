@@ -14,7 +14,7 @@ import type { Prepared } from "@mako/host/workspaces/thread-processes"
 import { inputsDigest, mirroredProject, projectRoot, recipePath, RecipeSchema, type Recipe } from "@mako/host/workspaces/thread-recipe"
 import { projectRepositories } from "@mako/host/git/repository-discovery"
 import { ThreadStore } from "@mako/host/threads/store"
-import { worktreeCheckout, worktreeSlug } from "@mako/host/contracts/thread-worktrees"
+import { worktreeCheckout, worktreeSlug, type WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
 import { openWorkspaces } from "@mako/host/workspaces"
 import { ThreadWorktreeService, type CheckoutConversations } from "@mako/host/workspaces/thread-worktrees"
 import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "@mako/host/workspaces/worktree-carry"
@@ -899,8 +899,9 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   await own.settled()
 }
 
-// Windows ask every half minute: a worktree nothing changes in is read less and less, while one with a conversation
-// at work, a new index or a changed status is read as often as they ask, and one asked of alone is read then.
+// A worktree is read again on its own events (its index or HEAD moved, a turn in it ended), and the windows hear it:
+// however often they ask, one nothing happened in is read only past the backstop. One with a conversation at work is
+// read as often as they ask, and one asked of alone is read then.
 {
   const quiet = repository("quiet")
   const id = randomUUID()
@@ -911,6 +912,11 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   const real = { now: Date.now, readOutput: gitRunner.readOutput, idleOutput: gitRunner.idleOutput }
   let reads = 0
   let closing = () => {}
+  const pushed: WorktreeSummary[][] = []
+  const heard = async (what: string, test: () => boolean) => {
+    for (const deadline = performance.now() + 10_000; !test(); await new Promise((resolve) => setTimeout(resolve, 25)))
+      if (performance.now() > deadline) throw new Error(`never heard: ${what}`)
+  }
   Date.now = () => now
   // A summaries pass reads in the idle lane; a summary someone waits on, in the other.
   gitRunner.readOutput = function (this: typeof gitRunner, cwd, args) {
@@ -929,7 +935,9 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
       readOnly: false,
       store: threads,
       jobs: new HostJobs(),
-      emit: () => {},
+      emit: (event) => {
+        if (event.type === "worktree-summaries") pushed.push(event.summaries)
+      },
       inUse: async () => [],
       working: async () => [],
       workingFolders: async () => at,
@@ -948,8 +956,8 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
       return reads - before
     }
     await passes(1)
-    assert.ok(await passes(40) <= 10, "twenty quiet minutes read it a handful of times, not forty")
-    assert.ok(await passes(40) >= 4, "a quiet worktree is still read, every few minutes")
+    assert.equal(await passes(19), 0, "nine and a half quiet minutes of windows asking read it not once")
+    assert.equal(await passes(2), 1, "past the backstop a quiet worktree is read once all the same")
     at = [made.path]
     assert.equal(await passes(4), 4, "a conversation at work there keeps it current")
     at = [join(made.path, "packages")]
@@ -957,15 +965,31 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     at = [dirname(made.path)]
     assert.equal(await passes(2), 2, "and one in the project folder around it")
     at = []
-    await passes(20)
+    await passes(2)
+    // Nobody asks: the index's own event reads it, and the windows hear the new count.
+    const said = pushed.length
+    // A worktree is read from its events at most every five seconds.
+    now += 6_000
     writeFileSync(join(made.path, "new.txt"), "new\n")
     git(made.path, "add", "new.txt")
-    now += 1
-    assert.equal(await changes(), 1, "a new index asks again at once")
-    await passes(20)
+    await heard("the new index's summary", () => pushed.slice(said).some((summaries) => summaries.find((summary) => summary.path === made.path)?.changes === 1))
+    assert.equal(await changes(), 1, "and an ask after it answers what was heard")
+    // A turn that ended there reads it again, unasked.
+    const turnRead = reads
+    now += 6_000
+    watched.turnEnded(join(made.path, "packages"))
+    await heard("a read after the turn's end", () => reads > turnRead)
+    // That read ends before the next event, as a turn's end does before its commit.
+    await watched.summaries()
+    // A commit moves its HEAD: heard the same way.
+    const committed = pushed.length
+    now += 6_000
+    git(made.path, "commit", "-qm", "new")
+    await heard("the commit's summary", () => pushed.slice(committed).some((summaries) => summaries.find((summary) => summary.path === made.path)?.changes === 0))
+    await passes(2)
     const before = reads
     now += 16_000
-    assert.equal((await watched.summary(made.path))?.changes, 1, "one worktree asked of alone")
+    assert.equal((await watched.summary(made.path))?.changes, 0, "one worktree asked of alone")
     assert.equal(reads - before, 1, "reads past the short wait whatever its quiet")
   } finally {
     Date.now = real.now

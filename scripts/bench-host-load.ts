@@ -66,6 +66,7 @@ const { values } = parseArgs({
     gc: { type: "boolean", default: false },
     idle: { type: "boolean", default: false },
     "idle-only": { type: "boolean", default: false },
+    "summaries-every": { type: "string", default: "30000" },
   },
 })
 const say = (line: string) => process.stderr.write(`${line}\n`)
@@ -234,7 +235,9 @@ try {
   const timers: NodeJS.Timeout[] = []
   for (let w = 0; w < windows; w += 1) {
     ask("mako:worktree-summaries")
-    timers.push(setInterval(() => ask("mako:worktree-summaries"), 30_000))
+    // A window before the host said summaries as they change asked every half minute; `--summaries-every 0` is one now.
+    const summariesEvery = Number(values["summaries-every"])
+    if (summariesEvery > 0) timers.push(setInterval(() => ask("mako:worktree-summaries"), summariesEvery))
     // The marks are read once, then pushed by the host's sampler as they change (`ThreadAppSampler`); each followed
     // folder's app is read again on each push and otherwise every 30 s (`thread-app-host.ts`). A world whose apps hold
     // still pushes nothing, so the 30 s look stands for the pushes too.

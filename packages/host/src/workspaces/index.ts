@@ -213,6 +213,8 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
         }),
       } : undefined, deps.conversations, deps.ledger, deps.workingFolders)
     : null
+  // Windows hear the summaries as they change, rather than each asking every half minute.
+  worktrees?.followSummaries((summaries) => emit({ type: "worktree-summaries", summaries }))
   if (worktrees) {
     const tidy = () => worktrees.tidy()
     void tidy().catch((error: Error) => hostWarn("threads", "spare worktrees could not be tidied", { error: error.message }))
@@ -230,7 +232,10 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     whoseApp,
     appOwner,
     fileHistory,
-    close: () => checkoutHeads.close(),
+    close: () => {
+      checkoutHeads.close()
+      worktrees?.closeSummaries()
+    },
   }
 }
 
