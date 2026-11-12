@@ -142,6 +142,16 @@ export interface MoveInput {
   log(message: string, facts: Record<string, string | number | boolean>): void
   /** Each step as it's reached, for a test that stops the process there. */
   stepped?: (step: string) => void
+  /** A handoff's deadline (`MoveHaste.by`): the journal is waited for until then, and nothing is read back. */
+  by?: number
+}
+
+/** The journal's settle, waited for until `by` at most when there is one: a handoff moves with what's settled then. */
+async function settledBy(ledger: Pick<MoveLedger, "settled">, by: number | undefined): Promise<void> {
+  if (by === undefined) return ledger.settled()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([ledger.settled(), new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, by - Date.now())) })])
+  clearTimeout(timer)
 }
 
 /** Why a move didn't happen, said to the agent and the person; nothing was changed. */
@@ -153,14 +163,14 @@ function blobId(bytes: Uint8Array, format: "sha1" | "sha256"): string {
 }
 
 /** What a file is on disk: its bytes and permission bits; null for no regular file there. */
-async function onDisk(path: string): Promise<{ bytes: Buffer; perm: number } | null | "other"> {
+export async function onDisk(path: string): Promise<{ bytes: Buffer; perm: number } | null | "other"> {
   const stat = await lstat(path).catch(() => null)
   if (!stat) return null
   if (!stat.isFile()) return "other"
   return { bytes: await readFile(path), perm: stat.mode & 0o777 }
 }
 
-async function mapLimit<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
   const results: R[] = []
   const queue = values.entries()
   const worker = async () => {
@@ -292,9 +302,9 @@ export async function pruneBackups(git: Git, repoRoot: string, now = Date.now())
  * the main checkout's file isn't what the journal holds yet, `unknown` when a
  * side is neither checkout's version (a filter rewrote the base, say).
  */
-type Sides = { thread: Buffer | null; remaining: Buffer | null } | "stale" | "unknown"
+export type Sides = { thread: Buffer | null; remaining: Buffer | null } | "stale" | "unknown"
 
-function sidesOf(file: PartitionFile, before: Buffer | null, base: Buffer | null): Sides {
+export function sidesOf(file: PartitionFile, before: Buffer | null, base: Buffer | null): Sides {
   const ref = (bytes: Buffer | null) => (bytes ? contentRef(bytes) : null)
   if (ref(before) !== file.current) return "stale"
   const version = (side: PartitionFile["thread"]): Buffer | null | "unknown" => {
@@ -618,10 +628,18 @@ export async function moveByAuthor(input: MoveInput): Promise<MovePlan> {
     if ((await git.output(repoRoot, ["ls-files", "-u"])).length)
       throw new MoveRefused(`${members.length > 1 ? relative(input.project, repoRoot) : "The main checkout"} is in the middle of a merge, so its changes stayed where they are. Finish or abort it, then move.`)
   }
+  let settleMs = 0
+  let readBackMs = 0
   if (ledger) {
     for (const { repoRoot } of members) await ledger.track(repoRoot)
-    await ledger.settled()
-    for (const { repoRoot } of members) await ledger.readBack?.(repoRoot, READ_BACK_MS)
+    const settling = performance.now()
+    await settledBy(ledger, input.by)
+    settleMs = performance.now() - settling
+    // Lines nobody is sure of stay in the main checkout either way; reading sessions' records back to name them is
+    // left to a move with time for it.
+    const reading = performance.now()
+    if (input.by === undefined) for (const { repoRoot } of members) await ledger.readBack?.(repoRoot, READ_BACK_MS)
+    readBackMs = performance.now() - reading
   }
   input.stepped?.("planning")
   // The watcher hears a write some milliseconds after it lands: a file the journal hasn't caught up with is asked again.
@@ -629,7 +647,7 @@ export async function moveByAuthor(input: MoveInput): Promise<MovePlan> {
   for (let attempt = 0; attempt < 4 && !planned; attempt++) {
     if (attempt) {
       await new Promise((resolve) => setTimeout(resolve, 150 * attempt))
-      await ledger?.settled()
+      if (ledger) await settledBy(ledger, input.by)
     }
     const found: Planned[] = []
     for (const member of members) {
@@ -674,7 +692,7 @@ export async function moveByAuthor(input: MoveInput): Promise<MovePlan> {
   }
   input.stepped?.("stored")
   if (!moving) {
-    input.log("nothing of the thread's to move", { thread: input.thread, stayed: shares.kept ?? 0, uncertain: plan.outcome.stayed.uncertain.files, unattributed: plan.outcome.stayed.unattributed.files, ms: Math.round(planMs) })
+    input.log("nothing of the thread's to move", { thread: input.thread, stayed: shares.kept ?? 0, uncertain: plan.outcome.stayed.uncertain.files, unattributed: plan.outcome.stayed.unattributed.files, ms: Math.round(planMs), settleMs: Math.round(settleMs), readBackMs: Math.round(readBackMs), ...input.by !== undefined && { hasty: true } })
     plan.step = "done"
     return plan
   }
@@ -715,6 +733,9 @@ export async function moveByAuthor(input: MoveInput): Promise<MovePlan> {
     split: plan.outcome.split.length,
     brought,
     planMs: Math.round(planMs),
+    settleMs: Math.round(settleMs),
+    readBackMs: Math.round(readBackMs),
+    ...input.by !== undefined && { hasty: true },
     writeMs: Math.round(performance.now() - writeStarted),
     ms: Math.round(performance.now() - started),
   })

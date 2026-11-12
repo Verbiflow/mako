@@ -6,7 +6,7 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { moveIntoWorktree, type ConversationMoveDeps, type MovedConversation } from "./conversation-move.js"
 import type { WorkspaceConversations } from "./conversations.js"
-import type { WorkspaceMoveHold, WorkspaceMoveTarget } from "../contracts/workspace-moves.js"
+import type { MoveHaste, WorkspaceMoveHold, WorkspaceMoveTarget } from "../contracts/workspace-moves.js"
 import { outcomeSentences } from "./worktree-move.js"
 import type { MoveSource, WorkspaceMoves } from "./moves.js"
 
@@ -143,8 +143,8 @@ export class ThreadWorktreeMoves {
   }
 
   /** Move one conversation into its Thread's worktree (`conversation-move.ts`); `bring` takes the changes that stay otherwise too. */
-  move(id: string, input: ForkInput | undefined, project?: string, bring = false): Promise<MovedConversation> {
-    return moveIntoWorktree(this.deps, id, input, project, bring)
+  move(id: string, input: ForkInput | undefined, project?: string, bring = false, haste?: MoveHaste): Promise<MovedConversation> {
+    return moveIntoWorktree(this.deps, id, input, project, bring, haste)
   }
 
   /**
@@ -159,7 +159,7 @@ export class ThreadWorktreeMoves {
    * what might be the Thread's and what nobody can be named for too. `asItself`: it goes as the same session or not
    * at all, never as a fork, as a handoff's paused turn needs to go on in that session.
    */
-  async carry(id: string, how: { lead: boolean; tell: boolean; after?: string; input?: ForkInput; bring?: boolean; asItself?: boolean }): Promise<LiveSnapshot> {
+  async carry(id: string, how: { lead: boolean; tell: boolean; after?: string; input?: ForkInput; bring?: boolean; asItself?: boolean; haste?: MoveHaste }): Promise<LiveSnapshot> {
     const source = this.deps.conversations.snapshot(id)
     if (!source) throw new Error("The conversation closed before it could move onto its own branch.")
     const title = source.session.title || "Untitled conversation"
@@ -173,7 +173,7 @@ export class ThreadWorktreeMoves {
       move: true,
     } satisfies ForkInput)
     // With no answer to fork from, it can still go as itself.
-    const { conversation, moved, outcome, relocated } = await this.move(id, input, how.lead ? this.project(id) : undefined, how.bring).catch((error: Error) => {
+    const { conversation, moved, outcome, relocated } = await this.move(id, input, how.lead ? this.project(id) : undefined, how.bring, how.haste).catch((error: Error) => {
       if (input) throw error
       if (how.asItself) throw new Error(`It couldn't go onto its own branch as the same session. ${error.message}`)
       throw new Error(how.lead

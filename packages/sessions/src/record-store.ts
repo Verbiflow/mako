@@ -1351,10 +1351,13 @@ export class RecordStore {
    * (`fillWriters`), newest capture first.
    */
   sessionsWithoutWriters(options: { unknownBefore?: number } = {}): { harness: string; nativeId: string; paths: string[] }[] {
+    // Each session's latest capture from one pass over `captures`, which has no index by session: asked per session, it
+    // read the whole table once for each, 61 s a backfill pass on a store of 900,000 captures and 1,600 sessions.
     const rows = z.object({ id: z.number(), harness: z.string(), nativeId: z.string(), writers: z.string().nullable(), captured: z.number().nullable() }).array().parse(this.prepared(`
       SELECT s.id, s.harness, s.native_id AS nativeId, (SELECT fingerprint FROM marks m WHERE m.session = s.id AND m.name = ?) AS writers,
-        (SELECT max(c.at) FROM captures c WHERE c.session = s.id) AS captured
-      FROM sessions s ORDER BY captured DESC`).all(WRITERS))
+        c.captured AS captured
+      FROM sessions s LEFT JOIN (SELECT session, max(at) AS captured FROM captures GROUP BY session) c ON c.session = s.id
+      ORDER BY captured DESC`).all(WRITERS))
     return rows.flatMap((row) => {
       const writers = row.writers ? SessionWritersSchema.parse(JSON.parse(row.writers)) : null
       // A version that names no build (Devin's handshake's `0.0.0-dev`) names no writer: the evidence beside the store is read for it.
