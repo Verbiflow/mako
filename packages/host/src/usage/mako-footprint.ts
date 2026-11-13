@@ -1,8 +1,7 @@
-import { hostCommand } from "../base/host-command.js"
+import { hostProbe } from "../base/host-command.js"
 import type { MakoFootprint, MakoProcess, RescanFootprint, WatchFootprint } from "../contracts/mako-footprint.js"
 import type { MethodTable } from "../base/methods.js"
 
-const execute = hostCommand
 
 export interface ProcessRow {
   pid: number
@@ -90,7 +89,7 @@ export function makoProcesses(
 
 /** Every process on this machine now, from `ps`: unreadable where there's no `ps` (Windows). */
 export async function readProcessTable(): Promise<ProcessRow[]> {
-  const { stdout } = await execute("ps", ["-axo", "pid=,ppid=,rss=,%cpu=,time=,command="], {
+  const { stdout } = await hostProbe("ps", ["-axo", "pid=,ppid=,rss=,%cpu=,time=,command="], {
     env: { ...process.env, LC_ALL: "C" },
     maxBuffer: 64 * 1024 * 1024,
     timeout: 5_000,

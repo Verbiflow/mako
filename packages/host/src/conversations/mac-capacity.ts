@@ -1,4 +1,4 @@
-import { hostCommand } from "../base/host-command.js"
+import { hostProbe } from "../base/host-command.js"
 import { statfs } from "node:fs/promises"
 import { availableParallelism, homedir, totalmem } from "node:os"
 import { coresBusy, cpuTicks, type CpuTicks } from "../base/machine-load.js"
@@ -123,12 +123,11 @@ export function finSlots(): number | undefined {
   return Number.isInteger(set) && set >= 1 ? set : undefined
 }
 
-const run = hostCommand
 
 /** macOS's free swap (`sysctl vm.swapusage`: "total = 5120.00M  used = 4208.94M  free = 911.06M"); undefined elsewhere. */
 async function swapFree(): Promise<number | undefined> {
   if (!onMac()) return undefined
-  const said = await run("/usr/sbin/sysctl", ["-n", "vm.swapusage"], { timeout: 2_000 }).then((out) => out.stdout, () => "")
+  const said = await hostProbe("/usr/sbin/sysctl", ["-n", "vm.swapusage"], { timeout: 2_000 }).then((out) => out.stdout, () => "")
   const free = /free = ([\d.]+)([KMG])/.exec(said)
   if (!free) return undefined
   const unit = free[2] === "G" ? 1024 ** 3 : free[2] === "M" ? 1024 ** 2 : 1024
@@ -138,7 +137,7 @@ async function swapFree(): Promise<number | undefined> {
 /** macOS's memory pressure (`sysctl kern.memorystatus_vm_pressure_level`: 1 normal, 2 warn, 4 critical); undefined elsewhere. */
 async function pressured(): Promise<boolean | undefined> {
   if (!onMac()) return undefined
-  const said = await run("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"], { timeout: 2_000 }).then((out) => out.stdout.trim(), () => "")
+  const said = await hostProbe("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"], { timeout: 2_000 }).then((out) => out.stdout.trim(), () => "")
   const level = Number(said)
   return said && Number.isFinite(level) ? level >= 2 : undefined
 }
@@ -146,7 +145,7 @@ async function pressured(): Promise<boolean | undefined> {
 /** Whether macOS slows the CPU for heat (`pmset -g therm`: "CPU_Speed_Limit = 100"); undefined elsewhere. */
 async function throttled(): Promise<boolean | undefined> {
   if (!onMac()) return undefined
-  const said = await run("/usr/bin/pmset", ["-g", "therm"], { timeout: 2_000 }).then((out) => out.stdout, () => "")
+  const said = await hostProbe("/usr/bin/pmset", ["-g", "therm"], { timeout: 2_000 }).then((out) => out.stdout, () => "")
   const limit = /CPU_Speed_Limit\s*=\s*(\d+)/.exec(said)
   return limit ? Number(limit[1]) < 100 : undefined
 }

@@ -17,7 +17,8 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * - The keyboard opening leaves what's read where it was, and the end in view when it was followed.
  * - Turned sideways at the end and back, the newest turn stays where the end shows it.
  * - An earlier page arriving under a resting finger leaves the line under it where it is.
- * - A flick makes no long tasks.
+ * - A flick makes no long tasks: no task with 50 ms of the page's own work (its main thread's CPU time, from a trace),
+ *   and none that holds the thread 150 ms.
  * - On a laptop, the wheel leaves the end of a streaming answer in a short transcript and a windowed one, and the
  *   windowed one's rows aren't scrolled under it.
  *
@@ -227,6 +228,35 @@ async function checkScroll() {
   })`)
   const written = (since) => evaluate(`window.__scrollWrites.filter(write => write.at >= ${since}).length`)
   const longTasks = (since) => evaluate(`window.__longTasks.filter(task => task.at >= ${since}).map(task => Math.round(task.ms))`)
+  /**
+   * The page's own work while `run` runs: each task on the page's main thread with the CPU time its thread spent in it,
+   * from a Chrome trace. A long task's duration is wall time, and on a busy runner the system takes the CPU from the
+   * page mid-task: traced on the macOS runner, a flick's task of 67 ms held 11 ms of the page's work, and its gaps were
+   * plain script and garbage collection, no call waiting on another process.
+   */
+  const pageWork = async (run) => {
+    const events = []
+    let done
+    const finished = new Promise((resolve) => { done = resolve })
+    const listen = (_event, method, params) => {
+      if (method === "Tracing.dataCollected") events.push(...params.value)
+      if (method === "Tracing.tracingComplete") done()
+    }
+    page.debugger.on("message", listen)
+    try {
+      await send("Tracing.start", { transferMode: "ReportEvents", traceConfig: { includedCategories: ["toplevel"], enableSampling: false } })
+      await run()
+      await send("Tracing.end")
+      await finished
+    } finally {
+      page.debugger.removeListener("message", listen)
+    }
+    const main = new Set(events.filter((event) => event.name === "thread_name" && event.args?.name === "CrRendererMain").map((event) => `${event.pid}:${event.tid}`))
+    const tasks = events.filter((event) => event.ph === "X" && event.name.endsWith("RunTask") && main.has(`${event.pid}:${event.tid}`))
+    assert.ok(main.size === 1 && tasks.length > 0, `the trace found the page's main thread (${main.size}) and its tasks (${tasks.length})`)
+    // Chrome leaves out the thread's time of a task too short to have any; one without it counts by its wall time.
+    return tasks.map((task) => ({ wall: task.dur / 1000, cpu: (task.tdur ?? task.dur) / 1000 }))
+  }
   const now = () => evaluate("performance.now()")
   const centre = { x: 196, y: 380 }
   /**
@@ -416,15 +446,24 @@ async function checkScroll() {
     }
     if (!unavailable) try {
       since = await now()
-      await flick(400, 2_500)
-      await rest()
+      // A long task is one with 50 ms of the page's own work, as the browser's are 50 ms of wall time. A task the page
+      // waits in (a synchronous call to another process, a GPU readback) holds the thread with little work, so any task
+      // of 150 ms of wall time fails too: the system taking the CPU from the page made 67 ms at most on the runner.
+      const work = await pageWork(async () => {
+        await flick(400, 2_500)
+        await rest()
+      })
       const flung = await fromEnd()
       assert.ok(flung > 600, `a flick of 400 px glided ${Math.round(flung)} px from the end`)
-      const tasks = await longTasks(since)
-      if (diagnostic) packet.oracle = { status: "observed", since, tasks: tasks.slice(0, 64), droppedTasks: Math.max(0, tasks.length - 64) }
-      assert.deepEqual(tasks, [], `a flick while streaming made long tasks: ${tasks.join(", ")} ms`)
+      const walls = await longTasks(since)
+      const tasks = work.filter((task) => task.cpu >= 50).map((task) => Math.round(task.cpu))
+      const blocked = work.filter((task) => task.wall >= 150).map((task) => Math.round(task.wall))
+      const most = work.reduce((worst, task) => (task.cpu > worst.cpu ? task : worst), { wall: 0, cpu: 0 })
+      if (diagnostic) packet.oracle = { status: "observed", since, measure: "the page's main-thread CPU time per task, from a trace", tasks: tasks.slice(0, 64), droppedTasks: Math.max(0, tasks.length - 64), blocked: blocked.slice(0, 64), wallTasks: walls.slice(0, 64) }
+      assert.deepEqual(tasks, [], `a flick while streaming made long tasks: ${tasks.join(", ")} ms of the page's own work`)
+      assert.deepEqual(blocked, [], `a flick while streaming held the page's thread in tasks of ${blocked.join(", ")} ms`)
       held = await holds("after a flick")
-      console.log(`Flick up: glided to ${Math.round(flung)} px from the end, no long tasks, held within ${Math.abs(held.worst).toFixed(1)} px`)
+      console.log(`Flick up: glided to ${Math.round(flung)} px from the end, no long tasks (the most work in one: ${most.cpu.toFixed(1)} ms, ${most.wall.toFixed(1)} ms of wall time${walls.length ? `; wall-clock long tasks ${walls.join(", ")} ms` : ""}), held within ${Math.abs(held.worst).toFixed(1)} px`)
       if (diagnostic) packet.oracle.status = "passed-instrumented-only"
     } catch (value) {
       primary = value; hasPrimary = true

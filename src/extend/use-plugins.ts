@@ -1,6 +1,5 @@
 import { useEffect } from "react"
 import { getMako, hasBridge } from "@/lib/bridge"
-import { loadPlugin, plugins, unloadPlugin } from "@/extend/plugin-host"
 import { toast } from "sonner"
 
 /**
@@ -18,10 +17,15 @@ export function usePlugins() {
     const bridge = getMako()
 
     let live = true
+    // The plugin runtime and its compiler (sucrase) load with the first plugin, never for a person with none.
+    let host: typeof import("@/extend/plugin-host") | undefined
 
     const sync = async () => {
       const files = await bridge.listPlugins().catch(() => [])
+      if (!live || (!files.length && !host)) return
+      host ??= await import("@/extend/plugin-host")
       if (!live) return
+      const { loadPlugin, plugins, unloadPlugin } = host
 
       const present = new Set(files.map((file) => file.id))
       // A plugin whose file is gone must give its registrations back, or a
