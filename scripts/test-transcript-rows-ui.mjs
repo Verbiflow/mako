@@ -729,17 +729,24 @@ async function check() {
       }
       const under = () => [...node.querySelectorAll('[data-exchange]')].find((turn) => { const box = turn.getBoundingClientRect(); return box.top <= view.top + view.height / 2 && box.bottom > view.top + view.height / 2 })
       let id, last, crossing = false
-      const read = () => { if (node.hasAttribute('data-virtualized') && !seen.crossed) { seen.crossed = true; crossing = true }
+      const read = () => { if (last && frameAt === last.at) return
+        if (node.hasAttribute('data-virtualized') && !seen.crossed) { seen.crossed = true; crossing = true }
         const turn = (id && node.querySelector('[data-exchange="' + id + '"]')) || under(); if (!turn) return
         const box = turn.getBoundingClientRect(); seen.tallest = Math.max(seen.tallest, box.height)
-        const now = { top: box.top, scrolled: node.scrollTop, wrote: window.__wrote, at: performance.now() }
+        const now = { top: box.top, scrolled: node.scrollTop, wrote: window.__wrote, at: frameAt }
         if (turn.dataset.exchange === id && last) {
           seen.frames.push({ step: Math.round(now.top - last.top), against: Math.round((now.top - last.top + now.scrolled - last.scrolled - (now.wrote - last.wrote)) * 10) / 10, ms: Math.round(now.at - last.at), crossing })
           crossing = false
         }
         id = turn.dataset.exchange; last = now }
+      // Each reading is timed by its frame's start, not by when it ran: the offset a frame reads is where the compositor
+      // had the scroll as that frame began, and after a long task (the crossing's own) the next frame begins as many
+      // frame intervals on as passed. Timed as it ran, a reading held a fling's travel over several compositor frames
+      // in a few milliseconds, and the crossing failed the gesture's pace without anything on screen leaping. Two readings
+      // a long task held back to run together read in the same frame: the second says nothing of speed, and is skipped.
+      let frameAt = performance.now()
       const after = new MessageChannel(); after.port1.onmessage = read
-      const tick = () => { after.port2.postMessage(0); requestAnimationFrame(tick) }; requestAnimationFrame(tick); return true })()`)
+      const tick = (time) => { frameAt = time; after.port2.postMessage(0); requestAnimationFrame(tick) }; requestAnimationFrame(tick); return true })()`)
     let moving = true
     const mover = (async () => {
       for (let step = 0; moving; step += 1) {
@@ -757,15 +764,28 @@ async function check() {
     await writeFile(join(evidence, `${form} frames.json`), JSON.stringify(frames))
     const crossingAt = frames.findIndex((frame) => frame.crossing)
     // The crossing's own frame sets the scroll offset afresh (the offset and its height both change many times over), so
-    // there the line is held to what the gesture could move it in that frame's time: its fastest in any other frame.
-    const fastest = Math.max(0, ...frames.filter((frame, index) => index !== crossingAt && frame.ms >= 8).map((frame) => Math.abs(frame.step) / frame.ms))
+    // there the line is held to what the gesture itself moved it in as long a time: its most over any other run of frames
+    // lasting at least as long. A finger's moves land in frames unevenly, none in one and three in the next, so a speed
+    // taken from single frames fell short of what two of them carried; a leap is still several times what it allows.
     const crossing = frames[crossingAt]
+    let most = 0
+    for (let from = 0; crossing && from < frames.length; from += 1) {
+      let ms = 0, travel = 0
+      for (let to = from; to < frames.length && to !== crossingAt; to += 1) {
+        ms += frames[to].ms
+        travel += frames[to].step
+        if (ms >= crossing.ms) {
+          most = Math.max(most, Math.abs(travel))
+          break
+        }
+      }
+    }
     const moved = frames.map((frame, index) => ({ ...frame, index })).filter((frame) => frame.index !== crossingAt && Math.abs(frame.against) > 1)
-    console.log(`${form}: crossed ${seen.crossed}, ${frames.length} frames, the longest ${Math.max(...frames.map((frame) => frame.ms))} ms, in a turn ${Math.round(seen.tallest)} px tall; at the crossing ${crossing ? `${crossing.step} px in ${crossing.ms} ms, the gesture at most ${Math.round(fastest * 1000)} px/s` : "no frame"}; moved against the scroll ${JSON.stringify(moved.slice(0, 3))}`)
+    console.log(`${form}: crossed ${seen.crossed}, ${frames.length} frames, the longest ${Math.max(...frames.map((frame) => frame.ms))} ms, in a turn ${Math.round(seen.tallest)} px tall; at the crossing ${crossing ? `${crossing.step} px in ${crossing.ms} ms, the gesture at most ${most} px in as long` : "no frame"}; moved against the scroll ${JSON.stringify(moved.slice(0, 3))}`)
     assert.ok(seen.crossed, `${form}: the turns crossed into a window`)
     assert.ok(crossing, `${form}: the crossing came during the gesture`)
     assert.deepEqual(moved.slice(0, 3), [], `${form}: what's read goes with the gesture across the crossing, in frames of any length`)
-    assert.ok(Math.abs(crossing.step) <= fastest * crossing.ms + 2, `${form}: at the crossing, what's read moved ${crossing.step} px in ${crossing.ms} ms, past the gesture's ${Math.round(fastest * 1000)} px/s`)
+    assert.ok(Math.abs(crossing.step) <= most + 2, `${form}: at the crossing, what's read moved ${crossing.step} px in ${crossing.ms} ms, past the ${most} px the gesture moved in as long`)
   }
 
   console.log("Transcript rows: held apart in every frame on the desk, in a laptop's browser and on a phone, with and without the observer")
