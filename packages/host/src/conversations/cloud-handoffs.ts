@@ -402,7 +402,7 @@ export type WorkingSnapshot = Pick<LiveSnapshot, "permissions" | "nativeAgents">
 
 /** What `workingThreads` reads of the live conversations and the Thread store. */
 export type WorkingSources = {
-  live: { listed(): ReadonlyArray<{ session: Pick<LiveSummary["session"], "id"> }>; loaded(id: string): boolean; snapshot(id: string): WorkingSnapshot | null }
+  live: { listed(): ReadonlyArray<{ session: Pick<LiveSummary["session"], "id"> }>; held(id: string): WorkingSnapshot | undefined }
   threads: { journalPlacement(conversationId: string): ThreadPlacement | undefined; execution(session: SessionId): Pick<SessionExecution, "state"> | undefined } | undefined
   /** Whether a conversation runs on a cloud machine already (`CloudConversations.has`). */
   cloud(conversationId: string): boolean
@@ -430,13 +430,13 @@ export function workingThreads(sources: WorkingSources): WorkingThread[] {
   const byThread = new Map<string, WorkingThread & { running: boolean }>()
   for (const summary of sources.live.listed()) {
     const id = summary.session.id
-    // One only on disk is at rest (memory keeps whatever works), and its snapshot would read it back in: every
-    // conversation this host has, each round.
-    if (sources.cloud(id) || !sources.live.loaded(id)) continue
+    if (sources.cloud(id)) continue
+    // A work check reads resident metadata only: snapshot() would flush its pending transcript batch to SQLite.
+    // One only on disk is at rest (memory keeps whatever works), and is never loaded for this check.
+    const snapshot = sources.live.held(id)
+    if (!snapshot) continue
     const placed = threads.journalPlacement(id)
     if (!placed || threads.execution(placed.session)?.state !== "here") continue
-    const snapshot = sources.live.snapshot(id)
-    if (!snapshot) continue
     const running = snapshot.session.status === "running" || snapshot.requests.some((request) => request.status === "dispatching")
     const working = sources.ownWork ? doingItself(snapshot, running) : running || snapshot.permissions.length > 0 || Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)
     if (!working) continue

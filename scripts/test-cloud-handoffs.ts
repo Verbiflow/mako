@@ -63,8 +63,7 @@ try {
     const working = workingThreads({
       live: {
         listed: () => [...byId.values()].map((each) => each.summary),
-        loaded: (id) => id !== unloaded.summary.session.id,
-        snapshot: (id) => (read.push(id), byId.get(id)?.snapshot ?? null),
+        held: (id) => (read.push(id), id === unloaded.summary.session.id ? undefined : byId.get(id)?.snapshot),
       },
       threads: {
         journalPlacement: (id) => byId.get(id)?.placement,
@@ -77,7 +76,7 @@ try {
     })
     assert.deepEqual(working.map((each) => each.thread).sort(), [threadA, threadB].sort(), "Threads at work, each once")
     assert.equal(working.find((each) => each.thread === threadA)?.conversationId, all[1]?.summary.session.id, "the running conversation is the one asked from")
-    assert.ok(!read.includes(unloaded.summary.session.id), "a conversation only on disk isn't read back in")
+    assert.ok(read.includes(unloaded.summary.session.id), "the resident lookup sees an unloaded conversation without loading its journal")
   }
 
   // A handoff: one move per Thread, named by the handoff and the Thread (asked again, the same moves); a Thread that

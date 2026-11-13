@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 import { Git } from "@mako/git"
+import { SLICE_MS } from "@mako/sessions/slices"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import type { LiveBatch } from "@mako/host/contracts/live-conversations"
 import { openAttribution, type TreeWatcher } from "@mako/host/attribution/index"
@@ -379,7 +380,7 @@ test("through a real journal: renames from before tracking come from Git, an ans
   }
 })
 
-test("a Thread's work is read once and then only what moved, in slices: another Thread's writes cost it nothing", async () => {
+test("a Thread's work is read once and then only what moved, in slices: another Thread's writes cost it nothing", async (t) => {
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-work-")))
   const store = JournalStore.open(join(folder, "journal.sqlite"), { device: "d-1" })
   const files = new ThreadFiles({ git: new Git(), home: folder })
@@ -389,10 +390,16 @@ test("a Thread's work is read once and then only what moved, in slices: another 
     for (let at = 1; at <= 6_000; at += 1) store.saveActivity(call("busy", at))
     store.saveActivity(call("busy", 6_001, null))
     let read = 0
+    let elapsed = 0
+    let turns = 0
+    const readTurns: number[] = []
     const page = store.activityFrom.bind(store)
     store.activityFrom = (thread, from, limit) => {
       const rows = page(thread, from, limit)
       read += rows.length
+      readTurns.push(turns)
+      // A real SQLite page consumes one slice in this test, however fast the runner reads it.
+      elapsed += SLICE_MS
       return rows
     }
     const changed = store.activityChanged.bind(store)
@@ -401,15 +408,17 @@ test("a Thread's work is read once and then only what moved, in slices: another 
       read += rows.length
       return rows
     }
-    let turns = 0
-    let waiting = true
-    const turn = () => { turns += 1; if (waiting) setImmediate(turn) }
-    setImmediate(turn)
-    const first = await files.context(store, { thread: "busy", current: [] })
-    waiting = false
+    const turn = () => { turns += 1; pending = setImmediate(turn) }
+    let pending = setImmediate(turn)
+    const clock = t.mock.method(performance, "now", () => elapsed)
+    const first = await files.context(store, { thread: "busy", current: [] }).finally(() => {
+      clearImmediate(pending)
+      clock.mock.restore()
+    })
     assert.ok(first.touched.has(join(folder, "f-3.ts")), "it reads what the Thread touched")
     assert.ok(read >= 6_001, `its whole history is read once (${read})`)
     assert.ok(turns > 3, `with other work running between slices (${turns} turns)`)
+    assert.ok(readTurns.slice(1).every((turn, index) => turn > readTurns[index]!), "other work runs before each next page once the slice budget is spent")
 
     read = 0
     store.saveActivity(call("other", 1))

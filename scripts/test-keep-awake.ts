@@ -127,7 +127,7 @@ try {
     ["idle-fin", { session: { harness: "codex", status: "ready" }, permissions: [], requests: [], nativeAgents: roster(agent("fin", { thread: randomUUID(), origin: "started" })) }],
   ])
   const sources = {
-    live: { listed: () => [...snapshots.keys()].map((id) => ({ session: { id } })), loaded: () => true, snapshot: (id: string) => snapshots.get(id) ?? null },
+    live: { listed: () => [...snapshots.keys()].map((id) => ({ session: { id } })), held: (id: string) => snapshots.get(id) },
     threads: { journalPlacement: () => ({ thread: ThreadIdSchema.parse(randomUUID()), session: SessionIdSchema.parse(randomUUID()) }), execution: () => ({ state: "here" as const }) },
     cloud: () => false,
   }
