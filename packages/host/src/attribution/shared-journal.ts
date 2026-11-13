@@ -352,7 +352,8 @@ export class SharedJournal {
   private link?: Socket
   private following?: Socket
   private recoveryLog?: { why: string; at: number }
-  private retrying?: () => void
+  private retrying?: { started: number; finish(): void }
+  private earlyRetryAt?: number
   private privateReason?: string
   private sent = 0
   /** What the owner hasn't applied yet, oldest first. */
@@ -458,9 +459,14 @@ export class SharedJournal {
     return () => this.listeners.delete(listener)
   }
 
-  /** Foreground work can retry immediately without resetting the outage's backoff. Status reads stay passive. */
-  retry(): void {
-    if (!this.closed && this.current.kind === "failed") this.retrying?.()
+  /** Explicit person actions only: never journal traffic or automatic polling. */
+  retryFromPerson(): void {
+    const wait = this.retrying
+    const now = performance.now()
+    if (this.closed || this.current.kind !== "failed" || !wait || now - wait.started < 1_000) return
+    if (this.earlyRetryAt !== undefined && now - this.earlyRetryAt < 30_000) return
+    this.earlyRetryAt = now
+    wait.finish()
   }
 
   /** The metadata a writing child sends back to its host; never an acknowledgement of journal writes. */
@@ -494,7 +500,6 @@ export class SharedJournal {
   /** The messages already sent have been applied. This does not wait for a root's watch or rescan. */
   applied(): Promise<void> {
     if (!this.unsent.length) return Promise.resolve()
-    this.retry()
     const through = this.sent
     return new Promise((resolve, reject) => {
       const finish = (error?: Error) => {
@@ -517,7 +522,7 @@ export class SharedJournal {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
-    this.retrying?.()
+    this.retrying?.finish()
     this.following?.destroy()
     for (const check of this.acknowledgements) check()
     for (const call of this.calls.values()) {
@@ -607,7 +612,7 @@ export class SharedJournal {
       await new Promise<void>(resolve => {
         const done = () => { clearTimeout(timer); this.retrying = undefined; resolve() }
         const timer = setTimeout(done, writerRetryDelay(attempt, retry, maxRetry))
-        this.retrying = done
+        this.retrying = { started: performance.now(), finish: done }
       })
     }
   }
@@ -851,7 +856,6 @@ export class SharedJournal {
       return
     }
     this.transmit(this.link, message, !this.link)
-    this.retry()
   }
 
   private request(request: Request): Promise<Reply> {
@@ -868,7 +872,7 @@ export class SharedJournal {
       timer.unref?.()
       const call: Call = { id, request, timer, resolve: resolveCall, reject: rejectCall }
       this.calls.set(id, call)
-      this.retry()
+      if (request.kind === "restore" || request.kind === "lost") this.retryFromPerson()
       this.run(call)
     })
   }

@@ -460,36 +460,47 @@ test("writer recovery starts fast, grows to thirty seconds, and remains capped",
   assert.equal(writerRetryDelay(1_000_000), 30_000)
 })
 
-for (const demand of ["read", "write", "request"] as const) {
-  test(`new attribution ${demand} work cuts a long recovery wait short`, async () => {
+for (const demand of ["view", "lost", "restore"] as const) {
+  test(`person ${demand} retries require one second of waiting and share a thirty-second budget`, async context => {
+    let now = 100_000
+    context.mock.method(performance, "now", () => now)
     const root = scratch()
     let attempts = 0
-    let release!: (address: string) => void
-    const restarting = new Promise<string>(resolve => { release = resolve })
     const client = await SharedJournal.open({
-      folder: root, host: { pid: process.pid, dataRoot: root, label: "demand-retry" }, timing: { retryMs: 10_000, maxRetryMs: 30_000 },
-      startOwner: async () => { if (++attempts === 1) throw new Error("temporarily unavailable"); return restarting },
+      folder: root, host: { pid: process.pid, dataRoot: root, label: "person-retry" }, timing: { retryMs: 10_000, maxRetryMs: 30_000 },
+      startOwner: async () => { attempts++; throw new Error("unavailable") },
       own: async () => { throw new Error("no main writer") }, alone: async () => { throw new Error("no private writer") }, follow() {}, log() {},
     })
-    try {
-      assert.equal(attempts, 1)
-      if (demand === "read") client.retry()
-      else if (demand === "write") client.writes.activity({ kind: "turn", edge: "start", id: "demand", session: "session", thread: "thread", at: Date.now() })
-      else void client.writes.track(root).catch(() => {})
+    const ask = async () => {
+      if (demand === "view") client.retryFromPerson()
+      else if (demand === "lost") void client.writes.lost({ thread: "thread" }).catch(() => {})
+      else void client.writes.restore(root, 1).catch(() => {})
       await new Promise(resolve => setImmediate(resolve))
-      assert.equal(attempts, 2, "recovery began without waiting for the ten-second timer")
-      if (demand === "write") assert.equal(client.status().unsent, 1)
-    } finally {
-      await client.close()
-      release(join(root, "missing.socket"))
-      await new Promise(resolve => setImmediate(resolve))
-      rmSync(root, { recursive: true, force: true })
     }
+    try {
+      now = 100_999
+      await ask()
+      assert.equal(attempts, 1, "the current wait has not run for one second")
+      now = 101_000
+      await ask()
+      assert.equal(attempts, 2)
+      now = 102_000
+      await ask()
+      assert.equal(attempts, 2, "one second in a new wait cannot spend the same budget twice")
+      now = 130_999
+      await ask()
+      assert.equal(attempts, 2)
+      now = 131_000
+      await ask()
+      assert.equal(attempts, 3, "a person can cut again after thirty seconds")
+    } finally { await client.close(); rmSync(root, { recursive: true, force: true }) }
   })
 }
 
 test("an outage logs a changed reason immediately and the same reason at most once a minute", async context => {
   context.mock.timers.enable({ apis: ["Date"], now: 1_000_000 })
+  let elapsed = 0
+  context.mock.method(performance, "now", () => elapsed)
   const root = scratch()
   let reason = "unavailable", attempts = 0
   const logs: string[] = []
@@ -501,7 +512,8 @@ test("an outage logs a changed reason immediately and the same reason at most on
   })
   const retry = async () => {
     const before = attempts
-    client.retry()
+    elapsed += 30_000
+    client.retryFromPerson()
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(attempts, before + 1)
   }
@@ -519,4 +531,50 @@ test("an outage logs a changed reason immediately and the same reason at most on
     await retry()
     assert.deepEqual(logs, ["unavailable", "different reason", "different reason"])
   } finally { await client.close(); rmSync(root, { recursive: true, force: true }) }
+})
+
+test("ten seconds of journal traffic cannot bypass a broken writer's backoff", { timeout: 20_000 }, async context => {
+  const root = scratch()
+  const entry = join(root, "always-fails.ts"), starts = join(root, "starts")
+  writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module" }))
+  writeFileSync(entry, `
+    import { appendFileSync } from "node:fs";
+    appendFileSync(${JSON.stringify(starts)}, ${JSON.stringify("start\n")});
+    throw new Error("test writer is permanently unavailable");
+  `)
+  const deps = dependencies(root)
+  const writer = new AttributionWriter(deps, settings(deps), { entry })
+  let attempts = 0, batches = 0
+  const client = await SharedJournal.open({
+    folder: sharedJournalFolder(deps.userRoot), host: { pid: process.pid, dataRoot: deps.dataRoot, label: "steady-traffic" },
+    startOwner: async () => { attempts++; return (await writer.ensure()).address },
+    own: async () => { throw new Error("no main writer") }, alone: async () => { throw new Error("no private writer") }, follow() {}, log() {},
+  })
+  const stream = setInterval(() => {
+    const id = `batch-${++batches}`, at = Date.now()
+    client.writes.activity({ kind: "turn", edge: "start", id, session: "session", thread: "thread", at })
+    client.writes.reported({ thread: "thread", session: "session", call: id, status: "completed", effects: [] })
+    client.writes.makoStart(id, { kind: "editor", operation: "save", paths: [join(root, "file.ts")] }, at)
+    client.writes.makoEnd(id, at)
+    client.writes.activity({ kind: "turn", edge: "end", id, session: "session", thread: "thread", at })
+    if (batches % 10 === 0) {
+      void client.applied().catch(() => {})
+      void client.writes.settled().catch(() => {})
+      void client.writes.track(root).catch(() => {})
+    }
+  }, 20)
+  try {
+    await new Promise(resolve => setTimeout(resolve, 10_000))
+    const entries = readFileSync(starts, "utf8").trim().split("\n").length
+    context.diagnostic(`10s traffic: ${batches} batches, ${attempts} start attempts, ${entries} worker entries`)
+    assert.ok(batches >= 20, "the failing owner was exercised under continuing journal traffic")
+    assert.ok(attempts <= 10, "traffic cannot add starts to the default ten-second backoff schedule")
+    assert.ok(entries <= attempts)
+    assert.equal(client.status().role, "failed")
+  } finally {
+    clearInterval(stream)
+    await client.close()
+    await writer.close()
+    rmSync(root, { recursive: true, force: true })
+  }
 })

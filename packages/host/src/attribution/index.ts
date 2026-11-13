@@ -150,8 +150,14 @@ export function changeUsage(store: JournalStore, since: number): ChangeUsage {
 
 /** What windows ask the journal: a Thread's changes made, every Thread's, versions lost from disk, and putting one back. */
 export function declareAttributionMethods(methods: MethodTable, attribution: () => Attribution | undefined): void {
-  methods.handle("mako:thread-changes", (thread: string): ThreadChangeSummary | null => attribution()?.threadChanges(thread) ?? null)
-  methods.handle("mako:change-usage", (): ChangeUsage | null => attribution()?.changeUsage() ?? null)
+  // These reads come from opening the window's changes/usage view, not background journal polling.
+  const forWindowView = () => {
+    const journal = attribution()
+    journal?.retryFromPerson()
+    return journal
+  }
+  methods.handle("mako:thread-changes", (thread: string): ThreadChangeSummary | null => forWindowView()?.threadChanges(thread) ?? null)
+  methods.handle("mako:change-usage", (): ChangeUsage | null => forWindowView()?.changeUsage() ?? null)
   // Null while the journal isn't open: the window links as it did before, unchecked.
   methods.handle("mako:resolve-file-references", async (source: FileReferenceSource, spellings: FileSpellings): Promise<FileResolution[] | null> =>
     (await attribution()?.resolveFiles(source, spellings)) ?? null)
@@ -211,6 +217,8 @@ export interface ReportedBounds {
 
 /** Who changed what in every checkout Threads work in: the journal, what feeds it, and what it answers. */
 export interface Attribution {
+  /** A person opened a view of the journal; bounded independently of background reads and writes. */
+  retryFromPerson(): void
   /** A batch the live conversations sent: turns, tool calls and background work starting and ending. */
   live(batch: LiveBatch): void
   /** A finished call's reported effects, from the live engine. */
@@ -374,7 +382,6 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
   let offLoop: { path: string; reader: JournalReader } | undefined
 
   const view = (): JournalView => {
-    sharing.journal?.retry()
     if (!reader) throw new Error("Mako's record of changes isn't open yet. Try again in a moment.")
     const version = reader.store.dataVersion()
     if (!reader.view || version !== reader.version) {
@@ -599,6 +606,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     moved: (move) => journal.writes.moved({ ...move, at: Date.now() }),
     lost: (target) => journal.writes.lost(target),
     restore: (root, entry) => journal.writes.restore(root, entry),
+    retryFromPerson: () => journal.retryFromPerson(),
     failure: () => journal.status().failure,
     status: () => ({
       ...attributionStatus(view(), { recent: writer.snapshot()?.recent, live: writer.snapshot()?.role.kind === "owner" || writer.snapshot()?.role.kind === "private" }),
