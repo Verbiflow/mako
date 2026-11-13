@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils"
 import type { GitHubStatus, PullRequest as Pull } from "@/lib/types"
 import {
   CheckIcon,
+  CircleSlashIcon,
   ExternalLinkIcon,
   GitPullRequestIcon,
   MessageSquarePlusIcon,
@@ -411,13 +412,15 @@ function PullSummary({ pull, loading, root }: { pull: Pull; loading: boolean; ro
           <span
             className={cn(
               "flex items-center gap-1",
-              checks.failed > 0 ? "text-removed" : checks.running > 0 ? "text-caution" : "text-added"
+              checks.failed > 0 ? "text-removed" : checks.running > 0 || checks.cancelled > 0 ? "text-caution" : "text-added"
             )}
           >
             {checks.failed > 0 ? (
               <XIcon className="size-2.5" />
             ) : checks.running > 0 ? (
               <span className="size-1.5 animate-live rounded-full bg-caution" />
+            ) : checks.cancelled > 0 ? (
+              <CircleSlashIcon className="size-2.5" />
             ) : (
               <CheckIcon className="size-2.5" />
             )}
@@ -425,7 +428,9 @@ function PullSummary({ pull, loading, root }: { pull: Pull; loading: boolean; ro
               ? `${checks.failed} failing`
               : checks.running > 0
                 ? `${checks.running} running`
-                : "checks pass"}
+                : checks.cancelled > 0
+                  ? `${checks.cancelled} cancelled`
+                  : "checks pass"}
           </span>
         ) : null}
 
