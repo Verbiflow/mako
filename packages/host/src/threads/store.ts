@@ -789,6 +789,8 @@ export class ThreadStore {
   /** The rows the last edges were read from, kept through commits: a read that finds the same keeps the same object. */
   private edgesKept: { records: string[]; native: Set<string>; edges: ThreadEdges } | undefined
   private worktreesSeen: { revision: number; worktrees: ThreadWorktree[] } | undefined
+  /** Who hears this device's worktrees change here (`onWorktrees`). */
+  private readonly worktreeListeners = new Set<() => void>()
   private changeSeq = 0
   private titleSeq = 0
   /** Threads whose name another host changed since `takeExternalTitles` last ran. */
@@ -1838,13 +1840,25 @@ export class ThreadStore {
   attachWorktree(input: Omit<ThreadWorktree, "createdAt">, repositories: readonly WorktreeRepository[] = []): void {
     const thread = this.thread(input.thread)
     if (!thread) throw new Error("This Thread no longer exists")
+    let added = false
     this.write(() => {
-      const added = this.sql("INSERT OR IGNORE INTO thread_worktrees (path, thread_id, device_id, repo_root, project, branch, base, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(input.path, thread.id, this.deviceId, input.repoRoot, input.project, input.branch, input.base, this.now())
-      if (!added.changes) return
+      added = this.sql("INSERT OR IGNORE INTO thread_worktrees (path, thread_id, device_id, repo_root, project, branch, base, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(input.path, thread.id, this.deviceId, input.repoRoot, input.project, input.branch, input.base, this.now()).changes > 0
+      if (!added) return
       for (const repository of repositories)
         this.sql("INSERT OR IGNORE INTO thread_worktree_repositories (path, checkout, repo_root, base) VALUES (?, ?, ?, ?)").run(repository.path, input.path, repository.repoRoot, repository.base)
     })
+    if (added) this.worktreesMoved()
+  }
+
+  /** Hears this device's worktrees change here (one added, moved home, forgotten); returns how to stop hearing. */
+  onWorktrees(listener: () => void): () => void {
+    this.worktreeListeners.add(listener)
+    return () => this.worktreeListeners.delete(listener)
+  }
+
+  private worktreesMoved(): void {
+    for (const listener of this.worktreeListeners) listener()
   }
 
   /**
@@ -2002,6 +2016,7 @@ export class ThreadStore {
     this.write(() => {
       this.sql("UPDATE thread_worktrees SET repo_root = ?, project = ? WHERE path = ? AND device_id = ?").run(repoRoot, project, path, this.deviceId)
     })
+    this.worktreesMoved()
   }
 
   /** Forget a worktree; a checkout of several repositories goes with the last of its worktrees, or at once by its own folder. */
@@ -2018,6 +2033,7 @@ export class ThreadStore {
       if (owner && !this.sql("SELECT 1 AS found FROM thread_worktrees WHERE thread_id = ?").get(MembershipRowSchema.parse(owner).thread_id))
         this.sql("DELETE FROM thread_places WHERE place_thread = ?").run(MembershipRowSchema.parse(owner).thread_id)
     })
+    this.worktreesMoved()
   }
 
   /**

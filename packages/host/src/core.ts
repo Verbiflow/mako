@@ -714,6 +714,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     else if (event.type === "thread-activity") sessions.nativeChanged(event.path)
   })
   late.sessions = sessions
+  // A Thread's worktree added, moved home or forgotten: its rows say the project and worktree they're in, and every row
+  // of a Thread there may change, so the list is worked out again. Rare: a start, an abandon, a move.
+  threads.store?.onWorktrees(() => sessions.changed())
   // How this Mac's sync goes, for Diagnostics: what it follows of other devices' work, the account's list, and what it
   // sends of its own watched conversations.
   const syncReadings = new SyncRecorder()
@@ -751,6 +754,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const UPLOADS_WORK = "keep this Mac's Sessions in the account"
   // The reconcile: what changes without an event (the catalog's progress, the power, a link given late).
   const UPLOADS_RECONCILE_MS = 60_000
+  // The first retry of a look that left something undone; each after waits twice as long, up to the reconcile.
+  const UPLOADS_RETRY_MS = 5_000
   if (!fixtureDesk && config.machineAgentFd === undefined) {
     uploads = new SessionUploads({
       rows: () => sessions.listed(),
@@ -779,11 +784,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     // reconcile for what changes without an event (the catalog's progress, the power, a link given late).
     let looking: Promise<void> | undefined
     let again = false
+    // A look that left something undone goes again on its own, 5 s after, doubling to the reconcile's minute.
+    let retryMs = UPLOADS_RETRY_MS
+    let retry: ReturnType<typeof setTimeout> | undefined
     const look = (): Promise<void> => {
       if (looking) {
         again = true
         return looking
       }
+      if (retry) clearTimeout(retry)
+      retry = undefined
       looking = shell.work.run(UPLOADS_WORK, () => ticking.tick())
         .catch((error: Error) => hostWarn("sync", "this device's Sessions couldn't be looked at", { error: error.message }))
         .finally(() => {
@@ -791,7 +801,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           if (again) {
             again = false
             void look()
-          }
+          } else if (ticking.needsRetry() && !shell.stopping.signal.aborted) {
+            retry = setTimeout(() => void look(), retryMs)
+            retry.unref()
+            retryMs = Math.min(retryMs * 2, UPLOADS_RECONCILE_MS)
+          } else if (!ticking.needsRetry()) retryMs = UPLOADS_RETRY_MS
         })
       return looking
     }
@@ -1117,6 +1131,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     // What a turn left in its worktree is read again for the rail, as its own event rather than a window's poll.
     turnEnded: (_id, cwd) => workspaces.worktrees?.turnEnded(cwd),
+    // Its row in the account's list says whether it works: said as its work moves, checkpoint and close included.
+    workMoved: (id) => late.sessions?.conversationMoved(id),
     movePending: (id) => {
       const answer = late.movers?.moves.answerFor(id)
       return answer === "asking" || answer === "allowed" || answer === "moving"

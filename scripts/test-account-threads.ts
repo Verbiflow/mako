@@ -791,6 +791,62 @@ test("a batch reworks its own conversation's row, never the whole list; the whol
   assert.equal(whole, 3, "and the reconcile, a few minutes after the last whole one, reworks it whole, for what moves without an event")
 })
 
+test("a conversation's work moving with no batch (a checkpoint released, a start settled) reworks its row alone, on the next turn", async () => {
+  let now = NOW
+  let whole = 0
+  const asked: string[][] = []
+  const sent: SessionsReport[] = []
+  let state = "working"
+  const soon: Array<() => void> = []
+  let serving: SessionLink | undefined
+  const publisher = new SessionPublisher({
+    rows: () => (whole++, [row(1), row(2, state)]),
+    rowsOf: (conversations) => (asked.push([...conversations]), [...conversations].map((conversation) => row(Number(conversation.slice(2)), state))),
+    now: () => now,
+    reportNow: () => publisher.report(serving),
+    schedule: (run) => { soon.push(run) },
+  })
+  serving = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  publisher.report(serving)
+  state = "idle"
+  publisher.conversationMoved("c-2")
+  assert.equal(soon.length, 1, "asked for at once, as a change a list shows")
+  now += 10
+  soon.shift()!()
+  assert.equal(whole, 1, "the whole list isn't worked out")
+  assert.deepEqual(asked, [["c-2"]], "its own row is")
+  assert.deepEqual(sent.at(-1)!.listed.map((each) => `${each.conversation} ${each.state}`), ["c-2 idle"], "and goes now, not at the reconcile")
+})
+
+test("a look at the uploads that left something undone says so, and one that didn't, doesn't", async () => {
+  const link = { id: "l-1", base: "https://gateway.test/", authorization: "Bearer t" }
+  let refuse = true
+  let throwLinks = false
+  const uploads = new SessionUploads({
+    rows: () => [row(1)],
+    path: () => undefined,
+    links: async () => {
+      if (throwLinks) throw new Error("the account didn't answer")
+      return { state: "on", copies: link, originals: { ...link, id: "l-2" } }
+    },
+    power: async () => ({ onBattery: false, percent: undefined, lowPower: false }),
+    scope: async () => {},
+    copies: async () => { if (refuse) throw new Error("the catalog's process was busy") },
+    originals: async () => {},
+    status: async () => null,
+    backfill: async () => undefined,
+    now: () => NOW,
+  })
+  await uploads.tick()
+  assert.equal(uploads.needsRetry(), true, "links the catalog didn't take are tried again on their own")
+  refuse = false
+  await uploads.tick()
+  assert.equal(uploads.needsRetry(), false, "taken, nothing's left")
+  throwLinks = true
+  await assert.rejects(uploads.tick())
+  assert.equal(uploads.needsRetry(), true, "a look that threw is tried again")
+})
+
 test("a native session's write or catalog row reworks its own rows, never the whole list; one gone from the window reworks it whole", async () => {
   let now = NOW
   let whole = 0

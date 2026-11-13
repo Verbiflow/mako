@@ -238,6 +238,7 @@ export class LiveConversations {
       add: (resident) => this.records.add(resident),
       control: conversationControl,
       flush: (resident) => this.flush(resident),
+      noteWork: (resident) => this.noteWork(resident),
       keep: (resident) => this.keep(resident),
       schedule: (resident) => this.schedule(resident),
       storageFailed: (resident, boundary) => this.storageFailed(resident, boundary),
@@ -1970,7 +1971,26 @@ export class LiveConversations {
   }
 
   /** Commits what changed to the journal and tells every window, in one batch. */
+  /** What each conversation's work was last said to be (`noteWork`), so only a move is said. */
+  private readonly workSaid = new Map<string, string>()
+
+  private noteWork(resident: Resident): void {
+    const id = resident.snapshot.session.id
+    const status = residentWork(resident)?.status ?? "none"
+    if (this.workSaid.get(id) === status) return
+    this.workSaid.set(id, status)
+    this.dependencies.workMoved?.(id)
+  }
+
   private flush(resident: Resident): void {
+    try {
+      this.write(resident)
+    } finally {
+      this.noteWork(resident)
+    }
+  }
+
+  private write(resident: Resident): void {
     resident.snapshot = withdrawGone(resident.snapshot)
     if (this.records.isReleased(resident)) {
       hostWarn("residency", "a write reached an unloaded conversation and was dropped", { conversation: resident.snapshot.session.id })

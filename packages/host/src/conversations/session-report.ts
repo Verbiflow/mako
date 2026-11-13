@@ -649,6 +649,15 @@ export class SessionPublisher {
   }
 
   /**
+   * A conversation of this host moved as a list shows it with no batch of its own (its work started, settled or ended):
+   * its row alone is worked out again, on the next turn of the event loop.
+   */
+  conversationMoved(conversation: string): void {
+    this.#touched.add(conversation)
+    this.#rowShowsChanged()
+  }
+
+  /**
    * A native session moved (its file was written, its catalog row changed): its rows alone are reported soon, as
    * `changed` reports, without working the whole list out again.
    */
