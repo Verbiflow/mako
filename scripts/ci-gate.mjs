@@ -205,28 +205,37 @@ export const STEPS = [
   [3, "npm run -s test:web-delivery"],
   [2, "npm run -s test:window-boot"],
   [1, "npm run -s test:zod-patch"],
+  // The host's tests under Node and Electron's Helper (`test-host.ts`), a runtime a step, but the Keychain's on the Mac.
+  [86, "MAKO_TEST_HOST_EXCEPT=scripts/test-keychain-safe-storage.ts tsx scripts/test-host.ts --runtime node"],
+  [86, "MAKO_TEST_HOST_EXCEPT=scripts/test-keychain-safe-storage.ts tsx scripts/test-host.ts --runtime electron"],
+  // Taken apart here, their Mac-only parts (`MAC_PARTS`) on the Mac.
+  [207, "npm run -s test:execution-ownership"],
+  [201, "npm run -s test:thread-worktrees"],
+  [61, "npm run -s test:mcp"],
 ]
 
 /**
  * The steps that pass only on macOS, each for the reason beside it, run by `--mac` on Mac runners: on every push to
- * main, and on a pull request that touches the host or its tests (`ci-changes.mjs`'s `macHost`).
+ * main, and on a pull request that touches the host or its tests (`ci-changes.mjs`'s `macHost`), with the parts of
+ * Linux steps `MAC_PARTS` names: a suite taken apart runs on Linux but for the parts only a Mac passes.
  */
 export const MAC_STEPS = [
-  // `test-keychain-safe-storage.ts` reads the macOS Keychain, which Linux's secret store answers otherwise.
-  [206, "npm run -s test:host"],
-  // `test-recovery-probe-scope.ts` expects a resume to be unavailable as it is on a Mac; Linux reads it resumable.
-  [207, "npm run -s test:execution-ownership"],
-  // the same recovery probe as `test:execution-ownership`.
-  [50, "npm run -s test:recovery-admission"],
-  // its npm install expectations follow the Mac's lockfile platform packages.
-  [201, "npm run -s test:thread-worktrees"],
-  // its embedded computer-use host is macOS-only.
-  [61, "npm run -s test:mcp"],
-  // a native crash leaves a minidump only where Crashpad writes one, on the Mac.
+  // The host's own secret storage test reads the macOS Keychain; Linux's secret store answers otherwise. The rest of
+  // `test-host.ts`'s scripts run in the Linux gate.
+  [20, "MAKO_TEST_HOST_SCRIPTS=scripts/test-keychain-safe-storage.ts tsx scripts/test-host.ts"],
+  // A native crash leaves a minidump only where Crashpad writes one, on the Mac.
   [8, "npm run -s test:desktop-crashes"],
-  // it runs Claude's darwin-arm64 binary.
+  // It runs Claude's darwin-arm64 binary.
   [11, "npm run -s test:native-authoring"],
 ]
+
+/**
+ * Parts of the Linux steps that pass only on macOS, which `--mac` runs instead, each for its reason:
+ * `test-recovery-probe-scope.ts` reads a resume as unavailable, as it is on a Mac, where Linux reads it resumable;
+ * `test-thread-worktrees.ts` holds the npm install to the Mac's lockfile platform packages; `test-mcp.ts` drives the
+ * embedded computer-use host, which is macOS-only.
+ */
+const MAC_PARTS = [/scripts\/test-recovery-probe-scope\.ts\b/, /scripts\/test-thread-worktrees\.ts\b/, /scripts\/test-mcp\.ts\b/]
 
 /** A step not yet measured. */
 const DEFAULT_SECONDS = 30
@@ -322,9 +331,11 @@ function workspaceParts(seconds, command, name) {
 }
 
 /** Every step's parts, each part once: a part two chains share runs in the first. */
-export function units(steps) {
+export function units(steps, mac = false) {
   const seen = new Set()
-  return steps.flatMap((step) => parts(step)).filter((unit) => !seen.has(unit.command) && seen.add(unit.command))
+  const own = (unit) => MAC_PARTS.some((rule) => rule.test(unit.command)) === mac
+  const linux = STEPS.flatMap((step) => parts(step))
+  return (mac ? [...MAC_STEPS.flatMap((step) => parts(step)), ...linux.filter(own)] : linux.filter(own)).filter((unit) => !seen.has(unit.command) && seen.add(unit.command))
     .map((unit) => (MEASURED[unit.command] === undefined ? unit : { ...unit, seconds: MEASURED[unit.command] }))
 }
 
@@ -361,7 +372,7 @@ const listed = mac ? MAC_STEPS : STEPS
  * so two at a time on a 2-vCPU runner take about half as long. A part's output is printed whole when it ends.
  */
 const LANES = Number(process.env.CI_GATE_LANES ?? 2)
-const lanesOf = (count) => shards(units(listed), count * LANES)
+const lanesOf = (count) => shards(units(listed, mac), count * LANES)
 if (args[0] === "--plan") {
   const count = Number(args[1])
   const lanes = lanesOf(count)

@@ -127,16 +127,13 @@ jobs:
           path: ${{ runner.temp }}/test-evidence
           if-no-files-found: ignore
 
-  # The gate's steps that pass only on macOS (`ci-gate.mjs`'s `MAC_STEPS`, each with its reason), in three shards.
+  # The gate's steps and parts that pass only on macOS (`ci-gate.mjs`'s `MAC_STEPS` and `MAC_PARTS`, each with its
+  # reason), about two minutes of them, on one Mac.
   mac-host:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.macHost == 'true'
     runs-on: macos-15
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -147,13 +144,13 @@ jobs:
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
       - run: npm run build:control-runtime
-      - run: node scripts/ci-gate.mjs --mac ${{ matrix.shard }} 3
+      - run: node scripts/ci-gate.mjs --mac 1 1
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: mac-host-${{ matrix.shard }}-evidence
+          name: mac-host-evidence
           path: ${{ runner.temp }}/test-evidence
           if-no-files-found: ignore
 
