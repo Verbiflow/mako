@@ -69,7 +69,10 @@ try {
   earlier.track(wrapper, { kind: "acp:test", owner: "conv-wrapper" })
   earlier.track(finished, { kind: "acp:test", owner: "conv-2" })
   await new Promise<void>((resolve) => finished.once("exit", () => resolve()))
-  const deadline = Date.now() + 10_000
+  // As long as the host's observations may take (`ProviderChildren.observe`): looks after 0, 250, 1,000 and 5,000 ms,
+  // each allowed 4.5 s, so 24.25 s at most. 10 s held only while the OS answered at once, which a loaded runner
+  // didn't (#635).
+  const deadline = Date.now() + 25_000
   const wrappedExecutable = await realpath("/bin/sleep")
   while (true) {
     const records = JSON.parse(await readFile(earlier.path, "utf8")).children
