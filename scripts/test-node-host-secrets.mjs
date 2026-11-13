@@ -6,6 +6,7 @@ import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 import { build } from "esbuild"
+import { acquireHostLock } from "@mako/host/base/host-lock"
 import { invokeRuntime } from "@mako/host/transport/connection"
 import { ensureRuntime } from "@mako/host/transport/service"
 import { endHost } from "./lib/host-end.mjs"
@@ -89,11 +90,24 @@ try {
   console.log("Node-mode host secrets: the real host under Electron's Helper in Node mode, with no keychain of its own, reads a saved connection as unavailable, then opens it once an Electron process unwraps the data key through the keychain and hands it over the host's socket")
 } finally {
   const quit = await endHost({
+    // Quit is the host letting go of its data root, within 15 s: its own stop, which the next host waits for. Then its
+    // process goes: macOS has kept one seconds after its exit, every thread ended (15 s on a CI runner, 2026-11-13), so
+    // that's given longer, and both times are said.
     quit: async () => {
       if (!host) return true
+      const asked = Date.now()
       await invokeRuntime(host.socket, crypto.randomUUID(), "mako:lifecycle-command", [{ kind: "wait", action: "quit" }]).catch(() => undefined)
-      const end = Date.now() + 15_000
-      while (Date.now() < end && alive(host.info.pid)) await delay(100)
+      let freed
+      for (const end = asked + 15_000; freed === undefined && Date.now() < end; await delay(100)) {
+        const lock = await acquireHostLock(dataRoot)
+        if (lock.kind === "held") {
+          freed = Date.now() - asked
+          await lock.release()
+        }
+      }
+      if (freed === undefined) return false
+      for (const end = asked + 75_000; Date.now() < end && alive(host.info.pid); ) await delay(100)
+      console.log(`The host let go of its data root ${freed} ms after its quit, and its process was gone at ${Date.now() - asked} ms`)
       return !alive(host.info.pid)
     },
     // What held it is in its own log, which goes with the scratch folder: kept first, for the job's artifacts.
