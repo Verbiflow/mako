@@ -58,7 +58,9 @@ const chromium = spawn(
 )
 const endpoint = await new Promise<string>((done, fail) => {
   let stderr = ""
-  const timer = setTimeout(() => fail(new Error("Chromium startup timed out")), 15_000)
+  // How long Chromium may take to come up at all, not a time the test claims: a cold start beside another suite on a
+  // 2-vCPU runner took longer than 15 s (#635).
+  const timer = setTimeout(() => fail(new Error("Chromium startup timed out")), 60_000)
   chromium.once("exit", () => fail(new Error("Chromium exited before its endpoint")))
   chromium.stderr.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-16_384)
