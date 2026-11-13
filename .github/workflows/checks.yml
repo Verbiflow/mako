@@ -476,7 +476,8 @@ jobs:
   # load and latency benches) run on a pull request only when its paths reach them, and always on main after the merge,
   # under `ci`: a failure there is fixed or reverted, never waited on by an unrelated pull request.
   pr-gate:
-    if: always()
+    # A pull request's verdict only: on main, `ci` is the one verdict, after the heavy jobs too.
+    if: always() && github.event_name == 'pull_request'
     needs: [changes, checks, gate, mac-host]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
