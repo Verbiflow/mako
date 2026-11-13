@@ -140,7 +140,7 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 | Cursor | 1.3.1 | 2026-11-04 | 17 | 1 | 8 | the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions |
 | OpenCode | 2.2.7 | 2026-11-10 | 14 | 8 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model, and as a lead (configureOpenCodeRouting) |
 | Grok | 1.0.77 | 2026-11-06 | 27 | 8 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode, and as a lead (nativeSpawnsOff) |
-| Devin | 3000.12.43 | 2026-11-10 | 24 | 10 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode and as a lead (nativeSpawnsOff) |
+| Devin | 3000.12.57 | 2026-11-13 | 24 | 10 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode and as a lead (nativeSpawnsOff) |
 
 ## Plan, questions and subagents
 

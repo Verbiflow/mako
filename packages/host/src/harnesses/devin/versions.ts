@@ -16,10 +16,10 @@ import { scriptInstall } from "../update-source.js"
  * of a version.
  */
 export const DEVIN_VERSIONS: HarnessVersions = {
-  tested: "3000.12.43",
+  tested: "3000.12.57",
   feed: { manifest: "https://static.devin.ai/cli/current/manifest.json" },
   checked: {
-    on: "2026-11-10",
+    on: "2026-11-13",
     how: "the version every record names: the vocabulary, native-tools/devin-3000.12.43.json, the decode pairs and devin-concepts.json",
   },
 }
