@@ -301,15 +301,16 @@ export class LiveLaunches {
           }
           return
         }
-        resident.snapshot = {
-          ...resident.snapshot,
-          session: {
-            ...session,
-            title: session.title ?? resident.snapshot.session.title,
-          },
+        // The driver reports its session under the binding it runs (a relaunched one isn't the conversation's own);
+        // the conversation keeps its ID, as a wake's and a transfer's do.
+        const connected = {
+          ...session,
+          id: conversation,
+          title: session.title ?? resident.snapshot.session.title,
         }
-        resident.connections.set(id, { driver, session })
-        updateBinding(dependencies, resident, session)
+        resident.snapshot = { ...resident.snapshot, session: connected }
+        resident.connections.set(id, { driver, session: { ...connected, id } })
+        updateBinding(dependencies, resident, connected)
         // A host- or launch-enforced tier is already current when the session
         // reports; a provider's own mode (Cursor's plan) is applied here. An
         // explicit choice must apply or fail; the ledger's memory applies only
