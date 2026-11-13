@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { MessageChannel } from "node:worker_threads"
+import { execFileSync } from "node:child_process"
 import { once } from "node:events"
 import { postToWriter } from "@mako/host/attribution/writer-messages"
 import { ToWriterSchema } from "@mako/host/attribution/writer-protocol"
@@ -17,7 +18,7 @@ import { hostLifecycle } from "@mako/host/base/host-lifecycle"
 import { AttributionWriter } from "@mako/host/attribution/writer-client"
 import { JournalStore } from "@mako/host/attribution/journal-store"
 import { openAttribution, type AttributionDeps, type TreeWatcher } from "@mako/host/attribution/index"
-import { SharedJournal, sharedJournalFolder } from "@mako/host/attribution/shared-journal"
+import { SharedJournal, sharedJournalFolder, writerRetryDelay } from "@mako/host/attribution/shared-journal"
 
 const scratch = () => realpathSync(mkdtempSync(join(tmpdir(), "maw-")))
 const git = new Git()
@@ -321,7 +322,7 @@ for (const fault of ["throws", "never-starts", "invalid-ready", "never-answers"]
         await import(${JSON.stringify(main)});
       }
     `)
-    const writer = new AttributionWriter(deps, settings(deps), { entry, timing: { startMs: 2_000, askMs: 300 } })
+    const writer = new AttributionWriter(deps, settings(deps), { entry, timing: { startMs: 2_000, askMs: 300, probeMs: 300 } })
     let client: SharedJournal | undefined
     let attempts = 0
     try {
@@ -388,4 +389,134 @@ test("closing during an owner restart rejects late recovery without a new connec
     await new Promise(resolve => setTimeout(resolve, 40))
     assert.equal(attempts, 2)
   } finally { release(join(root, "missing.socket")); await client.close(); rmSync(root, { recursive: true, force: true }) }
+})
+
+
+test("a wake that exceeds its command deadline completes in the same writing generation", { timeout: 15_000 }, async () => {
+  const root = scratch()
+  const repo = join(root, "repo")
+  mkdirSync(repo)
+  const run = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" })
+  run("init", "-q")
+  writeFileSync(join(repo, "a.ts"), "export const a = 1\n")
+  run("add", ".")
+  run("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "base")
+  const entered = join(root, "wake-entered"), release = join(root, "wake-release"), completed = join(root, "wake-completed"), starts = join(root, "starts"), armed = join(root, "armed")
+  const entry = join(root, "slow-wake.ts")
+  const main = fileURLToPath(new URL("../packages/host/src/attribution/writer-main.ts", import.meta.url))
+  const tracker = fileURLToPath(new URL("../packages/host/src/attribution/tracker.ts", import.meta.url))
+  writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module" }))
+  writeFileSync(entry, `
+    import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+    import { setTimeout as delay } from "node:timers/promises";
+    import { LaptopTracker } from ${JSON.stringify(tracker)};
+    appendFileSync(${JSON.stringify(starts)}, ${JSON.stringify("start\n")});
+    const open = LaptopTracker.open;
+    LaptopTracker.open = (ports, options) => open(ports, { ...options, sleepAfterMs: 0 });
+    const track = LaptopTracker.prototype.track;
+    LaptopTracker.prototype.track = async function(...args) {
+      if (existsSync(${JSON.stringify(armed)})) {
+        writeFileSync(${JSON.stringify(entered)}, "entered");
+        while (!existsSync(${JSON.stringify(release)})) await delay(10);
+      }
+      const result = await track.apply(this, args);
+      if (existsSync(${JSON.stringify(armed)})) writeFileSync(${JSON.stringify(completed)}, "completed");
+      return result;
+    };
+    await import(${JSON.stringify(main)});
+  `)
+  const deps = dependencies(root)
+  const writer = new AttributionWriter(deps, settings(deps), { entry, timing: { askMs: 100 } })
+  let client: SharedJournal | undefined
+  try {
+    client = await follower(writer, deps)
+    await client.writes.track(repo)
+    await client.writes.settled()
+    assert.deepEqual(await writer.command({ kind: "sleep" }), [repo], "the actual tracked root sleeps")
+    writeFileSync(armed, "armed")
+    const wake = writer.command({ kind: "wake", checkout: repo })
+    void wake.catch(() => {})
+    await until(() => existsSync(entered))
+    await assert.rejects(wake, /took too long/)
+    assert.ok(writer.snapshot(), "a command deadline must not retire the writer")
+    await writer.ensure()
+    assert.equal(readFileSync(starts, "utf8"), "start\n")
+    writeFileSync(release, "release")
+    await until(() => existsSync(completed))
+    await client.writes.settled()
+    await writer.ensure()
+    assert.equal(readFileSync(starts, "utf8"), "start\n", "the late wake completed without any restart")
+  } finally {
+    writeFileSync(release, "release")
+    await client?.close()
+    await writer.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("writer recovery starts fast, grows to thirty seconds, and remains capped", () => {
+  assert.deepEqual(Array.from({ length: 14 }, (_, attempt) => writerRetryDelay(attempt)), [25, 50, 100, 200, 400, 800, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000])
+  assert.deepEqual(Array.from({ length: 4 }, (_, attempt) => writerRetryDelay(attempt, 40, 100)), [40, 80, 100, 100])
+  assert.equal(writerRetryDelay(1_000_000), 30_000)
+})
+
+for (const demand of ["read", "write", "request"] as const) {
+  test(`new attribution ${demand} work cuts a long recovery wait short`, async () => {
+    const root = scratch()
+    let attempts = 0
+    let release!: (address: string) => void
+    const restarting = new Promise<string>(resolve => { release = resolve })
+    const client = await SharedJournal.open({
+      folder: root, host: { pid: process.pid, dataRoot: root, label: "demand-retry" }, timing: { retryMs: 10_000, maxRetryMs: 30_000 },
+      startOwner: async () => { if (++attempts === 1) throw new Error("temporarily unavailable"); return restarting },
+      own: async () => { throw new Error("no main writer") }, alone: async () => { throw new Error("no private writer") }, follow() {}, log() {},
+    })
+    try {
+      assert.equal(attempts, 1)
+      if (demand === "read") client.retry()
+      else if (demand === "write") client.writes.activity({ kind: "turn", edge: "start", id: "demand", session: "session", thread: "thread", at: Date.now() })
+      else void client.writes.track(root).catch(() => {})
+      await new Promise(resolve => setImmediate(resolve))
+      assert.equal(attempts, 2, "recovery began without waiting for the ten-second timer")
+      if (demand === "write") assert.equal(client.status().unsent, 1)
+    } finally {
+      await client.close()
+      release(join(root, "missing.socket"))
+      await new Promise(resolve => setImmediate(resolve))
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+}
+
+test("an outage logs a changed reason immediately and the same reason at most once a minute", async context => {
+  context.mock.timers.enable({ apis: ["Date"], now: 1_000_000 })
+  const root = scratch()
+  let reason = "unavailable", attempts = 0
+  const logs: string[] = []
+  const client = await SharedJournal.open({
+    folder: root, host: { pid: process.pid, dataRoot: root, label: "quiet-retry" }, timing: { retryMs: 10_000, maxRetryMs: 30_000 },
+    startOwner: async () => { attempts++; throw new Error(reason) },
+    own: async () => { throw new Error("no main writer") }, alone: async () => { throw new Error("no private writer") }, follow() {},
+    log(_message, facts) { if (facts?.error) logs.push(String(facts.error)) },
+  })
+  const retry = async () => {
+    const before = attempts
+    client.retry()
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(attempts, before + 1)
+  }
+  try {
+    assert.deepEqual(logs, ["unavailable"])
+    await retry()
+    assert.deepEqual(logs, ["unavailable"])
+    reason = "different reason"
+    await retry()
+    assert.deepEqual(logs, ["unavailable", "different reason"])
+    context.mock.timers.tick(59_999)
+    await retry()
+    assert.equal(logs.length, 2)
+    context.mock.timers.tick(1)
+    await retry()
+    assert.deepEqual(logs, ["unavailable", "different reason", "different reason"])
+  } finally { await client.close(); rmSync(root, { recursive: true, force: true }) }
 })

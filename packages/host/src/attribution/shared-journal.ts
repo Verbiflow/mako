@@ -219,6 +219,13 @@ const PATIENCE = {
   carry: { ms: 60_000, retry: true },
 } as const satisfies Record<Request["kind"], { ms: number; retry: boolean }>
 
+/** Fast initial recovery, then fewer idle retries: 25ms through 1s, doubling thereafter to 30s. */
+export function writerRetryDelay(attempt: number, retryMs = 25, maxRetryMs = 30_000): number {
+  let ms = Math.min(retryMs, maxRetryMs)
+  for (let i = 0; i < Math.min(attempt, 32) && ms < maxRetryMs; i++) ms = Math.min(maxRetryMs, ms < 1_000 ? Math.min(1_000, ms * 2) : ms * 2)
+  return ms
+}
+
 export type JournalRole =
   | { kind: "starting" }
   | { kind: "failed"; why: string }
@@ -344,6 +351,7 @@ export class SharedJournal {
   /** The owner, while following. */
   private link?: Socket
   private following?: Socket
+  private recoveryLog?: { why: string; at: number }
   private retrying?: () => void
   private privateReason?: string
   private sent = 0
@@ -450,6 +458,11 @@ export class SharedJournal {
     return () => this.listeners.delete(listener)
   }
 
+  /** Foreground work can retry immediately without resetting the outage's backoff. Status reads stay passive. */
+  retry(): void {
+    if (!this.closed && this.current.kind === "failed") this.retrying?.()
+  }
+
   /** The metadata a writing child sends back to its host; never an acknowledgement of journal writes. */
   onFollowers(listener: () => void): () => void {
     this.followerListeners.add(listener)
@@ -481,6 +494,7 @@ export class SharedJournal {
   /** The messages already sent have been applied. This does not wait for a root's watch or rescan. */
   applied(): Promise<void> {
     if (!this.unsent.length) return Promise.resolve()
+    this.retry()
     const through = this.sent
     return new Promise((resolve, reject) => {
       const finish = (error?: Error) => {
@@ -564,7 +578,7 @@ export class SharedJournal {
   /** An off-thread owner may fail repeatedly; keep the same numbered outbox through every bounded attempt. */
   private async electWriter(start: NonNullable<SharedJournalOptions["startOwner"]>): Promise<void> {
     const retry = this.options.timing?.retryMs ?? 25
-    const maxRetry = this.options.timing?.maxRetryMs ?? 1_000
+    const maxRetry = this.options.timing?.maxRetryMs ?? 30_000
     for (let attempt = 0; !this.closed; attempt++) {
       try {
         // The first connection can follow an existing host without starting a local worker.
@@ -584,11 +598,15 @@ export class SharedJournal {
         if (this.closed) return
         const why = error instanceof Error ? error.message : String(error)
         this.setRole({ kind: "failed", why })
-        this.options.log("the record of changes is unavailable; retrying its writing owner", { error: why })
+        const now = Date.now()
+        if (!this.recoveryLog || this.recoveryLog.why !== why || now - this.recoveryLog.at >= 60_000) {
+          this.options.log("the record of changes is unavailable; retrying its writing owner", { error: why })
+          this.recoveryLog = { why, at: now }
+        }
       }
       await new Promise<void>(resolve => {
         const done = () => { clearTimeout(timer); this.retrying = undefined; resolve() }
-        const timer = setTimeout(done, Math.min(maxRetry, retry * 2 ** Math.min(attempt, 6)))
+        const timer = setTimeout(done, writerRetryDelay(attempt, retry, maxRetry))
         this.retrying = done
       })
     }
@@ -783,6 +801,7 @@ export class SharedJournal {
             return
           }
           this.link = socket
+          this.recoveryLog = undefined
           this.replay((oneWay) => this.transmit(socket, oneWay, false))
           this.setRole({ kind: "follower", owner: message.host })
           this.options.log("follows the owner of the record of changes", { pid: message.host.pid, label: message.host.label })
@@ -832,6 +851,7 @@ export class SharedJournal {
       return
     }
     this.transmit(this.link, message, !this.link)
+    this.retry()
   }
 
   private request(request: Request): Promise<Reply> {
@@ -848,6 +868,7 @@ export class SharedJournal {
       timer.unref?.()
       const call: Call = { id, request, timer, resolve: resolveCall, reject: rejectCall }
       this.calls.set(id, call)
+      this.retry()
       this.run(call)
     })
   }

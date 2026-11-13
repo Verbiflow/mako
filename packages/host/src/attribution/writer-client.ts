@@ -10,6 +10,7 @@ import type { TrackerRepository } from "./tracker.js"
 import { FromWriterSchema, WriterSnapshotSchema, WriterCommandResults, type WriterReply, type WriterStateMessage, type WriterCommandResult, type WriterHostResult, type ToWriter, type WriterCommand, type WriterHostRequest, type WriterSettings, type WriterSnapshot } from "./writer-protocol.js"
 
 const ASK_MS = 30_000
+const PROBE_MS = 5_000
 const START_MS = 60_000
 const MAX_PENDING = 256
 interface Pending { resolve(reply: WriterReply): void; reject(error: Error): void; timer: NodeJS.Timeout }
@@ -31,7 +32,7 @@ interface Generation {
 interface WriterClientOptions {
   entry?: string
   applied?(): Promise<void>
-  timing?: { startMs?: number; askMs?: number }
+  timing?: { startMs?: number; askMs?: number; probeMs?: number }
 }
 
 /** The host talks to a writing worker; its normal journal client still owns replay and acknowledgements. */
@@ -45,14 +46,14 @@ export class AttributionWriter {
   private closed = false
   private closing: Promise<void> | undefined
   private state: WriterSnapshot | undefined
-  private readonly timing: { startMs: number; askMs: number }
+  private readonly timing: { startMs: number; askMs: number; probeMs: number }
 
   constructor(deps: AttributionDeps, settings: Omit<WriterSettings, "privateReason">, options: WriterClientOptions = {}) {
     this.deps = deps
     this.settings = settings
     this.entry = options.entry ?? defaultEntry()
     this.applied = options.applied
-    this.timing = { startMs: options.timing?.startMs ?? START_MS, askMs: options.timing?.askMs ?? ASK_MS }
+    this.timing = { startMs: options.timing?.startMs ?? START_MS, askMs: options.timing?.askMs ?? ASK_MS, probeMs: options.timing?.probeMs ?? PROBE_MS }
   }
 
   snapshot(): WriterSnapshot | undefined { return this.state }
@@ -71,7 +72,7 @@ export class AttributionWriter {
     try {
       // A ready generation may have stopped answering since its journal link was lost.
       const snapshot = generation.started
-        ? WriterSnapshotSchema.parse(await this.ask(generation, { kind: "snapshot" }))
+        ? WriterSnapshotSchema.parse(await this.ask(generation, { kind: "snapshot" }, "liveness"))
         : await generation.ready
       if (generation.closed || this.closed) throw new Error("The record of changes' writer stopped while opening.")
       this.state = snapshot
@@ -184,14 +185,16 @@ export class AttributionWriter {
     return generation
   }
 
-  private ask(generation: Generation, command: WriterCommand): Promise<WriterCommandResult> {
+  private ask(generation: Generation, command: WriterCommand, probe?: "liveness"): Promise<WriterCommandResult> {
     if (generation.closed) return Promise.reject(new Error("The writing owner has stopped."))
     if (generation.pending.size >= MAX_PENDING) return Promise.reject(new Error("Too many requests are waiting on the writing owner."))
     const id = ++this.next
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.retire(generation, new Error("The record of changes' writer took too long to answer."))
-      }, this.timing.askMs)
+        const error = new Error("The record of changes' writer took too long to answer.")
+        if (probe) this.retire(generation, error)
+        else { generation.pending.delete(id); reject(error) }
+      }, probe ? this.timing.probeMs : this.timing.askMs)
       timer.unref()
       generation.pending.set(id, { resolve: reply => {
         try { resolve(WriterCommandResults[command.kind].parse(reply.value)) } catch (error) { reject(error) }

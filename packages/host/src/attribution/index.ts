@@ -374,6 +374,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
   let offLoop: { path: string; reader: JournalReader } | undefined
 
   const view = (): JournalView => {
+    sharing.journal?.retry()
     if (!reader) throw new Error("Mako's record of changes isn't open yet. Try again in a moment.")
     const version = reader.store.dataVersion()
     if (!reader.view || version !== reader.version) {
