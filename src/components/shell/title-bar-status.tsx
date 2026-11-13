@@ -35,6 +35,9 @@ function ConnectionPill() {
   const phase = useSession((state) => state.phase)
   const connected = useHostConnection((state) => state.kind === "connected")
   if (phase === "ready" && connected) return null
+  // A window that's starting opens before its host answers (a cold host takes a second or two): that's
+  // not something wrong, so it says so quietly, not as the lost host below.
+  if (phase === "booting" && connected) return <span className="px-1.5">Connecting…</span>
   return (
     <button
       type="button"
