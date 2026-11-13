@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { mock } from "node:test"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -103,6 +104,16 @@ async function emptyIsUnchanged(): Promise<void> {
   policy = { rules: [] }
   const { world, apex, fin } = await team("empty")
   try {
+    const read = mock.method(world.live, "snapshot")
+    try {
+      const resident = world.agents.ruleLines(fin)
+      assert.equal(read.mock.callCount(), 0, "standing-rule checks read resident requests without a snapshot flush")
+      const held = mock.method(world.live, "held", () => undefined)
+      try {
+        assert.deepEqual(world.agents.ruleLines(fin), resident, "a cold conversation retains the same rule answer")
+        assert.equal(read.mock.callCount(), 1, "a conversation not held can still be loaded for its rule history")
+      } finally { held.mock.restore() }
+    } finally { read.mock.restore() }
     assert.equal(promptsOf(world, fin)[0], briefText(BRIEF, "android"), "the brief, byte for byte, with no note")
     await tell(world, apex, "Rebase on main.")
     assert.equal(last(world, fin), undefined, "no note before a Fin's next turn")
