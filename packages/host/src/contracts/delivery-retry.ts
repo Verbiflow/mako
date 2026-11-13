@@ -1,3 +1,4 @@
+import type { ProviderFailureEvidence } from "./provider-failure-evidence.js"
 import type { LiveRequest } from "./live-conversations.js"
 import { resetWords } from "./account-usage.js"
 import { limitReset } from "./limit-reset.js"
@@ -59,8 +60,9 @@ export function retryCause(kind: ProviderFailureKind, busy: boolean): RetryCause
  * The cause a failure in `message` is waited out for: none when anything in it is a cause the person must fix,
  * whatever transient words wrap it (`permanentFailure`: "API error: 400 … unknown model" is a setting, not an outage).
  */
-export function transientCause(message: string, kind: ProviderFailureKind, busy: boolean): RetryCause | undefined {
+export function transientCause(message: string, kind: ProviderFailureKind, busy: boolean, evidence?: ProviderFailureEvidence): RetryCause | undefined {
   if (busy) return "busy"
+  if (evidence?.kind === kind) return retryCause(kind, false)
   return permanentFailure(message) ? undefined : retryCause(kind, false)
 }
 
@@ -81,6 +83,12 @@ export function nextRetry(previous: RequestRetry | undefined, cause: RetryCause,
   const attempt = (previous?.attempt ?? 0) + 1
   const wait = RETRY_STEPS_MS[Math.min(attempt, RETRY_STEPS_MS.length) - 1]!
   return { at: cause === "rate-limited" && reset !== undefined && reset > now ? reset + RESET_MARGIN_MS : now + wait, attempt, since, cause, reason: reason.slice(0, 2_000), ...(reset !== undefined && { until: reset }) }
+}
+
+/** An ambiguous authentication failure gets a sign-in check once its service retry budget is spent; not proof of sign-out. */
+export function failureAfterRetry(kind: ProviderFailureKind, evidence: ProviderFailureEvidence | undefined, retry: RequestRetry | undefined, now: number): ProviderFailureKind {
+  return kind === "provider-unavailable" && evidence?.kind === "provider-unavailable" && evidence.source === "unconfirmed-auth" &&
+    retry?.cause === "provider-unavailable" && now - retry.since >= GIVE_UP_MS["provider-unavailable"] ? "sign-in-check" : kind
 }
 
 /** A digest of Fins' news no model answered: only an answer proves it was heard, and its reports already read as heard. */

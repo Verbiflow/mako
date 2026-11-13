@@ -758,9 +758,70 @@ export function turnChain(view: JournalView, group: Pick<TurnFile, "root" | "pat
     .sort((a, b) => a.seq - b.seq)
 }
 
+/**
+ * `turnChain` in steps: a long file history is read in bounded indexed pages, and renamed paths are merged by seq
+ * without a whole-chain decode or sort between yields. The counters need content refs and authors, never line maps.
+ */
+export function* readingTurnChain(view: JournalView, group: Pick<TurnFile, "root" | "paths" | "first" | "last">): Steps<StoredEntry[]> {
+  type Cursor = { path: string; page: StoredEntry[]; at: number }
+  const heads: Cursor[] = []
+  const seq = (cursor: Cursor) => cursor.page[cursor.at]!.seq
+  const add = (cursor: Cursor) => {
+    let index = heads.length
+    heads.push(cursor)
+    while (index > 0) {
+      const parent = (index - 1) >>> 1
+      if (seq(heads[parent]!) <= seq(cursor)) break
+      heads[index] = heads[parent]!
+      index = parent
+    }
+    heads[index] = cursor
+  }
+  for (const path of group.paths) {
+    const page = view.store.chainPage(group.root, path, group.first - 1, group.last, TURN_PAGE)
+    if (page.length) add({ path, page, at: 0 })
+    yield
+  }
+  const chain: StoredEntry[] = []
+  let last = 0
+  while (heads.length) {
+    const head = heads[0]!
+    const entry = head.page[head.at++]!
+    if (entry.seq !== last) {
+      chain.push(entry)
+      last = entry.seq
+    }
+    if (head.at === head.page.length) {
+      head.page = head.page.length === TURN_PAGE ? view.store.chainPage(group.root, head.path, entry.seq, group.last, TURN_PAGE) : []
+      head.at = 0
+      if (!head.page.length) {
+        const tail = heads.pop()!
+        if (heads.length) heads[0] = tail
+      }
+    }
+    // The first cursor advanced or was removed: restore the smallest head at the root.
+    if (heads.length) {
+      const cursor = heads[0]!
+      let index = 0
+      for (;;) {
+        const left = index * 2 + 1
+        if (left >= heads.length) break
+        const right = left + 1
+        const child = right < heads.length && seq(heads[right]!) < seq(heads[left]!) ? right : left
+        if (seq(cursor) <= seq(heads[child]!)) break
+        heads[index] = heads[child]!
+        index = child
+      }
+      heads[index] = cursor
+    }
+    yield
+  }
+  return chain
+}
+
 /** One file of a turn, counted; undefined when the turn made it and took it away again, or none of it is the Thread's. */
 function* countFile(view: JournalView, group: TurnFile, tagOf: (seq: number) => Tag, base: string): Steps<TurnChangedFile | undefined> {
-  const chain = turnChain(view, group)
+  const chain = yield* readingTurnChain(view, group)
   yield
   const first = chain[0]
   const last = chain.at(-1)
