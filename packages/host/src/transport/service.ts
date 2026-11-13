@@ -103,11 +103,12 @@ export interface HostCommand {
 }
 
 export function hostCommand(input: Pick<RuntimeLaunch, "executable" | "args" | "env">): HostCommand {
-  // A packaged app's code is its bundle's app.asar, which Electron's Node mode reads as a folder.
-  const appRoot = input.args[0] ?? join(dirname(input.executable), "..", "Resources", "app.asar")
+  // A packaged app's code is its bundle's app.asar, which Electron's Node mode reads as a folder, and its host the
+  // bundle of it (scripts/bundle-main.mjs); a checkout's is what tsc emits, which it rebuilds while it runs.
+  const entry = input.args[0] ? join(input.args[0], "dist-electron", "entry.js") : join(dirname(input.executable), "..", "Resources", "app.asar", "dist-electron", "host", "entry.js")
   return {
     executable: headlessNodeExecutable(input.executable),
-    args: [...HOST_NODE_OPTIONS, join(appRoot, "dist-electron", "entry.js")],
+    args: [...HOST_NODE_OPTIONS, entry],
     env: { ...input.env, MAKO_HOST_EXECUTABLE: input.executable, ELECTRON_RUN_AS_NODE: "1" },
   }
 }
