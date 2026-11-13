@@ -38,6 +38,7 @@ import { loadReleasedThreadTurn } from "@/state/thread-viewing"
 import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
 import { SCROLL_WRITE_EVENT, TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
+import { READER_SCROLL_EVENT } from "@/lib/reader-scroll"
 import { CompactPresentationContext } from "./compact-presentation"
 import { rowChecker } from "./row-check"
 import { wokeAfterRest } from "@/lib/woke-after-rest"
@@ -1069,6 +1070,28 @@ export function ConversationTimeline({
     node.addEventListener(TRANSCRIPT_END_EVENT, toEnd)
     return () => node.removeEventListener(TRANSCRIPT_END_EVENT, toEnd)
   }, [scrollToEnd])
+  // The app scrolling for the reader (`scrollReaderTo`) is their movement, as a wheel's is: the place they had goes, any
+  // target the virtualizer was reconciling toward goes, and what moves next is theirs until it settles, so a hold before
+  // its scroll event keeps it rather than putting the old place back. Windowed too, where nothing else says so.
+  useEffect(() => {
+    const node = viewport.current
+    if (!node) return
+    const readerScroll = () => {
+      endSeek(node)
+      bookmarkRestore.current = undefined
+      if (!awaitingEarlier.current) node.removeAttribute("data-preserve-scroll")
+      pendingJump.current = null
+      restoringReader.current = null
+      if (displaceCorrection(node)) settleCorrection()
+      else readingAnchor.current = captureAnchor(node, [], false)
+      if (!awaitingEarlier.current) restore.current = null
+      stalled.current = false
+      scrollMotion.current = true
+      settleInput()
+    }
+    node.addEventListener(READER_SCROLL_EVENT, readerScroll)
+    return () => node.removeEventListener(READER_SCROLL_EVENT, readerScroll)
+  }, [endSeek, displaceCorrection, settleCorrection, settleInput])
   useEffect(() => transcriptEnd?.away(showJump), [transcriptEnd, showJump])
   useEffect(() => {
     if (!transcriptEnd) return

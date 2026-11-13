@@ -628,6 +628,38 @@ async function checkPage({ window, page, shots, base }) {
     "exactly one Fin's row re-renders for its own step, not the whole card"
   )
 
+  // A long Apex, its transcript windowed (past 40 turns): the line brings the card back there too, with the transcript
+  // changing in the same frame. Windowed, the transcript can't tell a scroll it didn't make from its own virtualizer's,
+  // so the line announces its scroll as the reader's (`scrollReaderTo`); unannounced, the hold put the top back.
+  await window.loadURL(`${base}?mock&app=apex&turns=60`)
+  await until(
+    "[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))",
+    "the long Apex's row"
+  )
+  await evaluate(
+    "[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true"
+  )
+  await until("Boolean(document.querySelector('[data-composer]'))", "the long Apex's composer")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-crew]'))", "the long Apex's crew card")
+  await settle()
+  assert.equal(
+    await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"),
+    true,
+    "the long Apex's transcript is windowed"
+  )
+  // A screen or so up, as a reader leaving the card is: the turns they're on stay mounted in the window, and those are
+  // what holding their place reads.
+  await evaluate("(() => { const node = document.querySelector('[data-transcript-viewport]'); node.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, bubbles: true })); node.scrollTop -= 900; return true })()")
+  await until("Boolean(document.querySelector('[data-crew-away]'))", "the long Apex's line while its card is scrolled away")
+  assert.equal(await clickAway(), true, "the long Apex's line, beside a turn that changes")
+  await until("!document.querySelector('[data-crew-away]')", "the long Apex's line leaves once Needs you is back in view")
+  const longCard = await evaluate(
+    "(() => { const card = document.querySelector('[data-crew]').getBoundingClientRect(); const view = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { top: Math.round(card.top), bottom: Math.round(card.bottom), viewTop: Math.round(view.top), viewBottom: Math.round(view.bottom) } })()"
+  )
+  console.log("LONG", JSON.stringify(longCard))
+  assert.ok(longCard.top < longCard.viewBottom && longCard.bottom > longCard.viewTop, `the long Apex's card is back in view: ${JSON.stringify(longCard)}`)
+
   // The phone: the same card, compact, answers in reach of a thumb.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
