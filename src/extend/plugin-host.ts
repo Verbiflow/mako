@@ -20,7 +20,7 @@ import { actions, store, useSession } from "@/state/session"
 import { threads, threadsStore, useThreads } from "@/state/threads"
 import { toast } from "sonner"
 import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
-import { Registry } from "@/extend/registry"
+import { plugins, type LoadedPlugin } from "@/extend/plugin-registry"
 
 /**
  * The plugin host.
@@ -84,17 +84,11 @@ export interface MakoApi {
   toast: typeof toast
 }
 
-export interface LoadedPlugin {
-  id: string
-  source: string
-  error?: string
-}
 
 interface PluginModule {
   setup?: (api: MakoApi) => void
 }
 
-export const plugins = new Registry<LoadedPlugin>()
 
 const pluginApis = new Map<string, MakoApi>()
 Object.defineProperty(globalThis, "__makoApi__", {
