@@ -23,9 +23,9 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const root = testScratch("mako-account-threads-ui-")
-  const server = await createServer({
+  const server = await uiVite({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],

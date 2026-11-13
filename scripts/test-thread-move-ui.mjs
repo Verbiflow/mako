@@ -34,14 +34,14 @@ if (process.versions.electron) {
 } else {
   await checkMoveState()
   if (process.argv.includes("--state-only")) process.exit(0)
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const args = process.argv.slice(2)
   const portAt = args.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(args[portAt + 1])
   const root = testScratch("mako-thread-move-ui-")
   const evidence = process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "moves") : root
   await mkdir(evidence, { recursive: true })
-  const server = await createServer({
+  const server = await uiVite({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],
