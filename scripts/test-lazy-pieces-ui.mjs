@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { writeFile } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
@@ -56,10 +56,30 @@ async function check() {
   const page = window.webContents
   const guard = guardElectronCheck({ app, page, name: "The lazy pieces UI check", ms: 300_000 })
   page.debugger.attach("1.3")
+  const consoleLines = []
+  page.on("console-message", (event) => consoleLines.push(String(event.message ?? "").slice(0, 300)))
+  // What a failed check saw, beside the run and in CI's evidence (`MAKO_TEST_EVIDENCE`, which the job uploads).
+  const keepEvidence = async (label) => {
+    const kept = [root, ...(process.env.MAKO_TEST_EVIDENCE ? [join(process.env.MAKO_TEST_EVIDENCE, "lazy-pieces")] : [])]
+    const png = await page.capturePage().then((image) => image.toPNG(), () => undefined)
+    const dom = await page.executeJavaScript("document.body.innerHTML.slice(0, 20000)").catch(() => "")
+    const said = `${label}\n\nasks:\n${asks.join("\n")}\n\nconsole:\n${consoleLines.slice(-60).join("\n")}\n`
+    for (const folder of kept) {
+      await mkdir(folder, { recursive: true }).catch(() => undefined)
+      if (png) await writeFile(join(folder, "failure.png"), png)
+      await writeFile(join(folder, "failure.txt"), said)
+      await writeFile(join(folder, "failure.html"), dom)
+    }
+  }
   const send = (method, params) => page.debugger.sendCommand(method, params)
   const viewport = async (width, height) => {
     await window.loadURL("about:blank")
     await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile: false })
+    // MAKO_LAZY_SLOW: a CI runner's pace and settings here (a slow CPU, reduced motion), to see what it sees.
+    if (process.env.MAKO_LAZY_SLOW) {
+      await send("Emulation.setCPUThrottlingRate", { rate: Number(process.env.MAKO_LAZY_SLOW) || 4 })
+      await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] })
+    }
   }
   const evaluate = (code) => page.executeJavaScript(code)
   const until = async (code, label = code) => {
@@ -67,7 +87,7 @@ async function check() {
     const deadline = Date.now() + 30_000
     while (!(await evaluate(code).catch(() => false))) {
       if (Date.now() > deadline) {
-        await writeFile(join(root, "failure.png"), (await page.capturePage()).toPNG())
+        await keepEvidence(label)
         throw new Error(`Timed out waiting for ${label}`)
       }
       await new Promise((done) => setTimeout(done, 50))
@@ -98,18 +118,29 @@ async function check() {
   const notBroken = async (what) => assert.equal(await evaluate("document.body.innerText.includes('Something in the interface broke')"), false, `${what}: the window never shows its error screen`)
 
   // A module held, then let go or failed as a network fails it: `hold` before the page that reads it loads.
+  // Each held pattern is in one state: `hold` (asks wait in `paused`), `fail` (every ask fails, as with the network
+  // down) or `continue` (every ask goes through). A state applies to every later ask too: a browser may ask for the
+  // same module again, and an ask left waiting after its first was failed leaves the import pending for good.
   const paused = new Map()
+  const states = new Map()
+  /** Every ask for a held pattern, in order, with what was done with it: said when a check fails. */
+  const asks = []
+  const settle = (requestId, state) =>
+    send(state === "fail" ? "Fetch.failRequest" : "Fetch.continueRequest", state === "fail" ? { requestId, errorReason: "InternetDisconnected" } : { requestId }).catch(() => undefined)
   page.debugger.on("message", (_event, method, params) => {
     if (method !== "Fetch.requestPaused") return
-    const pattern = [...paused.keys()].find((each) => params.request.url.includes(each))
-    if (pattern) {
-      paused.get(pattern).push(params.requestId)
-    }
-    else void send("Fetch.continueRequest", { requestId: params.requestId }).catch(() => undefined)
+    const pattern = [...states.keys()].find((each) => params.request.url.includes(each))
+    const state = pattern ? states.get(pattern) : "continue"
+    if (pattern) asks.push(`${state}: ${params.request.url}`)
+    if (state === "hold") paused.get(pattern).push(params.requestId)
+    else void settle(params.requestId, state)
   })
   const hold = async (...patterns) => {
-    for (const pattern of patterns) paused.set(pattern, [])
-    await send("Fetch.enable", { patterns: [...paused.keys()].map((pattern) => ({ urlPattern: `*${pattern}*`, requestStage: "Request" })) })
+    for (const pattern of patterns) {
+      paused.set(pattern, [])
+      states.set(pattern, "hold")
+    }
+    await send("Fetch.enable", { patterns: [...states.keys()].map((pattern) => ({ urlPattern: `*${pattern}*`, requestStage: "Request" })) })
   }
   const held = async (pattern) => {
     guard.at(`${pattern} asked for`)
@@ -119,16 +150,16 @@ async function check() {
       await new Promise((done) => setTimeout(done, 50))
     }
   }
+  /** Settles what waits for `pattern` and every later ask for it the same way, until `letGo`. */
   const release = async (pattern, how) => {
-    for (const requestId of paused.get(pattern) ?? []) {
-      if (how === "fail") await send("Fetch.failRequest", { requestId, errorReason: "InternetDisconnected" }).catch(() => undefined)
-      else await send("Fetch.continueRequest", { requestId }).catch(() => undefined)
-    }
+    states.set(pattern, how)
+    for (const requestId of paused.get(pattern) ?? []) await settle(requestId, how)
     paused.set(pattern, [])
   }
   const letGo = async () => {
     for (const pattern of paused.keys()) await release(pattern, "continue")
     paused.clear()
+    states.clear()
     await send("Fetch.disable").catch(() => undefined)
   }
   /** Back online after a failure: the piece draws by itself, or (a module this page won't fetch again) offers Reload, which brings it. */
