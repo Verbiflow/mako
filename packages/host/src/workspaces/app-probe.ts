@@ -1,4 +1,4 @@
-import { hostCommand } from "../base/host-command.js"
+import { hostCommand, hostProbe } from "../base/host-command.js"
 import { readdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, relative, sep } from "node:path"
@@ -187,7 +187,7 @@ export async function writingOutside(open: Open, inside: string[]): Promise<{ pa
 /** The first port the system hands out for port 0; one from there up was picked for the app and can't collide. */
 export async function systemPortsFrom(): Promise<number> {
   if (onMac()) {
-    const first = await run("sysctl", ["-n", "net.inet.ip.portrange.first"]).then(({ stdout }) => Number(stdout.trim()), () => Number.NaN)
+    const first = await hostProbe("sysctl", ["-n", "net.inet.ip.portrange.first"]).then(({ stdout }) => Number(stdout.trim()), () => Number.NaN)
     return Number.isInteger(first) && first > 0 ? first : 49_152
   }
   const range = await readFile("/proc/sys/net/ipv4/ip_local_port_range", "utf8").catch(() => "")
@@ -894,7 +894,7 @@ async function saveTrace(folder: string, trace: Trace): Promise<void> {
 
 async function lsof(args: string[]): Promise<string> {
   try {
-    const { stdout } = await run("lsof", ["-nP", "-w", ...args], {
+    const { stdout } = await hostProbe("lsof", ["-nP", "-w", ...args], {
       env: { ...process.env, LC_ALL: "C", PATH: `${process.env.PATH ?? ""}:/usr/sbin:/usr/bin:/sbin:/bin` },
       maxBuffer: LSOF_BYTES,
     })

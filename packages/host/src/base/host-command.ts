@@ -1,8 +1,28 @@
 import type { spawn, fork, ChildProcess, ExecFileException, ExecFileOptions } from "node:child_process"
 import { processRunner } from "@mako/git/process-runner"
-import { hostStopping } from "./host-stopping.js"
+import { basename } from "node:path"
+import { hostStopping, type ProbeOptions } from "./host-stopping.js"
+
+/** Programs that only read the machine, which the host's probe child runs for it (`HostProbes`). */
+const PROBES = new Set(["ps", "pgrep", "lsof", "sysctl", "footprint", "vm_stat", "pmset", "notifyutil"])
+
+/** Whether `file args` is one of `PROBES`, itself or lowered with `nice -n <n>` (`belowAgents`). */
+export function isProbe(file: string, args: readonly string[]): boolean {
+  if (basename(file) === "nice" && args[0] === "-n" && args[2] !== undefined) return isProbe(args[2], args.slice(3))
+  return PROBES.has(basename(file))
+}
 
 type CommandResult = { stdout: string; stderr: string }
+
+/**
+ * A probe that only reads the machine (`ps`, `lsof`, `sysctl`: `isProbe`), run in the host's probe child when it has
+ * one (`HostProbes`), so its spawn never holds the host's loop, and here otherwise. It answers as `hostCommand` does.
+ */
+export function hostProbe(file: string, args: readonly string[], options: ProbeOptions = {}): Promise<CommandResult> {
+  const probes = hostStopping()?.probes
+  if (probes && isProbe(file, args)) return probes.run(file, args, options)
+  return hostCommand(file, args, options)
+}
 
 /** A buffered command, with its child handle, whose whole process group belongs to the host. */
 export function hostCommand(file: string, args: readonly string[], options: Omit<ExecFileOptions, "encoding"> = {}) {

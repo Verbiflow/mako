@@ -1,4 +1,5 @@
-import { hostCommand } from "../../base/host-command.js"
+import { z } from "zod"
+import { hostProbe } from "../../base/host-command.js"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
@@ -8,7 +9,6 @@ import type {
 } from "../../threads/index.js"
 import { onWindows } from "../../base/platform.js"
 
-const run = hostCommand
 /** `ps` reports start times to the second. */
 const START_SLACK_MS = 2_000
 const MAX_LOCKS = 100_000
@@ -28,14 +28,33 @@ export function parseDevinProcesses(output: string): DevinProcess[] {
   })
 }
 
+/**
+ * The running `devin` processes: `pgrep` first, which prints nothing on a Mac with none, and only then `ps` for when
+ * they started, of those pids alone. A full `ps -ax` every 5 s for a Devin nobody ran held the host's loop 2.5 s in a
+ * 600 s run (2026-11-12).
+ */
 async function runningDevins(signal: AbortSignal): Promise<DevinProcess[]> {
-  const { stdout } = await run("ps", ["-axo", "pid=,lstart=,comm="], {
+  const found = await printed(hostProbe("pgrep", ["-x", "devin"], { timeout: 2_000, signal }))
+  const pids = found.split("\n").map(Number).filter((pid) => Number.isSafeInteger(pid) && pid > 0)
+  if (!pids.length) return []
+  const stdout = await printed(hostProbe("ps", ["-o", "pid=,lstart=,comm=", "-p", pids.join(",")], {
     env: { ...process.env, LC_ALL: "C" },
-    maxBuffer: 8 * 1024 * 1024,
+    maxBuffer: 1024 * 1024,
     timeout: 2_000,
     signal,
-  })
+  }))
   return parseDevinProcesses(stdout)
+}
+
+/** What a probe printed; each exits 1 when nothing matches (pgrep for no devin, ps for a pid ended since), and what it printed holds. */
+async function printed(probe: Promise<{ stdout: string }>): Promise<string> {
+  try {
+    return (await probe).stdout
+  } catch (error) {
+    const matched = z.object({ code: z.literal(1), stdout: z.string() }).safeParse(error)
+    if (matched.success) return matched.data.stdout
+    throw error
+  }
 }
 
 function lockedBy(text: string): number | undefined {

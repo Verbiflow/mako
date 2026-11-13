@@ -1,4 +1,4 @@
-import { hostCommand } from "../base/host-command.js"
+import { hostCommand, hostProbe } from "../base/host-command.js"
 import { appendFile, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -40,7 +40,7 @@ export interface DaemonReading {
  */
 export async function readFseventsd(known?: number): Promise<DaemonReading | undefined> {
   const resident = async (pid: number) => {
-    const { stdout } = await execute("ps", ["-o", "rss=", "-p", String(pid)], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
+    const { stdout } = await hostProbe("ps", ["-o", "rss=", "-p", String(pid)], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
     const kb = Number(stdout.trim())
     return stdout.trim() && Number.isFinite(kb) ? { pid, residentBytes: kb * 1024 } : undefined
   }
@@ -48,7 +48,7 @@ export async function readFseventsd(known?: number): Promise<DaemonReading | und
     const reading = await resident(known)
     if (reading) return reading
   }
-  const { stdout } = await execute("pgrep", ["-x", "fseventsd"], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
+  const { stdout } = await hostProbe("pgrep", ["-x", "fseventsd"], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
   const pid = Number(stdout.trim().split("\n")[0])
   return Number.isInteger(pid) && pid > 0 ? resident(pid) : undefined
 }
@@ -510,7 +510,7 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
     }
     const sample = await readFile(join(folder, "sample.txt"), "utf8").catch(() => "")
     const clients = await Promise.all(clientPids(sample).map(async (pid) => {
-      const { stdout } = await execute("ps", ["-o", "command=", "-p", String(pid)], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
+      const { stdout } = await hostProbe("ps", ["-o", "command=", "-p", String(pid)], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
       return `${pid}\t${stdout.trim().split(" ")[0] || "(exited)"}`
     }))
     await writeFile(join(folder, "clients.txt"), `${clients.join("\n")}\n`)

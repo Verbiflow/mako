@@ -64,6 +64,7 @@ const { values } = parseArgs({
     fins: { type: "string", default: "0" },
     "node-arg": { type: "string", multiple: true },
     gc: { type: "boolean", default: false },
+    "app-poll-ms": { type: "string", default: "30000" },
     "heap-snapshots": { type: "string" },
     "snapshot-sends": { type: "string" },
     idle: { type: "boolean", default: false },
@@ -251,7 +252,8 @@ try {
     // still pushes nothing, so the 30 s look stands for the pushes too.
     ask("mako:thread-app-marks")
     const mine = followed.slice(w * 3, w * 3 + 3)
-    timers.push(setInterval(() => mine.forEach((cwd) => ask("mako:thread-app", cwd)), 30_000))
+    // `--app-poll-ms`: how often a window asks for each followed folder's app; an older renderer asked every 4 s.
+    timers.push(setInterval(() => mine.forEach((cwd) => ask("mako:thread-app", cwd)), Number(values["app-poll-ms"])))
   }
   // Focus moving between windows: each focus refreshes that window's summaries.
   timers.push(setInterval(() => ask("mako:worktree-summaries"), 10_000))

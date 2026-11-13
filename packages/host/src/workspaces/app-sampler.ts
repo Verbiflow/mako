@@ -36,7 +36,7 @@ interface SamplerDeps {
  * for the marks every second while an app started and every four seconds otherwise, and each folder it followed for
  * its app as often, each look reading the process table: 17% of the person's held loop on 2026-11-12 (339 s). The
  * trace and the memory look ride on the same looks, so the table is read once for all of them, off the host's loop
- * (`childProcessTable`), and only while some run is alive (`ThreadProcesses.tableFor`).
+ * (`childProcessReader`), and only while some run is alive (`ThreadProcesses.tableFor`).
  *
  * `tick` is the one job (`HostJobs.every`, `SAMPLER_TICK_MS`). While someone reads the apps (`wanted`, within
  * `WANTED_MS`) it looks when one is due: at once after anything this host changed (`changed`), every second while an
