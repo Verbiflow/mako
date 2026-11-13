@@ -57,6 +57,8 @@ export type CloudHandOffsOptions = {
      */
     /** A going-away starts: the held Sessions' owner isn't asked until this Mac is back (`AwayNotes.going`). */
     going?(): void
+    /** The going-away's note was answered, or won't be: from now the account's link checked again is this Mac back (`AwayNotes.answered`). */
+    answered?(): void
     noted?(sent: QuietNote): Promise<void>
     /** The account took none of these Threads of the note (it refused them, or took no notes): their record of it goes. */
     refused?(note: string, threads: readonly string[]): Promise<void>
@@ -230,6 +232,7 @@ export class CloudHandOffs {
     })
     // A note whose answer didn't come may have been taken all the same: its Sessions wait for the account's word as if it
     // had, and an owner ask lets them go if it wasn't. Only a gateway that takes no notes (`unserved`) took none.
+    goingAway.answered?.()
     const taken = heard.kind === "answered" ? new Set(heard.answer.threads.filter((each) => each.accepted).map((each) => each.thread))
       : heard.kind === "unanswered" ? new Set(note.threads.map((each) => each.thread)) : new Set<string>()
     // Only the Threads the account took keep this note's record: nothing is continued from it for the rest.

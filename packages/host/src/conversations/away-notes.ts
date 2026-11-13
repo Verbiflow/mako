@@ -15,6 +15,9 @@ const AwayFileSchema = z.object({
 })
 type AwayFile = z.infer<typeof AwayFileSchema>
 
+/** How long after a going-away began this Mac, still running, takes it as one that didn't happen (`AwayNotes.lapse`). */
+export const GOING_LAPSES_MS = 2 * 60_000
+
 export type AwayNotesOptions = {
   /** Where the Sessions of the last note the account took are kept: `<data root>/cloud/away.json`. */
   file: string
@@ -47,9 +50,10 @@ export class AwayNotes {
    * A going-away is under way: the account isn't asked until this Mac is back (`back`). Asked before the note goes, or
    * before this Mac is off, the account says the Sessions are this Mac's, as they are until it's quiet; they'd be let
    * go here, its parked turn would run, and an ask ends the quiet the account would continue them in. In memory only:
-   * a host that starts is back.
+   * a host that starts is back. `answered` once the note's answer came (or never will): only then does the account's
+   * link checked again say this Mac is back.
    */
-  #going = false
+  #going: { since: number; answered: boolean } | undefined
   #writing: Promise<void> = Promise.resolve()
 
   constructor(options: AwayNotesOptions) {
@@ -74,12 +78,37 @@ export class AwayNotes {
 
   /** This Mac is going away: nothing asks the account whose the held Sessions are until it's back. */
   going(): void {
-    this.#going = true
+    this.#going = { since: this.#now(), answered: false }
   }
 
-  /** This Mac is back (a wake, its account's link again): asking goes on. */
-  back(): void {
-    this.#going = false
+  /** The going-away's note was answered, or won't be (unanswered, a gateway with no notes): the link may say it's back. */
+  answered(): void {
+    if (this.#going) this.#going.answered = true
+  }
+
+  /**
+   * This Mac is back, and asking goes on: by a wake, or (`link`) its account's link checked again. A link checked while
+   * the note is still out says nothing of being back (the link was up as the Mac began to go), so it's ignored then.
+   */
+  back(by: "wake" | "link"): void {
+    if (by === "link" && this.#going && !this.#going.answered) return
+    this.#going = undefined
+  }
+
+  /**
+   * A going-away that never happened (a quit or shutdown cancelled, a sleep the system aborted): this Mac still runs
+   * `GOING_LAPSES_MS` after it began, which no sleep or shutdown leaves it doing, so it's back. The job asking whose
+   * the held Sessions are calls it on its round. True when it lapsed.
+   */
+  lapse(): boolean {
+    if (!this.#going || this.#now() - this.#going.since < GOING_LAPSES_MS) return false
+    hostLog("away", "a going-away didn't happen: this Mac still runs, so it asks whose its held Sessions are again", { afterMs: this.#now() - this.#going.since })
+    this.#going = undefined
+    return true
+  }
+
+  #now(): number {
+    return (this.#options.now ?? Date.now)()
   }
 
   /** The account took a going-away's note: these Sessions wait for its word from now. */

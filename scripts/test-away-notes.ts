@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { test } from "node:test"
 import type { ListedContinue } from "@mako/protocol/continues"
 import type { OwnerAnswer, OwnerAsk } from "@mako/protocol/handoff"
-import { AwayNotes } from "@mako/host/conversations/away-notes"
+import { AwayNotes, GOING_LAPSES_MS } from "@mako/host/conversations/away-notes"
 import { ownerHold } from "@mako/host/conversations/owner-check"
 
 /*
@@ -97,7 +97,7 @@ test("going away, nothing asks the account until this Mac is back: it would say 
   await n.away.ask()
   assert.equal(n.asked.length, 0, "the job's ask, before the note went or while the Mac is off: nothing asked")
   assert.ok(n.away.holds(sessions.a) !== undefined, "and nothing let go")
-  n.away.back()
+  n.away.back("wake")
   await n.away.ask()
   assert.equal(n.asked.length, 1, "back: asked")
   assert.equal(n.away.holds(sessions.a), undefined, "yours: let go")
@@ -108,6 +108,47 @@ test("going away, nothing asks the account until this Mac is back: it would say 
   const again = new AwayNotes({ file: m.file, owner: () => async () => "unserved", deviceId: async () => undefined, join: () => {}, released: () => {} })
   await again.ask()
   assert.equal(again.any(), false, "a new host asks, and a gateway with no owner answer lets it go")
+})
+
+test("the account's link checked again while the note is out isn't this Mac back; once it's answered, it is", async () => {
+  const n = notes(async () => ({ sessions: [{ session: sessions.a, answer: "yours", generation: 1 }] }))
+  n.away.going()
+  await n.away.noted(randomUUID(), [{ session: sessions.a, generation: 1 }])
+  n.away.back("link")
+  await n.away.ask()
+  assert.equal(n.asked.length, 0, "the link was up as the Mac began to go: still going, nothing asked")
+  n.away.answered()
+  n.away.back("link")
+  await n.away.ask()
+  assert.equal(n.asked.length, 1, "the note answered, the link checked again: back, asked")
+})
+
+test("a going-away that didn't happen lapses: this Mac still runs two minutes on, so it asks again", async () => {
+  let now = 1_000_000
+  const asked: OwnerAsk[] = []
+  const away = new AwayNotes({
+    file: join(mkdtempSync(join(tmpdir(), "mako-away-")), "away.json"),
+    owner: () => async (ask) => {
+      asked.push(ask)
+      return { sessions: [{ session: sessions.c, answer: "yours", generation: 1 }] }
+    },
+    deviceId: async () => undefined,
+    join: () => {},
+    released: () => {},
+    now: () => now,
+  })
+  away.going()
+  await away.noted(randomUUID(), [{ session: sessions.c, generation: 1 }])
+  now += GOING_LAPSES_MS - 1_000
+  assert.equal(away.lapse(), false, "a going-away under way (a shutdown's hold) isn't over yet")
+  await away.ask()
+  assert.equal(asked.length, 0)
+  now += 2_000
+  assert.equal(away.lapse(), true, "still running past it: the quit, shutdown or sleep didn't happen")
+  await away.ask()
+  assert.equal(asked.length, 1, "asked again")
+  assert.equal(away.holds(sessions.c), undefined, "yours: let go")
+  assert.equal(away.lapse(), false, "nothing going: nothing lapses")
 })
 
 test("the owner check holds a conversation of a held Session, and nothing else", async () => {
