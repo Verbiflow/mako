@@ -567,17 +567,26 @@ export function ConversationTimeline({
    * Once windowed, a conversation stays windowed while it's shown: releasing a turn's body never remounts the rest.
    * The crossing lays out every row it keeps in one long task (80 to 150 ms on a 4× slowed phone), which under a finger
    * or a fling holds the page while the scroller travels on. So it waits for the reader's input to settle, or for
-   * `CROSSING_WAIT_MS` of input that never does, and crosses then.
+   * `CROSSING_WAIT_MS` of input that never does, and crosses then. Only a column that already holds its turns but
+   * the one arriving waits (`drawn`, the turns its last commit drew unwindowed): drawing that one more costs what a turn
+   * does. A conversation opened mid-gesture (the timeline is reused across Threads, and the last one's input may not
+   * have settled) or a history arriving whole would draw all of it, and windows at once. One that falls back below
+   * the window as it waits (a rewind, a fork in place) stops waiting.
    */
-  const sized = useRef<{ identity: string; windowed: boolean; waitingSince?: number }>({ identity, windowed: false })
+  const sized = useRef<{ identity: string; windowed: boolean; drawn?: number; waitingSince?: number }>({ identity, windowed: false })
   if (sized.current.identity !== identity) sized.current = { identity, windowed: false }
   if (!sized.current.windowed && (exchanges.length > WINDOWED_TURNS ||
       exchanges.reduce((items, exchange) => items + exchange.system.length +
         exchange.response.reduce((blocks, message) => blocks + message.blocks.length, 0), 0) > WINDOWED_ITEMS)) {
     const since = sized.current.waitingSince ?? performance.now()
-    if (!inputMoving() || performance.now() - since >= CROSSING_WAIT_MS) sized.current = { identity, windowed: true }
+    const drawn = sized.current.drawn
+    if (drawn === undefined || exchanges.length - drawn > 1 || !inputMoving() || performance.now() - since >= CROSSING_WAIT_MS)
+      sized.current = { identity, windowed: true }
     else sized.current.waitingSince = since
-  }
+  } else if (sized.current.waitingSince !== undefined) sized.current = { identity, windowed: false, drawn: sized.current.drawn }
+  useLayoutEffect(() => {
+    if (sized.current.identity === identity && !sized.current.windowed) sized.current.drawn = exchanges.length
+  })
   const windowed = sized.current.windowed
   const crossingWait = windowed ? undefined : sized.current.waitingSince
   // A look that finds input settled renders again; should input have started by then, the wait goes on from a new look.
