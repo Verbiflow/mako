@@ -14,9 +14,9 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * captures. `node scripts/test-model-connections-ui.mjs [evidence folder]`.
  */
 if (!process.versions.electron) {
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const root = testScratch("mako-model-connections-ui-")
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: Number(process.env.MAKO_UI_PORT ?? 0) } })
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: Number(process.env.MAKO_UI_PORT ?? 0) } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ main: fileURLToPath(import.meta.url) }))
   const evidence = resolve(process.argv[2] ?? join(root, "evidence"))

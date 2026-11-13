@@ -26,11 +26,11 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const { default: electronPath } = await import("electron")
   const root = testScratch("mako-opening-send-ui-", { given: process.argv[2] })
   await mkdir(root, { recursive: true })
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, watch: null, fs: { strict: false } } })
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, watch: null, fs: { strict: false } } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-opening-send-ui-check", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_OPENING_CHECK_ROOT: root, MAKO_OPENING_CHECK_URL: server.resolvedUrls.local[0] }

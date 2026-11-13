@@ -25,11 +25,11 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const portAt = process.argv.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(process.argv[portAt + 1])
   const root = testScratch("mako-inbox-ui-")
-  const server = await createServer({
+  const server = await uiVite({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],

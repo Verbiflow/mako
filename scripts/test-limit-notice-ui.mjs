@@ -17,8 +17,8 @@ if (process.versions.electron) {
 } else {
   const root = testScratch("mako-limit-notice-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-limit-notice-ui", main: fileURLToPath(import.meta.url) }))
-  const { createServer } = await import("vite")
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, fs: { strict: false }, watch: { ignored: ["**"] } } })
+  const { uiVite } = await import("./lib/ui-vite.mjs")
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, fs: { strict: false }, watch: { ignored: ["**"] } } })
   await server.listen()
   const env = { ...process.env, MAKO_LIMIT_UI_ROOT: root, MAKO_LIMIT_UI_URL: server.resolvedUrls.local[0] }
   delete env.ELECTRON_RUN_AS_NODE

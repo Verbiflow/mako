@@ -11,9 +11,9 @@ if (process.versions.electron) {
     ;(await import("electron")).app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const root = testScratch("mako-terminal-ui-")
-  const server = await createServer({
+  const server = await uiVite({
     cacheDir: join(root, "cache"),
     server: { port: 0, host: "127.0.0.1" },
   })
