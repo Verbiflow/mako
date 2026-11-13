@@ -712,6 +712,15 @@ export class JournalStore {
     return this.statement("SELECT * FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 AND seq <= ?4 ORDER BY seq").all(root, path, after, upTo).map((row) => this.entryOf(row))
   }
 
+  /** A bounded page of a file's chain, without line maps; both paths use their index before the bounded merge. */
+  chainPage(root: string, path: string, after: number, upTo: number, limit: number): StoredEntry[] {
+    return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map
+      FROM entries WHERE seq IN (
+        SELECT seq FROM (SELECT seq FROM entries WHERE root=?1 AND path=?2 AND seq > ?3 AND seq <= ?4 ORDER BY seq LIMIT ?5)
+        UNION SELECT seq FROM (SELECT seq FROM entries WHERE root=?1 AND from_path=?2 AND seq > ?3 AND seq <= ?4 ORDER BY seq LIMIT ?5)
+        ORDER BY seq LIMIT ?5) ORDER BY seq`).all(root, path, after, upTo, limit).map((row) => this.entryOf(row))
+  }
+
   /** A file's entries after `after` that changed it after `since`, oldest first, without line maps; a rename away from it counts. */
   versions(root: string, path: string, after: number, since: number): StoredEntry[] {
     return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map
