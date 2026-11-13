@@ -282,9 +282,12 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     step: (conversation, _move, step) => void steps.push({ conversation, kind: step.kind }),
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
   })
+  /** How many times this Mac asked its account whose its held Sessions are. */
+  let ownerAsks = 0
   away = new AwayNotes({
     file: join(base, "cloud", "away.json"),
     owner: () => async (ask) => {
+      ownerAsks += 1
       if (!ownerSays) throw new Error("this Mac can't reach its account")
       return ownerSays(ask)
     },
@@ -354,6 +357,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
         if (options.unanswered) throw new Error("the answer was lost as this Mac went off")
         return { note: note.note, threads: note.threads.map((each) => (each.checkpoint ? { thread: each.thread, accepted: true as const } : { thread: each.thread, accepted: false as const, why: "no-checkpoint" as const })) }
       },
+      going: () => awayNotes.going(),
       accepted: (note, sessions) => awayNotes.noted(note, sessions),
       goneQuiet: (why) => void order.push(`gone quiet ${why}`),
     },
@@ -379,7 +383,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     await tracker.close?.()
   }
   const owner = (says: (ask: OwnerAsk) => OwnerAnswer) => (ownerSays = says)
-  return { roots, listed, rowReads: () => rowReads, duringNote: () => ({ queued: queuedDuringNote, ran: ranDuringNote }), base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, awayNotes, owner, joined, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
+  return { ownerAsks: () => ownerAsks, roots, listed, rowReads: () => rowReads, duringNote: () => ({ queued: queuedDuringNote, ran: ranDuringNote }), base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, awayNotes, owner, joined, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
 }
 
 type Host = Awaited<ReturnType<typeof host>>
@@ -510,8 +514,14 @@ try {
     await sleeps(h, 20_000)
     assert.deepEqual(h.order.filter((each) => each !== "rows"), ["note", "gone quiet sleep"], "sleep: the account heard the note, then the Mac go quiet, without the desktop's suspend")
     await wentAway(h, "sleep", work, ready, began)
+    // Still going away (asleep, the job's half-minute come round): nothing asks the account, which would say the
+    // Sessions are this Mac's and end the quiet it continues them in.
+    const asked = h.ownerAsks()
+    await h.awayNotes.ask()
+    assert.equal(h.ownerAsks(), asked, "sleep: not asked while going away")
     // Back, offline: the account took the note, so its Sessions wait for its word whatever the owner check does.
     const before = h.world.prompts.length
+    h.awayNotes.back()
     await h.cloudMoves.unpark()
     await h.awayNotes.ask()
     await pause(300)
@@ -577,6 +587,7 @@ try {
     await pause(300)
     assert.ok(!h.world.prompts.some((prompt) => prompt.text.includes("Fin's report")), "nor after, while the account may continue the Thread")
     h.owner((ask) => ({ sessions: ask.sessions.map((each) => ({ session: each.session, answer: "yours" as const, generation: each.generation })) }))
+    h.awayNotes.back()
     await h.awayNotes.ask()
     await until("the message to run once the account says the Session is this Mac's", () => h.world.prompts.some((prompt) => prompt.conversation === queued!.conversation && prompt.text.includes("Fin's report")))
     await h.close()
@@ -676,6 +687,7 @@ try {
     await sleeps(h, 20_000)
     for (const id of conversations(work)) assert.ok(h.awayNotes.holds(h.world.store.journalPlacement(id)!.session) !== undefined, "held, the answer unknown")
     const before = h.world.prompts.length
+    h.awayNotes.back()
     await h.cloudMoves.unpark()
     await h.awayNotes.ask()
     await pause(300)

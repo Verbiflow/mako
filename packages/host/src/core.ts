@@ -553,6 +553,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     web()?.terminal({ type: "wake" })
     late.cloud?.wake()
     late.cloudConversations?.wake()
+    late.awayNotes?.back()
   })
   const telemetry = await declareTelemetryMethods(methods, {
     environment,
@@ -923,6 +924,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         ownerChecked: () => {
           late.conversations?.live.moves.ownerChecked()
           // Sessions a going-away named, which the account may have continued: whose they are is asked now, never given up on.
+          // The account's link checked again is this Mac back.
+          late.awayNotes?.back()
           void late.awayNotes?.ask()
           // Turns paused as this Mac went off, for a Thread still here, go on now (`CloudMoves.unpark`).
           void late.cloudMoves?.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
@@ -1444,6 +1447,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       others: async (thread) => (await late.readiness?.noteOthers(thread)) ?? [],
       project: async (thread) => late.readiness?.noteProject(thread),
       projectFrom: async (thread) => late.readiness?.noteProjectFrom(thread),
+      going: () => late.awayNotes?.going(),
       noted: async (sent) => late.readiness?.noted(sent),
       refused: async (note, threads) => late.readiness?.refused(note, threads),
       quiet: async (note, record) => {
