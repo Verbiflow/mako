@@ -232,16 +232,22 @@ export class LiveLaunches {
     resident.driver = driver
     resident.opening = true
     resident.snapshot = { ...resident.snapshot, session: { ...session, status: "starting", connection: "starting", error: undefined } }
-    hostLog("residency", "a conversation whose first start failed for now starts again", { conversation: session.id, harness: session.harness })
+    hostLog("residency", "a conversation whose first start failed for now starts again", { conversation: session.id, harness: session.harness, binding: binding.id })
+    // Under its active binding's ID, which every message is sent to: a binding a move made isn't the conversation's own,
+    // and one started under the conversation's ID took no message (2026-11-11: "The agent execution owner is unavailable").
     this.launch(resident, driver, session.harness, session.cwd, {
-      conversationId: session.id,
+      conversationId: binding.id,
       ...session.title !== undefined && { title: session.title },
       ...binding.modeId !== undefined && { modeId: binding.modeId },
     }, binding.modeId, binding.tuning ?? session.settings)
     return true
   }
 
-  /** Start the conversation's first native session; its outcome lands on the resident. */
+  /**
+   * Start the conversation's first native session, or its active binding's when it never ran (`relaunch`); its outcome
+   * lands on the resident. `options.conversationId` names the binding the driver runs it under; what the conversation
+   * is handed (its tools, routing and calls) stays the conversation's.
+   */
   launch(
     resident: Resident,
     driver: AdmittedLiveDriver,
@@ -253,13 +259,14 @@ export class LiveLaunches {
   ): void {
     const { dependencies } = this.access
     const id = options.conversationId
+    const conversation = resident.snapshot.session.id
     const generation = resident.generation
     // A start is what a person waits on: the host's routine work waits for it (`base/foreground.ts`).
     const releaseForeground = dependencies.foreground?.hold(`start ${provider} ${id.slice(0, 8)}`)
     const openingOperation = Promise.resolve()
       .then(async () => {
-        const conversationTools = await dependencies.tools?.(id, id)
-        const threadEnvironment = await dependencies.threadEnvironment?.(id, options.title, cwd)
+        const conversationTools = await dependencies.tools?.(id, conversation)
+        const threadEnvironment = await dependencies.threadEnvironment?.(conversation, options.title, cwd)
         // Preparation may finish after Close or an execution-ownership move.
         // Check and start without yielding so a stale owner never spawns.
         if (resident.generation !== generation || resident.closing || !this.access.moves.executes(resident))
@@ -274,8 +281,8 @@ export class LiveLaunches {
             : undefined,
           conversationTools,
           threadEnvironment,
-          nativeRouting: launchRouting(dependencies, id, conversationTools),
-          nativeCalls: launchCalls(dependencies, id, cwd, conversationTools, threadEnvironment),
+          nativeRouting: launchRouting(dependencies, conversation, conversationTools),
+          nativeCalls: launchCalls(dependencies, conversation, cwd, conversationTools, threadEnvironment),
           pinnedAccount: launchAccount(resident, provider),
           unattended: dependencies.unattended,
         }))
@@ -284,7 +291,7 @@ export class LiveLaunches {
         if (resident.generation !== generation) {
           try {
             await driver.close(id)
-            await revokeTools(dependencies, id, id)
+            await revokeTools(dependencies, id, conversation)
             resident.opening = false
             resident.driver = null
           } catch (error) {
@@ -294,15 +301,16 @@ export class LiveLaunches {
           }
           return
         }
-        resident.snapshot = {
-          ...resident.snapshot,
-          session: {
-            ...session,
-            title: session.title ?? resident.snapshot.session.title,
-          },
+        // The driver reports its session under the binding it runs (a relaunched one isn't the conversation's own);
+        // the conversation keeps its ID, as a wake's and a transfer's do.
+        const connected = {
+          ...session,
+          id: conversation,
+          title: session.title ?? resident.snapshot.session.title,
         }
-        resident.connections.set(id, { driver, session })
-        updateBinding(dependencies, resident, session)
+        resident.snapshot = { ...resident.snapshot, session: connected }
+        resident.connections.set(id, { driver, session: { ...connected, id } })
+        updateBinding(dependencies, resident, connected)
         // A host- or launch-enforced tier is already current when the session
         // reports; a provider's own mode (Cursor's plan) is applied here. An
         // explicit choice must apply or fail; the ledger's memory applies only
@@ -326,7 +334,7 @@ export class LiveLaunches {
           () => true,
           () => false
         )
-        await revokeTools(dependencies, id, id)
+        await revokeTools(dependencies, id, conversation)
         resident.opening = !closed
         resident.driver = closed ? null : driver
         if (closed) resident.connections.clear()
@@ -346,7 +354,7 @@ export class LiveLaunches {
         }
         this.access.flush(resident)
         if (closed && options.resume)
-          releaseHold(dependencies.memory, provider, options.resume, id)
+          releaseHold(dependencies.memory, provider, options.resume, conversation)
       })
     resident.openingOperation = openingOperation
     void openingOperation.finally(() => {
