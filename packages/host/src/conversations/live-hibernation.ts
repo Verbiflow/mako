@@ -19,7 +19,7 @@ export const PROVIDER_IDLE_MS = 10 * 60_000
 export const PROVIDER_WARM_LIMIT = 2
 
 type HibernationAccess = Pick<LiveAccess,
-  "dependencies" | "residents" | "resident" | "load" | "flush" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
+  "dependencies" | "residents" | "resident" | "load" | "flush" | "noteWork" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
   "failedStart" | "returnFromRemovedWorktree" | "driverEvents">
 
 /**
@@ -344,6 +344,7 @@ export class LiveHibernation {
     if (resident.generation !== retiringGeneration) return
     resident.connections.clear()
     resident.driver = null
+    this.access.noteWork(resident)
     resident.snapshot = {
       ...resident.snapshot,
       nativeAgents: disconnectNativeAgents(resident.snapshot.nativeAgents),
@@ -613,6 +614,7 @@ export class LiveHibernation {
         resident.driver = null
         resident.connections.delete(binding.id)
         resident.opening = false
+        this.access.noteWork(resident)
       }
       const requests = this.access.failedStart(resident, { error }, true)
       // A message that goes again by itself leaves the session asleep, not failed: the next attempt wakes it.

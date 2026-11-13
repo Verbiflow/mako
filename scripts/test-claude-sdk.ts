@@ -1,3 +1,4 @@
+import { claudeRecoveryControls } from "./lib/claude-recovery-controls.ts"
 import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
@@ -1017,6 +1018,13 @@ const revoked = claudeAuthDiagnostics({}, fields => revokedFields.push(fields), 
 revoked.observe({ ...assistantError("authentication_failed"), message: { ...assistant.message,
   content: [{ type: "text", text: "Failed to authenticate. API Error: 401 OAuth access token has been revoked.", citations: null }] } })
 await revoked.settled()
+assert.deepEqual(await revoked.failureEvidence("Failed to authenticate"), { kind: "auth", source: "provider-auth-error" }, "a generic terminal result retains an explicit native revocation from its own turn")
+assert.equal(await revoked.failureEvidence("Unknown model"), undefined, "the next turn cannot inherit revocation evidence")
+const clearedEvidence = claudeAuthDiagnostics({}, () => {}, async () => clearedStore)
+clearedEvidence.observe(assistantError("authentication_failed"))
+await clearedEvidence.failureEvidence(undefined)
+assert.equal(await clearedEvidence.failureEvidence("Unknown model"), undefined, "a successful result clears the native authentication marker")
+await clearedEvidence.settled()
 assert.equal(revokedFields[0]?.category, "access-revoked")
 assert.equal(revokedFields[0]?.cause, "store-unreadable", "a failed store read is evidence, not a crash")
 projection.project({
@@ -1256,5 +1264,6 @@ try {
   messages.close()
 }
 console.log("PASS: A steer that aborts a running command keeps the turn running until Claude answers it")
+await claudeRecoveryControls(dependencies, authLogRoot)
 await authHostLog.flush()
 await rm(authLogRoot, { recursive: true, force: true })
