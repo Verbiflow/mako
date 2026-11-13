@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { CODE_PATIENCE_MS } from "@/lib/code-patience"
 
 /** Back online, a read is tried at once and then after these pauses: the event can come before the network carries. */
 const ONLINE_RETRIES_MS = [0, 1_000, 3_000]
-/** A read still unsettled this long while online won't settle: Safari can leave an import it failed before pending. */
-const READ_PATIENCE_MS = 8_000
 
 /**
  * Trying a chunk of code again (`chunk`, `lazyCode`): by hand, and by itself when the browser is back online. A read that
@@ -30,7 +29,7 @@ export function useCodeRetry(retry: () => Promise<void>): CodeRetry {
     const online = navigator.onLine
     let timer: ReturnType<typeof setTimeout> | undefined
     const late = new Promise<boolean>((settle) => {
-      timer = setTimeout(() => settle(true), READ_PATIENCE_MS)
+      timer = setTimeout(() => settle(true), CODE_PATIENCE_MS)
     })
     const failed = await Promise.race([retry().then(() => false, () => true), late])
     clearTimeout(timer)

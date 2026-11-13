@@ -5,19 +5,21 @@ import { cn } from "@/lib/utils"
 import { usePrefs } from "@/state/prefs"
 import { canReadOriginals } from "@/state/thread-viewing"
 import { LazyBoundary } from "@/components/ui/lazy-boundary"
+import { withPatience } from "@/lib/code-patience"
 import { useTranscriptSource } from "./source-context"
 
 /**
  * The dialog and its readers (the code highlighter among them): read the first time it opens, a debugging aid few turn
- * on. A read that failed is forgotten, so Retry reads it afresh.
+ * on. One read, within its patience (an import still pending then won't settle), the same promise on every render
+ * until Retry forgets it (`forgetDialog`), so `use` never meets a new one.
  */
 let dialogReading: Promise<typeof import("./show-original-dialog")> | undefined
 function readDialog(): Promise<typeof import("./show-original-dialog")> {
-  dialogReading ??= import("./show-original-dialog")
-  dialogReading.catch(() => {
-    dialogReading = undefined
-  })
+  dialogReading ??= withPatience(import("./show-original-dialog"), "The original's viewer")
   return dialogReading
+}
+function forgetDialog(): void {
+  dialogReading = undefined
 }
 
 /** The dialog once its code is here: suspends until then, and throws to its `LazyBoundary` if it can't arrive. */
@@ -74,11 +76,16 @@ export function ShowOriginal({ origins, className, always = false }: {
       </button>
       {open ? (
         <LazyBoundary
+          onRetry={forgetDialog}
           fallback={(retry) => (
             <span role="alert" data-original-unavailable="" className="flex items-center gap-1.5 text-negative">
               Couldn't open the original.
               <button type="button" className="pressable px-1 text-foreground underline" onClick={retry}>
                 Retry
+              </button>
+              {/* A browser that keeps a dynamic import it failed once (Electron's Chromium) only reads it again afresh. */}
+              <button type="button" className="pressable px-1 text-foreground underline" onClick={() => location.reload()}>
+                Reload
               </button>
             </span>
           )}>

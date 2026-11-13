@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react"
+import { withPatience } from "@/lib/code-patience"
 
 /**
  * A chunk of the app the list paints without, read once: its module as soon as it has arrived, and until then nothing.
@@ -16,16 +17,21 @@ export function chunk<Module>(load: () => Promise<Module>) {
     for (const listener of listeners) listener()
   }
   const read = (): Promise<Module> => {
-    // `failed` stands until a read succeeds: a screen saying so keeps saying it while it tries again.
-    reading ??= load().then((loaded) => {
-      module = loaded
-      failed = false
-      told()
-      return loaded
-    })
-    // Not here (offline before the service worker kept it): asked again next time.
+    // `failed` stands until a read succeeds: a screen saying so keeps saying it while it tries again. A read that
+    // arrives after its patience ran out still lands, and the screen draws then.
+    reading ??= withPatience(
+      load().then((loaded) => {
+        module = loaded
+        failed = false
+        told()
+        return loaded
+      }),
+      "This code"
+    )
+    // Not here (offline before the service worker kept it), or not within its patience: asked again next time.
     reading.catch(() => {
       reading = undefined
+      if (module) return
       failed = true
       told()
     })

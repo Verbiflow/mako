@@ -82,10 +82,21 @@ async function check() {
     }
   }
   const evaluate = (code) => page.executeJavaScript(code)
-  const until = async (code, label = code) => {
+  /**
+   * A function run in the page with `args` passed as its arguments (`Runtime.callFunctionOn`), never spliced into
+   * script text: a selector or words reach the page as values.
+   */
+  const run = async (fn, ...args) => {
+    const { result: global } = await send("Runtime.evaluate", { expression: "globalThis" })
+    const answer = await send("Runtime.callFunctionOn", { objectId: global.objectId, functionDeclaration: fn.toString(), arguments: args.map((value) => ({ value })), returnByValue: true, awaitPromise: true })
+    if (answer.exceptionDetails) throw new Error(answer.exceptionDetails.exception?.description ?? answer.exceptionDetails.text)
+    return answer.result.value
+  }
+  /** Until `check`, a check here (which may `run` one in the page with values), holds. */
+  const untilCheck = async (check, label) => {
     guard.at(label)
     const deadline = Date.now() + 30_000
-    while (!(await evaluate(code).catch(() => false))) {
+    while (!(await check().catch(() => false))) {
       if (Date.now() > deadline) {
         await keepEvidence(label)
         throw new Error(`Timed out waiting for ${label}`)
@@ -93,6 +104,8 @@ async function check() {
       await new Promise((done) => setTimeout(done, 50))
     }
   }
+  /** Until a page script of fixed text holds. */
+  const until = (code, label = code) => untilCheck(() => evaluate(code), label)
   const load = async (path) => {
     await window.loadURL(`${base}${path}`).catch((error) => {
       if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
@@ -105,16 +118,24 @@ async function check() {
     // A run's screenshots kept beyond its scratch folder, which goes when it passes.
     if (process.env.MAKO_UI_SHOTS) await writeFile(join(process.env.MAKO_UI_SHOTS, name), png)
   }
-  const seen = (selector) => until(`Boolean(document.querySelector(${JSON.stringify(selector)}))`, selector)
+  const seen = (selector) => untilCheck(() => run((target) => Boolean(document.querySelector(target)), selector), selector)
   const click = async (selector) => {
     await seen(selector)
-    await evaluate(`document.querySelector(${JSON.stringify(selector)}).click(); true`)
+    await run((target) => document.querySelector(target).click(), selector)
   }
   const press = async (selector) => {
     await seen(selector)
-    await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail: 1 })); node.click(); return true })()`)
+    await run((target) => {
+      const node = document.querySelector(target)
+      node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, detail: 1 }))
+      node.click()
+    }, selector)
   }
-  const clickText = (scope, text) => evaluate(`[...document.querySelectorAll(${JSON.stringify(`${scope} button`)})].find((button) => button.textContent.trim() === ${JSON.stringify(text)})?.click() ?? false`)
+  /** The button in `scope` that says `text`, whether there is one. */
+  const hasButton = (scope, text) => run((within, words) => [...document.querySelectorAll(`${within} button`)].some((button) => button.textContent.trim() === words), scope, text)
+  const clickText = (scope, text) => run((within, words) => [...document.querySelectorAll(`${within} button`)].find((button) => button.textContent.trim() === words)?.click() ?? false, scope, text)
+  /** Whether the element `selector` names says `words`. */
+  const says = (selector, words) => run((target, text) => Boolean(document.querySelector(target)?.innerText.includes(text)), selector, words)
   const notBroken = async (what) => assert.equal(await evaluate("document.body.innerText.includes('Something in the interface broke')"), false, `${what}: the window never shows its error screen`)
 
   // A module held, then let go or failed as a network fails it: `hold` before the page that reads it loads.
@@ -165,9 +186,9 @@ async function check() {
   /** Back online after a failure: the piece draws by itself, or (a module this page won't fetch again) offers Reload, which brings it. */
   const recovers = async (what, drawn, scope, reopen) => {
     await letGo()
-    if (await evaluate(`Boolean([...document.querySelectorAll(${JSON.stringify(`${scope} button`)})].find((button) => button.textContent.trim() === 'Retry'))`)) await clickText(scope, "Retry")
+    if (await hasButton(scope, "Retry")) await clickText(scope, "Retry")
     else await evaluate("window.dispatchEvent(new Event('online')); true")
-    await until(`(${drawn}) || Boolean(document.querySelector('[data-code-unavailable=stuck]'))`, `${what} back, or offering Reload`)
+    await untilCheck(async () => (await evaluate(drawn)) || (await evaluate("Boolean(document.querySelector('[data-code-unavailable=stuck]'))")), `${what} back, or offering Reload`)
     if (await evaluate("Boolean(document.querySelector('[data-code-unavailable=stuck]'))")) {
       await clickText(scope, "Reload")
       await reopen()
@@ -218,11 +239,27 @@ async function check() {
     await load(desk)
     await until("document.querySelectorAll('[data-thread-row]').length > 0", `the web desk, ${what}'s code held`)
     await open()
-    await until(`document.querySelector('.rv-layer [data-code-loading]')?.innerText.includes(${JSON.stringify(`Loading ${what}`)})`, `${what} loading`)
+    await untilCheck(() => says(".rv-layer [data-code-loading]", `Loading ${what}`), `${what} loading`)
     await capture(`${what.toLowerCase()}-loading.png`)
     await release(pattern, "continue")
     await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-loading]')", `${what} drawn`)
   }
+  await letGo()
+
+  // Code that neither arrives nor fails (a stalled connection; Safari leaving an import it failed once pending): past
+  // its patience the piece says it couldn't load, never "Loading…" for good, and draws if the code lands after all.
+  const FILES = "src/web-client/files-screen.tsx"
+  await hold(FILES)
+  await load(desk)
+  await until("document.querySelectorAll('[data-thread-row]').length > 0", "the web desk, Files' code stalled")
+  await click("button[aria-label='Show the right sidebar']:not(:disabled)")
+  await press("[data-side-rail] [data-surface-id=files]")
+  await held(FILES)
+  await untilCheck(() => says(".rv-layer [data-code-unavailable]", "Files couldn't load"), "Files past its patience, saying it couldn't load")
+  assert.equal(paused.get(FILES).length > 0, true, "its code still held, neither arrived nor failed")
+  await capture("files-past-patience.png")
+  await release(FILES, "continue")
+  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-unavailable]')", "Files drawn once its late code landed")
   await letGo()
 
   // Show original's dialog: a line while it opens, a line with Retry if it can't, never the window's error screen.
@@ -231,7 +268,7 @@ async function check() {
   const field = "[data-composer] textarea"
   const answered = async () => {
     await seen(field)
-    await evaluate(`document.querySelector(${JSON.stringify(field)}).focus()`)
+    await run((target) => document.querySelector(target).focus(), field)
     await send("Input.insertText", { text: "Find out why the session rail re-renders on every token" })
     for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 })
     await until("document.body.textContent.includes('The rail selected the entire store object')", "the streams scene's answer")
@@ -248,6 +285,7 @@ async function check() {
   await release(DIALOG, "fail")
   await until("Boolean(document.querySelector('[data-original-unavailable]'))", "Show original saying it couldn't open")
   assert.match(await evaluate("document.querySelector('[data-original-unavailable]').innerText"), /Couldn't open the original/)
+  assert.ok(await hasButton("[data-original-unavailable]", "Reload"), "Show original's Reload")
   await capture("original-unavailable.png")
   await notBroken("Show original")
   await letGo()
@@ -259,6 +297,16 @@ async function check() {
   await answered()
   await click("[data-show-original]")
   await seen("[data-original-dialog]")
+  // Its viewer's code stalled: past its patience the line says so, with Retry and Reload, never "Opening…" for good.
+  await hold(DIALOG)
+  await load(streams)
+  await answered()
+  await click("[data-show-original]")
+  await held(DIALOG)
+  await untilCheck(() => says("[data-original-unavailable]", "Couldn't open the original"), "Show original past its patience")
+  assert.ok((await hasButton("[data-original-unavailable]", "Retry")) && (await hasButton("[data-original-unavailable]", "Reload")), "Show original's Retry and Reload")
+  await notBroken("Show original, stalled")
+  await letGo()
 
   // The phone's Agents sheet: a loading line while its roster's code arrives, a line with Retry and Reload if it can't.
   await viewport(390, 844)
@@ -282,7 +330,7 @@ async function check() {
   await notBroken("the Agents sheet")
   await recovers("the Agents sheet", rosterDrawn, "[data-agents-sheet]", openSheet)
 
-  console.log(`Lazy pieces UI: the composer, Files, Changes, Show original and the Agents sheet each load, fail and come back without a blank or the error screen (${root})`)
+  console.log(`Lazy pieces UI: the composer, Files, Changes, Show original and the Agents sheet each load, fail, stall past their patience and come back without a blank or the error screen (${root})`)
   guard.done()
   app.exit(0)
 }

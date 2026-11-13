@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react"
 import { z } from "zod"
 import { createHook, createStore } from "@/state/store"
+import { withPatience } from "@/lib/code-patience"
 
 /*
  * Which Changes screen is open, if any: one Session's turn, or every turn of
@@ -81,10 +82,11 @@ function lazyCode<T>(load: () => Promise<T>): ReviewCode<T> {
     read() {
       const { reading } = codeStore.get()
       if (reading) return reading
-      const read = load().then((code) => codeStore.set({ code, failed: false }))
+      // Within its patience, as every chunk's read (`chunk`): one that arrives later still lands.
+      const read = withPatience(load().then((code) => codeStore.set({ code, failed: false })), "Changes")
       // Not here (offline before the service worker kept it): asked again next time. `failed` stands until a read
       // succeeds, so Changes keeps saying so while it tries again.
-      read.catch(() => codeStore.set({ reading: undefined, failed: true }))
+      read.catch(() => codeStore.set({ reading: undefined, failed: codeStore.get().code === undefined }))
       codeStore.set({ reading: read })
       return read
     },
