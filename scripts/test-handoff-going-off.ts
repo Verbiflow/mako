@@ -358,6 +358,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
         return { note: note.note, threads: note.threads.map((each) => (each.checkpoint ? { thread: each.thread, accepted: true as const } : { thread: each.thread, accepted: false as const, why: "no-checkpoint" as const })) }
       },
       going: () => awayNotes.going(),
+      answered: () => awayNotes.answered(),
       accepted: (note, sessions) => awayNotes.noted(note, sessions),
       goneQuiet: (why) => void order.push(`gone quiet ${why}`),
     },
@@ -521,7 +522,7 @@ try {
     assert.equal(h.ownerAsks(), asked, "sleep: not asked while going away")
     // Back, offline: the account took the note, so its Sessions wait for its word whatever the owner check does.
     const before = h.world.prompts.length
-    h.awayNotes.back()
+    h.awayNotes.back("wake")
     await h.cloudMoves.unpark()
     await h.awayNotes.ask()
     await pause(300)
@@ -587,7 +588,7 @@ try {
     await pause(300)
     assert.ok(!h.world.prompts.some((prompt) => prompt.text.includes("Fin's report")), "nor after, while the account may continue the Thread")
     h.owner((ask) => ({ sessions: ask.sessions.map((each) => ({ session: each.session, answer: "yours" as const, generation: each.generation })) }))
-    h.awayNotes.back()
+    h.awayNotes.back("wake")
     await h.awayNotes.ask()
     await until("the message to run once the account says the Session is this Mac's", () => h.world.prompts.some((prompt) => prompt.conversation === queued!.conversation && prompt.text.includes("Fin's report")))
     await h.close()
@@ -687,7 +688,7 @@ try {
     await sleeps(h, 20_000)
     for (const id of conversations(work)) assert.ok(h.awayNotes.holds(h.world.store.journalPlacement(id)!.session) !== undefined, "held, the answer unknown")
     const before = h.world.prompts.length
-    h.awayNotes.back()
+    h.awayNotes.back("wake")
     await h.cloudMoves.unpark()
     await h.awayNotes.ask()
     await pause(300)

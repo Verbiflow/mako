@@ -553,7 +553,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     web()?.terminal({ type: "wake" })
     late.cloud?.wake()
     late.cloudConversations?.wake()
-    late.awayNotes?.back()
+    late.awayNotes?.back("wake")
   })
   const telemetry = await declareTelemetryMethods(methods, {
     environment,
@@ -925,7 +925,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           late.conversations?.live.moves.ownerChecked()
           // Sessions a going-away named, which the account may have continued: whose they are is asked now, never given up on.
           // The account's link checked again is this Mac back.
-          late.awayNotes?.back()
+          late.awayNotes?.back("link")
           void late.awayNotes?.ask()
           // Turns paused as this Mac went off, for a Thread still here, go on now (`CloudMoves.unpark`).
           void late.cloudMoves?.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
@@ -1286,6 +1286,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     })
     // Asked again while any waits and the account couldn't answer: on the account's next link too, through the owner check.
     shell.jobs.every("ask the account whose the Sessions held as this Mac went away are", 30_000, async () => {
+      // A going-away that didn't happen (this Mac still runs long after) is over: asking goes on.
+      late.awayNotes?.lapse()
       if (late.awayNotes?.any() && !cloudConversations?.ownerCheck(false)) await late.awayNotes.ask()
     })
   }
@@ -1448,6 +1450,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       project: async (thread) => late.readiness?.noteProject(thread),
       projectFrom: async (thread) => late.readiness?.noteProjectFrom(thread),
       going: () => late.awayNotes?.going(),
+      answered: () => late.awayNotes?.answered(),
       noted: async (sent) => late.readiness?.noted(sent),
       refused: async (note, threads) => late.readiness?.refused(note, threads),
       quiet: async (note, record) => {
