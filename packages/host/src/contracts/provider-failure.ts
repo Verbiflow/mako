@@ -1,3 +1,6 @@
+import type { ProviderFailureEvidence } from "./provider-failure-evidence.js"
+import type { FailureBoundary } from "./error-message.js"
+
 /**
  * What a failed turn means for the person reading it.
  *
@@ -9,7 +12,7 @@
  * string once, on the host, and the request carries the verdict; the
  * renderer never pattern-matches error text.
  *
- * Kept free of imports so the renderer and the host share it.
+ * Kept free of runtime imports so the renderer and the host share it.
  */
 export const PROVIDER_FAILURE_KINDS = [
   /** The model API refused the session's saved history; only a new session escapes it. */
@@ -65,9 +68,6 @@ interface Rule {
  */
 const USAGE_LIMIT = /\bhit your (?:[\w-]+ )?limit|\breached (?:your|its|the) (?:[\w-]+ )?(?:usage |rate )?limit|\busage limit\b|\b(?:session|weekly|daily|monthly|five-hour|5-hour) limit (?:reached|hit)|\bquota (?:exhausted|exceeded)\b|usage_limit_(?:reached|exceeded)/i
 
-/** An edge challenge is not an account verdict. Keep this exact: an ordinary 403, or a revoked token, still stands. */
-const CLOUDFLARE_CHALLENGE = /^(?:API Error:\s*)?403 Attention Required!\s*\|\s*Cloudflare\s*$/i
-
 /**
  * Claude prefixes temporary failures from its authentication request with "Failed to authenticate". Classify the
  * actual response, without checking or changing credentials. Explicit invalid-key/revocation text inside it still
@@ -77,7 +77,7 @@ function failureText(message: string | undefined): string {
   const text = message ?? ""
   const response = text.replace(/^Failed to authenticate[.:]\s*/i, "")
   if (response === text) return text
-  const transient = CLOUDFLARE_CHALLENGE.test(response) || /^(?:API Error:\s*)?(?:429|50[0234]|529)\b|^(?:fetch failed|(?:read )?ECONNRESET\b|ECONNREFUSED\b|ETIMEDOUT\b|ENOTFOUND\b|EAI_AGAIN\b|socket hang up)/i.test(response)
+  const transient = /^(?:API Error:\s*)?(?:429|50[0234]|529)\b|^(?:fetch failed|(?:read )?ECONNRESET\b|ECONNREFUSED\b|ETIMEDOUT\b|ENOTFOUND\b|EAI_AGAIN\b|socket hang up)/i.test(response)
   return transient ? response : text
 }
 
@@ -116,10 +116,6 @@ const rules: Rule[] = [
     kind: "plan",
     match:
       /subscription|billing|payment required|\b402\b|insufficient (?:credits|balance|funds)|out of credits|credit balance|plan does not|not (?:included|available) (?:in|on|with) your plan|upgrade your plan/i,
-  },
-  {
-    kind: "provider-unavailable",
-    match: CLOUDFLARE_CHALLENGE,
   },
   {
     kind: "auth",
@@ -180,7 +176,6 @@ const CLIENT_ERROR = /\b4\d\d (?:Bad Request|Unauthorized|Forbidden|Not Found|Me
 
 /** Whether `text` names a fault only the person can fix, apart from what a plan covers. */
 function personsFault(text: string): boolean {
-  if (CLOUDFLARE_CHALLENGE.test(text)) return false
   return rules.some((rule) => PERMANENT.has(rule.kind) && rule.kind !== "plan" && rule.match.test(text)) || CLIENT_ERROR.test(text)
 }
 
@@ -205,10 +200,11 @@ export function permanentFailure(message: string | undefined): boolean {
 
 export function classifyProviderFailure(
   message: string | undefined,
-  providerLabel = "The provider"
+  providerLabel = "The provider",
+  evidence?: ProviderFailureEvidence
 ): ProviderFailure {
   const text = failureText(message)
-  const kind = usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown"
+  const kind = evidence?.kind ?? (usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown")
   return describeProviderFailure(kind, providerLabel)
 }
 
@@ -217,8 +213,8 @@ export function classifyProviderFailure(
  * keeps that cause; one that failed for no classifiable reason while
  * reopening a session is Mako's failure to resume, not the provider's.
  */
-export function classifyStartFailure(message: string | undefined, resuming: boolean): ProviderFailureKind {
-  const kind = classifyProviderFailure(message).kind
+export function classifyStartFailure(message: string | undefined, resuming: boolean, evidence?: ProviderFailureEvidence): ProviderFailureKind {
+  const kind = classifyProviderFailure(message, undefined, evidence).kind
   return kind === "unknown" && resuming ? "resume-failed" : kind
 }
 
@@ -333,4 +329,19 @@ export function describeProviderFailure(
         guidance: `${providerLabel} ended the turn without saying why; what it did is in the conversation.`,
       }
   }
+}
+
+/** A preflight refusal retains the same secret-free verdict as a provider's terminal session event. */
+export class ProviderFailureError extends Error {
+  readonly failureEvidence: ProviderFailureEvidence
+
+  constructor(message: string, failureEvidence: ProviderFailureEvidence, options?: ErrorOptions) {
+    super(message, options)
+    this.name = "ProviderFailureError"
+    this.failureEvidence = failureEvidence
+  }
+}
+
+export function failureEvidenceOf({ error }: FailureBoundary): ProviderFailureEvidence | undefined {
+  return error instanceof ProviderFailureError ? error.failureEvidence : undefined
 }

@@ -1,3 +1,4 @@
+import type { ProviderFailureEvidence } from "@mako/host/contracts/provider-failure-evidence"
 import { randomUUID } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -68,6 +69,7 @@ export interface ScriptedTurn {
 export interface ScriptedEnd {
   limit?: UsageLimit
   fail?: string
+  failureEvidence?: ProviderFailureEvidence
 }
 
 /** What a scripted model does with a turn: its reply, once whatever it calls has answered. `hold` keeps the turn running until it resolves. */
@@ -614,7 +616,7 @@ export class AgentsWorld {
           emit({ type: "live-update", id: binding, update: { kind: "text", text: reply } })
           if (end.limit) emit({ type: "live-update", id: binding, update: { kind: "event", label: "Rate limited", detail: "Reached your usage limit", tone: "warning", limit: end.limit } })
           const ended = { ...(this.live.snapshot(id)?.session ?? session), id: binding }
-          emit({ type: "live-session", session: end.fail ? { ...ended, status: "failed", lastStop: "failed", error: end.fail } : { ...ended, status: "ready" } })
+          emit({ type: "live-session", session: end.fail ? { ...ended, status: "failed", lastStop: "failed", error: end.fail, failureEvidence: end.failureEvidence } : { ...ended, status: "ready", failureEvidence: undefined } })
         })()
         this.running.add(turn)
         void turn.finally(() => this.running.delete(turn))

@@ -1,3 +1,4 @@
+import type { ProviderFailureEvidence } from "./provider-failure-evidence.js"
 import type { LiveRequest } from "./live-conversations.js"
 import { resetWords } from "./account-usage.js"
 import { limitReset } from "./limit-reset.js"
@@ -59,8 +60,9 @@ export function retryCause(kind: ProviderFailureKind, busy: boolean): RetryCause
  * The cause a failure in `message` is waited out for: none when anything in it is a cause the person must fix,
  * whatever transient words wrap it (`permanentFailure`: "API error: 400 … unknown model" is a setting, not an outage).
  */
-export function transientCause(message: string, kind: ProviderFailureKind, busy: boolean): RetryCause | undefined {
+export function transientCause(message: string, kind: ProviderFailureKind, busy: boolean, evidence?: ProviderFailureEvidence): RetryCause | undefined {
   if (busy) return "busy"
+  if (evidence?.kind === kind) return retryCause(kind, false)
   return permanentFailure(message) ? undefined : retryCause(kind, false)
 }
 

@@ -1,3 +1,4 @@
+import { claudeFailureEvidence } from "@mako/host/harnesses/claude/failure-evidence"
 import assert from "node:assert/strict"
 import { join } from "node:path"
 import { strandedTurn } from "@mako/host/contracts/turn-continuation"
@@ -5,7 +6,7 @@ import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import { AgentsWorld } from "./agents-world.ts"
 
 const OUTAGES = [
-  "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare",
+  'Failed to authenticate. API Error: 403 <!doctype html><html><head><title>Temporary access check</title></head><body>Please wait.</body></html>',
   "Failed to authenticate. API Error: 503 Service Unavailable",
   "Failed to authenticate. API Error: 529 Overloaded",
 ]
@@ -21,6 +22,7 @@ async function until(what: string, check: () => boolean): Promise<void> {
 /** Real local store/dispatch/Fin path, with scripted transports and no account or provider calls. */
 export async function providerOutageControls(root: string): Promise<void> {
   for (const [index, error] of OUTAGES.entries()) {
+    const failureEvidence = claudeFailureEvidence(error, { store: "file", scoped: true, access: true, refresh: "present", expiresAt: new Date(Date.now() + 60_000).toISOString() })
     for (const outcome of ["recover", "restart", "crash", "stop", "close"] as const) {
       let heldOnce = false
       const world = new AgentsWorld({
@@ -47,11 +49,12 @@ export async function providerOutageControls(root: string): Promise<void> {
         await until("turn running", () => world.live.session(id)?.status === "running")
         const before = await world.agents.send(apex.caller, { to: "worker", text: "Queued before outage", clientKey: "before" })
         assert.ok(!("refused" in before))
-        world.endWith(id, { fail: error })
+        world.endWith(id, { fail: error, failureEvidence })
         world.release(id)
         await until("outage settled", () => world.live.snapshot(id)?.requests.find(request => request.id === cut.request)?.status !== "dispatching")
         const snapshot = () => world.live.snapshot(id)!
         assert.equal(signInPause(snapshot().requests), undefined, "an edge/service failure is not a sign-out")
+        assert.deepEqual(snapshot().requests.find(request => request.id === cut.request)?.failureEvidence, failureEvidence)
         const failed = snapshot().requests.find(request => request.id === cut.request)!
         assert.equal(failed.failure, "provider-unavailable")
         assert.equal(strandedTurn(snapshot().requests), undefined, "no Continue/Stop fallback while the retry owns recovery")
@@ -70,6 +73,7 @@ export async function providerOutageControls(root: string): Promise<void> {
           await (outcome === "restart" ? world.restart() : world.crashed())
           assert.equal(snapshot().requests.find(request => request.id === continuation.id)?.retry?.at, at, "same durable retry after restart")
           assert.equal(signInPause(snapshot().requests), undefined)
+          assert.deepEqual(snapshot().requests.find(request => request.id === cut.request)?.failureEvidence, failureEvidence, "secret-free verdict survives restart")
         }
         if (outcome === "stop" || outcome === "close") {
           await (outcome === "stop" ? world.live.cancel(id) : world.live.close(id))
@@ -80,7 +84,7 @@ export async function providerOutageControls(root: string): Promise<void> {
           assert.notEqual(snapshot().requests.find(request => request.id === later.request)?.status, "completed")
           continue
         }
-        if (outcome === "recover") world.endWith(id, { fail: error })
+        if (outcome === "recover") world.endWith(id, { fail: error, failureEvidence })
         world.live.wakeDue(at + 1)
         if (outcome === "recover") {
           const previous = continuation
@@ -101,5 +105,5 @@ export async function providerOutageControls(root: string): Promise<void> {
       }
     }
   }
-  console.log("provider outage controls: false-auth edge/service failure, pending messages, growing backoff, restart/crash, Stop and Close passed")
+  console.log("provider outage controls: credential-backed edge/service failure, pending messages, growing backoff, restart/crash, Stop and Close passed")
 }

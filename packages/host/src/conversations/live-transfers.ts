@@ -14,7 +14,7 @@ import type {
 import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
-import { classifyStartFailure } from "../contracts/provider-failure.js"
+import { classifyStartFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
 import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { arriving, departing } from "../contracts/request-hold.js"
 import { SessionHeldError } from "../threads/index.js"
@@ -795,9 +795,10 @@ export class LiveTransfers {
           error: errorMessage({ error }),
         })
         const words = errorMessage({ error })
-        const failure = classifyStartFailure(words, reconnect)
+        const evidence = failureEvidenceOf({ error })
+        const failure = classifyStartFailure(words, reconnect, evidence)
         // A cause that clears by itself: the transfer stays queued and goes again at its time (`wakeDue`), once.
-        const cause = transientCause(words, failure, error instanceof SessionBusyError || error instanceof SessionHeldError)
+        const cause = transientCause(words, failure, error instanceof SessionBusyError || error instanceof SessionHeldError, evidence)
         const retry = cause && nextRetry(transfer.retry, cause, words, Date.now())
         try {
           if (retry) {

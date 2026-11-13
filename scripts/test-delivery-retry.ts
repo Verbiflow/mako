@@ -44,7 +44,6 @@ async function until(what: string, done: () => boolean, timeoutMs = 8_000): Prom
 const CAUSES: { cause: RetryCause; error: string }[] = [
   { cause: "rate-limited", error: "[unavailable] Server at capacity" },
   { cause: "provider-unavailable", error: "503 Service Unavailable" },
-  { cause: "provider-unavailable", error: "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare" },
   { cause: "provider-unavailable", error: "Failed to authenticate. API Error: 503 Service Unavailable" },
   { cause: "network", error: "fetch failed" },
   { cause: "launch-stalled", error: "The agent produced no output for 60 s during startup" },

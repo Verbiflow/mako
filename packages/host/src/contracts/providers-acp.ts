@@ -1,3 +1,4 @@
+import type { ProviderFailureEvidence } from "./provider-failure-evidence.js"
 import type { ApprovalOrigin } from "./approval-response.js"
 import type { AccessEnforcement, AccessTier } from "./access.js"
 
@@ -200,6 +201,8 @@ export interface LiveSessionState {
    */
   lastStop?: string
   error?: string
+  /** Secret-free provider-boundary evidence for this error; cleared before the next turn. */
+  failureEvidence?: ProviderFailureEvidence
   /**
    * Background commands the provider's process still runs after its turn
    * ended, as the provider reports them. They die with that process, so

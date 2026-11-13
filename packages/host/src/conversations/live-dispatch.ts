@@ -13,7 +13,7 @@ import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence
 import { transientCause, waitsAgain } from "../contracts/delivery-retry.js"
 import { nextInLine } from "../contracts/request-hold.js"
 import { ASK_EVERY_MS, DIGEST_WAITS, WAKES_PER_MINUTE } from "../contracts/children.js"
-import { classifyProviderFailure } from "../contracts/provider-failure.js"
+import { classifyProviderFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
 import { SessionBusyError } from "../contracts/session-hold.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { checkoutAccount, pendingInterruption, TurnSteps } from "./interrupted-turn.js"
@@ -540,7 +540,9 @@ export class LiveDispatch {
           return
         }
         // The harness refused it unsent for a cause that clears by itself: it waits and goes again, never a failure.
-        const cause = refused ? transientCause(errorMessage({ error }), classifyProviderFailure(errorMessage({ error })).kind, error instanceof SessionBusyError) : undefined
+        const failureEvidence = failureEvidenceOf({ error })
+        const failure = classifyProviderFailure(errorMessage({ error }), undefined, failureEvidence).kind
+        const cause = refused ? transientCause(errorMessage({ error }), failure, error instanceof SessionBusyError, failureEvidence) : undefined
         const waits = refused ? waitsAgain(target, cause, errorMessage({ error }), Date.now()) : undefined
         const retry = waits?.retry
         if (waits) {
@@ -567,7 +569,8 @@ export class LiveDispatch {
                   ...candidate,
                   status: "failed",
                   error: errorMessage({ error }),
-                  failure: error instanceof ExecutionAccountChanged ? undefined : classifyProviderFailure(errorMessage({ error })).kind,
+                  failureEvidence,
+                  failure: error instanceof ExecutionAccountChanged ? undefined : failure,
                 }
               : candidate
           ),

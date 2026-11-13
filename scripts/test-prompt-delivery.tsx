@@ -490,13 +490,14 @@ console.log("PASS: native coverage reaches renderer through snapshot and coverag
 }
 console.log("PASS: a message waiting for this Mac to hear its account is the one being sent, and says so once it's a wait")
 
-// The same Cloudflare result used by the scratch host is a visible automatic wait, with no sign-in or Resume action.
+// The same gateway result used by the scratch host is a visible automatic wait, with no sign-in or Resume action.
 {
   const outageId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-  const error = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"
-  assert.equal(classifyProviderFailure(error).kind, "provider-unavailable")
+  const error = "Failed to authenticate. API Error: 403 <html><title>Temporary access check</title></html>"
+  const failureEvidence = { kind: "provider-unavailable", source: "credential-current" } as const
+  assert.equal(classifyProviderFailure(error, undefined, failureEvidence).kind, "provider-unavailable")
   const retry = nextRetry(undefined, "provider-unavailable", error, Date.now())!
-  const failed: LiveRequest = { ...request, status: "failed", failure: "provider-unavailable", error, retry }
+  const failed: LiveRequest = { ...request, status: "failed", failure: "provider-unavailable", failureEvidence, error, retry }
   const continuation: LiveRequest = { ...second, status: "held", text: continueTurnPrompt("connection-lost", "mako"), retry, continues: { requestId: failed.id, reason: "connection-lost", auto: true } }
   acpStore.set({ activeKey: outageId })
   applyLiveSnapshot({ ...snapshot, revision: 1, session: { ...snapshot.session, id: outageId }, requests: [failed, continuation] })
@@ -508,4 +509,4 @@ console.log("PASS: a message waiting for this Mac to hear its account is the one
   assert.match(ended, /Continues by itself/)
   assert.doesNotMatch(ended, /data-recovery-primary|Sign in|Continue turn/)
 }
-console.log("PASS: a Cloudflare outage shows its automatic retry time and reason, without a sign-in or Resume button")
+console.log("PASS: a gateway outage shows its automatic retry time and reason, without a sign-in or Resume button")

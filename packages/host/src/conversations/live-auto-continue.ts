@@ -180,7 +180,7 @@ export class LiveAutoContinue {
     if (failed?.status !== "failed" || this.access.admission.closed) return
     // A turn a Stop latched isn't picked up again by itself (`LiveRequest.pause`).
     if (failed.pause === "stop") return
-    const cause = transientCause(failed.error ?? "", failed.failure ?? "unknown", false)
+    const cause = transientCause(failed.error ?? "", failed.failure ?? "unknown", false, failed.failureEvidence)
     // Only a turn its harness ran is continued: one it never took has nothing to pick up. A digest no model answered is
     // the exception, whatever ended it: it stays until one does.
     const ran = failed.nativeRun !== undefined || failed.nativeDelivery?.evidence.kind === "accepted"

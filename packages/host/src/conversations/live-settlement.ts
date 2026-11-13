@@ -31,6 +31,7 @@ export function settleRequest(request: LiveRequest, session: LiveSessionState, e
       : request.nativeDelivery,
     status,
     error: session.error,
+    failureEvidence: session.failureEvidence,
     nativeRun:
       request.nativeRun && session.nativeForkId
         ? { ...request.nativeRun, forkId: session.nativeForkId }
@@ -41,9 +42,9 @@ export function settleRequest(request: LiveRequest, session: LiveSessionState, e
     // continuable rather than one to re-send; the failure kind is still
     // recorded so the panel can say what ended it.
     settled.interruption = { reason: dropped, at: Date.now() }
-    settled.failure = dropped === "connection-lost" ? "network" : classifyProviderFailure(session.error).kind
+    settled.failure = dropped === "connection-lost" ? "network" : classifyProviderFailure(session.error, undefined, session.failureEvidence).kind
   } else if (status === "interrupted") settled.interruption = { reason, at: Date.now(), ...work?.length && { stopped: work } }
-  if (status === "failed") settled.failure = classifyProviderFailure(session.error).kind
+  if (status === "failed") settled.failure = classifyProviderFailure(session.error, undefined, session.failureEvidence).kind
   const spend = measuredSpend(request.usageFrom, session)
   if (spend) settled.spend = spend
   return settled
@@ -129,9 +130,10 @@ function continuableInterruption(request: LiveRequest, session: LiveSessionState
   if (session.status === "closed" || session.lastStop === RETRIES_EXHAUSTED_STOP) return undefined
   if (session.lastStop === CONNECTION_LOST_STOP) return "connection-lost"
   if (session.status === "ready" || request.nativeDelivery?.evidence.kind !== "accepted") return undefined
-  const failure = classifyProviderFailure(session.error).kind
+  const failure = classifyProviderFailure(session.error, undefined, session.failureEvidence).kind
   // A process that quit on a sign-out would quit again; it waits for the user.
   if (failure === "auth") return "signed-out"
+  if (session.failureEvidence?.kind === "provider-unavailable") return undefined
   if (session.connection === "disconnected") return "provider-exited"
   return failure === "network" ? "connection-lost" : undefined
 }
