@@ -56,7 +56,7 @@ ${JSON.stringify({
       changes: { files: pull.files, additions: pull.additions, deletions: pull.deletions },
       mergeable: pull.mergeable,
       reviewDecision: pull.reviewDecision,
-      checks: { total: checks.total, passed: checks.passed, running: checks.running, failed: checks.failed },
+      checks: { total: checks.total, passed: checks.passed, running: checks.running, failed: checks.failed, cancelled: checks.cancelled },
       failing,
     }, null, 2)}
 
