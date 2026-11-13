@@ -153,6 +153,8 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
 
 interface RawCheck {
   name?: string
+  /** The workflow its run is a job of: two workflows may name a job alike. */
+  workflowName?: string
   context?: string
   state?: string
   conclusion?: string
@@ -215,6 +217,7 @@ function parseRawCheck(value: JsonValue): RawCheck | null {
   if (!isJsonObject(value)) return null
   return {
     name: stringValue(value.name),
+    workflowName: stringValue(value.workflowName),
     context: stringValue(value.context),
     state: stringValue(value.state),
     conclusion: stringValue(value.conclusion),
@@ -318,6 +321,29 @@ function parseJsonArray<TResult>(
  * downstream of here sees one shape, because "is CI green" should not require
  * the reader to know which system a repo happens to use.
  */
+/**
+ * A check's runs less those cancelled because another replaced them: a push twice or a retarget runs the same head
+ * again and GitHub cancels the older run, which failed nothing. A cancelled run goes when another run of the same check
+ * (its workflow and name) didn't end cancelled, or when a later cancelled one did; a lone cancelled run stays, and says
+ * so (`toCheck`). Every other run stays as GitHub lists it: gh's rollup doesn't say which event started a run, so a
+ * workflow run on both push and pull_request reads as two runs of one check, and neither's outcome may hide the other's.
+ */
+export function withoutSuperseded<Check extends { name?: string; workflowName?: string; context?: string; conclusion?: string; startedAt?: string; completedAt?: string }>(checks: readonly Check[]): Check[] {
+  const key = (check: Check) => `${check.workflowName ?? ""}\0${check.name ?? check.context ?? ""}`
+  const cancelled = (check: Check) => check.conclusion?.toUpperCase() === "CANCELLED"
+  const at = (check: Check) => timeOf(check.startedAt ?? check.completedAt) ?? Number.NEGATIVE_INFINITY
+  const groups = new Map<string, Check[]>()
+  for (const check of checks) groups.set(key(check), [...(groups.get(key(check)) ?? []), check])
+  const kept = new Set<Check>()
+  for (const runs of groups.values()) {
+    const others = runs.filter((run) => !cancelled(run))
+    // Of cancelled runs alone, the latest started (a tie, the one listed later) says the check's cancelled.
+    const latest = runs.reduce<Check | undefined>((held, run) => (cancelled(run) && (!held || at(run) >= at(held)) ? run : held), undefined)
+    for (const run of others.length ? others : latest ? [latest] : []) kept.add(run)
+  }
+  return checks.filter((check) => kept.has(check))
+}
+
 function toCheck(raw: RawCheck): CheckSummary {
   const name = raw.name ?? raw.context ?? "check"
   const url = raw.detailsUrl ?? raw.targetUrl
@@ -335,14 +361,11 @@ function toCheck(raw: RawCheck): CheckSummary {
   if (verdict === "SUCCESS" || verdict === "NEUTRAL" || verdict === "SKIPPED") {
     return { name, state: "passed", url }
   }
-  if (
-    verdict === "FAILURE" ||
-    verdict === "ERROR" ||
-    verdict === "TIMED_OUT" ||
-    verdict === "CANCELLED"
-  ) {
+  if (verdict === "FAILURE" || verdict === "ERROR" || verdict === "TIMED_OUT") {
     return { name, state: "failed", url }
   }
+  // A cancelled run nothing replaced (`withoutSuperseded` drops one that was): it didn't fail, and didn't pass.
+  if (verdict === "CANCELLED") return { name, state: "cancelled", url }
   return { name, state: "unknown", url }
 }
 
@@ -392,7 +415,7 @@ function toPull(raw: RawPull): PullRequest {
             : "none",
     author: raw.author?.login,
     updatedAt: raw.updatedAt ?? raw.createdAt,
-    checks: (raw.statusCheckRollup ?? []).map(toCheck),
+    checks: withoutSuperseded(raw.statusCheckRollup ?? []).map(toCheck),
     reviews: toReviews(raw.latestReviews),
   }
 }
@@ -457,7 +480,7 @@ export async function readPull(target: PullTarget, runner: GitHubRunner = gh): P
   const state = stringValue(value.state)
   const url = stringValue(value.url)
   if (!state || !url) return null
-  const checks = parseJsonArray(value.statusCheckRollup, parseRawCheck) ?? []
+  const checks = withoutSuperseded(parseJsonArray(value.statusCheckRollup, parseRawCheck) ?? [])
   const reviews = parseJsonArray(value.latestReviews, parseRawReview) ?? []
   const author = parseOptionalUser(value.author)?.login
   const head = stringValue(value.headRefOid)
@@ -568,7 +591,7 @@ export async function listBranchPulls(cwd: string): Promise<WorktreeBranchPull[]
         const head = stringValue(entry.headRefOid)
         const state = stringValue(entry.state)
         if (number === undefined || title === undefined || url === undefined || !branch || !head || !state) continue
-        const checks = (parseJsonArray(entry.statusCheckRollup, parseRawCheck) ?? []).map(toCheck)
+        const checks = withoutSuperseded(parseJsonArray(entry.statusCheckRollup, parseRawCheck) ?? []).map(toCheck)
         pulls.push({
           number,
           title,
@@ -578,7 +601,8 @@ export async function listBranchPulls(cwd: string): Promise<WorktreeBranchPull[]
           state: state === "MERGED" ? "merged" : state === "CLOSED" ? "closed" : booleanValue(entry.isDraft) ? "draft" : "open",
           checks: checks.length === 0
             ? null
-            : checks.some((check) => check.state === "failed")
+            // A lone cancelled check didn't pass either: the list's mark has no word of its own for it.
+            : checks.some((check) => check.state === "failed" || check.state === "cancelled")
               ? "failed"
               : checks.some((check) => check.state === "running")
                 ? "running"
@@ -695,14 +719,19 @@ export interface FailedRun {
 export async function failedRuns(cwd: string, branch: string, commit: string): Promise<FailedRun[]> {
   const runs = await ghJson(cwd, ["run", "list", "--branch", branch, "--limit", "30", "--json", "databaseId,headSha,conclusion,workflowName,url"], (value) => {
     if (!Array.isArray(value)) return null
+    const runs = value.filter(isJsonObject).filter((entry) => stringValue(entry.headSha) === commit)
+    // A run cancelled because another of its workflow ran this commit again failed nothing: its checks say so too
+    // (`withoutSuperseded`). gh lists runs newest first, so of cancelled runs alone the first is the latest.
+    const replaced = (entry: JsonObject, index: number) =>
+      stringValue(entry.conclusion) === "cancelled" &&
+      runs.some((other, at) => other !== entry && stringValue(other.workflowName) === stringValue(entry.workflowName) && (stringValue(other.conclusion) !== "cancelled" || at < index))
     const failed: FailedRun[] = []
-    for (const entry of value) {
-      if (!isJsonObject(entry) || stringValue(entry.headSha) !== commit) continue
+    runs.forEach((entry, index) => {
       const conclusion = stringValue(entry.conclusion)
       const id = numberValue(entry.databaseId)
-      if (id === undefined || !conclusion || !["failure", "timed_out", "cancelled", "startup_failure"].includes(conclusion)) continue
+      if (id === undefined || !conclusion || !["failure", "timed_out", "cancelled", "startup_failure"].includes(conclusion) || replaced(entry, index)) return
       failed.push({ id, workflow: stringValue(entry.workflowName) ?? "workflow", url: stringValue(entry.url) ?? "" })
-    }
+    })
     return failed
   })
   return runs ?? []
