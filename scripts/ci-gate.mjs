@@ -248,6 +248,9 @@ const MAC_PARTS = [
   /scripts\/test-mcp\.ts\b/,
   // Reads the Mac's document windows ("2 document windows").
   /scripts\/test-computer-tools\.ts\b/,
+  // Holds Git's executable to the first on PATH, resolved once, as `@mako/git` resolves it only on a Mac: elsewhere it
+  // runs `git` by PATH at each spawn, so its older-Git case can't stand in a Git there (#636's test).
+  /scripts\/test-worktree-writes\.ts\b/,
 ]
 
 /** A step not yet measured. */
