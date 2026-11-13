@@ -251,6 +251,8 @@ const MAC_PARTS = [
   // Holds Git's executable to the first on PATH, resolved once, as `@mako/git` resolves it only on a Mac: elsewhere it
   // runs `git` by PATH at each spawn, so its older-Git case can't stand in a Git there (#636's test).
   /scripts\/test-worktree-writes\.ts\b/,
+  // Starts the host as the packaged Mac app does, through Electron.app's own binary.
+  /scripts\/test-host-exit-hold\.mjs\b/,
 ]
 
 /** A step not yet measured. */
@@ -271,6 +273,17 @@ const INSTALL = {
   // Recording reads ffmpeg and ffprobe on PATH; the runner's image has neither.
   ffmpeg: process.platform === "darwin" ? "command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg" : "command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg)",
 }
+
+/**
+ * The parts that measure the event loop, which run with nothing beside them in their shard: each holds a loop to
+ * bounds it measures in the same run (a slice against the whole done at once), and a second lane on a 2-vCPU runner
+ * puts its own work into one side of that comparison. test-attribution-holds once read 130 ms against its 117 ms, where
+ * it reads 11 to 30 ms alone (#635).
+ */
+const ALONE = [
+  /scripts\/test-(app-overview-reads|attribution-holds|event-loop|git-helper|host-probes|idle-app-marks|probe-child-edges|resume-holds|trace-history-holds)\.ts\b/,
+  /scripts\/test-terminal-backpressure\.mjs\b/,
+]
 
 /** Evidence a failed step leaves, by its npm script, run after it: its own exit stays the result. */
 const ON_FAILURE = {
@@ -430,6 +443,21 @@ function build(command) {
   return building.get(command)
 }
 
+/** Lanes share the shard; a part `ALONE` names waits until no other part runs, and none starts while it does. */
+let running = 0
+let alone = false
+const turns = []
+async function enter(solo) {
+  while (alone || (solo && running > 0)) await new Promise((next) => turns.push(next))
+  running += 1
+  alone = solo
+}
+function leave() {
+  running -= 1
+  alone = false
+  for (const next of turns.splice(0)) next()
+}
+
 const results = []
 async function lane(steps) {
   for (const { command, builds, script } of steps) {
@@ -438,7 +466,12 @@ async function lane(steps) {
     for (const each of builds) if ((code = await build(each)) !== 0) break
     let output = ""
     const write = (text) => { output += text }
-    if (code === 0) code = await runSuite("bash", ["-c", command], { limitMs: STEP_MS, quietMs: QUIET_MS, write })
+    await enter(ALONE.some((rule) => rule.test(command)))
+    try {
+      if (code === 0) code = await runSuite("bash", ["-c", command], { limitMs: STEP_MS, quietMs: QUIET_MS, write })
+    } finally {
+      leave()
+    }
     const evidence = code !== 0 ? ON_FAILURE[script] : undefined
     if (evidence) await runSuite("bash", ["-c", evidence], { limitMs: 3 * 60_000, quietMs: 3 * 60_000, write })
     const seconds = Math.round((Date.now() - began) / 1000)
