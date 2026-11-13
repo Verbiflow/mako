@@ -1,11 +1,12 @@
 import parcel, { type AsyncSubscription } from "@parcel/watcher"
-import { execFile } from "node:child_process"
+import { execFile, type ChildProcess } from "node:child_process"
+import { z } from "zod"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { OTHER_APPS_DATA } from "../base/other-apps-data.js"
 import { membersOnly, parseTable, PS_ARGS, type RunLeader } from "./process-table.js"
-import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, WatcherRequestSchema, type CanaryTest, type DropReason, type HistoryMark, type WatcherReply } from "../contracts/watcher-child.js"
+import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, WatcherRequestSchema, type CanaryTest, type DropReason, type HistoryMark, type WatcherReply, type WatcherRequest } from "../contracts/watcher-child.js"
 
 /*
  * @parcel/watcher's FSEvents backend races its own callback thread on
@@ -26,6 +27,14 @@ process.on("message", (raw) => {
   const request = WatcherRequestSchema.safeParse(raw)
   if (!request.success) return
   const { id } = request.data
+  if (request.data.t === "run") {
+    runProbe(request.data)
+    return
+  }
+  if (request.data.t === "cancel") {
+    probes.get(id)?.kill()
+    return
+  }
   if (request.data.t === "table" || request.data.t === "members") {
     const asked = request.data
     void (asked.t === "table" ? readTable().then((text) => reply({ t: "table", id, text })) : readMembers(id, asked.runs, asked.self))
@@ -437,6 +446,32 @@ function readTable(): Promise<string> {
       else done(stdout)
     })
   })
+}
+
+/** Programs a probe may run: they only read the machine. The host asks only for these (`isProbe`). */
+const PROBE_PROGRAMS = new Set(["ps", "pgrep", "lsof", "sysctl", "footprint", "vm_stat", "pmset", "notifyutil", "nice"])
+/** Probes under way, by the host's id, so a `cancel` ends one. */
+const probes = new Map<number, ChildProcess>()
+
+/** A probe, answered whatever becomes of it: its output, its exit, and why it failed when it did. */
+function runProbe(asked: Extract<WatcherRequest, { t: "run" }>): void {
+  const { id, file, args } = asked
+  const program = basename(file)
+  const lowered = program === "nice" ? basename(args[2] ?? "") : program
+  if (!PROBE_PROGRAMS.has(program) || lowered === "nice" || !PROBE_PROGRAMS.has(lowered)) {
+    reply({ t: "failed", id, message: `Not a probe: ${file}` })
+    return
+  }
+  const child = execFile(file, args, { env: asked.env ?? process.env, cwd: asked.cwd, timeout: asked.timeout ?? 0, maxBuffer: asked.maxBuffer ?? 1024 * 1024, encoding: "utf8" }, (error, stdout, stderr) => {
+    probes.delete(id)
+    // An exit code is a number; a string code (ENOENT, the output past its limit) is a failure to run.
+    const exited = z.number().int().safeParse(error?.code)
+    const named = z.string().safeParse(error?.code)
+    const exit = !error ? 0 : exited.success ? exited.data : null
+    const failure = error && exit === null ? { message: error.message, ...(named.success && { code: named.data }) } : undefined
+    reply({ t: "ran", id, stdout, stderr, code: exit, signal: error?.signal ?? null, killed: Boolean(error?.killed), ...(failure && { failure }) })
+  })
+  probes.set(id, child)
 }
 
 /** Only `runs`' processes of the table, parsed and matched here, off the host's loop. */

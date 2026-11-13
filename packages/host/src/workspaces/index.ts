@@ -28,7 +28,7 @@ export { RecipeAccounts } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { beginTrace, TraceRefresh } from "./app-probe.js"
-import { childHistory, childProcessReader, type DaemonRestarts } from "./watch-backend.js"
+import { childHistory, childProcessReader, type DaemonRestarts, type ProcessReader } from "./watch-backend.js"
 import type { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
@@ -81,6 +81,7 @@ export { WorkspaceSnapshots, type CheckpointComparison } from "./snapshots.js"
 export { applyThreadEnvironment, CLOUD_MACHINE_INSTRUCTIONS, threadEnvironmentInstructions } from "./thread-environment.js"
 export { childBackend, probeDelivery, type FileHistory } from "./watch-backend.js"
 export { administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd } from "./file-events-service.js"
+export { childProcessReader, type ProcessReader } from "./watch-backend.js"
 export { WatchReadings } from "./watch-readings.js"
 export { watchTree } from "./tree-watcher.js"
 export { watchOutsideGitDir } from "./git-dir-watch.js"
@@ -143,6 +144,8 @@ export interface WorkspacesDeps {
   watchReadings?: WatchReadings
   /** When fseventsd started over, so a read of history across it is reported lost. */
   daemonRestarts?: DaemonRestarts
+  /** The host's probe child (`childProcessReader`), which reads the apps' processes too; one of its own without it. */
+  probes?: ProcessReader
 }
 
 export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
@@ -175,7 +178,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     return found ? { id: found.id, title: found.title || "Untitled Thread" } : undefined
   }
   // Starts its child at the first ask.
-  const reader = childProcessReader()
+  const reader = deps.probes ?? childProcessReader()
   const processes = shared
     ? new ThreadProcesses({
         root: join(shared, "thread-environments"),

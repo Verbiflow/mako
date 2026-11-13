@@ -1,4 +1,4 @@
-import { hostCommand } from "./host-command.js"
+import { hostProbe } from "./host-command.js"
 import { readFile } from "node:fs/promises"
 import { availableParallelism, cpus, loadavg } from "node:os"
 import { onMac } from "./platform.js"
@@ -12,7 +12,6 @@ import { onMac } from "./platform.js"
  * updater's performance check).
  */
 
-const run = hostCommand
 
 export type MemoryPressure = "normal" | "warning" | "critical"
 /** macOS's thermal pressure: above nominal, the system slows the cores to cool down. */
@@ -24,7 +23,7 @@ export type ThermalPressure = "nominal" | "moderate" | "heavy" | "critical"
  */
 export async function memoryPressure(): Promise<MemoryPressure> {
   if (onMac()) {
-    const level = await run("sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]).then(({ stdout }) => Number(stdout.trim()), () => 1)
+    const level = await hostProbe("sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]).then(({ stdout }) => Number(stdout.trim()), () => 1)
     return level >= 4 ? "critical" : level >= 2 ? "warning" : "normal"
   }
   const text = await readFile("/proc/pressure/memory", "utf8").catch(() => "")
@@ -35,7 +34,7 @@ export async function memoryPressure(): Promise<MemoryPressure> {
 /** macOS's thermal pressure, as `OSThermalNotification` levels it; undefined where it can't be read. */
 export async function thermalPressure(): Promise<ThermalPressure | undefined> {
   if (!onMac()) return undefined
-  const level = await run("notifyutil", ["-g", "com.apple.system.thermalpressurelevel"])
+  const level = await hostProbe("notifyutil", ["-g", "com.apple.system.thermalpressurelevel"])
     .then(({ stdout }) => Number(stdout.trim().split(/\s+/).at(-1)), () => Number.NaN)
   if (!Number.isInteger(level) || level < 0) return undefined
   return level === 0 ? "nominal" : level === 1 ? "moderate" : level === 2 ? "heavy" : "critical"

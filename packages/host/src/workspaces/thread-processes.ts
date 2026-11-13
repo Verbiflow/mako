@@ -1,4 +1,4 @@
-import { hostCommand, hostSpawn } from "../base/host-command.js"
+import { hostSpawn, hostProbe } from "../base/host-command.js"
 import { hostStopping } from "../base/host-stopping.js"
 import { setTimeout as wait } from "node:timers/promises"
 import { spawn } from "node:child_process"
@@ -17,7 +17,6 @@ import { onLinux, onMac } from "../base/platform.js"
 import { childInput } from "@mako/sessions/child-input"
 import { parseTable, PS_ARGS, TableIndex, type Row, type RunLeader } from "./process-table.js"
 
-const run = hostCommand
 
 /** Stop asks nicely this long before it kills. */
 /**
@@ -1436,7 +1435,7 @@ async function physicalFootprints(pids: number[]): Promise<Map<number, { bytes: 
   const queue = [...pids]
   const readOne = async (pid: number) => {
     const [command, args] = belowAgents("/usr/bin/footprint", ["--noCategories", "-f", "bytes", "-p", String(pid)])
-    const stdout = await run(command, args, { timeout: FOOTPRINT_MS }).then((result) => result.stdout, () => "")
+    const stdout = await hostProbe(command, args, { timeout: FOOTPRINT_MS }).then((result) => result.stdout, () => "")
     const bytes = Number(/\]: [^\n]*Footprint: (\d+) B/.exec(stdout)?.[1] ?? Number.NaN)
     const peak = Number(/phys_footprint_peak: (\d+) B/.exec(stdout)?.[1] ?? Number.NaN)
     if (Number.isFinite(bytes)) found.set(pid, { bytes, peakBytes: Number.isFinite(peak) ? Math.max(peak, bytes) : bytes })
@@ -1450,7 +1449,7 @@ async function physicalFootprints(pids: number[]): Promise<Map<number, { bytes: 
 /** Memory the system could give apps now, and all it has. */
 export async function freeMemory(): Promise<{ freeBytes: number; totalBytes: number } | undefined> {
   if (onMac()) {
-    const values = await run("sysctl", ["-n", "kern.memorystatus_level", "hw.memsize"]).then(({ stdout }) => stdout.trim().split("\n").map(Number), () => [])
+    const values = await hostProbe("sysctl", ["-n", "kern.memorystatus_level", "hw.memsize"]).then(({ stdout }) => stdout.trim().split("\n").map(Number), () => [])
     const [level, total] = values
     if (level === undefined || total === undefined || !Number.isFinite(level) || !Number.isFinite(total)) return undefined
     return { freeBytes: Math.round((total * level) / 100), totalBytes: total }
@@ -1475,7 +1474,7 @@ const ifMissing = <T>(value: T) => (error: NodeJS.ErrnoException): T => {
 }
 
 async function processTable(): Promise<Row[]> {
-  const { stdout } = await run("ps", [...PS_ARGS], {
+  const { stdout } = await hostProbe("ps", [...PS_ARGS], {
     env: { ...process.env, LC_ALL: "C" },
     maxBuffer: PROCESS_TABLE_BYTES,
   })
@@ -1537,7 +1536,7 @@ async function stopTree(record: Run, graceMs: number, owned: Set<string>, more?:
 async function listeningPids(port: number): Promise<number[]> {
   let stdout: string
   try {
-    ({ stdout } = await run("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"], {
+    ({ stdout } = await hostProbe("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"], {
       env: { ...process.env, PATH: `${process.env.PATH ?? ""}:/usr/sbin:/usr/bin:/sbin:/bin` },
     }))
   } catch (error) {
@@ -1566,7 +1565,7 @@ async function runMarks(rows: Row[], mark = RUN_MARK): Promise<Map<number, strin
     return found
   }
   // ps exits 1 when one of the pids has just ended; what it printed of the others still holds.
-  const { stdout } = await run("ps", ["-wwE", "-o", "pid=,command=", "-p", rows.map((row) => row.pid).join(",")], {
+  const { stdout } = await hostProbe("ps", ["-wwE", "-o", "pid=,command=", "-p", rows.map((row) => row.pid).join(",")], {
     env: { ...process.env, LC_ALL: "C" },
     maxBuffer: PROCESS_TABLE_BYTES,
   }).catch((error) => z.object({ stdout: z.string() }).catch({ stdout: "" }).parse(error))
