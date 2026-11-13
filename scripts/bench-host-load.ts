@@ -25,6 +25,10 @@ import { scriptedModel } from "./scripted-model.ts"
  * half minute and as focus moves between them, the apps' marks once, then as the host pushes them, and each followed
  * folder's app every half minute).
  * Meanwhile a prober of its own asks `/health` every 20 ms and reads a list every 100 ms, each timed to its answer.
+ * These deliberate 50 Hz health and 10 Hz worktree stress probes include response construction, encoding and
+ * writing in the host's profile; they are not the renderer's polling rates or a measure of idle production RPC cost.
+ * `--tool-heavy --send --seconds 120` adds 13 scripted turns of 64 file patches (832 calls), including turn-end
+ * attribution. Completion reads only `live-state`: a status check must not serialize the growing transcript.
  *
  * A shared runner's speed varies by several times between runs, so the limits are calibrated in the same run: a
  * yardstick process beside the host, under the same contention and running none of Mako's code
@@ -60,6 +64,8 @@ const { values } = parseArgs({
     out: { type: "string" },
     keep: { type: "boolean", default: false },
     send: { type: "boolean", default: false },
+    "tool-heavy": { type: "boolean", default: false },
+    "model-port": { type: "string" },
     "send-quiet": { type: "boolean", default: false },
     fins: { type: "string", default: "0" },
     "node-arg": { type: "string", multiple: true },
@@ -97,6 +103,9 @@ const HEALTH_FLOOR_MS = 150
 /** A read does work of its own (a hundred worktrees looked at), so it may take this many health checks' limits. */
 const READ_TIMES = 10
 
+if (values["tool-heavy"] && (!values.send || Number(values.fins) > 0))
+  throw new Error("--tool-heavy requires --send and no --fins")
+
 const root = realpathSync(values.root ? (mkdirSync(values.root, { recursive: true }), values.root) : mkdtempSync(join(tmpdir(), "mako-host-load-")))
 say(`world: ${root}`)
 const began = performance.now()
@@ -124,11 +133,29 @@ const finish = async (code: number) => {
 
 /** With `--send`: when the stand-in model first heard each `BENCH-S<n>` message, by its tag. */
 const heardAt = new Map<string, number>()
+const completedTools = new Set<string>()
+const toolSteps = new Map<string, number>()
+const TOOL_CALLS = 64
+const TOOL_TURNS = 13
+const LiveStateStatus = z.object({ status: z.string() }).loose()
 /** With `--fins <n>` (and `--send`): the Apex the sends go to starts this many Fins, each a Codex turn, before the probe. */
 const finCount = Number(values.fins)
 const model = values.send || finCount > 0 ? await scriptedModel({
+  ...values["model-port"] && { port: z.coerce.number().int().min(1).max(65535).parse(values["model-port"]) },
   reply: (heard) => {
     for (const match of heard.matchAll(/BENCH-([SF]\d+)/g)) if (!heardAt.has(match[1]!)) heardAt.set(match[1]!, performance.now())
+    if (values["tool-heavy"]) {
+      const tag = [...heard.matchAll(/BENCH-(S\d+)/g)].at(-1)?.[1]
+      if (!tag) throw new Error("The tool-heavy turn has no bench tag")
+      const step = toolSteps.get(tag) ?? 0
+      if (step < TOOL_CALLS) {
+        toolSteps.set(tag, step + 1)
+        const path = `app/attribution-bench-${tag}-${step}.ts`
+        const lines = Array.from({ length: 128 }, (_, line) => `+export const v${line} = ${step * 128 + line}`).join("\n")
+        return { call: { id: `attribution_${tag}_${step}`, name: "apply_patch", input: `*** Begin Patch\n*** Add File: ${path}\n${lines}\n*** End Patch\n` } }
+      }
+      completedTools.add(tag)
+    }
     return { text: "Done." }
   },
 }) : undefined
@@ -268,8 +295,8 @@ try {
     const churned = (index: number) => world.checkouts[index]!.fin || index < scale.fins.length
     const quietAt = world.checkouts.findLastIndex((_, index) => !churned(index))
     const cwd = world.checkouts[values["send-quiet"] && quietAt >= 0 ? quietAt : 0]!.path
-    await call("mako:live-start", "codex", cwd, { conversationId: conversation, modeId: "access:ask", title: "Host load send", initialRequest: { id: randomUUID(), text: "BENCH-S0 start", attachments: [] } })
-    for (const deadline = Date.now() + 180_000; !heardAt.has("S0"); await delay(100))
+    await call("mako:live-start", "codex", cwd, { conversationId: conversation, modeId: values["tool-heavy"] ? "access:full" : "access:ask", title: "Host load send", initialRequest: { id: randomUUID(), text: "BENCH-S0 start", attachments: [] } })
+    for (const deadline = Date.now() + 180_000; !(values["tool-heavy"] ? completedTools : heardAt).has("S0"); await delay(100))
       if (Date.now() > deadline) throw new Error("the bench's Codex never asked the stand-in model")
     if (finCount > 0) {
       // The person's tree of 2026-11-12: an Apex of many Fins, each of which every batch of the Apex's row reads.
@@ -329,12 +356,21 @@ try {
     say(`heap snapshot ${why}: none written`)
   }
   const sending = (async () => {
-    for (let n = 1; probing && conversation; n += 1) {
+    for (let n = 1; probing && conversation && (!values["tool-heavy"] || n < TOOL_TURNS); n += 1) {
       await delay(3_000)
       const tag = `S${n}`
       const began = performance.now()
       await call("mako:live-prompt", conversation, randomUUID(), `BENCH-${tag} next`, []).catch(() => undefined)
       for (const deadline = Date.now() + 60_000; !heardAt.has(tag) && Date.now() < deadline; ) await delay(10)
+      if (values["tool-heavy"]) {
+        for (const deadline = Date.now() + 90_000; !completedTools.has(tag) && Date.now() < deadline; ) await delay(10)
+        if (!completedTools.has(tag)) throw new Error(`Attribution scripted turn ${tag} did not finish its ${TOOL_CALLS} tool calls`)
+        for (const deadline = Date.now() + 60_000; ; await delay(20)) {
+          const state = LiveStateStatus.parse(await call("mako:live-state", conversation))
+          if (state.status !== "running") break
+          if (Date.now() > deadline) throw new Error(`Attribution turn ${tag} did not settle`)
+        }
+      }
       const heard = heardAt.get(tag)
       sends.push([Date.now(), heard === undefined ? null : Math.round((heard - began) * 10) / 10])
       if (snapshots && snapshotAt.has(n)) await heapSnapshot(snapshots, `after send ${n}`)
@@ -388,6 +424,7 @@ try {
   const unread = unmeasured(memory, sampled)
   const report = {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
+    ...values["tool-heavy"] && { toolWorkload: { callsPerTurn: TOOL_CALLS, requestedTurns: TOOL_TURNS, steps: Object.fromEntries(toolSteps), completed: [...completedTools] } },
     ...answers, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
     nodeArgs, ...idle && { idle }, ...snapshotsTaken.length && { snapshots: snapshotsTaken }, ...rss && { rss }, ...gc && { gc },
     ...profile && {
@@ -405,6 +442,8 @@ try {
   const readLimit = READ_TIMES * healthLimit
   const heldLimit = Math.round(HELD_MS + measured.late.max)
   const failures: string[] = []
+  if (values["tool-heavy"] && (completedTools.size !== TOOL_TURNS || [...toolSteps.values()].some((count) => count !== TOOL_CALLS)))
+    failures.push(`tool-heavy workload incomplete: ${completedTools.size}/${TOOL_TURNS} turns of ${TOOL_CALLS} calls`)
   for (const name of ["health", "reads"] as const) {
     const result = answers[name]
     if (result.failed) failures.push(`${name}: ${result.failed} of ${result.n} failed or passed the probe's timeout`)
