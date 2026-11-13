@@ -138,9 +138,12 @@ async function checkPage({ window, page, shots, base }) {
     if (event.level === "error") errors.push(event.message)
   })
   const evaluate = (code) => page.executeJavaScript(code)
+  // Each look asks for a frame first. The window is hidden, and what the page learns only when it draws, such as the
+  // crew card's IntersectionObserver saying the card is back in view, waits for a frame it may not get. Screenshots
+  // drew it before a step; after a scroll that nothing else draws, a step waited out its 20 s on the runner.
   const until = async (code, what = code) => {
     const deadline = Date.now() + 20_000
-    while (!(await evaluate(code))) {
+    while ((page.invalidate(), !(await evaluate(code)))) {
       if (Date.now() > deadline)
         throw new Error(
           `Timed out waiting for ${what}${errors.length ? `; the page said: ${errors.join(" | ")}` : ""}`
