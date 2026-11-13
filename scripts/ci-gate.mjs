@@ -241,9 +241,6 @@ const MAC_PARTS = [
   /scripts\/test-mcp\.ts\b/,
   // Reads the Mac's document windows ("2 document windows").
   /scripts\/test-computer-tools\.ts\b/,
-  // On Linux, bringing a 2 MB folder into a worktree reported no copy (#635, 2026-11-13): a Linux gap of the host's
-  // own to look into, not this test's; until then it runs where it passes.
-  /scripts\/test-workspace-moves\.ts\b/,
 ]
 
 /** A step not yet measured. */
