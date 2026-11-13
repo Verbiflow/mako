@@ -177,6 +177,14 @@ async function checkPage({ window, page, shots, base }) {
     evaluate(
       `(() => { const probe = ${evidence} ? window.__crewEvidence : undefined; probe?.begin(); try { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true } finally { probe?.post() } })()`
     )
+  // The line brings the card back with a scroll whose event comes a frame later. A transcript still streaming changes in
+  // that frame, and the timeline holding its reader's place then put the old place back over the scroll, the card out
+  // of view again and the line left standing: one run in a dozen on the runner. The click changes the transcript in the
+  // same task, so every run meets that frame.
+  const clickAway = (evidence = false) =>
+    evaluate(
+      `(() => { const probe = ${evidence} ? window.__crewEvidence : undefined; probe?.begin(); try { const node = document.querySelector('[data-crew-away]'); if (!node) return false; node.click(); const turn = document.querySelector('[data-transcript-viewport] [data-exchange]'); turn?.append(document.createElement('span')); return Boolean(turn) } finally { probe?.post() } })()`
+    )
   // The card virtualizes past its own height, so a row off screen isn't in the DOM yet: scroll its own scroller
   // top to bottom, a screenful at a time, collecting every row once, in the order it comes into view (the order
   // it's drawn in, since the virtualizer never renders two rows out of their list's order).
@@ -358,7 +366,7 @@ async function checkPage({ window, page, shots, base }) {
     "[...document.querySelectorAll('[data-sonner-toast]')].forEach((toast) => toast.remove()); true"
   )
   await both("away")
-  assert.equal(await click("[data-crew-away]", true), true, "the crew-away click target exists at dispatch")
+  assert.equal(await clickAway(true), true, "the crew-away click target exists at dispatch, beside a turn that changes")
   await until(
     "!document.querySelector('[data-crew-away]')",
     "the line leaves once Needs you is back in view"
@@ -711,7 +719,7 @@ async function checkPage({ window, page, shots, base }) {
     "the phone's dock still doesn't draw the ask itself"
   )
   await both("phone-away")
-  await click("[data-crew-away]")
+  await clickAway()
   await until(
     "!document.querySelector('[data-crew-away]')",
     "the phone's line leaves once the card is back"

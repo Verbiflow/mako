@@ -898,10 +898,18 @@ export function ConversationTimeline({
         )
       )
         return
-      // A resize can arrive before the scroll event for this frame. Preserve
-      // the reader's unreported movement as well as their place in the media.
-      const movement = !displaced && (userScrolling.current || scrollMotion.current || touching.current)
-        ? node.scrollTop - lastScrollTop.current : 0
+      // A resize can arrive before the scroll event for this frame. Preserve the movement not yet reported as well as
+      // the reader's place in the media. Not the reader's input alone: while an anchor holds, the scroller anchors
+      // nothing itself (`overflow-anchor: none`) and this file reports its own writes as it makes them (`owned`), so a
+      // change it hasn't heard of is a scroll, the reader's or one made for them, such as the crew card's "Fins need you"
+      // line bringing the card back. Counted as layout, the hold put the old point back over it, a frame before that
+      // scroll's event. Left out are what it can't tell apart: the virtualizer's own writes while windowed, and the
+      // browser's clamp at a newly shorter end.
+      const end = Math.max(0, node.scrollHeight - node.clientHeight)
+      const clamped = lastScrollTop.current > end && node.scrollTop === end
+      const unreported = !displaced && !clamped &&
+        (!windowed || userScrolling.current || scrollMotion.current || touching.current)
+      const movement = unreported ? node.scrollTop - lastScrollTop.current : 0
       const moved = movement === 0 ? snapshot : { ...snapshot,
         exchangeOffset: snapshot.exchangeOffset === undefined ? undefined : snapshot.exchangeOffset - movement,
         block: snapshot.block ? { ...snapshot.block, offset: snapshot.block.offset - movement } : undefined }
@@ -923,7 +931,7 @@ export function ConversationTimeline({
       correction.current = owner
       settleCorrection()
     },
-    [owned, endSeek, displaceCorrection, settleCorrection]
+    [owned, endSeek, displaceCorrection, settleCorrection, windowed]
   )
   useLayoutEffect(() => {
     const before = named.current
