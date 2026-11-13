@@ -1,5 +1,5 @@
 import { readFileSync, realpathSync, statSync } from "node:fs"
-import { dirname, isAbsolute, join, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, resolve } from "node:path"
 
 /**
  * How long a write waits for a ref lock another program holds (an agent's own commit or branch, the person's
@@ -123,7 +123,9 @@ function findCommonDir(cwd: string): string {
         const common = readFileSync(join(gitDir, "commondir"), "utf8").trim()
         return isAbsolute(common) ? common : resolve(gitDir, common)
       } catch {
-        return gitDir
+        // A worktree Git is still adding (its `.git` file written, its `commondir` not yet) or taking away: by Git's own
+        // layout its folder `<repository>/.git/worktrees/<name>` is that repository's, so its writes take its turn.
+        return basename(dirname(gitDir)) === "worktrees" ? dirname(dirname(gitDir)) : gitDir
       }
     }
     if (dirname(folder) === folder) return resolve(cwd)
