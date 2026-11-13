@@ -1,3 +1,4 @@
+import { ThreadIdSchema } from "@mako/protocol/ids"
 import { createHash, randomUUID } from "node:crypto"
 import { chmodSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs"
 import { readFile, rm, writeFile } from "node:fs/promises"
@@ -14,13 +15,12 @@ import {
   ReportedCallSchema,
   SessionRefSchema,
   ThreadFileHistorySchema,
-  ThreadIdSchema,
   type ActivityMark,
   type MakoWrite,
   type PathMap,
   type ReportedCall,
   type ThreadFileHistory,
-} from "@mako/protocol"
+} from "@mako/protocol/attribution"
 import { acquireHostLock, type HostLock } from "../base/host-lock.js"
 import { nodePlatform } from "../base/platform.js"
 import type { LostVersion } from "../contracts/thread-changes.js"
@@ -257,6 +257,12 @@ export interface SharedJournalOptions {
   timing?: { retryMs?: number; maxRetryMs?: number; unansweredMs?: number }
   /** For tests: the format this host speaks. */
   format?: string
+  /** Start or find a writing owner elsewhere. This client never takes the lock or opens a writer itself. */
+  startOwner?(privateReason?: string): Promise<string>
+  /** A private writing owner may still serve its own host, on an address other hosts never discover. */
+  privateAddress?: string
+  /** An isolated owner for this host, after its sharing attempt was refused. */
+  privateReason?: string
 }
 
 type HeldLock = Extract<HostLock, { kind: "held" }>
@@ -327,7 +333,7 @@ function tryConnect(address: string): Promise<Socket | null> {
 export class SharedJournal {
   private readonly options: SharedJournalOptions
   private readonly format: string
-  private readonly address: string
+  private address: string
   private current: JournalRole = { kind: "starting" }
   private owned?: OwnedJournal
   private lock?: HeldLock
@@ -348,6 +354,8 @@ export class SharedJournal {
   private electing?: Promise<void>
   private closed = false
   private readonly listeners = new Set<(role: JournalRole) => void>()
+  private readonly followerListeners = new Set<() => void>()
+  private readonly acknowledgements = new Set<() => void>()
 
   readonly writes: JournalWrites
 
@@ -410,8 +418,15 @@ export class SharedJournal {
     mkdirSync(options.folder, { recursive: true, mode: 0o700 })
     sweepCarried(join(options.folder, CARRY_FOLDER), Date.now() - CARRIED_STALE_MS)
     const shared = new SharedJournal(options)
-    await shared.elect()
-    return shared
+    try {
+      if (options.privateReason) await shared.keepOwn(options.privateReason)
+      else await shared.elect()
+      return shared
+    } catch (error) {
+      const [cleanup] = await Promise.allSettled([shared.close()])
+      if (cleanup.status === "rejected") throw new AggregateError([error, cleanup.reason], "The record of changes failed to open and close", { cause: error })
+      throw error
+    }
   }
 
   role(): JournalRole {
@@ -421,6 +436,12 @@ export class SharedJournal {
   onRole(listener: (role: JournalRole) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  /** The metadata a writing child sends back to its host; never an acknowledgement of journal writes. */
+  onFollowers(listener: () => void): () => void {
+    this.followerListeners.add(listener)
+    return () => { this.followerListeners.delete(listener) }
   }
 
   /** The hosts following this one, while it owns the journal. */
@@ -444,9 +465,32 @@ export class SharedJournal {
     }
   }
 
+  /** The messages already sent have been applied. This does not wait for a root's watch or rescan. */
+  applied(): Promise<void> {
+    if (!this.unsent.length) return Promise.resolve()
+    const through = this.sent
+    return new Promise((resolve, reject) => {
+      const finish = (error?: Error) => {
+        clearTimeout(timer)
+        this.acknowledgements.delete(check)
+        if (error) reject(error)
+        else resolve()
+      }
+      const check = () => {
+        if (this.closed || !this.link) finish(new Error("The journal owner left before acknowledging its writes."))
+        else if (!this.unsent.some(message => message.n <= through)) finish()
+      }
+      const timer = setTimeout(() => finish(new Error("The journal owner did not acknowledge its writes before closing.")), 15_000)
+      timer.unref()
+      this.acknowledgements.add(check)
+      check()
+    })
+  }
+
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    for (const check of this.acknowledgements) check()
     for (const call of this.calls.values()) {
       clearTimeout(call.timer)
       call.reject(new Error("Mako is closing."))
@@ -462,7 +506,7 @@ export class SharedJournal {
     await closing
     // The journal is closed before the lock goes, so the next owner never opens it while this one still writes.
     await this.lock?.release()
-    if (onFileSystem(this.address)) rmSync(this.address, { force: true })
+    if (server && onFileSystem(this.address)) rmSync(this.address, { force: true })
   }
 
   private setRole(role: JournalRole): void {
@@ -488,6 +532,11 @@ export class SharedJournal {
         const outcome = await this.follow(socket)
         if (outcome === "following" || this.closed) return
         if (outcome !== "lost") return this.keepOwn(outcome.why)
+        continue
+      }
+      if (this.options.startOwner) {
+        if (Date.now() - began > unanswered) throw new Error("The record of changes' writing owner did not become reachable.")
+        this.address = await this.options.startOwner()
         continue
       }
       const lock = await acquireHostLock(this.options.folder, { purpose: "owner" }).catch((error: Error) => error)
@@ -540,6 +589,7 @@ export class SharedJournal {
     socket.on("error", () => undefined)
     socket.on("close", () => {
       this.connections.delete(connection)
+      for (const listener of this.followerListeners) listener()
       if (connection.host) this.options.log("a follower left", { pid: connection.host.pid, label: connection.host.label })
     })
     readLines(socket, (text) => {
@@ -561,6 +611,7 @@ export class SharedJournal {
         return
       }
       connection.host = message.host
+      for (const listener of this.followerListeners) listener()
       if (this.owned) this.welcome(connection)
       return
     }
@@ -572,6 +623,7 @@ export class SharedJournal {
       if (message.m.kind === "activity" && message.m.mark.record) connection.live.set(message.m.mark.record, Date.now())
       if (message.m.kind === "sessions") connection.placed = new Map(message.m.sessions.map((session) => [session.path, { thread: session.thread, session: session.session }]))
       else this.apply(owned.writes, message.m)
+      if (message.m.kind === "sessions" || message.m.kind === "activity") for (const listener of this.followerListeners) listener()
       connection.applied = message.n
       if (!connection.ackQueued) {
         connection.ackQueued = true
@@ -648,10 +700,11 @@ export class SharedJournal {
         if (!welcomed) return settle("lost")
         if (this.link !== socket) return
         this.link = undefined
+        for (const check of this.acknowledgements) check()
         if (this.closed) return
         this.setRole({ kind: "starting" })
         this.options.log("the owner of the record of changes left; finding the next", { unsent: this.unsent.length })
-        void this.elect()
+        void this.elect().catch((error: Error) => this.options.log("the record of changes' writing owner could not be found", { error: error.message }))
       })
       readLines(socket, (text) => {
         const parsed = parseLine(ToFollowerSchema, text)
@@ -682,6 +735,7 @@ export class SharedJournal {
           settle("following")
         } else if (message.t === "ack") {
           while (this.unsent.length && this.unsent[0]!.n <= message.n) this.unsent.shift()
+          for (const check of this.acknowledgements) check()
         } else this.replied(message)
       })
       send(socket, { t: "hello", format: this.format, host: this.options.host })
@@ -775,6 +829,12 @@ export class SharedJournal {
 
   private async keepOwn(why: string): Promise<void> {
     this.link = undefined
+    if (this.options.startOwner) {
+      this.address = await this.options.startOwner(why)
+      const socket = await tryConnect(this.address)
+      if (!socket || (await this.follow(socket)) !== "following") throw new Error("The private record of changes' writing owner did not answer.")
+      return
+    }
     this.options.log("keeps a record of changes of its own", { why })
     const owned = await this.options.alone(why)
     if (this.closed) {
@@ -782,6 +842,10 @@ export class SharedJournal {
       return
     }
     this.owned = owned
+    if (this.options.privateAddress) {
+      this.address = this.options.privateAddress
+      await this.listen()
+    }
     this.replay((message) => this.apply(owned.writes, message))
     this.setRole({ kind: "private", why })
     for (const call of this.calls.values()) this.run(call)

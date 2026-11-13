@@ -25,6 +25,7 @@ const PROGRAMS = new Map([
   ["conversations/journal-reclaim-worker.ts", "the journal compaction worker (conversations/journal-reclaim.ts)"],
   ["attribution/journal-vacuum-worker.ts", "the record of changes' compaction worker (attribution/journal-vacuum.ts)"],
   ["attribution/journal-reader-worker.ts", "the record of changes' reader worker (attribution/journal-reader.ts)"],
+  ["attribution/writer-main.ts", "the record of changes' writing owner child (attribution/writer-client.ts)"],
   ["attribution/journal-collect-worker.ts", "the record of changes' collection worker (attribution/journal-reader.ts)"],
   ["workspaces/watcher-child-main.ts", "the file watcher's child process (workspaces/watcher-child.ts)"],
   ["git/git-helper-main.ts", "the host's Git helper child (git/git-helper.ts)"],

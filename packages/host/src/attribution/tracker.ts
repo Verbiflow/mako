@@ -23,7 +23,7 @@ import {
   type TrackedRoot,
   type TrackerFileStat,
   type TrackerPorts,
-} from "@mako/protocol"
+} from "@mako/protocol/attribution"
 import { join } from "node:path"
 import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { HourCounts } from "../base/hour-counts.js"
@@ -74,7 +74,7 @@ export interface TrackerOptions {
   /** A change heard live came out uncertain while these Sessions were running: their child agents' records may name its author. */
   uncertain?(sessions: ReadonlySet<string>): void
   /** An agent this host doesn't run, working now where `path` (absolute, in `root`) is, in a few words; undefined when there's none. */
-  outsider?(path: string, root: string): string | undefined
+  outsider?(path: string, root: string): string | undefined | Promise<string | undefined>
   /** One line per flush, at most every `LOG_EVERY_MS`, and every slow one. Paths, never content. */
   log?(message: string, facts: Readonly<Record<string, string | number | boolean>>): void
   /**
@@ -1051,6 +1051,9 @@ export class LaptopTracker implements AttributionTracker {
     // journal's activity is read for the stretch they could have happened in, a page at a time between other work.
     const lostFrom = state.gap ? this.lostFrom(state, prepared, renamed, at) : undefined
     const gapEvidence = lostFrom !== undefined ? evidenceOf(await this.activityOverlapping(lostFrom - TRAIL_MS, at), this.evidence.worked) : undefined
+    // A remote owner asks its host for current session context before taking the SQLite write transaction.
+    const outsiders = this.options.outsider ? new Map(await Promise.all(prepared.filter(({ how }) => how === "event").map(async ({ item }) =>
+      [item.path, await this.options.outsider!(join(state.root.path, item.path), state.root.path)] as const))) : new Map<string, string | undefined>()
     // A burst (a build's output, a copied folder) is journaled a slice at a time: each change is attributed as it's recorded.
     const slice = new Slice(this.slicing)
     try {
@@ -1061,7 +1064,7 @@ export class LaptopTracker implements AttributionTracker {
             const { item, how, before } = prepared[index]!
             const t = performance.now()
             const from = renamed.get(item.path)
-            const seq = this.record(state, item, how, undefined, at, before, from, how === "event" ? undefined : gapEvidence)
+            const seq = this.record(state, item, how, undefined, at, before, from, how === "event" ? undefined : gapEvidence, outsiders.get(item.path))
             if (seq) timing.entries++
             const spent = performance.now() - t
             if (spent > slowest) {
@@ -1225,6 +1228,7 @@ export class LaptopTracker implements AttributionTracker {
     known?: { ref: ContentRef | null; bytes?: Uint8Array },
     from?: string,
     evidence: Evidence = this.evidence,
+    outsider?: string,
   ): number {
     const { root } = state
     const path = item.path
@@ -1301,7 +1305,6 @@ export class LaptopTracker implements AttributionTracker {
     }
     // Its modification time isn't when it was written: a copy that kept an old one, one ahead of the clock, or one rounded to the second.
     if (written === undefined || written > at || at - written > TRAIL_MS + late || item.stat!.mtimeNs % 1_000_000_000n === 0n) change.heard = at
-    const outsider = how === "event" && !given ? this.options.outsider?.(change.path, root.path) : undefined
     if (outsider) change.outsider = outsider
     const author = given ?? attribute(change, evidence)
     if (author.certainty === "exact") evidence.proved(author.author, change.path, change.changedAt)
