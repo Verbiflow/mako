@@ -17,7 +17,7 @@ import { AccountSessions } from "@mako/protocol/account-sessions"
 import { MovesUnderWay } from "@mako/host/conversations/moves-under-way"
 import { SENT_EVERY_MS, SentProgress } from "@mako/host/conversations/cloud-moves"
 import type { MoveSent } from "@mako/host/contracts/cloud-threads"
-import { ACTIVITY_REPORT_MS, conversationShown, FINS_COALESCE_MS, finAsking, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
+import { ACTIVITY_REPORT_MS, conversationShown, FINS_COALESCE_MS, finAsking, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, SWEEP_MS, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
 import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
@@ -259,7 +259,7 @@ test("a link hears everything owned first, then only what changed and what went;
   assert.equal(fresh[0]?.owned?.length, 249, "a new link: everything again")
 })
 
-test("a publisher reports when something changed, sweeps every half minute regardless, and relays a conversation's updates only while watched on that link", async () => {
+test("a publisher reports when something changed, reconciles every few minutes regardless, and relays a conversation's updates only while watched on that link", async () => {
   let now = NOW
   let rows = [row(1)]
   const sent: SessionsReport[] = []
@@ -315,7 +315,10 @@ test("a publisher reports when something changed, sweeps every half minute regar
   rows = [row(1, "idle")]
   now += 31_000
   publisher.report(link)
-  assert.equal(sent.length, 4, "the sweep finds what changed without an event")
+  assert.equal(sent.length, 3, "half a minute on, nothing changed by an event, nothing recomputed")
+  now += SWEEP_MS
+  publisher.report(link)
+  assert.equal(sent.length, 4, "the reconcile finds what changed without an event")
 
   // SAFETY: a batch as a live driver sends one, filled only as far as the publisher reads it (its conversation).
   const batch = (conversation: string) => encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision: 2, updates: [] } } as never)
@@ -742,7 +745,7 @@ test("a cloud machine's tick and an account with no link report on one publisher
   assert.ok(sent.at(-1)?.owned, "everything again")
 })
 
-test("a batch reworks its own conversation's row, never the whole list; the whole list is worked out on a structural change and every half minute", async () => {
+test("a batch reworks its own conversation's row, never the whole list; the whole list is worked out on a structural change and at the reconcile", async () => {
   let now = NOW
   let whole = 0
   const asked: string[][] = []
@@ -781,7 +784,60 @@ test("a batch reworks its own conversation's row, never the whole list; the whol
   now += 30_000
   publisher.own(batch("c-1"))
   publisher.report(link)
-  assert.equal(whole, 3, "and so does a report half a minute after the last whole one, for what moves without an event")
+  assert.equal(whole, 2, "half a minute on, a batch still reworks its own row alone")
+  now += SWEEP_MS
+  publisher.own(batch("c-1"))
+  publisher.report(link)
+  assert.equal(whole, 3, "and the reconcile, a few minutes after the last whole one, reworks it whole, for what moves without an event")
+})
+
+test("a native session's write or catalog row reworks its own rows, never the whole list; one gone from the window reworks it whole", async () => {
+  let now = NOW
+  let whole = 0
+  const native: string[][] = []
+  const sent: SessionsReport[] = []
+  let gone = false
+  // Three native sessions at /n/1, /n/2 and /n/3, their rows s-1 to s-3; /n/2's goes working.
+  let second = "idle"
+  const nativeRow = (n: number, state = "idle") => ({ ...row(n, state), conversation: `native:${n}`, session: `s-${n}` })
+  const publisher = new SessionPublisher({
+    rows: () => (whole++, [nativeRow(1), nativeRow(2, second), nativeRow(3)]),
+    rowsOfNative: (paths) => {
+      native.push([...paths])
+      if (gone) return undefined
+      const rows = [...paths].map((path) => nativeRow(Number(path.slice(3)), path === "/n/2" ? second : "idle"))
+      return { rows, sessions: new Set(rows.map((each) => each.session)) }
+    },
+    now: () => now,
+    schedule: () => {},
+  })
+  const link = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  publisher.report(link)
+  assert.equal(whole, 1)
+  for (let tick = 1; tick <= 10; tick++) {
+    second = tick % 2 ? "working" : "idle"
+    publisher.nativeChanged("/n/2")
+    now += 1_000
+    publisher.report(link)
+  }
+  assert.equal(whole, 1, "a native session writing all the while doesn't rework the whole list")
+  assert.equal(native.length, 10)
+  assert.ok(native.every((each) => each.length === 1 && each[0] === "/n/2"), "each report reworks the session that moved")
+  assert.ok(sent.slice(1).every((each) => each.listed.length === 1 && each.listed[0]!.session === "s-2"), "and says its row alone")
+  assert.equal(publisher.listed()?.length, 3, "the rest of the list stays")
+  now += 1_000
+  publisher.report(link)
+  assert.equal(native.length, 10, "nothing moved, nothing is worked out")
+  gone = true
+  publisher.nativeChanged("/n/3")
+  now += 1_000
+  publisher.report(link)
+  assert.equal(whole, 2, "a session the window no longer holds can't be told apart: the whole list is worked out")
+  gone = false
+  publisher.changed()
+  now += 1_000
+  publisher.report(link)
+  assert.equal(whole, 3, "a structural change (a catalog rescan) reworks it whole")
 })
 
 test("a watched conversation's batch too large for the gateway goes as the notice to read it again, as a cloud Thread's does", async () => {

@@ -24,7 +24,8 @@ import { Admission } from "./base/admission.js"
 import { readPower } from "./base/power.js"
 import { SessionIdSchema, ThreadIdSchema, type ThreadId } from "./contracts/thread-identity.js"
 import { threadArchiveKey, type ArchiveAnswer, type ArchiveCommand, type CloudArchiveOutcome } from "./contracts/thread-lifecycle.js"
-import type { ArchivedThread } from "@mako/protocol/thread-listing"
+import type { ArchivedThread, ReportedSession } from "@mako/protocol/thread-listing"
+import type { LiveSummary } from "./contracts/live-conversations.js"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
 import { HeapWatch, readHeap } from "./base/heap-watch.js"
@@ -189,6 +190,8 @@ const trace = (stage: string) => {
 /** Parts of the core built further down `openCore`; reached before then only through `?.`, by a caller that came early. */
 interface LateParts {
   conversations?: Conversations
+  /** This Mac's Sessions' uploads look again now: changed rows went to the account (`SessionPublisher.rowsSent`). */
+  uploadsLook?: () => void
   /** What this Mac can serve another place and its room, said to borrowing's brokers (`Advertiser`). */
   advertiser?: Advertiser
   /** The session leases this Mac serves another place's Threads (`Lending`). */
@@ -606,16 +609,22 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   }
   // The account's rows of this Mac's Sessions: every one, or (`only`) those of a few conversations whose batches came, with
   // no native row, which no batch moves.
-  const reportedRows = (only?: ReadonlySet<string>) => {
+  const reportedRows = (only?: ReadonlySet<string>, nativeAt?: ReadonlySet<string>): { rows: ReportedSession[]; sessions: Set<string> } | undefined => {
     const live = late.conversations?.live
     const store = threads.store
     // Until the catalog's first discovery is in, its rows would say this Mac has no sessions but Mako's own.
     if (!live || !store || !catalog.ready()) return undefined
     const activity = catalog.activity()
     const made = store.worktrees()
+    const window = () => (windowRows ??= catalog.recent(windowStart(Date.now())))
+    // A few native sessions, by path: their rows, as the native row or the conversation here that opens one, and nothing
+    // else. One gone from the sync window can't be told from one this host never listed: the whole list is worked out.
+    const natives = nativeAt && window().filter((ref) => nativeAt.has(ref.path))
+    if (nativeAt && natives!.length < nativeAt.size) return undefined
+    const opening = (summary: LiveSummary) => Boolean(nativeAt && ((summary.threadPath && nativeAt.has(summary.threadPath)) || summary.nativePaths?.some((path) => nativeAt.has(path))))
     const make = () => ownedSessions({
-      summaries: () => live.summaries(only),
-      native: () => only ? [] : (windowRows ??= catalog.recent(windowStart(Date.now()))),
+      summaries: () => nativeAt ? live.summaries().filter(opening) : live.summaries(only),
+      native: () => natives ?? (only ? [] : window()),
       activity: (path) => activity[path],
       work: () => application.lifecycle.snapshot().work,
       waitingOn: (id) => live.waitingOn(id),
@@ -642,11 +651,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       now: Date.now,
     })
     // The folders a whole making asks for are the ones read again (`listing`); a few rows' making leaves them as they are.
-    return only ? make() : repositories.listing(make)
+    const rows = only || nativeAt ? make() : repositories.listing(make)
+    if (!rows) return undefined
+    const sessions = new Set(rows.map((row) => row.session))
+    for (const ref of natives ?? []) if (ref.sessionId) sessions.add(ref.sessionId)
+    return { rows, sessions }
   }
   const sessions = new SessionPublisher({
-    rows: () => reportedRows(),
-    rowsOf: (conversations) => reportedRows(conversations),
+    rows: () => reportedRows()?.rows,
+    rowsOf: (conversations) => reportedRows(conversations)?.rows,
+    // A native session's write or catalog row reworks its own rows, never the whole list.
+    rowsOfNative: (paths) => reportedRows(undefined, paths),
     // What a list shows of one conversation, read as each of its batches comes, by the rule its row is made with: a
     // batch that moved it is reported at once. It reads only what memory holds.
     shown: (id) => {
@@ -670,6 +685,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     reportNow: config.machineAgentFd === undefined ? () => late.cloud?.reportSessions?.() : () => shell.reportMachineSessions?.(),
     // A Mac's runtime link, silent while it sends what another device watches, is asked whether it's alive.
     sent: config.machineAgentFd === undefined ? () => late.cloud?.liveSent?.() : undefined,
+    // Its Sessions' uploads follow the list: they look again once changed rows went.
+    rowsSent: () => late.uploadsLook?.(),
     work: shell.work,
   })
   catalog.subscribe((event) => {
@@ -683,15 +700,18 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       }
       // Whether this Mac keeps that session may have changed: the account's rows for it are looked at again, those alone.
       late.cloudConversations?.nativeChanged([event.ref])
+      // Its row in the account's list too.
+      sessions.nativeChanged(event.ref.path)
     } else if (event.type === "threads" || event.type === "thread-removed") {
       windowRows = undefined
       windowPaths = undefined
       late.cloudConversations?.nativeChanged()
       // A catalog row of an archived cloud Thread's Session (one this Mac had before it moved) shows archived too.
       late.archivedKeys?.()
+      sessions.changed()
     }
-    else if (event.type !== "thread-activity") return
-    sessions.changed()
+    // A session written or gone quiet: its own row, as `activity` says it.
+    else if (event.type === "thread-activity") sessions.nativeChanged(event.path)
   })
   late.sessions = sessions
   // How this Mac's sync goes, for Diagnostics: what it follows of other devices' work, the account's list, and what it
@@ -727,6 +747,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // another device reads one with this Mac off, and as its harness wrote it, so it continues anywhere. A cloud machine
   // keeps its Thread's records instead; a fixture desk sends nothing.
   let uploads: SessionUploads | undefined
+  // The work its looks run as, on a change and on the slow reconcile alike.
+  const UPLOADS_WORK = "keep this Mac's Sessions in the account"
+  // The reconcile: what changes without an event (the catalog's progress, the power, a link given late).
+  const UPLOADS_RECONCILE_MS = 60_000
   if (!fixtureDesk && config.machineAgentFd === undefined) {
     uploads = new SessionUploads({
       rows: () => sessions.listed(),
@@ -751,7 +775,28 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       statusChanged: () => void late.turnOn?.changed(),
     })
     const ticking = uploads
-    shell.jobs.every("keep this Mac's Sessions in the account", 5_000, () => ticking.tick())
+    // As the account's list changes (`rowsSent`), never two at once, and a look after one that ran meanwhile; a slow
+    // reconcile for what changes without an event (the catalog's progress, the power, a link given late).
+    let looking: Promise<void> | undefined
+    let again = false
+    const look = (): Promise<void> => {
+      if (looking) {
+        again = true
+        return looking
+      }
+      looking = shell.work.run(UPLOADS_WORK, () => ticking.tick())
+        .catch((error: Error) => hostWarn("sync", "this device's Sessions couldn't be looked at", { error: error.message }))
+        .finally(() => {
+          looking = undefined
+          if (again) {
+            again = false
+            void look()
+          }
+        })
+      return looking
+    }
+    late.uploadsLook = () => void look()
+    shell.jobs.every(UPLOADS_WORK, UPLOADS_RECONCILE_MS, look)
     catalog.onLinkDue((form) => {
       if (form === "copies" || form === "originals")
         void ticking.renew().catch((error: Error) => hostWarn("sync", "this device's links couldn't be renewed", { error: error.message }))
