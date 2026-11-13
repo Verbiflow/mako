@@ -16,7 +16,9 @@ runs:
       run: |
         echo "version=$(node -p process.versions.node)" >> "$GITHUB_OUTPUT"
         echo "npm=$(npm --version)" >> "$GITHUB_OUTPUT"
-        echo "image=${ImageOS:-none}-${ImageVersion:-none}" >> "$GITHUB_OUTPUT"
+        # The image's OS, not its weekly version: GitHub rolls a new image out over days, and runners on two versions
+        # at once missed each other's cache (#635). Node and npm, above, are what a version change could alter.
+        echo "image=${ImageOS:-none}" >> "$GITHUB_OUTPUT"
         echo "dependencies=$(node scripts/ci-dependency-key.mjs)" >> "$GITHUB_OUTPUT"
     - id: electron
       if: inputs.electron == 'true'
