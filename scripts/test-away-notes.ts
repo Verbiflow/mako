@@ -123,7 +123,7 @@ test("the account's link checked again while the note is out isn't this Mac back
   assert.equal(n.asked.length, 1, "the note answered, the link checked again: back, asked")
 })
 
-test("a going-away that didn't happen lapses: this Mac still runs two minutes on, so it asks again", async () => {
+test("a going-away that didn't happen lapses two minutes after its note settled, never while the note is still out", async () => {
   let now = 1_000_000
   const asked: OwnerAsk[] = []
   const away = new AwayNotes({
@@ -139,12 +139,18 @@ test("a going-away that didn't happen lapses: this Mac still runs two minutes on
   })
   away.going()
   await away.noted(randomUUID(), [{ session: sessions.c, generation: 1 }])
+  // A sleep has no deadline: its flush and note may take minutes on a slow network. Unanswered, it never lapses.
+  now += 3 * 60_000
+  assert.equal(away.lapse(), false, "three minutes with the note still out: no lapse")
+  await away.ask()
+  assert.equal(asked.length, 0, "and nothing asked: the account hasn't heard the note, and would say the Sessions are this Mac's")
+  away.answered()
   now += GOING_LAPSES_MS - 1_000
-  assert.equal(away.lapse(), false, "a going-away under way (a shutdown's hold) isn't over yet")
+  assert.equal(away.lapse(), false, "answered, then a going-away under way (a shutdown's hold) isn't over yet")
   await away.ask()
   assert.equal(asked.length, 0)
   now += 2_000
-  assert.equal(away.lapse(), true, "still running past it: the quit, shutdown or sleep didn't happen")
+  assert.equal(away.lapse(), true, "two minutes after its note settled, still running: the quit, shutdown or sleep didn't happen")
   await away.ask()
   assert.equal(asked.length, 1, "asked again")
   assert.equal(away.holds(sessions.c), undefined, "yours: let go")
