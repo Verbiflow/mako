@@ -123,7 +123,9 @@ const TURNS = `Promise.all([import('/src/state/live-recovery.ts'), import('/src/
     send({ requestChanges: [{ ...request, status: 'completed' }] })
     return 'wake-' + m
   }
-  window.__turn = async () => {
+  // A turn as the host streams one, a batch a frame or more apart; one not \`paced\` comes all at once.
+  window.__turn = async (paced = true) => {
+    const pause = paced ? sleep : () => Promise.resolve()
     n += 1
     const id = crypto.randomUUID(), m = n
     const words = '[mako · from your Fins, not the person]\\n1 finished:\\n  • "fin-' + m + '" done: the work is in.'
@@ -131,19 +133,19 @@ const TURNS = `Promise.all([import('/src/state/live-recovery.ts'), import('/src/
     const text = words + '\\n\\n<mako-reports>\\n' + JSON.stringify({ version: 1, reports: [card] }) + '\\n</mako-reports>'
     const request = { id, createdAt: Date.now(), text, attachments: [], status: 'dispatching', digest: { sentAt: Date.now(), notices: [] } }
     send({ requestChanges: [request] })
-    await sleep(40)
+    await pause(40)
     send({ updates: [{ kind: 'user', id: 'wake-' + m, text, requestId: id }] })
-    await sleep(60)
+    await pause(60)
     send({ updates: [{ kind: 'tool', id: 'tool-' + m, title: 'mcp__mako__agents_send', name: 'mcp__mako__agents_send', status: 'running', input: '{"to":"land-2","text":"Next."}', at: Date.now() }] })
-    await sleep(60)
+    await pause(60)
     send({ updates: [{ kind: 'tool-update', id: 'tool-' + m, status: 'completed', output: '{}', endedAt: Date.now() }] })
-    await sleep(60)
+    await pause(60)
     for (let piece = 0; piece < 5; piece += 1) {
       send({ updates: [{ kind: 'text', id: 'answer-' + m, text: 'It changes nothing else in the plan, so the rest stands as it was, and the queue goes on. '.repeat(3) }] })
-      await sleep(50)
+      await pause(50)
     }
     send({ requestChanges: [{ ...request, status: 'completed' }] })
-    await sleep(120)
+    await pause(120)
     return true
   }
   return true
@@ -567,6 +569,14 @@ async function check() {
     }
     console.log(`${form}: corrections logged: ${corrected.length}; the last: ${corrected.at(-1)}`)
   }
+  /**
+   * The fixture's twelve turns cross into a window some 22 turns later. All but the last few come at once, before
+   * anything watches the crossing: streamed at a turn's pace, they took 13 s of each crossing case. If they ever cross
+   * on their own, "starts short of a window" fails rather than the crossing going unwatched.
+   */
+  const turnsShortOfCrossing = async () => {
+    for (let turn = 0; turn < 18; turn += 1) await evaluate("window.__turn(false)")
+  }
   // The crossing into a window, at every width, under a reader who's up and one at the end, with turns streaming: each
   // frame paints turns where the frame before had them. Read after the frame's paint, so nothing that lands a frame late
   // passes for having been there.
@@ -585,6 +595,7 @@ async function check() {
       if (open) await until(open, `${form}: its list`)
       await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", `${form}: the Apex's turns`)
       await evaluate(TURNS)
+      await turnsShortOfCrossing()
       await wait(600)
       assert.equal(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"), false, `${form}: starts short of a window, or nothing crosses`)
       const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + 80 } })()")
@@ -644,7 +655,9 @@ async function check() {
     })
     await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", "the Apex's turns")
     await evaluate(TURNS)
+    await turnsShortOfCrossing()
     await wait(600)
+    assert.equal(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"), false, "a narrow window: starts short of a window, or nothing crosses")
     const box = await evaluate("(() => { const b = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: b.left, y: b.top, width: b.width, height: b.height } })()")
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: box.x + box.width / 2, y: box.y + 80, deltaX: 0, deltaY: -up })
     await wait(500)
