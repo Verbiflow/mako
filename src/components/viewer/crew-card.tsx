@@ -519,10 +519,13 @@ function CrewCardBody({
   const children = useThreadChildren(thread)
   const notice = useThreadAsks(thread).find((ask) => isLimitAsk(ask.ask.id))
   const scroller = useRef<HTMLDivElement>(null)
-  const card = useRef<HTMLElement>(null)
+  // The card as it's mounted now: the card goes while its conversation is away (a reconnect, a session reopening) and
+  // comes back as another element, and an observer left on the one that went never reports again, so the dock's line
+  // stood under a card in plain view.
+  const [card, setCard] = useState<HTMLElement | null>(null)
   // In view until the observer says otherwise, so the dock doesn't also draw the asks for the frame before it reports.
   useLayoutEffect(() => {
-    const element = card.current
+    const element = card
     if (!thread || !element) return
     mountCrewCard(thread, true)
     const observer = new IntersectionObserver((entries) => {
@@ -534,7 +537,7 @@ function CrewCardBody({
       observer.disconnect()
       unmountCrewCard(thread)
     }
-  }, [thread, children.length])
+  }, [thread, card, children.length])
   const [settledOpen, setSettledOpen] = useState(false)
   const rows = useMemo(() => buildRows(children, settledOpen), [children, settledOpen])
   const counts = useMemo(() => rollup(children), [children])
@@ -577,7 +580,7 @@ function CrewCardBody({
   if (!children.length || !conversation) return <>{fallback}</>
   return (
     <section
-      ref={card}
+      ref={setCard}
       data-crew={counts.total}
       data-compact={compact || undefined}
       aria-label={`${apexTitle}'s ${FIN_WORD}s`}
