@@ -13,9 +13,11 @@ on:
 permissions:
   contents: read
 
+# A pull request's newer push cancels its older run. A push to main never cancels: each merge's run finishes, so main
+# always has a complete run to compare with.
 concurrency:
-  group: checks-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: checks-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:
@@ -32,6 +34,25 @@ jobs:
       - uses: ./.github/actions/install-dependencies
       - run: npm run test:ci-downloads
       - run: npm run lint
+      - run: npm run typecheck
+
+  # A cold install on every push to main: the jobs above restore the installed tree by its key, which skips `npm ci`,
+  # so this is where a lockfile that no longer installs, or a package gone from the registry, still fails.
+  install-cold:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          cache: "false"
       - run: npm run typecheck
 
   # The protocol's conformance suite, every host call over the socket and the gateway, the host as a cloud
@@ -468,6 +489,10 @@ jobs:
       - uses: ./.github/actions/install-dependencies
       # Recording needs ffmpeg and ffprobe, which the Mac runner doesn't have.
       - run: brew install ffmpeg
+        env:
+          # Homebrew's own update and cleanup, not ffmpeg, were most of this step (29 s to 105 s).
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
       - run: npm run build:control-runtime
       - run: node scripts/ci-suites.mjs ${{ matrix.shard }} 3
         env:
