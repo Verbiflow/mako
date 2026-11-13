@@ -9,14 +9,19 @@ import { GitError } from "./errors.js"
 import { Repositories } from "./open.js"
 import { onMac } from "./platform.js"
 import type { Repository } from "./repository.js"
+import { commonDirOf, REF_LOCK_WAIT, writesShared } from "./shared-writes.js"
 
 /** One finished `git` process, for logs and `MAKO_GIT_TRACE`. */
 export interface GitTrace {
   command: string
   args: readonly string[]
   cwd: string
-  /** Spent waiting for a read slot before the process started. */
+  /** Spent waiting for a read slot, or for the repository's earlier writes, before the process started. */
   queuedMs: number
+  /** It wrote what every checkout of the repository shares (`writesShared`), in the repository's turn. */
+  write: boolean
+  /** For a write, the folder the repository's checkouts share (`commonDirOf`), whose turn it took. */
+  repository?: string
   ms: number
   code: number | null
   bytes: number
@@ -73,6 +78,8 @@ export interface RunResult {
 export interface GitActivity {
   running: { command: string; cwd: string; ms: number }[]
   queued: number
+  /** Writes waiting for their repository's earlier writes to finish. */
+  writesQueued: number
 }
 
 /** The repositories one `Git` holds open, for `git:doctor`. */
@@ -112,6 +119,9 @@ export class Git {
   /** Idle reads waiting: each starts once no other read waits and a slot past `FOREGROUND_SLOTS` is free. */
   readonly #idleWaiting: Array<() => void> = []
   readonly #running = new Set<{ command: string; cwd: string; started: number }>()
+  /** Each repository's last write asked for, by the folder its checkouts share: the next one starts once it ends. */
+  readonly #writes = new Map<string, Promise<void>>()
+  #writesWaiting = 0
   #readsRunning = 0
   #executable: string | undefined
   #environment: NodeJS.ProcessEnv | undefined
@@ -147,16 +157,22 @@ export class Git {
     return this.#environment
   }
 
-  /** Runs one `git` command. A failure is a `GitError`; cancelling rejects with the signal's reason. */
+  /**
+   * Runs one `git` command. A failure is a `GitError`; cancelling rejects with the signal's reason. A write to what
+   * every checkout of a repository shares (its refs, its worktrees, its configuration: `writesShared`) waits for the
+   * writes asked for before it in that repository, wherever they run, and then for a ref lock another program holds
+   * (`REF_LOCK_WAIT`): two of Mako's own never meet at a lock.
+   */
   async run(options: RunOptions): Promise<RunResult> {
     const owner = this.#runtime.signal
     if (owner) options = { ...options, signal: options.signal ? AbortSignal.any([owner, options.signal]) : owner }
     options.signal?.throwIfAborted()
     const queued = performance.now()
-    const release = options.read ? await this.#readSlot(options.idle === true) : undefined
+    const repository = !options.read && writesShared(options.args) ? commonDirOf(options.cwd) : undefined
+    const release = options.read ? await this.#readSlot(options.idle === true) : repository ? await this.#writeTurn(repository) : undefined
     try {
       options.signal?.throwIfAborted()
-      return await this.#execute(options, performance.now() - queued)
+      return await this.#execute(options, performance.now() - queued, repository)
     } finally {
       release?.()
     }
@@ -221,6 +237,7 @@ export class Git {
     return {
       running: [...this.#running].map((live) => ({ command: live.command, cwd: live.cwd, ms: Math.round(now - live.started) })),
       queued: this.#readsWaiting.length + this.#idleWaiting.length,
+      writesQueued: this.#writesWaiting,
     }
   }
 
@@ -272,6 +289,24 @@ export class Git {
     }
   }
 
+  /** The repository's turn to write, after every write asked for before in it; the returned call ends it. */
+  async #writeTurn(repository: string): Promise<() => void> {
+    const before = this.#writes.get(repository)
+    let end!: () => void
+    const turn = new Promise<void>((resolve) => (end = resolve))
+    const last = (before ?? Promise.resolve()).then(() => turn)
+    this.#writes.set(repository, last)
+    if (before) {
+      this.#writesWaiting += 1
+      await before
+      this.#writesWaiting -= 1
+    }
+    return () => {
+      end()
+      if (this.#writes.get(repository) === last) this.#writes.delete(repository)
+    }
+  }
+
   /** A slot came free: the oldest read someone waits on takes it, else the oldest idle one if it leaves the reserve. */
   #nextRead(): void {
     const next = this.#readsWaiting.shift()
@@ -279,8 +314,8 @@ export class Git {
     if (this.#readsRunning < READ_SLOTS - FOREGROUND_SLOTS) this.#idleWaiting.shift()?.()
   }
 
-  #execute(options: RunOptions, queuedMs: number): Promise<RunResult> {
-    const args = options.read ? ["--no-optional-locks", ...options.args] : [...options.args]
+  #execute(options: RunOptions, queuedMs: number, repository: string | undefined): Promise<RunResult> {
+    const args = options.read ? ["--no-optional-locks", ...options.args] : [...REF_LOCK_WAIT, ...options.args]
     const { background, trace } = this.#runtime
     const [command, argv] = options.background && background ? background(this.executable, args) : [this.executable, args]
     const env = options.env ? { ...this.environment(), ...options.env } : this.environment()
@@ -306,7 +341,7 @@ export class Git {
         clearTimeout(timer)
         options.signal?.removeEventListener("abort", cancel)
         if (!trace) return
-        const traced: GitTrace = { command: subcommand, args: options.args, cwd: options.cwd, queuedMs, ms: performance.now() - started, code, bytes, outcome }
+        const traced: GitTrace = { command: subcommand, args: options.args, cwd: options.cwd, queuedMs, write: repository !== undefined, ...(repository && { repository }), ms: performance.now() - started, code, bytes, outcome }
         if (code !== 0 && errorBytes > 0) traced.stderr = Buffer.concat(errors).toString("utf8", 0, Math.min(errorBytes, 500)).trim()
         trace(traced)
       }

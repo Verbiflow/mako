@@ -147,14 +147,6 @@ export class WorktreeSpares {
     this.filling = this.filling.then(() => this.fill(repoRoot)).catch(() => {})
   }
 
-  /**
-   * Resolves once every requested fill has finished: the worktrees being made, which take the repository's ref locks.
-   * Not the installs after them, which hold no lock and run for minutes.
-   */
-  filled(): Promise<void> {
-    return this.filling
-  }
-
   /** Resolves once every requested fill has finished, and every install this host started or follows has ended. */
   async settled(): Promise<void> {
     await this.filling

@@ -46,13 +46,6 @@ const SUMMARY_GAP_MS = 5_000
 const SUMMARY_INDEX_GAP_MS = 30_000
 /** The host's own pass, while a window listens: what no event says (a pull request on GitHub, an editor's edit). */
 export const SUMMARY_PASS_MS = 60_000
-/** A branch delete another Git process's lock refused is tried again after each of these waits. */
-const BRANCH_DELETE_WAITS_MS = [200, 400, 800, 1600]
-/**
- * At most this long a refused delete waits for the spares being made first: a refused start or a failed move awaits
- * its abandon, so the person's next step waits on it.
- */
-const SPARE_FILL_WAIT_MS = 2_000
 /** A new Thread's branch search lists this many branches, the most recently committed. */
 const LISTED_BRANCHES = 200
 const BRANCH_PULLS_EVERY_MS = 60_000
@@ -1596,8 +1589,7 @@ export class ThreadWorktreeService {
     const left: { repoRoot: string; error: string }[] = []
     for (const { repoRoot, path, base, adopted } of members) {
       if (existsSync(path)) await this.spares.setAside(repoRoot, path)
-      const commits = receipt.adopted || adopted ? 1 : await this.git.output(repoRoot, ["rev-list", "--count", `${base}..${receipt.branch}`]).then(Number, () => 1)
-      const error = commits === 0 ? await this.dropBranch(repoRoot, receipt.branch) : undefined
+      const error = receipt.adopted || adopted ? undefined : await this.dropIfEmpty(repoRoot, base, receipt.branch)
       if (error) left.push({ repoRoot, error })
     }
     if (receipt.members) await this.trashFolder(receipt.path)
@@ -1611,30 +1603,25 @@ export class ThreadWorktreeService {
   }
 
   /**
-   * Deletes a branch nothing was committed on; the error that kept it, if any. Another Git process in the repository
-   * (a spare being made, a worktree being removed, Git's own maintenance) can hold a ref's lock for a moment, and a
-   * delete it refuses would leave the branch behind for good: the spares this host is making end first, for at most
-   * `SPARE_FILL_WAIT_MS`, then the delete is tried again, a few times over three seconds.
+   * Deletes a branch nothing was committed on since `base`; why it stays, if it does. A count that can't be read keeps
+   * the branch, and says so: it may hold commits. One that isn't there is nothing to do.
+   */
+  private async dropIfEmpty(repoRoot: string, base: string, branch: string): Promise<string | undefined> {
+    // Gone already: an abandon before this one deleted it here, and stopped at another repository.
+    if (!(await this.hasBranch(repoRoot, branch))) return undefined
+    const counted = await this.git.output(repoRoot, ["rev-list", "--count", `${base}..${branch}`]).then((count) => ({ commits: Number(count) }), (failure: Error) => ({ refused: gitWords(failure) }))
+    if ("refused" in counted) return `its commits couldn't be counted: ${counted.refused}`
+    return counted.commits === 0 ? this.dropBranch(repoRoot, branch) : undefined
+  }
+
+  /**
+   * Deletes a branch; Git's first line, if it refused ("cannot lock ref …: Unable to create '….lock': File exists").
+   * Mako's own writes in the repository run one at a time (`Git.run`), and Git waits out a lock another program holds
+   * (`REF_LOCK_WAIT`), so a refusal is one to report, not to try again.
    */
   private async dropBranch(repoRoot: string, branch: string): Promise<string | undefined> {
-    let error = ""
-    for (const wait of [undefined, ...BRANCH_DELETE_WAITS_MS]) {
-      if (wait !== undefined) {
-        // The spares being made take the repository's ref locks; their installs after that take none, and run for minutes.
-        if (wait === BRANCH_DELETE_WAITS_MS[0]) await Promise.race([this.spares.filled(), new Promise((resolve) => setTimeout(resolve, SPARE_FILL_WAIT_MS).unref())])
-        await new Promise((resolve) => setTimeout(resolve, wait))
-      }
-      try {
-        await this.git.output(repoRoot, ["branch", "-D", branch])
-        return undefined
-      } catch (failure) {
-        if (!(await this.hasBranch(repoRoot, branch))) return undefined
-        // Git's first line says what held it ("cannot lock ref …: Unable to create '….lock': File exists").
-        const words = failure instanceof GitError && failure.stderr ? failure.stderr : failure instanceof Error ? failure.message : String(failure)
-        error = words.split("\n").map((line) => line.replace(/^(error|fatal): /, "").trim()).find(Boolean) ?? ""
-      }
-    }
-    return error
+    const refused = await this.git.output(repoRoot, ["branch", "-D", branch]).then(() => undefined, (failure: Error) => gitWords(failure))
+    return refused !== undefined && (await this.hasBranch(repoRoot, branch)) ? refused : undefined
   }
 
   private projectFolder(repoRoot: string): string {
@@ -2032,12 +2019,23 @@ export class ThreadWorktreeService {
         }
         return candidate
       } catch (error) {
-        for (const repoRoot of made) await this.git.output(repoRoot, ["branch", "-D", branch]).catch(() => undefined)
+        // The name is taken in one repository: the others give theirs back, and one that can't stops the start, never leaving it unsaid.
+        const kept: string[] = []
+        for (const repoRoot of made) {
+          const refused = await this.dropBranch(repoRoot, branch)
+          if (refused) kept.push(`${basename(repoRoot)}: ${refused}`)
+        }
+        if (kept.length) throw new Error(`Couldn't give back the branch ${branch} made for this worktree (${kept.join("; ")})`, { cause: error })
         if (!(error instanceof GitError && /already exists/i.test(error.stderr))) throw error
       }
     }
     throw new Error("Every name for this worktree is taken in one of the project's repositories. Remove some mako/ branches, then try again.")
   }
+}
+
+/** The first line Git said of a failed command (a `GitError`'s message is its error output), without its `error:`. */
+function gitWords(failure: Error): string {
+  return failure.message.split("\n").map((line) => line.replace(/^(error|fatal): /, "").trim()).find(Boolean) ?? ""
 }
 
 function slugCandidates(slug: string): string[] {
