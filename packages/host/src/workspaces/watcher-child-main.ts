@@ -430,8 +430,14 @@ process.on("exit", () => {
   if (canary) rmSync(canary.folder, { recursive: true, force: true })
 })
 
-// The host is gone, or let this child go: nothing here outlives it.
-process.on("disconnect", () => process.exit(0))
+// The host is gone, let this child go, or stopped it: nothing here outlives it, its probes included, which a host
+// that died rather than stopped leaves no one to end.
+const leave = () => {
+  for (const probe of probes.values()) probe.kill("SIGKILL")
+  process.exit(0)
+}
+process.on("disconnect", leave)
+process.on("SIGTERM", leave)
 
 /** At most this much of `ps`'s output, as the host's own read allows. */
 const TABLE_BYTES = 16 * 1024 * 1024
