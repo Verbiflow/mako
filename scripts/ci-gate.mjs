@@ -219,6 +219,7 @@ const QUIET_MS = 10 * 60_000
 
 /** What a step needs on the runner beyond the job's own setup, installed once in a shard that picks it. */
 const NEEDS = {
+  "npm run -s test:mcp": "ffmpeg",
   "npm run -s test:control-cli": "ffmpeg",
   "npm run -s test:control-packages": "ffmpeg",
   "npm run -s test:control-recording-continuous": "ffmpeg",

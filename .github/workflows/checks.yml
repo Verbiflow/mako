@@ -94,6 +94,8 @@ jobs:
       - run: npm run build:control-runtime
       # Electron's sandbox helper must be root's and setuid on Linux, which an npm install can't make it.
       - run: sudo chown root:root node_modules/electron/dist/chrome-sandbox && sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+      # Ubuntu 24.04 lets no unprivileged process make a user namespace, which Chrome's own sandbox needs.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # A display for the suites that open Electron, and no XDG_CONFIG_HOME: the runner points it at its own home,
       # which a scratch-home test rightly refuses to write outside.
       - run: env -u XDG_CONFIG_HOME xvfb-run -a node scripts/ci-gate.mjs ${{ matrix.shard }} 24
