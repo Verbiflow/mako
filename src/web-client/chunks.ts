@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react"
-import { whenSlow } from "@/lib/code-patience"
+import { noteReadStarted, whenSlow } from "@/lib/code-patience"
 
 /**
  * A chunk of the app the list paints without, read once: its module as soon as it has arrived, and until then nothing.
@@ -22,6 +22,7 @@ export function chunk<Module>(load: () => Promise<Module>) {
     // `failed` stands until a read succeeds: a screen saying so keeps saying it while it tries again. A read still
     // under way past its patience is slow, not failed (offline, it is failed), and draws when it lands.
     if (reading) return reading
+    noteReadStarted()
     const started = load().then((loaded) => {
       module = loaded
       failed = false
@@ -31,13 +32,17 @@ export function chunk<Module>(load: () => Promise<Module>) {
     })
     reading = started
     whenSlow(started, (offline) => {
-      if (module) return
-      if (offline) failed = true
-      else slow = true
+      // Only the read in hand speaks: one given up for a failure (below) says nothing more, though it still lands.
+      if (module || reading !== started) return
+      failed = offline
+      slow = !offline
+      // Offline, it's a failure and given up: the next read (Retry, or back online) starts a new load, not this one.
+      if (offline) reading = undefined
       told()
     })
     // Not here (offline before the service worker kept it): asked again next time.
     started.catch(() => {
+      if (module || reading !== started) return
       reading = undefined
       slow = false
       failed = true

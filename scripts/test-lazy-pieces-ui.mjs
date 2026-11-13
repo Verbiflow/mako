@@ -266,6 +266,45 @@ async function check() {
   await release(FILES, "continue")
   await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-loading]')", "Files drawn once its late code landed")
   await letGo()
+  // Past its patience a read follows the network: offline it's a failure, and given up, so going back online starts a
+  // new read, which says it's still loading past its own patience. Handed back the stalled read, Retry would end on
+  // "This page won't fetch it again". The browser shares one in-flight fetch per module, so the new read joins the
+  // held request rather than asking again: the page's count of reads started (`noteReadStarted`) tells it apart.
+  const readsStarted = () => evaluate("Number(globalThis.__makoCodeReads ?? 0)")
+  const network = async (online) => {
+    await send("Network.enable")
+    await send("Network.emulateNetworkConditions", { offline: !online, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+  }
+  await hold(FILES)
+  await filesOpen("the web desk, Files' code slow, then the network gone")
+  await untilCheck(() => says(".rv-layer [data-code-slow]", "Still loading Files"), "Files slow")
+  await network(false)
+  await untilCheck(() => says(".rv-layer [data-code-unavailable]", "Files couldn't load"), "Files slow, then offline: it couldn't load")
+  const filesReads = await readsStarted()
+  await network(true)
+  await untilCheck(async () => (await readsStarted()) > filesReads, "back online, a new read of Files' code started")
+  await untilCheck(() => says(".rv-layer [data-code-slow]", "Still loading Files"), "back online, Files loading again in a new read")
+  assert.equal(await evaluate("Boolean(document.querySelector('.rv-layer [data-code-unavailable]'))"), false, "back online and loading, not a failure")
+  await release(FILES, "continue")
+  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-loading]')", "Files drawn from its new load")
+  await letGo()
+  // Changes (`lazyCode`): offline when its patience runs out is a failure, and back online its code is asked for anew.
+  const CHANGES = "src/web-client/desk-review.tsx"
+  await hold(CHANGES)
+  await load(desk)
+  await until("document.querySelectorAll('[data-thread-row]').length > 0", "the web desk, Changes' code held")
+  await click("button[aria-label='Show the right sidebar']:not(:disabled)")
+  await held(CHANGES)
+  await network(false)
+  await untilCheck(() => says(".rv-layer [data-code-unavailable]", "Changes couldn't load"), "Changes offline past its patience: it couldn't load")
+  const changesReads = await readsStarted()
+  await network(true)
+  await untilCheck(async () => (await readsStarted()) > changesReads, "back online, a new read of Changes' code started")
+  await untilCheck(() => says(".rv-layer [data-code-slow]", "Still loading Changes"), "back online, Changes loading again in a new read")
+  assert.equal(await evaluate("Boolean(document.querySelector('.rv-layer [data-code-unavailable]'))"), false, "back online and loading, not a failure")
+  await release(CHANGES, "continue")
+  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-unavailable]') && !document.querySelector('[data-code-loading]')", "Changes drawn from its new load")
+  await letGo()
   await hold(FILES)
   await filesOpen("the web desk, Files' code failing")
   await release(FILES, "fail")

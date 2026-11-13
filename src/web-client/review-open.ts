@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react"
 import { z } from "zod"
 import { createHook, createStore } from "@/state/store"
-import { whenSlow } from "@/lib/code-patience"
+import { noteReadStarted, whenSlow } from "@/lib/code-patience"
 
 /*
  * Which Changes screen is open, if any: one Session's turn, or every turn of
@@ -84,14 +84,20 @@ function lazyCode<T>(load: () => Promise<T>): ReviewCode<T> {
     read() {
       const { reading } = codeStore.get()
       if (reading) return reading
+      noteReadStarted()
       // As every chunk's read (`chunk`): slow past its patience (failed if offline), and drawn whenever it lands.
       const read = load().then((code) => codeStore.set({ code, failed: false, slow: false }))
+      // Only the read in hand speaks: one given up for a failure (below) says nothing more, though it still lands.
+      const current = () => codeStore.get().code === undefined && codeStore.get().reading === read
       whenSlow(read, (offline) => {
-        if (codeStore.get().code === undefined) codeStore.set(offline ? { failed: true } : { slow: true })
+        // Offline, it's a failure: the next read (Retry, or back online) starts a new load, not this pending one.
+        if (current()) codeStore.set(offline ? { failed: true, slow: false, reading: undefined } : { failed: false, slow: true })
       })
       // Not here (offline before the service worker kept it): asked again next time. `failed` stands until a read
       // succeeds, so Changes keeps saying so while it tries again.
-      read.catch(() => codeStore.set({ reading: undefined, failed: true, slow: false }))
+      read.catch(() => {
+        if (current()) codeStore.set({ reading: undefined, failed: true, slow: false })
+      })
       codeStore.set({ reading: read })
       return read
     },
