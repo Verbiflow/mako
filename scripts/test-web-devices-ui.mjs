@@ -39,14 +39,14 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const root = testScratch("mako-web-devices-ui-")
   const args = process.argv.slice(2)
   const onlyAt = args.indexOf("--only")
   const only = onlyAt === -1 ? "" : args.splice(onlyAt, 2)[1]
   const evidence = args[0] ? resolve(args[0]) : root
   await mkdir(evidence, { recursive: true })
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false } })
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-web-devices-check", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_DEVICES_ROOT: root, MAKO_DEVICES_EVIDENCE: evidence, MAKO_DEVICES_URL: server.resolvedUrls.local[0], MAKO_DEVICES_ONLY: only }

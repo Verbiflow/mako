@@ -24,8 +24,8 @@ if (process.versions.electron) {
   const given = process.argv.slice(2).find((arg) => /^https?:/.test(arg))
   let server
   if (!given) {
-    const { createServer } = await import("vite")
-    server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
+    const { uiVite } = await import("./lib/ui-vite.mjs")
+    server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
     await server.listen()
   }
   const env = { ...process.env, MAKO_FRESH_UI_ROOT: root, MAKO_FRESH_UI_URL: given ?? server.resolvedUrls.local[0] }
