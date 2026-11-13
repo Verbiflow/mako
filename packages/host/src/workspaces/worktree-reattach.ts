@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto"
-import { existsSync } from "node:fs"
-import { mkdir, rename, rm } from "node:fs/promises"
-import { dirname, join } from "node:path"
-import type { Git } from "@mako/git"
+import { constants, existsSync } from "node:fs"
+import { access, mkdir, rename, rm } from "node:fs/promises"
+import { dirname, join, resolve } from "node:path"
+import { PARALLEL_CHECKOUT, type Git } from "@mako/git"
+import { endChildInput } from "@mako/sessions/child-input"
+import { hostCommand } from "../base/host-command.js"
 import type { ReturnProjectMissing } from "../contracts/cloud-threads.js"
 
 /**
@@ -41,18 +43,20 @@ export async function reattachWorktree(git: Git, repoRoot: string, folder: strin
   const onBranch = branch !== undefined
     && (await git.succeeds(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]))
     && !(await git.output(repoRoot, ["worktree", "list", "--porcelain"])).split("\n").includes(`branch refs/heads/${branch}`)
-  const add = (path: string, unchecked: boolean) =>
-    git.output(repoRoot, ["worktree", "add", "--quiet", ...unchecked ? ["--no-checkout"] : [], ...onBranch && branch ? [path, branch] : ["--detach", path, "HEAD"]])
+  // Added without its files, which would hold the repository's turn while they're written (`Git.run`); filled after.
+  const add = (path: string) =>
+    git.output(repoRoot, ["worktree", "add", "--quiet", "--no-checkout", ...onBranch && branch ? [path, branch] : ["--detach", path, "HEAD"]])
   if (!existsSync(folder)) {
     await mkdir(dirname(folder), { recursive: true, mode: 0o700 })
-    await add(folder, false)
+    await add(folder)
+    await fillWorktree(git, folder)
     return
   }
   // The folder stays where the Thread's sessions know it: a worktree is added beside it unchecked out, its `.git` moved
   // in, and the repository told where it is now.
   const beside = `${folder}.mako-reattach-${randomBytes(4).toString("hex")}`
   try {
-    await add(beside, true)
+    await add(beside)
     await rename(join(beside, ".git"), join(folder, ".git"))
     await git.output(repoRoot, ["worktree", "repair", folder])
     await git.output(folder, ["reset", "--quiet"])
@@ -60,4 +64,42 @@ export async function reattachWorktree(git: Git, repoRoot: string, folder: strin
     await rm(beside, { recursive: true, force: true })
   }
   if (!(await workingCheckout(git, folder))) throw new Error(`Git couldn't make ${folder} a worktree of ${repoRoot} again.`)
+}
+
+/**
+ * Writes a worktree added `--no-checkout` (its HEAD set, its index empty), then runs the repository's post-checkout
+ * hook as `worktree add` would have: projects install their own hooks or generate code there (husky), and a Mako
+ * worktree must get what any other checkout does. Outside the repository's write turn, both: they take as long as the
+ * files, filters and hook do.
+ */
+export async function fillWorktree(git: Git, path: string): Promise<void> {
+  await git.output(path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q"])
+  await runPostCheckout(git, path)
+}
+
+/**
+ * The post-checkout hook, run as `worktree add` runs it (`builtin/worktree.c`): in the new worktree, with `<null>
+ * <HEAD> 1`, and `GIT_DIR` and `GIT_WORK_TREE` unset so it finds the repository from there. Found by `rev-parse
+ * --git-path`, which honours `core.hooksPath`, and run only when it's there and executable, as Git does. Not through
+ * `git hook run`, which Git before 2.36 lacks (Xcode 13's tools ship 2.32, Ubuntu 22.04 2.34). A hook that fails fails
+ * the start, as it failed `worktree add`.
+ */
+/** How long the post-checkout hook may run, as any Git command may (`Git.run`'s default), before it's stopped. */
+const HOOK_TIMEOUT_MS = 120_000
+
+async function runPostCheckout(git: Git, path: string): Promise<void> {
+  const hook = resolve(path, await git.output(path, ["rev-parse", "--git-path", "hooks/post-checkout"]))
+  if (!(await access(hook, constants.X_OK).then(() => true, () => false))) return
+  const head = await git.output(path, ["rev-parse", "HEAD"])
+  const env = { ...git.environment() }
+  delete env.GIT_DIR
+  delete env.GIT_WORK_TREE
+  // Git gives a hook no input (`/dev/null`): its stdin ends at once, so a hook that reads it never waits on it. And it
+  // has the time any Git command has. `hostCommand` rejects with the command's output on the error.
+  const running = hostCommand(hook, ["0".repeat(head.length), head, "1"], { cwd: path, env, maxBuffer: 16 * 1024 * 1024, timeout: HOOK_TIMEOUT_MS })
+  endChildInput(running.child)
+  await running.catch((error: Error & { stderr?: string }) => {
+    const said = error.stderr?.trim().split("\n")[0]
+    throw new Error(`The repository's post-checkout hook failed in ${path}${said ? `: ${said}` : ""}`, { cause: error })
+  })
 }
