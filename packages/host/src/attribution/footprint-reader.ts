@@ -46,11 +46,11 @@ export interface FootprintOptions {
    */
   live?: readonly string[]
   /** The harnesses' stores and Mako's data: never a footprint, named or not. */
-  stores(): readonly string[]
+  stores(): readonly string[] | Promise<readonly string[]>
   /** Folders of other sessions on this machine that were active since `since`, not `thread`'s own, with whose they are. */
-  others?(thread: string, since: number): readonly { folder: string; why: string }[]
+  others?(thread: string, since: number): readonly { folder: string; why: string }[] | Promise<readonly { folder: string; why: string }[]>
   /** Native ids of every other session on this machine, lowercase, not `thread`'s own, with whose they are. */
-  sessions?(thread: string): ReadonlyMap<string, string>
+  sessions?(thread: string): ReadonlyMap<string, string> | Promise<ReadonlyMap<string, string>>
   /** Links whose targets the history reports, as [link, target]; the file system's top-level links by default. */
   links?: readonly (readonly [string, string])[]
   /**
@@ -299,7 +299,7 @@ export class FootprintReader {
       return
     }
     const writersKnown = Boolean(this.deps.ports.processes)
-    const each = segment.trails.map((trail) => new Map(readIgnore(this.folders(trail.thread, trail.start, [...trail.cwds]), this.evidence(trail), writersKnown).map((item) => [item.folder, item])))
+    const each = await Promise.all(segment.trails.map(async (trail) => new Map(readIgnore(await this.folders(trail.thread, trail.start, [...trail.cwds]), this.evidence(trail), writersKnown).map((item) => [item.folder, item]))))
     const [first, ...rest] = each
     const shared = first ? [...first.keys()].filter((folder) => rest.every((folders) => folders.has(folder))) : []
     // A turn that just ended may have written in the last moment of a live root's batching.
@@ -372,12 +372,12 @@ export class FootprintReader {
   }
 
   /** The folders rules take whole for a turn of `thread`, in the rules' order. */
-  private folders(thread: string, since: number, own: readonly string[]): RuleFolder[] {
+  private async folders(thread: string, since: number, own: readonly string[]): Promise<RuleFolder[]> {
     const { home, roots } = this.deps.options
     const tracked = this.deps.tracked().map((folder): RuleFolder => ({ folder, rule: "tracked", why: "a tracked checkout" }))
-    const stores = this.deps.options.stores().map((folder): RuleFolder => ({ folder, rule: "store", why: "a harness's store or Mako's data" }))
+    const stores = (await this.deps.options.stores()).map((folder): RuleFolder => ({ folder, rule: "store", why: "a harness's store or Mako's data" }))
     // Another session's folder never takes the Thread's own: a session in `~/work` says nothing about `~/work/api` the Thread runs in.
-    const others = (this.deps.options.others?.(thread, since) ?? [])
+    const others = (await this.deps.options.others?.(thread, since) ?? [])
       .filter((item) => !container(item.folder, roots) && !own.some((folder) => within(item.folder, folder)))
       .map((item): RuleFolder => ({ folder: item.folder, rule: "other-session", why: item.why }))
     const learned = this.baseline.folders().map((folder): RuleFolder => ({ folder, rule: "baseline", why: "learned: it changes while no Thread runs" }))
@@ -424,7 +424,7 @@ export class FootprintReader {
   private async decide(trail: Trail): Promise<void> {
     const end = trail.end ?? this.now()
     const evidence = this.evidence(trail)
-    const folders = this.folders(trail.thread, trail.start, [...trail.cwds])
+    const folders = await this.folders(trail.thread, trail.start, [...trail.cwds])
     const exclusions = trail.exclusions
     const started = performance.now()
     const processes = this.deps.ports.processes
@@ -434,7 +434,7 @@ export class FootprintReader {
       folders,
       turn: evidence,
       others: this.othersNamed(trail),
-      sessions: this.deps.options.sessions?.(trail.thread),
+      sessions: await this.deps.options.sessions?.(trail.thread),
       writers: trail.writers,
       ours: processes ? (pid) => processes.session(pid) === trail.session : undefined,
       baseline: (path) => this.baseline.verdict(path),
@@ -603,12 +603,12 @@ export class FootprintReader {
     const mark = await started
     if (!mark || this.closed) return 0
     const readStarted = performance.now()
-    const folders = this.folders("", since, [])
+    const folders = await this.folders("", since, [])
     const ignore = readIgnore(folders, { named: new Map(), mentioned: new Set(), cwds: new Set() }, false)
     const history = await this.history(mark, since, ignore.map((item) => item.folder))
     const rules = new FolderRules(folders)
     const input: FootprintInput = {
-      home: this.deps.options.home, roots: this.deps.options.roots, folders, turn: { named: new Map(), mentioned: new Set(), cwds: new Set() }, others: new Set(), sessions: this.deps.options.sessions?.(""),
+      home: this.deps.options.home, roots: this.deps.options.roots, folders, turn: { named: new Map(), mentioned: new Set(), cwds: new Set() }, others: new Set(), sessions: await this.deps.options.sessions?.(""),
     }
     const unexplained: string[] = []
     const turn = new Turn()

@@ -19,7 +19,7 @@ import {
   type ObservedBy,
   type ThreadHistoryPart,
   type TrackedRoot,
-} from "@mako/protocol"
+} from "@mako/protocol/attribution"
 import { TurnChangesSchema, type TurnChanges } from "../contracts/turn-changes.js"
 import { compress, decompress } from "./content.js"
 import { StatCache } from "./stat-cache.js"

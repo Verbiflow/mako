@@ -27,6 +27,7 @@ export function FootprintReadout({ footprint }: { footprint: MakoFootprint }) {
         </Action>
       </div>
       <div className="">
+        {footprint.attributionFailure !== undefined ? <Line title="File attribution" detail={`Unavailable; Mako is retrying. ${footprint.attributionFailure}`} caution /> : null}
         <Line title="Processes" detail={describeProcesses(footprint)} />
         <Line title="File watching" detail={describeWatching(watching)} caution={!watching.delivery.ok} />
         <Line title="Dropped file events" detail={describeDrops(watching)} />
