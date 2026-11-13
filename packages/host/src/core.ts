@@ -538,7 +538,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     session: (conversation) => {
       const live = late.conversations?.live
       const session = live?.session(conversation)
-      return session && { cwd: session.cwd, harness: session.harness, record: live?.snapshot(conversation)?.threadPath ?? undefined }
+      return session && { cwd: session.cwd, harness: session.harness, record: (live?.held(conversation) ?? live?.snapshot(conversation))?.threadPath ?? undefined }
     },
   }).then((attribution) => {
     if (shell.closing()) void attribution.close()

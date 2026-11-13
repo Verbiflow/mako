@@ -1051,7 +1051,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   ruleLines(conversation: string): RoleRuleLines {
     const policy = this.deps.finPolicy?.()
-    const requests = this.deps.live.snapshot(conversation)?.requests ?? []
+    const requests = (this.deps.live.held(conversation) ?? this.deps.live.snapshot(conversation))?.requests ?? []
     const read = new Set(requests.flatMap((request) => request.ruleLines ?? []))
     if (!policy?.forFins && !policy?.forApexes && !read.size) return {}
     const child = this.childOfConversation(conversation)
