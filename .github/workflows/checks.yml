@@ -463,6 +463,25 @@ jobs:
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" scripts/check-codex-sandbox.sh
 
   # The one result to wait on: it passes when every job passed, or was skipped because the change can't reach it.
+  # The pull request gate: what a change must pass to merge, in a few minutes. Lint, the typecheck, the Linux gate's
+  # shards and, when the host is touched, its Mac-only parts. The heavy jobs (the UI suites, the updater, performance,
+  # load and latency benches) run on a pull request only when its paths reach them, and always on main after the merge,
+  # under `ci`: a failure there is fixed or reverted, never waited on by an unrelated pull request.
+  pr-gate:
+    if: always()
+    needs: [changes, checks, gate, mac-host]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          for result in $RESULTS; do
+            case "$result" in success|skipped) ;; *) exit 1 ;; esac
+          done
+
+  # Every job's verdict: on main, the whole of CI after a merge.
   ci:
     if: always()
     needs: [changes, checks, install-cold, gate, mac-host, file-search, performance, update-checks, transcript-ui, suites, sync-bench, steer-latency, host-load, codex-sandbox]
