@@ -90,6 +90,26 @@ test("the person runs a Thread here anyway: only its Sessions let go, once", asy
   assert.equal(n.released(), 1)
 })
 
+test("going away, nothing asks the account until this Mac is back: it would say the Sessions are this Mac's and end its quiet", async () => {
+  const n = notes(async () => ({ sessions: [{ session: sessions.a, answer: "yours", generation: 1 }] }))
+  n.away.going()
+  await n.away.noted(randomUUID(), [{ session: sessions.a, generation: 1 }])
+  await n.away.ask()
+  assert.equal(n.asked.length, 0, "the job's ask, before the note went or while the Mac is off: nothing asked")
+  assert.ok(n.away.holds(sessions.a) !== undefined, "and nothing let go")
+  n.away.back()
+  await n.away.ask()
+  assert.equal(n.asked.length, 1, "back: asked")
+  assert.equal(n.away.holds(sessions.a), undefined, "yours: let go")
+  // A host that starts is back: what it reads from disk is asked at once.
+  const m = notes(async () => { throw new Error("offline") })
+  m.away.going()
+  await m.away.noted(randomUUID(), [{ session: sessions.b, generation: 1 }])
+  const again = new AwayNotes({ file: m.file, owner: () => async () => "unserved", deviceId: async () => undefined, join: () => {}, released: () => {} })
+  await again.ask()
+  assert.equal(again.any(), false, "a new host asks, and a gateway with no owner answer lets it go")
+})
+
 test("the owner check holds a conversation of a held Session, and nothing else", async () => {
   const n = notes(async () => { throw new Error("offline") })
   await n.away.noted(randomUUID(), [{ session: sessions.a, generation: 1 }])
