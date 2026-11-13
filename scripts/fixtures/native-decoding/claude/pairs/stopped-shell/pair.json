@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.322"
+    "version": "2.1.323"
   },
   "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/be0fe313-440a-4fe8-aee8-65ed0cd76ee0.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/816117b6-80ff-44cf-96fa-6bb8f8c6307e.jsonl",
       "known": [
         {
           "side": "+",

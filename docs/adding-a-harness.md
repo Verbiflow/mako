@@ -129,7 +129,7 @@ List what no other harness has in the definition's `unique`: its name, what carr
 | Development desk | Its modes and plan approval in `src/dev/mock-bridge.ts` (`MOCK_MODES`, `MOCK_PLAN_APPROVALS`), copied from the real wire, so `?mock` shows what the harness shows. | review | – | – | – | – | – | – |
 
 - OpenCode, models: no default model: OpenCode's models are the person's own providers, so it starts on the model they configured.
-- Claude Code, versions: tested 2.1.322, no oldest proven, bundled @anthropic-ai/claude-agent-sdk
+- Claude Code, versions: tested 2.1.323, no oldest proven, bundled @anthropic-ai/claude-agent-sdk
 - Codex, versions: tested 0.167.0, oldest 0.142.0
 - Cursor, versions: tested 1.3.1, no oldest proven, bundled @cursor/sdk
 - OpenCode, versions: tested 2.2.7, oldest 2.0.0
