@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { activeAcp, useAcp } from "@/state/acp"
+import { activeAcp, useAcp } from "@/state/acp-state"
 import { openTurnReviewWith } from "@/state/review-scope"
 import { EASE_OUT, EASE_SWIFT, reducedMotion } from "./motion"
 import { closeReview, deskReviewCode, followReviewHistory, leftReview, openReview, touchReviewCode, useReviewOpen, type ReviewOpen } from "./review-open"
@@ -39,12 +39,6 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
   useEffect(() => {
     if (open && !code) void readReviewCode().catch(() => undefined)
   }, [open, code, readReviewCode])
-  // A Thread on screen: its Changes code is read while nothing else is, so Review opens at once.
-  useEffect(() => {
-    if (code || !place?.startsWith("thread:")) return
-    const idle = window.requestIdleCallback ?? ((then: () => void) => window.setTimeout(then, 1_200))
-    idle(() => void readReviewCode().catch(() => undefined))
-  }, [code, place, readReviewCode])
   const [shown, setShown] = useState<ReviewOpen | null>(open)
   const layer = useRef<HTMLDivElement>(null)
   if (open && shown !== open) setShown(open)

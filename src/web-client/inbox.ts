@@ -1,6 +1,5 @@
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { useAcp, type AcpState } from "@/state/acp-state"
-import { threadChildren } from "@/state/apex-fins"
+import { threadChildren, useAcp, type AcpState } from "@/state/acp-state"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
 import type { WebThread } from "./threads"
 

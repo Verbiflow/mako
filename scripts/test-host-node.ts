@@ -36,7 +36,7 @@ try {
   // Always Node: Electron's Helper on the bundle's or checkout's entry, plain Node where there is no Electron.
   const electron = "/Applications/Mako.app/Contents/MacOS/Mako"
   const packaged = hostCommand({ executable: electron, args: [], env: { KEEP: "yes" } })
-  assert.deepEqual(packaged.args, [...HOST_NODE_OPTIONS, "/Applications/Mako.app/Contents/Resources/app.asar/dist-electron/entry.js"])
+  assert.deepEqual(packaged.args, [...HOST_NODE_OPTIONS, "/Applications/Mako.app/Contents/Resources/app.asar/dist-electron/host/entry.js"])
   assert.equal(packaged.env.ELECTRON_RUN_AS_NODE, "1")
   assert.equal(packaged.env.MAKO_HOST_EXECUTABLE, electron, "the host learns the executable that starts it and the agent views app")
   assert.equal(packaged.env.KEEP, "yes")
