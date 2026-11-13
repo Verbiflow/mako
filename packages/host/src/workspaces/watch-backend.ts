@@ -379,7 +379,7 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
       const current = running()
       current.ref()
       current.channel?.ref()
-      const timer = setTimeout(() => end(current, new Error(`The file system's history didn't answer within ${Math.round(ms / 1000)} seconds`)), ms)
+      const timer = setTimeout(afterReplies(() => pending.has(request.id), () => end(current, new Error(`The file system's history didn't answer within ${Math.round(ms / 1000)} seconds`)), ms), ms)
       pending.set(request.id, { child: current, settle, fail, timer })
       sendToChild(current, request).catch((error: Error) => end(current, error))
     })
@@ -412,6 +412,27 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
   }
 }
 
+/**
+ * A deadline's action, taken only if `waiting` still holds once the replies the child sent in time have been read. A
+ * timer that comes due while the host's loop is held fires before the loop reads what the child sent meanwhile, and a
+ * reply as long as the process table comes over the channel a piece at a time: it ended a child that had answered in
+ * time. A timer firing more than `LATE_MS` after its deadline gives the reply `GRACE_MS` of a running loop first.
+ */
+function afterReplies(waiting: () => boolean, overdue: () => void, waitMs: number): () => void {
+  const dueAt = performance.now() + waitMs
+  return () => setImmediate(() => {
+    if (!waiting()) return
+    if (performance.now() - dueAt < LATE_MS) return overdue()
+    setTimeout(() => {
+      if (waiting()) overdue()
+    }, GRACE_MS).unref()
+  })
+}
+/** A deadline's timer this late was held by the host's loop, not waiting on the child. */
+const LATE_MS = 250
+/** What a late deadline gives the reply to arrive over a running loop. */
+const GRACE_MS = 2_000
+
 /** A table this late means the child is stuck; it's ended and the caller reads its own. */
 const TABLE_ASK_MS = 20_000
 
@@ -430,7 +451,7 @@ export interface ProcessReader extends HostProbes {
  * rows the runs asked about. The child starts at the first ask and goes after `IDLE_MS` without one; one that
  * doesn't answer in time is ended with what it had, and the next ask starts another.
  */
-export function childProcessReader(script = defaultChildScript()): ProcessReader {
+export function childProcessReader(script = defaultChildScript(), askMs = TABLE_ASK_MS): ProcessReader {
   let child: ChildProcess | undefined
   let nextId = 1
   let idle: NodeJS.Timeout | undefined
@@ -485,12 +506,12 @@ export function childProcessReader(script = defaultChildScript()): ProcessReader
     return next
   }
 
-  const ask = (request: (id: number) => WatcherRequest, waitMs = TABLE_ASK_MS) => new Promise<WatcherReply>((settle, fail) => {
+  const ask = (request: (id: number) => WatcherRequest, waitMs = askMs) => new Promise<WatcherReply>((settle, fail) => {
     const current = running()
     current.ref()
     current.channel?.ref()
     const id = nextId++
-    const timer = setTimeout(() => end(current, new Error(`The process table's reader didn't answer within ${Math.round(waitMs / 1000)} seconds`)), waitMs)
+    const timer = setTimeout(afterReplies(() => pending.has(id), () => end(current, new Error(`The process table's reader didn't answer within ${Math.round(waitMs / 1000)} seconds`)), waitMs), waitMs)
     pending.set(id, { child: current, settle, fail, timer })
     sendToChild(current, request(id)).catch((error: Error) => end(current, error))
   })
@@ -508,7 +529,7 @@ export function childProcessReader(script = defaultChildScript()): ProcessReader
       if (options.timeout !== undefined) request.timeout = options.timeout
       if (options.maxBuffer !== undefined) request.maxBuffer = options.maxBuffer
       return request
-    }, (options.timeout ?? 0) + TABLE_ASK_MS)
+    }, (options.timeout ?? 0) + askMs)
     const command = `${file} ${args.join(" ")}`
     const result = answered.then((reply) => {
       if (reply.t !== "ran") throw unexpected(reply)
