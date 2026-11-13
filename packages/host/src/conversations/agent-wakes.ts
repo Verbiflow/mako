@@ -1,6 +1,6 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
-import { APEX_WORD, decisionWords, reportAsk, reportPhase, waitingWords, type Notice, type Report } from "../contracts/agents.js"
+import { APEX_WORD, decisionWords, FIN_WORD, reportAsk, reportPhase, waitingWords, type Notice, type Report } from "../contracts/agents.js"
 import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
 import { WAKE_COALESCE_MS } from "../contracts/children.js"
@@ -298,6 +298,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
   const decisions = [...asks.filter((notice) => notice.report.for !== "person"), ...decided.filter((notice) => notice.decision === "lead")]
   const persons = [...asks.filter((notice) => notice.report.for === "person"), ...decided.filter((notice) => notice.decision === "person")]
   const finished = fins.filter((notice) => !notice.decision && (notice.report.status === "done" || notice.report.status === "failed"))
+  const handoffs = fins.filter((notice) => notice.report.status === "progress" && notice.report.handoff)
   const lines = [FROM_AGENTS]
   // Every entry the digest writes has its twin here, from the same record, in the same order.
   const cards: FinReportCard[] = []
@@ -374,8 +375,20 @@ export function digest(notices: readonly Notice[], counts: string): string {
       artifactLines(lines, report)
     }
   }
+  if (handoffs.length) {
+    lines.push(`${handoffs.length} ${handoffs.length === 1 ? "hands" : "hand"} work to another ${FIN_WORD}:`)
+    for (const notice of handoffs) {
+      const { label, report } = notice
+      const handoff = report.handoff!
+      const said = (handoff.text ?? report.summary).trim()
+      const text = said.length > RESULT_CHARS ? `${said.slice(0, RESULT_CHARS)}… (agents_read gives the rest)` : said
+      lines.push(`  • ${label} → ${handoff.to}${handoff.text ? " (a message it couldn't send)" : ""}:`, ...text.split("\n").map((line) => `    ${line}`))
+      cards.push(card(notice, opening(report.summary)))
+    }
+    lines.push(`  agents_send to each passes it on.`)
+  }
   lines.push(counts)
-  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length
+  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length && !handoffs.length
     ? "Go on with it: reply to the person, start more work, or end your turn."
     : "agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
   return appendFinReports(lines.join("\n"), cards)

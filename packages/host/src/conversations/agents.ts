@@ -2081,9 +2081,12 @@ export class Agents implements AgentOperations, ConversationChildren {
       ownerGeneration: this.generation,
       at: this.now(),
     }
+    // Progress that hands work to another Fin of its Apex is a handoff: the Apex has to act on it, so it wakes.
+    const handed = input.status === "progress" ? this.siblingNamed(edge, `${input.summary}\n${input.action ?? ""}`) : undefined
+    if (handed) report.handoff = { to: handed.name, child: ThreadIdSchema.parse(handed.child) }
     const kept = this.keepReport(edge, report)
     if ("refused" in kept) return kept
-    return { id: kept.report.id, ...(kept.report.followUp && { followUp: this.store()!.reportAction(kept.report.id) }), ...(kept.deduped && { deduped: true as const }), delivered: kept.report.status === "progress" ? "none" : "notice", ...(kept.report.waitingOn?.length && { subscriptions: this.waitSubscriptions(edge, kept.report) }), ...(kept.report.supersedes?.length && { superseded: kept.report.supersedes }) }
+    return { id: kept.report.id, ...(kept.report.followUp && { followUp: this.store()!.reportAction(kept.report.id) }), ...(kept.deduped && { deduped: true as const }), delivered: kept.report.status === "progress" && !kept.report.handoff ? "none" : "notice", ...(kept.report.waitingOn?.length && { subscriptions: this.waitSubscriptions(edge, kept.report) }), ...(kept.report.supersedes?.length && { superseded: kept.report.supersedes }) }
   }
 
   /** Silent disposition of ordinary follow-through; native questions/approvals remain in answer(). */
@@ -2143,7 +2146,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if ("refused" in apex) return apex
     if (input.to.startsWith(APEX_PREFIX)) return this.sendToApex(apex, input, began)
     const edge = this.resolve(apex, input.to, false)
-    if (!edge) return this.unsendableFin(apex, input.to)
+    if (!edge) return this.unsendableFin(apex, input)
     const op = `send:${apex.session}:${input.clientKey}`
     const request = namedUuid(op)
     const kept = this.sent.get(op)
@@ -4131,7 +4134,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (kept.deduped) return kept
     hostLog("agents", "report", { op: edge.op, report: report.id, status: report.status, implicit: report.implicit ?? false })
     this.latest.set(edge.child, kept.report)
-    if (report.status === "progress") store.markReportsDelivered([report.id], this.now())
+    if (report.status === "progress" && !report.handoff) store.markReportsDelivered([report.id], this.now())
     else this.noticeOf(edge, kept.report, undefined, "off-the-call")
     this.childMoved(edge, false)
     for (const wake of this.waiters) wake()
@@ -4167,7 +4170,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** What a report is to its Apex: a notice, or nothing, and heard, when its route sends it elsewhere. */
   private noticeFor(edge: ThreadParent, report: Report, wake?: string): Notice | undefined {
     const store = this.store()!
-    const route = report.for === "person" ? (report.told ? "apex" : "person") : reportRoute(edge.asked, report.status)
+    const route = report.for === "person" ? (report.told ? "apex" : "person") : reportRoute(edge.asked, report.status, report.handoff !== undefined)
     if (route !== "apex") {
       store.markReportsDelivered([report.id], this.now())
       hostLog("agents", "report kept", { op: edge.op, report: report.id, status: report.status, to: route, wake: edge.asked.wake ?? "decisions" })
@@ -4799,13 +4802,43 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { session: edge.parentSession, thread: edge.parent, ...(conversation && { conversation }) }
   }
 
-  /** A discovered sibling is readable crew, not an authorized send target. Name its existing parent relay. */
-  private unsendableFin(caller: Apex, ref: string): AgentRefused {
+  /**
+   * A discovered sibling is readable crew, not an authorized send target: what it was sent goes to the Apex instead, as
+   * a handoff that wakes it (`Report.handoff`, carrying the words), and the Apex passes it on in one step. The send is
+   * still refused (`relayed`): nothing reached the sibling.
+   */
+  private unsendableFin(caller: Apex, input: AgentsSendInput): AgentRefused {
     const edges = this.store()!.edges()
     const own = edges.of(caller.thread)
-    const sibling = own && edges.children(own.parent).find((edge) => edge.child !== caller.thread && (edge.child === ref || edge.name === finName(ref)))
-    if (!sibling) return unknownFin(ref)
-    return { refused: "unknown-child", why: `${sibling.name} (${sibling.child}) is your sibling, owned by your ${APEX_WORD} (${sibling.parent}); crew discovery does not grant permission to send to it. No message was sent. Ask your ${APEX_WORD} to relay it with agents_report status done and the target name/Thread ID; progress does not wake it. The report's delivered: notice receipt confirms the parent handoff, not delivery to the sibling.` }
+    const sibling = own && edges.children(own.parent).find((edge) => edge.child !== caller.thread && (edge.child === input.to || edge.name === finName(input.to)))
+    if (!own || !sibling) return unknownFin(input.to)
+    const report: Report = {
+      id: `report:${own.child}:relay:${input.clientKey}`,
+      child: ThreadIdSchema.parse(own.child),
+      status: "progress",
+      summary: `Pass this to ${sibling.name}: ${input.text}`,
+      handoff: { to: sibling.name, child: ThreadIdSchema.parse(sibling.child), text: input.text },
+      ownerGeneration: this.generation,
+      at: this.now(),
+    }
+    const kept = this.keepReport(own, report)
+    if ("refused" in kept) return kept
+    return { refused: "relayed", why: `${sibling.name} (${sibling.child}) is your sibling, owned by your ${APEX_WORD} (${sibling.parent}); you can't send to it. Your message went to your ${APEX_WORD} instead, which it wakes, to pass on to ${sibling.name}: nothing reached ${sibling.name} directly (report ${kept.report.id}).` }
+  }
+
+  /**
+   * Another Fin of `edge`'s Apex a report names: by `fin:<name>`, its Thread, or its bare name where that isn't an
+   * ordinary word (it holds a hyphen, an underscore or a digit, as `mac-capacity`), so a Fin called `review` isn't
+   * named by every report that says "review".
+   */
+  private siblingNamed(edge: ThreadParent, text: string): ThreadParent | undefined {
+    const words = text.toLowerCase()
+    const named = (name: string) => {
+      const bare = name.toLowerCase()
+      const word = (said: string) => new RegExp(`(^|[^a-z0-9_-])${said.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9_-])`).test(words)
+      return word(`fin:${bare}`) || (/[-_0-9]/.test(bare) && word(bare))
+    }
+    return this.store()!.edges().children(edge.parent).find((other) => other.child !== edge.child && other.closedAt === undefined && (words.includes(other.child.toLowerCase()) || named(other.name)))
   }
 
   /** A Fin by its name, `fin:<name>` (`child:<name>` before the names) or its Thread: the Apex's own, or with `deep` a descendant's. */

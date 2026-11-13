@@ -120,6 +120,36 @@ async function crew(): Promise<void> {
     const done = await world.agents.list(world.caller(docs), { scope: "crew" })
     assert.ok("crew" in done && done.apex.working === false && done.crew.find((mate) => mate.name === "api")!.state.kind === "ended", "read again, it stands as they stand now")
 
+    // A message to a sibling it can't send goes to its Apex instead, waking it, and reaches the sibling only as the
+    // Apex passes it on. Before, the send was refused and the message went nowhere: handoffs stalled until someone
+    // relayed them by hand.
+    const apexHeard = (said: string) => world.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes(said))
+    const apiHeard = world.prompts.filter((prompt) => prompt.conversation === api).length
+    const relayed = await world.agents.send(world.caller(docs), { to: "api", text: "The docs need the router's new error codes: please list them.", clientKey: "relay-codes" })
+    assert.ok("refused" in relayed && relayed.refused === "relayed", JSON.stringify(relayed))
+    assert.match(relayed.why, /api .*is your sibling.*went to your Apex instead.*nothing reached api directly/)
+    await until("the Apex to hear the relayed message", async () => apexHeard("The docs need the router's new error codes"))
+    const relay = world.prompts.filter((prompt) => prompt.conversation === apex.conversation).at(-1)!.text
+    assert.ok(relay.includes("hands work to another Fin:") && /"docs" \(Cursor\) → api \(a message it couldn't send\):/.test(relay), relay)
+    assert.ok(relay.includes("agents_send to each passes it on."), "and how to pass it on")
+    assert.equal(world.prompts.filter((prompt) => prompt.conversation === api).length, apiHeard, "nothing reached the sibling itself")
+    const again = await world.agents.send(world.caller(docs), { to: "api", text: "The docs need the router's new error codes: please list them.", clientKey: "relay-codes" })
+    assert.ok("refused" in again && again.refused === "relayed")
+    await world.settle(600, 20_000, "ignore")
+    assert.equal(world.prompts.filter((prompt) => prompt.text.includes("The docs need the router's new error codes")).length, 1, "a repeat of its key is relayed once")
+
+    // Progress that hands work to another Fin is a handoff, and wakes the Apex; ordinary progress stays quiet, even
+    // when it uses a word that's also a Fin's name.
+    const handoff = await world.agents.report(world.caller(docs), { status: "progress", summary: "Docs drafted. Hand the review slot to fin:api once the port lands.", clientKey: "handoff-review" })
+    assert.ok(!("refused" in handoff) && handoff.delivered === "notice", JSON.stringify(handoff))
+    await until("the Apex to hear the handoff", async () => apexHeard("Hand the review slot to fin:api"))
+    const quiet = await world.agents.report(world.caller(docs), { status: "progress", summary: "Started the review of section 2.", clientKey: "quiet-review" })
+    assert.ok(!("refused" in quiet) && quiet.delivered === "none", "a word that's also a Fin's name isn't a handoff")
+    const plain = await world.agents.report(world.caller(docs), { status: "progress", summary: "Half the pages are written.", clientKey: "quiet-pages" })
+    assert.ok(!("refused" in plain) && plain.delivered === "none", "progress naming no Fin stays quiet")
+    await world.settle(600, 20_000, "ignore")
+    assert.ok(!apexHeard("Started the review of section 2.") && !apexHeard("Half the pages are written."), "and wakes no one")
+
     const reviewer = await world.agents.start(world.caller(lead), { brief: { objective: "Review the router port for API compatibility." }, harness: "cursor", name: "compat", clientKey: "compat", cwd: world.root })
     assert.ok(!("refused" in reviewer) && reviewer.conversation)
     await world.settle(600, 20_000, "ignore")

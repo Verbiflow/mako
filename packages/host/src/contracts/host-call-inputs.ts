@@ -292,6 +292,13 @@ const inputs = {
           for: z.literal("person").optional(),
           told: z.literal(true).optional(),
           implicit: z.literal(true).optional(),
+          handoff: z
+            .object({
+              to: z.string(),
+              child: z.string().optional(),
+              text: z.string().optional(),
+            })
+            .optional(),
         }),
         standing: z
           .object({

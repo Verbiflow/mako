@@ -158,12 +158,13 @@ export type ChildSpec = z.infer<typeof ChildSpecSchema>
 /**
  * Where a Fin's report goes (6.6): a notice that wakes its Apex (`apex`), a
  * question the person answers in the Fin's Thread (`person`), or nowhere but
- * the Fin's strip and `agents_read` (`none`). Progress never wakes. A `wait`
- * spawn's result always reaches its Apex, settled-only: as the Apex's next
- * turn, never steered into the turn that's running.
+ * the Fin's strip and `agents_read` (`none`). Progress never wakes, but for a
+ * handoff to another Fin (`Report.handoff`), which reaches the Apex as a result
+ * does. A `wait` spawn's result always reaches its Apex, settled-only: as the
+ * Apex's next turn, never steered into the turn that's running.
  */
-export function reportRoute(asked: Pick<ChildSpec, "mode" | "wake">, status: ReportStatus): "apex" | "person" | "none" {
-  if (status === "progress") return "none"
+export function reportRoute(asked: Pick<ChildSpec, "mode" | "wake">, status: ReportStatus, handoff = false): "apex" | "person" | "none" {
+  if (status === "progress" && !handoff) return "none"
   const wake = asked.wake ?? "decisions"
   if (status === "blocked" || status === "needs-input") return wake === "decisions" ? "apex" : "person"
   return wake !== "never" || asked.mode === "wait" ? "apex" : "none"
@@ -510,6 +511,11 @@ export const ReportSchema = z.object({
   told: z.literal(true).optional(),
   /** Recorded by the owner because the turn ended without one. */
   implicit: z.literal(true).optional(),
+  /**
+   * Work it hands to another Fin of its Apex: a progress report that names one ("hand the slot to fin:x"), or its
+   * message to a sibling, which it can't send itself (`text`, relayed). It wakes the Apex, who passes it on. Host-owned.
+   */
+  handoff: z.object({ to: z.string().max(200), child: ThreadIdSchema.optional(), text: z.string().max(16_000).optional() }).optional(),
   /** The child owner's generation when it was written: a report from a stale owner is refused. */
   ownerGeneration: z.number().int().positive(),
   at: z.number(),
@@ -1110,6 +1116,7 @@ export type AgentRefusalReason =
   | "budget"
   | "cycle"
   | "unknown-child"
+  | "relayed"
   | "unknown-apex"
   | "unknown-harness"
   | "unknown-thread"
