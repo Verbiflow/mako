@@ -34,7 +34,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
+import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -82,8 +82,13 @@ type WebHost = Awaited<ReturnType<typeof startWebHost>>
 const HELD_WAKES_AFTER_START_MS = 2_000
 /** A project whose checkout this host couldn't read, or let go of, is asked about again at most this often. */
 const HEAD_ASK_AGAIN_MS = 60_000
-/** How long attribution's read of the catalog stands with nothing said to move it (`cataloguedRows`). */
-const CATALOGUED_FRESH_MS = 30_000
+/**
+ * How long attribution's read of the catalog stands with nothing said to move it (`cataloguedRows`): a safety net, not a
+ * refresh. Rows the catalog moves are put in place, placements move it, and a folder's worktree origin is read once and
+ * kept (`WorktreeOrigins.of`; only a missing folder is looked for again, and its session's next write moves its row).
+ * At 30 s it was the one thing still listing the catalog whole: every 30 s, about 170 ms, on a quiet host.
+ */
+const CATALOGUED_FRESH_MS = 10 * 60_000
 
 /** What the host gives its core: the socket, the method table, and the domains that load on their own. */
 /** When a stop still running says where it is: well before the 15 s a machine's agent or a test waits for it. */
@@ -231,6 +236,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const { environment, fixtureDesk } = config
   const { crashes } = owner
   const web = () => shell.web()
+  // Every probe that only reads the machine (`ps`, `lsof`, `sysctl`) runs in this one child from here on (`hostProbe`),
+  // so none spawns on the loop; it starts at the first ask and reads the apps' processes too.
+  const probes = childProcessReader()
+  shell.stopping.probes = probes
   const git = hostGit(config.gitTrace ?? false)
   const admission = new Admission()
   const machine = processMachine()
@@ -443,6 +452,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     .map((terminal) => `the terminal “${terminal.title}”`)
   const workspaces = openWorkspaces({
     git,
+    probes,
     dataRoot: environment.dataRoot,
     recipes,
     // A recipe runs as its place says: a cloud machine's host is started by the machine's agent.
