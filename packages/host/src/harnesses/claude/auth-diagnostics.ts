@@ -4,7 +4,7 @@ import { join } from "node:path"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { classifyProviderFailure } from "../../contracts/provider-failure.js"
 import type { ProviderFailureEvidence } from "../../contracts/provider-failure-evidence.js"
-import { claudeFailureEvidence, claudeRejectedCredential } from "./failure-evidence.js"
+import { claudeFailureEvidence, claudePermissionRefusal, claudeRejectedCredential } from "./failure-evidence.js"
 import type { HostLogFields } from "../../base/host-log.js"
 import { claudeCredentialState, type ClaudeCredentialState } from "./accounts.js"
 
@@ -66,6 +66,7 @@ export function claudeAuthDiagnostics(
   }
   let nativeAuth = false
   let nativeRejected = false
+  let nativePermission = false
   let version: string | undefined
   const reported = new Set<string>()
   const pending = new Set<Promise<void>>()
@@ -91,6 +92,7 @@ export function claudeAuthDiagnostics(
       if (message.type === "assistant" && !message.parent_tool_use_id &&
         (message.error === "authentication_failed" || message.error === "oauth_org_not_allowed")) {
         nativeAuth = true
+        nativePermission ||= message.error === "oauth_org_not_allowed" || message.message.content.some(block => block.type === "text" && claudePermissionRefusal(block.text))
         const revoked = message.message.content.some(block => block.type === "text" && block.text.includes(REVOKED))
         nativeRejected ||= message.message.content.some(block => block.type === "text" && claudeRejectedCredential(block.text))
         report(revoked ? "access-revoked" : message.error)
@@ -102,12 +104,16 @@ export function claudeAuthDiagnostics(
     },
     /** Native failures only: consult the launch scope, never expose tokens or treat a wrapper as sign-out proof. */
     async failureEvidence(message: string | undefined): Promise<ProviderFailureEvidence | undefined> {
-      if (!message) { nativeAuth = false; nativeRejected = false; return undefined }
-      const auth = nativeAuth || /^Failed to authenticate[.:]/i.test(message) || classifyProviderFailure(message).kind === "auth" || claudeRejectedCredential(message)
+      if (!message) { nativeAuth = false; nativeRejected = false; nativePermission = false; return undefined }
+      const classified = classifyProviderFailure(message).kind
+      const auth = nativeAuth || /^Failed to authenticate[.:]/i.test(message) || classified === "auth" || classified === "permission" || claudeRejectedCredential(message) || claudePermissionRefusal(message)
       const rejected = nativeRejected
+      const permission = nativePermission
       nativeAuth = false
       nativeRejected = false
+      nativePermission = false
       if (!auth) return undefined
+      if (permission) return { kind: "permission", source: "provider-permission-error" }
       if (rejected) return { kind: "auth", source: "provider-auth-error" }
       // An override runs as its own credential; the ordinary OAuth store cannot attest to it.
       const override = provenance.apiKeyOverride || provenance.authTokenOverride || provenance.oauthTokenOverride

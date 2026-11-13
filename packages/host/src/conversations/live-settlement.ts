@@ -4,6 +4,7 @@ import { priceEstimate } from "../usage/index.js"
 import type { InterruptionReason, LiveRequest, LiveSnapshot, SpentThrough, UsageMark } from "../contracts/live-conversations.js"
 import { advancePromptDelivery } from "../contracts/prompt-delivery.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
+import { failureAfterRetry } from "../contracts/delivery-retry.js"
 import type { TurnEnd } from "../contracts/native-agents.js"
 import type { StoppedFor } from "./live-runtime.js"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LiveSessionState, type LiveSessionUsage } from "../contracts/providers-acp.js"
@@ -44,7 +45,8 @@ export function settleRequest(request: LiveRequest, session: LiveSessionState, e
     settled.interruption = { reason: dropped, at: Date.now() }
     settled.failure = dropped === "connection-lost" ? "network" : classifyProviderFailure(session.error, undefined, session.failureEvidence).kind
   } else if (status === "interrupted") settled.interruption = { reason, at: Date.now(), ...work?.length && { stopped: work } }
-  if (status === "failed") settled.failure = classifyProviderFailure(session.error, undefined, session.failureEvidence).kind
+  if (status === "failed") settled.failure = failureAfterRetry(classifyProviderFailure(session.error, undefined, session.failureEvidence).kind, session.failureEvidence, request.retry, Date.now())
+  if (settled.failure === "permission" || settled.failure === "sign-in-check") settled.retry = undefined
   const spend = measuredSpend(request.usageFrom, session)
   if (spend) settled.spend = spend
   return settled
@@ -133,6 +135,7 @@ function continuableInterruption(request: LiveRequest, session: LiveSessionState
   const failure = classifyProviderFailure(session.error, undefined, session.failureEvidence).kind
   // A process that quit on a sign-out would quit again; it waits for the user.
   if (failure === "auth") return "signed-out"
+  if (failure === "permission" || session.failureEvidence?.kind === "unknown") return undefined
   if (session.failureEvidence?.kind === "provider-unavailable") return undefined
   if (session.connection === "disconnected") return "provider-exited"
   return failure === "network" ? "connection-lost" : undefined

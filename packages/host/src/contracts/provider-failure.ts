@@ -21,6 +21,10 @@ export const PROVIDER_FAILURE_KINDS = [
   "context-exhausted",
   /** The provider's account is signed out or its key is invalid; signing in again fixes it. */
   "auth",
+  /** The provider explicitly refused this account's permission, scope or organisation access. */
+  "permission",
+  /** Automatic recovery could not confirm sign-in before its retry budget ended. */
+  "sign-in-check",
   /** The account is signed in but its plan, billing or credits do not cover the request. */
   "plan",
   /** The agent reported a different signed-in identity than the account the session runs as; nothing was sent. */
@@ -118,6 +122,10 @@ const rules: Rule[] = [
       /subscription|billing|payment required|\b402\b|insufficient (?:credits|balance|funds)|out of credits|credit balance|plan does not|not (?:included|available) (?:in|on|with) your plan|upgrade your plan/i,
   },
   {
+    kind: "permission",
+    match: /\bpermission_error\b|\boauth_org_not_allowed\b|\binsufficient (?:permissions?|scope)\b/i,
+  },
+  {
     kind: "auth",
     match:
       /\b401\b|\b403\b|unauthori[sz]ed|unauthenticated|authentication|failed to authenticate|oauth session (?:has )?expired|auth_required|invalid (?:api[_ ]?key|token|credentials)|api[_ ]?key|not (?:logged|signed) in|signed out|(?:log|sign) in (?:again|to)|login required|login (?:has )?expired|run \/login|credentials|token (?:has )?(?:expired|been revoked)|expired token|insufficient (?:permissions|scope)/i,
@@ -168,7 +176,7 @@ const rules: Rule[] = [
 
 /** The kinds a second attempt can't fix, whatever else the message says. */
 const PERMANENT = new Set<ProviderFailureKind>([
-  "transcript-rejected", "context-exhausted", "auth", "plan", "wrong-account", "rejected-input", "missing-folder", "transport-limit", "launch-failed",
+  "transcript-rejected", "context-exhausted", "auth", "permission", "sign-in-check", "plan", "wrong-account", "rejected-input", "missing-folder", "transport-limit", "launch-failed",
 ])
 
 /** A client error other than a timeout (408), a rate limit (429) or a plan's refusal (402), named by its status alone. */
@@ -243,6 +251,18 @@ export function describeProviderFailure(
         retriable: false,
         title: `${providerLabel} is signed out`,
         guidance: `Sign in to ${providerLabel} again, then send the message.`,
+      }
+    case "permission":
+      return {
+        kind, retriable: false,
+        title: `${providerLabel} refused access`,
+        guidance: "This account lacks the required permission, scope or organisation access. Choose an authorised account or ask its administrator for access.",
+      }
+    case "sign-in-check":
+      return {
+        kind, retriable: false,
+        title: `Check your ${providerLabel} sign-in`,
+        guidance: "Automatic retries could not confirm sign-in after an hour. Sign in again in Settings › Agents, then resume the work.",
       }
     case "plan":
       return {

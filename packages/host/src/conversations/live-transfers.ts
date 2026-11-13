@@ -15,7 +15,7 @@ import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
 import { classifyStartFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
-import { nextRetry, transientCause } from "../contracts/delivery-retry.js"
+import { failureAfterRetry, nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { arriving, departing } from "../contracts/request-hold.js"
 import { SessionHeldError } from "../threads/index.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -805,7 +805,7 @@ export class LiveTransfers {
             this.save(resident, { ...transfer, behind: undefined, state: { kind: "queued" }, retry })
             hostLog("transfer", "goes again by itself", { conversation: resident.snapshot.session.id, cause, attempt: retry.attempt, at: new Date(retry.at).toISOString() })
           } else
-            this.fail(resident, transfer, { kind: "failed", error: words, failure })
+            this.fail(resident, transfer, { kind: "failed", error: words, failure: failureAfterRetry(failure, evidence, transfer.retry, Date.now()) })
         } catch (failure) {
           this.host.storageFailed(resident, { error: failure })
         }

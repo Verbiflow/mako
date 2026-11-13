@@ -34,6 +34,10 @@ const cases: [string, string][] = [
   ["The selected Cursor account's login expired. Sign in again in Settings → Agents.", "auth"],
   ["OpenCode: ProviderAuthError: Unauthorized", "auth"],
   ["403 Forbidden", "auth"],
+  ['API Error: 403 {"error":{"type":"permission_error"}}', "permission"],
+  ["oauth_org_not_allowed", "permission"],
+  ["Insufficient permissions", "permission"],
+  ["Insufficient scope", "permission"],
   // A string alone cannot attest to credentials; the native boundary supplies that separate evidence.
   ["Failed to authenticate. API Error: 403 <html><title>Temporary access check</title></html>", "auth"],
   ["API Error: 403 <html><title>Temporary access check</title></html>", "auth"],

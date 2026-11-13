@@ -10,7 +10,7 @@ import { quietSwitch } from "../contracts/conversation-control.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
-import { transientCause, waitsAgain } from "../contracts/delivery-retry.js"
+import { failureAfterRetry, transientCause, waitsAgain } from "../contracts/delivery-retry.js"
 import { nextInLine } from "../contracts/request-hold.js"
 import { ASK_EVERY_MS, DIGEST_WAITS, WAKES_PER_MINUTE } from "../contracts/children.js"
 import { classifyProviderFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
@@ -570,7 +570,8 @@ export class LiveDispatch {
                   status: "failed",
                   error: errorMessage({ error }),
                   failureEvidence,
-                  failure: error instanceof ExecutionAccountChanged ? undefined : failure,
+                  failure: error instanceof ExecutionAccountChanged ? undefined : failureAfterRetry(failure, failureEvidence, candidate.retry, Date.now()),
+                  retry: undefined,
                 }
               : candidate
           ),

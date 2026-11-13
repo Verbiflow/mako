@@ -4,6 +4,9 @@ import { join } from "node:path"
 import { strandedTurn } from "@mako/host/contracts/turn-continuation"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import { AgentsWorld } from "./agents-world.ts"
+import { settleRequest } from "@mako/host/conversations/live-settlement"
+import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
+import { GIVE_UP_MS, transientCause } from "@mako/host/contracts/delivery-retry"
 
 const OUTAGES = [
   'Failed to authenticate. API Error: 403 <!doctype html><html><head><title>Temporary access check</title></head><body>Please wait.</body></html>',
@@ -21,6 +24,57 @@ async function until(what: string, check: () => boolean): Promise<void> {
 
 /** Real local store/dispatch/Fin path, with scripted transports and no account or provider calls. */
 export async function providerOutageControls(root: string): Promise<void> {
+  for (const [index, error] of [
+    'Failed to authenticate. API Error: 403 {"error":{"type":"permission_error"}}',
+    "oauth_org_not_allowed",
+    'API Error: 403 {"error":{"code":"forbidden"}}',
+    "Failed to authenticate: insufficient scope",
+  ].entries()) {
+    const failureEvidence = claudeFailureEvidence(error, { store: "file", scoped: true, access: true, refresh: "present", expiresAt: new Date(Date.now() + 60_000).toISOString() })
+    assert.equal(failureEvidence.kind, "permission")
+    const world = new AgentsWorld({ root: join(root, `permission-${index}`), accounts: { claude: [{ name: "default" }] },
+      script: async turn => { if (turn.text.includes("Refused input")) await turn.world.hold(turn.conversation); return "Done." } })
+    try {
+      const apex = await world.apex("codex")
+      const started = await world.agents.start(apex.caller, { brief: { objective: "Fixture work" }, harness: "claude", name: "worker", cwd: world.root, clientKey: "start" })
+      assert.ok(!("refused" in started) && started.conversation)
+      const id = started.conversation!
+      await until("brief completed", () => world.live.snapshot(id)?.requests.at(-1)?.status === "completed")
+      const sent = await world.agents.send(apex.caller, { to: "worker", text: "Refused input", clientKey: "refused" })
+      assert.ok(!("refused" in sent))
+      await until("refused turn running", () => world.live.session(id)?.status === "running")
+      world.endWith(id, { fail: error, failureEvidence }); world.release(id)
+      await until("permission settled", () => world.live.snapshot(id)?.requests.find(request => request.id === sent.request)?.status === "failed")
+      const failed = () => world.live.snapshot(id)!.requests.find(request => request.id === sent.request)!
+      assert.equal(failed().failure, "permission")
+      assert.equal(failed().retry, undefined)
+      const now = Date.now()
+      for (const source of ["unconfirmed-auth", "credential-current", "gateway-response"] as const) {
+        const evidence = { kind: "provider-unavailable", source } as const
+        for (const elapsed of [GIVE_UP_MS["provider-unavailable"] - 60_000, GIVE_UP_MS["provider-unavailable"] + 1_000]) {
+          const retry = { at: now - 1, since: now - elapsed, attempt: 10, cause: "provider-unavailable", reason: "Failed to authenticate" } as const
+          const ended = settleRequest({ ...failed(), status: "dispatching", retry }, { ...world.live.snapshot(id)!.session,
+            status: "failed", connection: "disconnected", lastStop: "failed", error: retry.reason, failureEvidence: evidence }, false)
+          const expected = source === "unconfirmed-auth" && elapsed > GIVE_UP_MS["provider-unavailable"] ? "sign-in-check" : "provider-unavailable"
+          assert.equal(ended.status, "failed", "no generic provider-exit continuation")
+          assert.equal(ended.failure, expected)
+          assert.equal(LiveRequestSchema.parse(ended).failure, expected, "the final disposition survives the actual journal schema")
+          if (expected === "sign-in-check") {
+            assert.equal(ended.retry, undefined)
+            assert.equal(transientCause(ended.error!, expected, false, ended.failureEvidence), undefined)
+          }
+        }
+      }
+      assert.equal(signInPause(world.live.snapshot(id)!.requests), undefined)
+      const count = world.prompts.filter(prompt => prompt.conversation === id).length
+      world.live.wakeDue(Date.now() + 2 * 60 * 60_000)
+      await world.settle(30, 8_000, "ignore")
+      await world.restart()
+      assert.equal(failed().failure, "permission", "the immediate refusal survives a journal restart")
+      assert.equal(world.live.snapshot(id)!.requests.some(request => request.continues?.requestId === sent.request), false)
+      assert.equal(world.prompts.filter(prompt => prompt.conversation === id).length, count, "no timed replay of a permission refusal")
+    } finally { await world.close() }
+  }
   for (const [index, error] of OUTAGES.entries()) {
     const failureEvidence = claudeFailureEvidence(error, { store: "file", scoped: true, access: true, refresh: "present", expiresAt: new Date(Date.now() + 60_000).toISOString() })
     for (const outcome of ["recover", "restart", "crash", "stop", "close"] as const) {

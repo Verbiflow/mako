@@ -40,8 +40,14 @@ export async function claudeRecoveryControls(dependencies: ClaudeSdkDependencies
   const now = Date.now()
   const valid: ClaudeCredentialState = { store: "file", scoped: true, access: true, refresh: "present", expiresAt: new Date(now + 60 * 60_000).toISOString(), refreshExpiresAt: new Date(now + 24 * 60 * 60_000).toISOString() }
   const expired: ClaudeCredentialState = { ...valid, expiresAt: new Date(now - 1_000).toISOString() }
-  const cases: { name: string; error: string; state?: ClaudeCredentialState; expected: ProviderFailureEvidence }[] = [
+  const cases: { name: string; error: string; nativeOrg?: boolean; state?: ClaudeCredentialState; expected: ProviderFailureEvidence }[] = [
+    { name: "valid-permission", error: 'Failed to authenticate. API Error: 403 {"error":{"type":"permission_error","message":"Model access refused"}}', state: valid, expected: { kind: "permission", source: "provider-permission-error" } },
+    { name: "valid-native-organisation", error: "Failed to authenticate", nativeOrg: true, state: valid, expected: { kind: "permission", source: "provider-permission-error" } },
+    { name: "valid-forbidden-code", error: 'API Error: 403 {"error":{"code":"forbidden"}}', state: valid, expected: { kind: "permission", source: "provider-permission-error" } },
+    { name: "valid-scope", error: "Failed to authenticate: insufficient scope", state: valid, expected: { kind: "permission", source: "provider-permission-error" } },
+    { name: "valid-unknown-json", error: 'Failed to authenticate. API Error: 403 {"error":{"type":"unclassified_error"}}', state: valid, expected: { kind: "unknown", source: "provider-error" } },
     { name: "valid-html", error: HTML, state: valid, expected: { kind: "provider-unavailable", source: "credential-current" } },
+    { name: "gateway-permission-words", error: 'API Error: 403 <html><title>Access check</title><body>Insufficient scope</body></html>', state: valid, expected: { kind: "provider-unavailable", source: "credential-current" } },
     { name: "closed-during-read", error: HTML, state: valid, expected: { kind: "provider-unavailable", source: "credential-current" } },
     { name: "valid-plain", error: "Failed to authenticate. API Error: 403 Temporary access check", state: valid, expected: { kind: "provider-unavailable", source: "credential-current" } },
     { name: "valid-revoked", error: REVOKED, state: valid, expected: { kind: "auth", source: "provider-auth-error" } },
@@ -49,13 +55,13 @@ export async function claudeRecoveryControls(dependencies: ClaudeSdkDependencies
     { name: "valid-revoked-json-message", error: 'Failed to authenticate. API Error: 401 {"error":{"type":"invalid_request_error","message":"OAuth access token has been revoked"}}', state: valid, expected: { kind: "auth", source: "provider-auth-error" } },
     { name: "valid-long-json", error: `Failed to authenticate. API Error: 401 ${JSON.stringify({ error: { type: "authentication_error", message: "Invalid token "+"detail ".repeat(500) } })}`, state: valid, expected: { kind: "auth", source: "provider-auth-error" } },
     { name: "missing", error: HTML, state: { store: "none", scoped: true }, expected: { kind: "auth", source: "credential-missing" } },
+    { name: "missing-json", error: 'Failed to authenticate. API Error: 403 {"error":{"type":"unknown"}}', state: { store: "none", scoped: true }, expected: { kind: "auth", source: "credential-missing" } },
     { name: "expired-refresh-failed", error: REFRESH_FAILED, state: expired, expected: { kind: "auth", source: "refresh-failed" } },
     { name: "expired-refresh-possible", error: "Failed to authenticate", state: expired, expected: { kind: "provider-unavailable", source: "unconfirmed-auth" } },
     { name: "unreadable-html", error: HTML, state: { store: "unreadable", scoped: true }, expected: { kind: "provider-unavailable", source: "gateway-response" } },
     { name: "read-failed-html", error: HTML, expected: { kind: "provider-unavailable", source: "gateway-response" } },
   ]
   assert.deepEqual(claudeFailureEvidence('API Error: 401 {"error":"invalid_token"}', valid), { kind: "auth", source: "provider-auth-error" })
-  assert.deepEqual(claudeFailureEvidence('Failed to authenticate. API Error: 403 {"error":{"type":"unknown"}}', undefined), { kind: "provider-unavailable", source: "unconfirmed-auth" }, "JSON or an ordinary denial alone is not an HTML gateway signal or sign-out proof")
   for (const test of cases) {
     const events: LiveDriverEvent[] = []
     const messages = new Messages()
@@ -91,7 +97,13 @@ export async function claudeRecoveryControls(dependencies: ClaudeSdkDependencies
           cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 }, fallback_credit: { status: { type: "redeemed" } }, inference_geo: "", iterations: [], output_tokens_details: { thinking_tokens: 0 },
           server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 }, service_tier: "standard", speed: "standard" },
       })
-      await prompt(); messages.send(result(test.error))
+      await prompt()
+      if (test.nativeOrg) messages.send({ type: "assistant", error: "oauth_org_not_allowed", uuid: randomUUID(), session_id: id, parent_tool_use_id: null,
+        message: { id: randomUUID(), type: "message", role: "assistant", model: "fixture", content: [], stop_reason: null, stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: null, cache_read_input_tokens: null, server_tool_use: null, service_tier: null,
+            cache_creation: null, fallback_credit: null, inference_geo: null, iterations: null, output_tokens_details: null, speed: null },
+          container: null, context_management: null, diagnostics: null, stop_details: null } })
+      messages.send(result(test.error))
       if (test.name === "closed-during-read") {
         await until(() => completeRead !== undefined, "credential read pending")
         await driver.close(id)
@@ -110,6 +122,7 @@ export async function claudeRecoveryControls(dependencies: ClaudeSdkDependencies
       assert.equal(session()?.failureEvidence, undefined, "a later turn cannot inherit an old credential verdict")
     } finally { await driver.close(id) }
   }
+  assert.deepEqual(claudeFailureEvidence('Failed to authenticate. API Error: 403 {"error":{"type":"unknown"}}', undefined), { kind: "unknown", source: "provider-error" }, "a provider JSON refusal is not an HTML gateway signal or a transient credential verdict")
   // Initialization errors use the same typed evidence, not only errors at the end of a turn.
   const startup = createClaudeSdkDriver({ ...dependencies,
     configure: async () => ({ options: { env: {} }, account: { name: "fixture" } }),

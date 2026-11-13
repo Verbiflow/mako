@@ -5,7 +5,7 @@ import { ExecutionAccountChanged, resumes } from "../harnesses/index.js"
 import type { AccountRemovalSession, AccountRemovalWait } from "../contracts/accounts.js"
 import type { AccountSwitchWait, LiveRequest, SignInHold, SignInReadiness, SignInResume } from "../contracts/live-conversations.js"
 import { isBusyProviderWork } from "../contracts/native-agents.js"
-import { holdForRetry, transientCause } from "../contracts/delivery-retry.js"
+import { failureAfterRetry, holdForRetry, transientCause } from "../contracts/delivery-retry.js"
 import { classifyStartFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
 import { SessionBusyError } from "../contracts/session-hold.js"
 import { SessionHeldError } from "../threads/index.js"
@@ -52,7 +52,7 @@ export class LiveAccounts {
     }
     return resident.snapshot.requests.map((request) =>
       request.status === "queued"
-        ? { ...request, status: "failed", error: message, failure, nativeDelivery: this.unsentStartupDelivery(resident, request, message) }
+        ? { ...request, status: "failed", error: message, failure: failureAfterRetry(failure, evidence, request.retry, Date.now()), failureEvidence: evidence, retry: undefined, nativeDelivery: this.unsentStartupDelivery(resident, request, message) }
         : request
     )
   }

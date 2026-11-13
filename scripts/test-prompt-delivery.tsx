@@ -9,7 +9,7 @@ import { beginStart } from "../src/state/acp-start"
 import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
 import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
-import { nextRetry } from "@mako/host/contracts/delivery-retry"
+import { failureAfterRetry, GIVE_UP_MS, nextRetry } from "@mako/host/contracts/delivery-retry"
 import { FailureRow } from "../src/components/transcript/failure-row"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
@@ -510,3 +510,31 @@ console.log("PASS: a message waiting for this Mac to hear its account is the one
   assert.doesNotMatch(ended, /data-recovery-primary|Sign in|Continue turn/)
 }
 console.log("PASS: a gateway outage shows its automatic retry time and reason, without a sign-in or Resume button")
+
+{
+  const conversationId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+  const error = "Failed to authenticate"
+  const now = Date.now()
+  const retry = { at: now - 1, attempt: 10, since: now - GIVE_UP_MS["provider-unavailable"], cause: "provider-unavailable" as const, reason: error }
+  for (const evidence of [
+    { kind: "permission", source: "provider-permission-error" },
+    { kind: "provider-unavailable", source: "unconfirmed-auth" },
+  ] as const) {
+    const ended: LiveRequest = { ...request, status: "failed", retry: undefined, error, failureEvidence: evidence,
+      failure: failureAfterRetry(classifyProviderFailure(error, undefined, evidence).kind, evidence, retry, now) }
+    assert.equal(ended.failure, evidence.kind === "permission" ? "permission" : "sign-in-check")
+    acpStore.set({ activeKey: conversationId })
+    applyLiveSnapshot({ ...snapshot, revision: evidence.kind === "permission" ? 1 : 2, session: { ...snapshot.session, id: conversationId }, requests: [ended] })
+    const markup = renderToStaticMarkup(<FailureRow conversationId={conversationId} request={ended} />)
+    assert.doesNotMatch(markup, /Continues by itself|Send again|Send another copy|signed out|Start a new/)
+    if (evidence.kind === "permission") {
+      assert.match(markup, /Access refused/)
+      assert.match(markup, /permission, scope or organisation access/)
+      assert.doesNotMatch(markup, /Sign in/)
+    } else {
+      assert.match(markup, /Check your sign-in/)
+      assert.match(markup, /Sign in/)
+    }
+  }
+}
+console.log("PASS: explicit access refusal is immediate; exhausted ambiguous authentication offers a sign-in check without claiming sign-out")

@@ -85,6 +85,12 @@ export function nextRetry(previous: RequestRetry | undefined, cause: RetryCause,
   return { at: cause === "rate-limited" && reset !== undefined && reset > now ? reset + RESET_MARGIN_MS : now + wait, attempt, since, cause, reason: reason.slice(0, 2_000), ...(reset !== undefined && { until: reset }) }
 }
 
+/** An ambiguous authentication failure gets a sign-in check once its service retry budget is spent; not proof of sign-out. */
+export function failureAfterRetry(kind: ProviderFailureKind, evidence: ProviderFailureEvidence | undefined, retry: RequestRetry | undefined, now: number): ProviderFailureKind {
+  return kind === "provider-unavailable" && evidence?.kind === "provider-unavailable" && evidence.source === "unconfirmed-auth" &&
+    retry?.cause === "provider-unavailable" && now - retry.since >= GIVE_UP_MS["provider-unavailable"] ? "sign-in-check" : kind
+}
+
 /** A digest of Fins' news no model answered: only an answer proves it was heard, and its reports already read as heard. */
 export function unheardDigest(request: Pick<LiveRequest, "digest">): boolean {
   return request.digest !== undefined && !request.digest.heard
