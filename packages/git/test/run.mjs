@@ -151,6 +151,12 @@ try {
     assert.equal(commonDirOf(root), join(root, ".git"))
     assert.equal(commonDirOf(join(linked, "deep", "er")), join(root, ".git"), "a folder inside a linked worktree")
     assert.equal(commonDirOf(scratch), scratch, "outside a repository, the folder itself")
+    // A worktree Git is still adding: its .git file is written, its commondir not yet.
+    const adding = join(scratch, "common-dir-adding")
+    await mkdir(join(root, ".git", "worktrees", "adding"), { recursive: true })
+    await mkdir(adding, { recursive: true })
+    await writeFile(join(adding, ".git"), `gitdir: ${join(root, ".git", "worktrees", "adding")}\n`)
+    assert.equal(commonDirOf(adding), join(root, ".git"), "a worktree being added is its repository's before its commondir is written")
     const { symlink } = await import("node:fs/promises")
     await symlink(root, join(scratch, "common-dir-link"))
     assert.equal(commonDirOf(join(scratch, "common-dir-link")), join(root, ".git"), "a repository reached through a link is the same repository")

@@ -42,13 +42,13 @@ const suite = join(root, "suite")
 const repositories = [repository("suite/app"), repository("suite/api"), repository("solo")]
 const solo = repositories[2]
 
-type Write = { repository: string; args: string; start: number; end: number; waited: number }
+type Write = { repository: string; cwd: string; args: string; outcome: string; start: number; end: number; waited: number }
 const writes: Write[] = []
 const traced = new Git({
   trace: (run) => {
     if (!run.write) return
     const end = performance.now()
-    writes.push({ repository: run.repository ?? "", args: run.args.join(" "), start: end - run.ms, end, waited: run.queuedMs })
+    writes.push({ repository: run.repository ?? "", cwd: run.cwd, args: run.args.join(" "), outcome: run.outcome, start: end - run.ms, end, waited: run.queuedMs })
   },
 })
 const records = new Map<string, Prepared>()
@@ -75,7 +75,13 @@ try {
   }
   assert.equal(new Set(branches).size, ROUNDS * 2, "each Thread had a branch of its own")
 
-  const byRepository = Map.groupBy(writes, (write) => write.repository)
+  // A write in a folder that's gone (a worktree set aside and being removed) is keyed by that folder and can't run;
+  // any other write is its repository's. One that ran under any other key ran outside its repository's turn.
+  const known = new Set(repositories.map((repo) => realpathSync(join(repo, ".git"))))
+  const strays = writes.filter((write) => !known.has(write.repository))
+  assert.deepEqual(strays.filter((write) => write.outcome === "ok"), [], "every write that ran took its repository's turn")
+  if (strays.length) console.log(JSON.stringify({ strayWrites: strays.map((write) => ({ args: write.args, outcome: write.outcome })) }))
+  const byRepository = Map.groupBy(writes.filter((write) => known.has(write.repository)), (write) => write.repository)
   assert.equal(byRepository.size, repositories.length, "every repository was written")
   for (const [repo, own] of byRepository) {
     own.sort((a, b) => a.start - b.start)
