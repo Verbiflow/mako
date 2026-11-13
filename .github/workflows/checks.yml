@@ -284,6 +284,7 @@ jobs:
       - run: npm run build:ui-test
       - run: |
           nohup node scripts/ci-ui-serve.mjs --port 4173 > "$RUNNER_TEMP/ui-serve.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/ui-serve.pid"
           curl --retry 20 --retry-delay 1 --retry-connrefused -sf http://127.0.0.1:4173/ -o /dev/null
       # The shard's first Electron start and page load, once and timed, before any suite pays for it.
       - run: node scripts/ci-ui-warm.mjs
@@ -304,6 +305,9 @@ jobs:
       - run: npm run test:limit-notice-ui
         env:
           MAKO_UI_VITE_URL: http://127.0.0.1:4173/
+      # The renderer's server ends with the job, whatever the suites did.
+      - if: always()
+        run: kill "$(cat "$RUNNER_TEMP/ui-serve.pid" 2>/dev/null)" 2>/dev/null || true
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -343,6 +347,7 @@ jobs:
       - run: npm run build:ui-test
       - run: |
           nohup node scripts/ci-ui-serve.mjs --port 4173 > "$RUNNER_TEMP/ui-serve.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/ui-serve.pid"
           curl --retry 20 --retry-delay 1 --retry-connrefused -sf http://127.0.0.1:4173/ -o /dev/null
       # The shard's first Electron start and page load, once and timed, before any suite pays for it.
       - run: node scripts/ci-ui-warm.mjs
@@ -352,6 +357,9 @@ jobs:
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
           MAKO_UI_VITE_URL: http://127.0.0.1:4173/
+      # The renderer's server ends with the job, whatever the suites did.
+      - if: always()
+        run: kill "$(cat "$RUNNER_TEMP/ui-serve.pid" 2>/dev/null)" 2>/dev/null || true
       # What a failed suite kept to say why (a host's logs when it didn't quit).
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
