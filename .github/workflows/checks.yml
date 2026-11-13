@@ -53,6 +53,7 @@ jobs:
       steer: ${{ steps.detect.outputs.steer }}
       codexSandbox: ${{ steps.detect.outputs.codexSandbox }}
       fileSearch: ${{ steps.detect.outputs.fileSearch }}
+      macHost: ${{ steps.detect.outputs.macHost }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -102,6 +103,36 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gate-${{ matrix.shard }}-evidence
+          path: ${{ runner.temp }}/test-evidence
+          if-no-files-found: ignore
+
+  # The gate's steps that pass only on macOS (`ci-gate.mjs`'s `MAC_STEPS`, each with its reason), in three shards.
+  mac-host:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.macHost == 'true'
+    runs-on: macos-15
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+      - run: npm run build:control-runtime
+      - run: node scripts/ci-gate.mjs --mac ${{ matrix.shard }} 3
+        env:
+          MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mac-host-${{ matrix.shard }}-evidence
           path: ${{ runner.temp }}/test-evidence
           if-no-files-found: ignore
 
@@ -376,7 +407,7 @@ jobs:
   # The one result to wait on: it passes when every job passed, or was skipped because the change can't reach it.
   ci:
     if: always()
-    needs: [changes, checks, gate, file-search, performance, update-checks, transcript-ui, suites, sync-bench, steer-latency, host-load, codex-sandbox]
+    needs: [changes, checks, gate, mac-host, file-search, performance, update-checks, transcript-ui, suites, sync-bench, steer-latency, host-load, codex-sandbox]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:

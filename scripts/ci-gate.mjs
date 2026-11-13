@@ -9,6 +9,7 @@ import { runSuite } from "./lib/run-suite.mjs"
  *
  *   node scripts/ci-gate.mjs <shard> <shards>     what CI runs, shards counted from 1
  *   node scripts/ci-gate.mjs --plan <shards>      each shard's steps and estimated seconds
+ *   --mac, before either, takes `MAC_STEPS` instead
  */
 
 /** [seconds, command] */
@@ -141,13 +142,10 @@ export const STEPS = [
   [71, "npm run -s test:control-recording-continuous"],
   [33, "npm run -s test:cursor-child"],
   [12, "npm run -s test:desktop-answers"],
-  [8, "npm run -s test:desktop-crashes"],
   [1, "npm run -s test:dev-updates"],
-  [207, "npm run -s test:execution-ownership"],
   [6, "npm run -s test:file-previews"],
   [19, "npm run -s test:git"],
   [8, "npm run -s test:git-remote"],
-  [206, "npm run -s test:host"],
   [1, "npm run -s test:host-load-memory"],
   [7, "npm run -s test:host-shutdown"],
   [28, "npm run -s test:host-signals"],
@@ -158,11 +156,9 @@ export const STEPS = [
   [26, "npm run -s test:live-approvals"],
   [1, "npm run -s test:live-context-children"],
   [1, "npm run -s test:local-signing"],
-  [61, "npm run -s test:mcp"],
   [16, "npm run -s test:message-queue"],
   [1, "npm run -s test:mobile-behavior"],
   [178, "npm run -s test:moves"],
-  [11, "npm run -s test:native-authoring"],
   [9, "npm run -s test:node-host-secrets"],
   [3, "npm run -s test:opencode-agents"],
   [2, "npm run -s test:opencode-api"],
@@ -172,7 +168,6 @@ export const STEPS = [
   [7, "npm run -s test:provider-launch-options"],
   [4, "npm run -s test:queued-steering"],
   [2, "npm run -s test:rail-list"],
-  [50, "npm run -s test:recovery-admission"],
   [66, "npm run -s test:roster-delta"],
   [10, "npm run -s test:run-suite"],
   [1, "npm run -s test:scripted-model"],
@@ -185,7 +180,6 @@ export const STEPS = [
   [42, "npm run -s test:thread-app"],
   [9, "npm run -s test:thread-environment-launch"],
   [6, "npm run -s test:thread-lifecycle"],
-  [201, "npm run -s test:thread-worktrees"],
   [6, "npm run -s test:transfer-scheduling"],
   [177, "npm run -s test:tree-watcher"],
   [2, "npm run -s test:update-local"],
@@ -193,6 +187,27 @@ export const STEPS = [
   [3, "npm run -s test:web-delivery"],
   [2, "npm run -s test:window-boot"],
   [1, "npm run -s test:zod-patch"],
+]
+
+/**
+ * The steps that pass only on macOS, each for the reason beside it, run by `--mac` on Mac runners: on every push to
+ * main, and on a pull request that touches the host or its tests (`ci-changes.mjs`'s `macHost`).
+ */
+export const MAC_STEPS = [
+  // `test-keychain-safe-storage.ts` reads the macOS Keychain, which Linux's secret store answers otherwise.
+  [206, "npm run -s test:host"],
+  // `test-recovery-probe-scope.ts` expects a resume to be unavailable as it is on a Mac; Linux reads it resumable.
+  [207, "npm run -s test:execution-ownership"],
+  // the same recovery probe as `test:execution-ownership`.
+  [50, "npm run -s test:recovery-admission"],
+  // its npm install expectations follow the Mac's lockfile platform packages.
+  [201, "npm run -s test:thread-worktrees"],
+  // its embedded computer-use host is macOS-only.
+  [61, "npm run -s test:mcp"],
+  // a native crash leaves a minidump only where Crashpad writes one, on the Mac.
+  [8, "npm run -s test:desktop-crashes"],
+  // it runs Claude's darwin-arm64 binary.
+  [11, "npm run -s test:native-authoring"],
 ]
 
 /** A step not yet measured. */
@@ -204,12 +219,13 @@ const QUIET_MS = 10 * 60_000
 
 /** What a step needs on the runner beyond the job's own setup, installed once in a shard that picks it. */
 const NEEDS = {
-  "npm run -s test:mcp": "ffmpeg",
+  "npm run -s test:control-cli": "ffmpeg",
+  "npm run -s test:control-packages": "ffmpeg",
   "npm run -s test:control-recording-continuous": "ffmpeg",
 }
 const INSTALL = {
   // Recording reads ffmpeg and ffprobe on PATH; the runner's image has neither.
-  ffmpeg: "command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg)",
+  ffmpeg: process.platform === "darwin" ? "command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg" : "command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg)",
 }
 
 /** Evidence a failed step leaves, run after it: its own exit stays the result. */
@@ -229,10 +245,12 @@ export function shards(steps, count) {
   return load.map((shard) => ({ seconds: shard.seconds, steps: shard.picked.sort((a, b) => a - b).map((index) => steps[index]) }))
 }
 
-const args = process.argv.slice(2)
+const mac = process.argv[2] === "--mac"
+const args = process.argv.slice(mac ? 3 : 2)
+const listed = mac ? MAC_STEPS : STEPS
 if (args[0] === "--plan") {
   const count = Number(args[1])
-  shards(STEPS, count).forEach((shard, index) => console.log(`shard ${index + 1}: ${shard.seconds} s, ${shard.steps.length} steps\n  ${shard.steps.map((step) => step[1]).join("\n  ")}`))
+  shards(listed, count).forEach((shard, index) => console.log(`shard ${index + 1}: ${shard.seconds} s, ${shard.steps.length} steps\n  ${shard.steps.map((step) => step[1]).join("\n  ")}`))
   process.exit(0)
 }
 const [shard, count] = args.map(Number)
@@ -241,7 +259,7 @@ if (!Number.isInteger(shard) || !Number.isInteger(count) || shard < 1 || shard >
   process.exit(2)
 }
 
-const picked = shards(STEPS, count)[shard - 1].steps
+const picked = shards(listed, count)[shard - 1].steps
 for (const need of new Set(picked.flatMap(([, command]) => (NEEDS[command] ? [NEEDS[command]] : [])))) {
   console.log(`::group::install ${need}`)
   await runSuite("bash", ["-c", INSTALL[need]], { limitMs: 5 * 60_000, quietMs: 5 * 60_000 })
@@ -263,7 +281,7 @@ for (const [, command] of picked) {
 
 const failed = results.filter(({ code }) => code !== 0)
 const lines = [
-  `### gate, shard ${shard} of ${count}: ${failed.length ? `${failed.length} failed` : "passed"}`,
+  `### ${mac ? "mac " : ""}gate, shard ${shard} of ${count}: ${failed.length ? `${failed.length} failed` : "passed"}`,
   "",
   "| step | exit | seconds |",
   "|---|---|---|",

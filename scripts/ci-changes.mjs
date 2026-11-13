@@ -12,6 +12,8 @@ import { appendFileSync, readFileSync } from "node:fs"
 export const JOBS = {
   // The window's suites on a Mac: whatever the renderer, the desk, the web app or the host's wire to them draws.
   ui: [/^src\//, /^electron\//, /^packages\/(web-client|client|protocol)\//, /^packages\/host\/src\/(contracts|transport)\//, /^scripts\/test-[\w-]*-ui[\w-]*\./, /^scripts\/ci-suites\.mjs$/, /^scripts\/lib\/test-/, /^index\.html$/, /^vite\./, /^tailwind/],
+  // The gate's steps that pass only on a Mac (`ci-gate.mjs`'s `MAC_STEPS`): the host, its packages and their tests.
+  macHost: [/^packages\//, /^electron\//, /^scripts\/(test-|lib\/|diagnose-|check-)/, /^scripts\/ci-gate\.mjs$/],
   // The local updater's checks: the application domain, the update scripts and anything the packaged build reads.
   updates: [/^packages\/host\/src\/application\//, /^scripts\/[\w-]*update[\w-]*\./, /^scripts\/ci-update-checks\.ts$/, /^electron\//, /^electron-builder/, /^build\//],
   // Decode and live-path timings measured against the base: the decoders, readers, live host and the window's reduction.
