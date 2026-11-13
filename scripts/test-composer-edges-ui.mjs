@@ -25,8 +25,8 @@ if (process.versions.electron) {
   let server
   let base = given > 0 ? process.argv[given + 1] : undefined
   if (!base) {
-    const { createServer } = await import("vite")
-    server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
+    const { uiVite } = await import("./lib/ui-vite.mjs")
+    server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
     await server.listen()
     base = server.resolvedUrls.local[0]
   }
