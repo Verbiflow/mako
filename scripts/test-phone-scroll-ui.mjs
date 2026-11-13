@@ -17,7 +17,8 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * - The keyboard opening leaves what's read where it was, and the end in view when it was followed.
  * - Turned sideways at the end and back, the newest turn stays where the end shows it.
  * - An earlier page arriving under a resting finger leaves the line under it where it is.
- * - A flick makes no long tasks: no task with 50 ms of the page's own work (its main thread's CPU time, from a trace).
+ * - A flick makes no long tasks: no task with 50 ms of the page's own work (its main thread's CPU time, from a trace),
+ *   and none that holds the thread 150 ms.
  * - On a laptop, the wheel leaves the end of a streaming answer in a short transcript and a windowed one, and the
  *   windowed one's rows aren't scrolled under it.
  *
@@ -434,7 +435,9 @@ async function checkScroll() {
     }
     if (!unavailable) try {
       since = await now()
-      // A long task is one with 50 ms of the page's own work, as the browser's are 50 ms of wall time.
+      // A long task is one with 50 ms of the page's own work, as the browser's are 50 ms of wall time. A task the page
+      // waits in (a synchronous call to another process, a GPU readback) holds the thread with little work, so any task
+      // of 150 ms of wall time fails too: the system taking the CPU from the page made 67 ms at most on the runner.
       const work = await pageWork(async () => {
         await flick(400, 2_500)
         await rest()
@@ -443,9 +446,11 @@ async function checkScroll() {
       assert.ok(flung > 600, `a flick of 400 px glided ${Math.round(flung)} px from the end`)
       const walls = await longTasks(since)
       const tasks = work.filter((task) => task.cpu >= 50).map((task) => Math.round(task.cpu))
+      const blocked = work.filter((task) => task.wall >= 150).map((task) => Math.round(task.wall))
       const most = work.reduce((worst, task) => (task.cpu > worst.cpu ? task : worst), { wall: 0, cpu: 0 })
-      if (diagnostic) packet.oracle = { status: "observed", since, measure: "the page's main-thread CPU time per task, from a trace", tasks: tasks.slice(0, 64), droppedTasks: Math.max(0, tasks.length - 64), wallTasks: walls.slice(0, 64) }
+      if (diagnostic) packet.oracle = { status: "observed", since, measure: "the page's main-thread CPU time per task, from a trace", tasks: tasks.slice(0, 64), droppedTasks: Math.max(0, tasks.length - 64), blocked: blocked.slice(0, 64), wallTasks: walls.slice(0, 64) }
       assert.deepEqual(tasks, [], `a flick while streaming made long tasks: ${tasks.join(", ")} ms of the page's own work`)
+      assert.deepEqual(blocked, [], `a flick while streaming held the page's thread in tasks of ${blocked.join(", ")} ms`)
       held = await holds("after a flick")
       console.log(`Flick up: glided to ${Math.round(flung)} px from the end, no long tasks (the most work in one: ${most.cpu.toFixed(1)} ms, ${most.wall.toFixed(1)} ms of wall time${walls.length ? `; wall-clock long tasks ${walls.join(", ")} ms` : ""}), held within ${Math.abs(held.worst).toFixed(1)} px`)
       if (diagnostic) packet.oracle.status = "passed-instrumented-only"
