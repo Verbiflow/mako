@@ -16,11 +16,11 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const { default: electron } = await import("electron")
   const root = testScratch("mako-internal-review-ui-", { given: process.argv[2] })
   await mkdir(root, { recursive: true })
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: Number(process.env.MAKO_THREAD_PORT ?? 0), strictPort: true, watch: null, fs: { strict: false } } })
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: Number(process.env.MAKO_THREAD_PORT ?? 0), strictPort: true, watch: null, fs: { strict: false } } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-internal-review-ui", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_INTERNAL_UI_ROOT: root, MAKO_INTERNAL_UI_URL: server.resolvedUrls.local[0] }
