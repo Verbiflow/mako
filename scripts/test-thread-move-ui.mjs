@@ -34,14 +34,14 @@ if (process.versions.electron) {
 } else {
   await checkMoveState()
   if (process.argv.includes("--state-only")) process.exit(0)
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const args = process.argv.slice(2)
   const portAt = args.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(args[portAt + 1])
   const root = testScratch("mako-thread-move-ui-")
   const evidence = process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "moves") : root
   await mkdir(evidence, { recursive: true })
-  const server = await createServer({
+  const server = await uiVite({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],
@@ -749,9 +749,18 @@ async function checkWindow() {
     })()`)
     if (rect) await writeFile(join(evidence, `${name}-crop.png`), (await page.capturePage(rect)).toPNG())
   }
+  /**
+   * The other theme, at once. Its colours would otherwise ease over a transition on every element, and each capture
+   * waits for every animation to end (`settle`): 45 pairs of captures spent most of a run on those. Transitions are off
+   * only while the class changes, so the captures are of the same settled colours, and the app's own animations,
+   * which `settle` is there for, run as they do.
+   */
   const theme = async (next) => {
+    await evaluate(`(() => { if (!document.getElementById('theme-at-once')) document.head.insertAdjacentHTML('beforeend', '<style id="theme-at-once">*,*::before,*::after{transition:none!important}</style>'); return true })()`)
     await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: ${JSON.stringify(next)}}))`)
     await evaluate(`new Promise(resolve => { const check = () => document.documentElement.classList.contains('light') === ${next === "light"} ? resolve(true) : requestAnimationFrame(check); check() })`)
+    await frames()
+    await evaluate(`(() => { document.getElementById('theme-at-once')?.remove(); return true })()`)
   }
   const both = async (name, around) => {
     const phase = await evaluate(`JSON.stringify([document.querySelector('[data-thread-move]')?.dataset.threadMove, document.querySelector('[data-thread-return]')?.dataset.threadReturn])`)
