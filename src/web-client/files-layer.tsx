@@ -34,12 +34,6 @@ export function FilesLayer({ form, place }: { form: WebForm; place: string | und
   useEffect(() => {
     if (open) void filesScreenChunk.read().catch(() => undefined)
   }, [open])
-  // A Thread on screen: the Files code is read while nothing else is, so Files opens at once.
-  useEffect(() => {
-    if (screen || !place?.startsWith("thread:")) return
-    const idle = window.requestIdleCallback ?? ((then: () => void) => window.setTimeout(then, 1_200))
-    idle(() => void filesScreenChunk.read().catch(() => undefined))
-  }, [screen, place])
 
   const [shown, setShown] = useState<FilesOpen | null>(open)
   if (open && shown !== open) setShown(open)

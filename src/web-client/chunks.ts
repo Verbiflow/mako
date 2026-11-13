@@ -34,5 +34,5 @@ export function chunk<Module>(load: () => Promise<Module>) {
 /** A Thread's transcript: read as soon as the list has painted, and drawn by its screen in the frame it's opened. */
 export const transcriptChunk = chunk(() => import("./live-session"))
 
-/** The Files screen's code (its browser, its file kinds, its reader): read when Files opens, or while a Thread is on screen and nothing else is. */
+/** The Files screen's code (its browser, its file kinds, its reader): read after the list's next screens, or when Files opens. */
 export const filesScreenChunk = chunk(() => import("./files-screen"))
