@@ -66,6 +66,8 @@ const HoldRowSchema = z.object({
   since: z.number(),
   heartbeat_at: z.number(),
 })
+const StaleHoldsSchema = z.array(HoldRowSchema.extend({ provider: z.string(), native_id: z.string() }))
+const ConversationEndpointSchema = z.object({ conversationId: z.string(), socket: z.string() })
 
 export interface SessionMemoryEntry {
   settings?: SessionSettings
@@ -409,7 +411,7 @@ export class SessionMemory {
     if (this.verifying || this.lifecycle.signal.aborted || !this.writable || this.newer) return
     this.verifying = true
     try {
-      const rows = z.array(HoldRowSchema.extend({ provider: z.string(), native_id: z.string() })).parse(
+      const rows = StaleHoldsSchema.parse(
         this.db.prepare("SELECT * FROM holds WHERE heartbeat_at < ? ORDER BY provider, native_id LIMIT 8 OFFSET ?").all(this.now() - HOLD_STALE_MS, this.holdCheckOffset))
       this.holdCheckOffset = rows.length < 8 ? 0 : this.holdCheckOffset + rows.length
       await Promise.all(rows.map(async (row) => {
@@ -643,7 +645,7 @@ export class SessionMemory {
   }
 
   routeForConversation(conversationId: string): ConversationEndpoint | null {
-    const journal = z.object({ conversationId: z.string(), socket: z.string() }).safeParse(
+    const journal = ConversationEndpointSchema.safeParse(
       this.db.prepare("SELECT conversation_id AS conversationId, socket FROM conversation_journals WHERE conversation_id = ?").get(conversationId))
     return journal.success && journal.data.socket !== this.host.socket ? journal.data : null
   }
@@ -653,7 +655,7 @@ export class SessionMemory {
     if (hold && this.holdLive(hold)) {
       const row = this.db.prepare(`SELECT conversation_id AS conversationId, socket
         FROM conversation_journals WHERE conversation_id = ?`).get(hold.conversation_id)
-      const parsed = z.object({ conversationId: z.string(), socket: z.string() }).safeParse(row)
+      const parsed = ConversationEndpointSchema.safeParse(row)
       return parsed.success ? { ...parsed.data, provider, nativeId } : null
     }
     const row = this.db.prepare(`SELECT b.conversation_id AS conversationId, b.provider,

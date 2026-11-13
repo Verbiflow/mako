@@ -3,6 +3,7 @@ import { execFileSync, spawn } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { mock } from "node:test"
 import { setTimeout as wait } from "node:timers/promises"
 import { AppKeySchema, type AppKey } from "@mako/host/contracts/thread-environments"
 import { membersOnly, parseTable, PS_ARGS, type RunLeader } from "@mako/host/workspaces/process-table"
@@ -32,6 +33,39 @@ async function endedPid(): Promise<number> {
   const child = spawn("/usr/bin/true", [], { detached: true, stdio: "ignore" })
   await new Promise((done) => child.once("exit", done))
   return child.pid!
+}
+
+// A signal check can see a live group after its leader ended, or a process we can't signal. Only EPERM counts as
+// alive after a failed check; changing how that error is read mustn't hide a group or turn a missing pid into one.
+for (const [index, sample] of [
+  { group: "alive", process: "ESRCH", alive: true, parent: false },
+  { group: "EPERM", process: "ESRCH", alive: true, parent: false },
+  { group: "ESRCH", process: "alive", alive: true, parent: true },
+  { group: "ESRCH", process: "EPERM", alive: true, parent: true },
+  { group: "ESRCH", process: "ESRCH", alive: false, parent: true },
+  { group: "EINVAL", process: undefined, alive: false, parent: true },
+].entries()) {
+  const app = key(1_000 + index)
+  const folder = join(root, `signal-${index}`)
+  mkdirSync(join(folder, app), { recursive: true })
+  writeFileSync(join(folder, app, "runs.json"), JSON.stringify({ runs: { "process-web": run("web", 12345, 1) } }))
+  let asked = 0
+  const probes: number[] = []
+  const kill = mock.method(process, "kill", (pid: number, signal?: number | string) => {
+    assert.equal(signal, 0, "a look never signals a run")
+    probes.push(pid)
+    const code = pid < 0 ? sample.group : sample.process
+    if (code === "alive") return true
+    throw code === undefined ? null : { code }
+  })
+  try {
+    const look = new ThreadProcesses({ root: folder, listening: async () => false, readMembers: async () => { asked++; return [] } })
+    assert.equal((await look.overview()).length, 1, "a signal refusal doesn't drop the app's records")
+    assert.equal(asked > 0, sample.alive, `read members only when the group or leader exists: ${sample.group}/${sample.process}`)
+    assert.equal(probes.includes(12345), sample.parent, "a live group doesn't require its leader to exist")
+  } finally {
+    kill.mock.restore()
+  }
 }
 
 // A run alive in a group of its own, with a child of its own.

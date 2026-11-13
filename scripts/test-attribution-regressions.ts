@@ -12,6 +12,7 @@ import { Git } from "@mako/git"
 import type { ActivityMark, Attribution, MakoWrite, ReportedCall, ReportedEffect, TrackerFileSystem } from "@mako/protocol"
 import { FakeClock, FakeEventSource, FakeFileSystem } from "@mako/protocol/attribution-conformance"
 import type { ChildSource } from "@mako/sessions"
+import { atOnce, inSlices, StepsStopped } from "@mako/sessions/slices"
 import type { Entry } from "@mako/sessions/entries"
 import { Backfill } from "@mako/host/attribution/backfill"
 import { ChildCalls } from "@mako/host/attribution/child-calls"
@@ -20,7 +21,7 @@ import { gitRepository, nodeFileSystem, watcherEvents } from "@mako/host/attribu
 import { readOnlyCommand } from "@mako/host/attribution/read-only"
 import { untrackable } from "@mako/host/attribution/paths"
 import { ranTexts, SCRIPT_LIMIT } from "@mako/host/attribution/scripts"
-import { partition, shares, side, storedView, turnChanges, type JournalView } from "@mako/host/attribution/queries"
+import { countingTurn, fileGroups, partition, readingTurnChain, shares, side, storedView, turnChain, turnChanges, type JournalView } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { JournalStore } from "@mako/host/attribution/journal-store"
 import { contentRef } from "@mako/host/attribution/content"
@@ -2271,5 +2272,64 @@ test("attributing again only what new evidence reaches gives every change the au
         assert.deepEqual(item.author, full, `trial ${trial}, step ${step}: change ${index} on ${item.change.path} at ${item.change.changedAt} is stale`)
       }
     }
+  }
+})
+
+test("counting a long renamed file chain yields between bounded indexed reads", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "mako-turn-chain-"))
+  const store = JournalStore.open(join(folder, "journal.sqlite"), { device: "turn-chain" })
+  try {
+    const started = 1_800_000_000_000
+    store.saveRoot({ id: "root", path: "/work", kind: "workspace", repository: false, head: null, mark: null, seenAt: started, trackedAt: started, active: true })
+    const refs = ["first\n", "second\n"].map((text) => {
+      const bytes = Buffer.from(text)
+      const ref = contentRef(bytes)
+      store.putBlob(ref, bytes, started)
+      return ref
+    })
+    const own: Attribution = { certainty: "exact", author: { thread: "T", session: "S", turn: "turn" }, effect: "modify" }
+    const other: Attribution = { certainty: "exact", author: { thread: "other", session: "other", turn: "other" }, effect: "modify" }
+    let path = "a.txt"
+    const append = (index: number) => {
+      const from = index > 0 && index % 31 === 0 ? path : undefined
+      if (from) path = path === "a.txt" ? "b.txt" : path === "b.txt" ? "c.txt" : "a.txt"
+      return store.insertEntry({ at: started + index, changedAt: started + index, root: "root", path, ...(from && { from }), kind: from ? "rename" : "modify",
+        before: refs[index % 2]!, after: refs[(index + 1) % 2]!, text: true, added: 1, removed: 1, stored: true, observed: "event", author: from || index % 7 ? own : other, settled: true })
+    }
+    store.transaction(() => {
+      for (let index = 0; index < 2_048; index++) append(index)
+      store.saveActivity({ kind: "turn", id: "turn", session: "S", thread: "T", turn: "turn", checkout: "/work", named: [], start: started, end: started + 2_048 })
+    })
+    const view = storedView(store)
+    const withoutMaps = (entries: ReturnType<typeof turnChain>) => entries.map(({ map: _map, ...entry }) => entry)
+    for (const group of fileGroups(store.entriesOfTurn("T", "turn")).values())
+      assert.deepEqual(withoutMaps(atOnce(readingTurnChain(view, group))), withoutMaps(turnChain(view, group)), "paged rename merge matches the original whole-chain read in all metadata and order")
+    const expected = turnChanges(view, "T", "turn", "settled", 0)
+    const pages: number[] = []
+    const readPage = store.chainPage.bind(store)
+    store.chainPage = (...args) => {
+      const page = readPage(...args)
+      pages.push(page.length)
+      return page
+    }
+    store.chain = () => { throw new Error("the count must not read a whole file chain between yields") }
+    const steps = countingTurn(view, "T", "turn", "settled", 0)
+    assert.equal(steps.next().done, false)
+    append(2_048)
+    assert.deepEqual(atOnce(steps), expected, "the original through bound, renamed paths, other writers and final line counts are unchanged")
+    assert.ok(pages.length > 3, "each path's long chain is paged")
+    assert.ok(Math.max(...pages) <= 256, "no native query returns more than one bounded page")
+    const first = countingTurn(view, "T", "turn", "settled", 0)
+    const second = countingTurn(view, "T", "turn", "settled", 0)
+    assert.equal(first.next().done, false)
+    assert.equal(second.next().done, false)
+    assert.deepEqual(atOnce(first), atOnce(second), "concurrent counts share no live SQLite iterator")
+    const stopping = inSlices(countingTurn(view, "T", "turn", "settled", 0), 0, () => store.closed)
+    await new Promise((resolve) => setImmediate(resolve))
+    store.close()
+    await assert.rejects(stopping, StepsStopped, "closing between slices cancels before another SQL read")
+  } finally {
+    if (!store.closed) store.close()
+    rmSync(folder, { recursive: true, force: true })
   }
 })

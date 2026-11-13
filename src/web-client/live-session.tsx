@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { ConversationSkeleton } from "@/components/viewer/conversation-skeleton"
 import { ShowAgentsContext } from "@/components/viewer/show-agents"
-import { Composer as DeskComposer } from "@/components/composer/composer"
 import { TranscriptEndContext, type TranscriptEnd } from "@/components/transcript/transcript-end"
 import { ExchangeNoteContext, PromptNoteContext } from "@/components/transcript/transcript-notes"
 import { CompactPresentationContext, type CompactPresentation } from "@/components/transcript/compact-presentation"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
 import { AgentsSheet } from "./agents"
+import { deskComposerChunk } from "./chunks"
+import { CodeLine, CodeSlowLine } from "./code-unavailable"
 import { useWebClient } from "./client"
 import { openingThread } from "./probe"
 import { useSyncing } from "./syncing"
@@ -30,6 +31,9 @@ import { SwitchLines } from "./thread-chips"
 import { TranscriptLoading } from "./transcript-loading"
 
 const NO_RECORDS: never[] = []
+
+/** The desk's composer at rest (an empty draft and its chips), the room held for it while its code arrives. */
+const DESK_COMPOSER_HEIGHT = 104
 
 /**
  * A Session live: opened on its owner through the gateway, drawn by the renderer's own conversation (`AcpPanel`: the
@@ -110,6 +114,13 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
   const [agents, setAgents] = useState(false)
   const showAgents = useCallback(() => setAgents(true), [])
   const elsewhere = useSendElsewhere(session, thread, openedBy, onSession)
+  const deskComposer = deskComposerChunk.use()
+  const composerFailed = deskComposerChunk.useFailed()
+  const composerSlow = deskComposerChunk.useSlow()
+  const readComposer = useCallback(() => deskComposerChunk.read().then(() => undefined), [])
+  useEffect(() => {
+    if (desk && !deskComposer) void readComposer().catch(() => undefined)
+  }, [desk, deskComposer, readComposer])
   if (desk)
     return (
       <PromptNoteContext value={note}>
@@ -123,7 +134,17 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
               </div>
             ) : null}
           </div>
-          {active ? <DeskComposer /> : null}
+          {active ? (
+            deskComposer ? (
+              <deskComposer.Composer />
+            ) : (
+              // The composer's room while its code arrives, so the transcript above doesn't move when it does; a line
+              // saying so with Retry if it can't.
+              <div data-composer-pending="" aria-busy={!composerFailed} aria-label="Loading the composer" className="flex shrink-0 items-center bg-surface" style={{ height: DESK_COMPOSER_HEIGHT }}>
+                {composerFailed ? <CodeLine what="The composer" retry={readComposer} className="w-full" /> : composerSlow ? <CodeSlowLine what="the composer" slow className="px-4" /> : null}
+              </div>
+            )
+          ) : null}
         </div>
       </PromptNoteContext>
     )
