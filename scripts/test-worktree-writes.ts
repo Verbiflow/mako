@@ -116,7 +116,8 @@ try {
   // has no `git hook` (Xcode 13's tools ship 2.32, Ubuntu 22.04 2.34): this Git's `hook` says what theirs says.
   const hooked = repository("hooked")
   mkdirSync(join(hooked, ".husky"))
-  writeFileSync(join(hooked, ".husky", "post-checkout"), '#!/bin/sh\necho "$1 $2 $3 GIT_DIR=${GIT_DIR:-unset}" > .post-checkout-ran\n', { mode: 0o755 })
+  // It reads its input to the end first: Git gives a hook none, and one given an open pipe would never finish.
+  writeFileSync(join(hooked, ".husky", "post-checkout"), '#!/bin/sh\ncat > /dev/null\necho "$1 $2 $3 GIT_DIR=${GIT_DIR:-unset}" > .post-checkout-ran\n', { mode: 0o755 })
   git(hooked, "add", ".husky")
   git(hooked, "commit", "-q", "-m", "hooks")
   git(hooked, "config", "core.hooksPath", ".husky")
@@ -132,7 +133,12 @@ try {
   await assert.rejects(older.output(hooked, ["hook", "run", "--ignore-missing", "post-checkout"]), /'hook' is not a git command/, "this Git has no `git hook`")
   const onOlder = new ThreadWorktreeService(older, join(root, "older-worktrees"), threads, undefined, undefined, undefined, setup)
   const hookedId = randomUUID()
-  const started = await onOlder.prepare(hookedId, hooked, "Hooked")
+  const hookStarted = performance.now()
+  const started = await Promise.race([
+    onOlder.prepare(hookedId, hooked, "Hooked"),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("a start whose post-checkout hook reads its stdin is still waiting after 30 s")), 30_000).unref()),
+  ])
+  assert.ok(performance.now() - hookStarted < 30_000)
   const head = git(started.path, "rev-parse", "HEAD")
   assert.equal(readFileSync(join(started.path, ".post-checkout-ran"), "utf8").trim(), `${"0".repeat(head.length)} ${head} 1 GIT_DIR=unset`, "the post-checkout hook ran in the new worktree, as worktree add runs it")
   await onOlder.abandon(hookedId)

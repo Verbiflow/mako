@@ -3,6 +3,7 @@ import { constants, existsSync } from "node:fs"
 import { access, mkdir, rename, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { PARALLEL_CHECKOUT, type Git } from "@mako/git"
+import { endChildInput } from "@mako/sessions/child-input"
 import { hostCommand } from "../base/host-command.js"
 import type { ReturnProjectMissing } from "../contracts/cloud-threads.js"
 
@@ -83,6 +84,9 @@ export async function fillWorktree(git: Git, path: string): Promise<void> {
  * `git hook run`, which Git before 2.36 lacks (Xcode 13's tools ship 2.32, Ubuntu 22.04 2.34). A hook that fails fails
  * the start, as it failed `worktree add`.
  */
+/** How long the post-checkout hook may run, as any Git command may (`Git.run`'s default), before it's stopped. */
+const HOOK_TIMEOUT_MS = 120_000
+
 async function runPostCheckout(git: Git, path: string): Promise<void> {
   const hook = resolve(path, await git.output(path, ["rev-parse", "--git-path", "hooks/post-checkout"]))
   if (!(await access(hook, constants.X_OK).then(() => true, () => false))) return
@@ -90,8 +94,11 @@ async function runPostCheckout(git: Git, path: string): Promise<void> {
   const env = { ...git.environment() }
   delete env.GIT_DIR
   delete env.GIT_WORK_TREE
-  // `hostCommand` rejects with the command's output on the error.
-  await hostCommand(hook, ["0".repeat(head.length), head, "1"], { cwd: path, env, maxBuffer: 16 * 1024 * 1024 }).catch((error: Error & { stderr?: string }) => {
+  // Git gives a hook no input (`/dev/null`): its stdin ends at once, so a hook that reads it never waits on it. And it
+  // has the time any Git command has. `hostCommand` rejects with the command's output on the error.
+  const running = hostCommand(hook, ["0".repeat(head.length), head, "1"], { cwd: path, env, maxBuffer: 16 * 1024 * 1024, timeout: HOOK_TIMEOUT_MS })
+  endChildInput(running.child)
+  await running.catch((error: Error & { stderr?: string }) => {
     const said = error.stderr?.trim().split("\n")[0]
     throw new Error(`The repository's post-checkout hook failed in ${path}${said ? `: ${said}` : ""}`, { cause: error })
   })
