@@ -323,13 +323,15 @@ export class CloudReadiness {
   /**
    * The other repositories a going-away names for a Thread in a project folder: each but the first with the checkpoint
    * the cloud acknowledged of it, where it sits in the Thread's folder and its GitHub repository. One without a place or
-   * a GitHub repository can't be laid out on a machine, so it isn't named; its changes stay here.
+   * a GitHub repository can't be laid out on a machine, so it isn't named; its changes stay here. Each names no branch
+   * to clone: the Thread's own is the one its move would make, new and on no remote, so the machine clones the default,
+   * as it does the first's, and lays the checkpoint on the Thread's branch, which the checkpoint names.
    */
   async noteOthers(thread: string): Promise<QuietRepository[]> {
     const entry = (await this.#load())[thread]
     return (entry?.acknowledged ?? []).slice(1).flatMap((each) => {
       const url = each.url && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(each.url) ? each.url : undefined
-      return each.folder && url ? [{ path: each.folder, url, ...each.checkpoint.branch && { branch: each.checkpoint.branch }, checkpoint: each.checkpoint }] : []
+      return each.folder && url ? [{ path: each.folder, url, checkpoint: each.checkpoint }] : []
     })
   }
 
