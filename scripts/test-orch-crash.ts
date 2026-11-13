@@ -262,7 +262,9 @@ function check(root: string, point: Point): void {
 
 async function main(): Promise<void> {
   const only = process.argv.slice(2)
-  const harnesses = TESTED_HARNESSES.filter((harness) => !only.length || only.includes(harness))
+  // Arguments name harnesses, kill points or both; each filter reads only the names it knows.
+  const namedHarnesses = only.filter((each) => HARNESSES.some((harness) => harness === each))
+  const harnesses = TESTED_HARNESSES.filter((harness) => !namedHarnesses.length || namedHarnesses.includes(harness))
   const points = POINTS.filter((point) => !only.length || only.includes(point) || !only.some((each) => POINTS.some((named) => named === each)))
   const base = mkdtempSync(join(tmpdir(), "mako-orch-crash-"))
   const failures: string[] = []
