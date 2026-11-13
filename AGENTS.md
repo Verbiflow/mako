@@ -125,7 +125,7 @@ waits for the writes asked for before it in that repository, keyed by the
 folder they share (`commonDirOf`), so Mako's own writes (a spare being made, a
 Thread's branch made or deleted) never meet at a lock; network commands,
 those that run hooks or rewrite files (`commit`, `merge`, `stash`, a `checkout` of an existing branch) stay out of
-that turn (a worktree is added `--no-checkout` in it, then filled and its post-checkout hook run, `fillWorktree`), and a
+that turn (a worktree is added `--no-checkout` in it, then filled and its post-checkout hook run as `worktree add` runs it, `fillWorktree`), and a
 write that waits past `WRITE_TURN_WAIT_MS` fails naming what held it. Every
 non-read command waits out a ref lock another program holds
 (`REF_LOCK_WAIT`, 3 s), and a failed write is logged with Git's own words.

@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { delimiter, join } from "node:path"
 import { performance } from "node:perf_hooks"
 import { Git } from "@mako/git"
 import { ThreadStore } from "@mako/host/threads/store"
@@ -112,18 +112,32 @@ try {
   console.log(JSON.stringify({ slowStartMs: Math.round(startEnded), branchDuringItMs: Math.round(meanwhileMs) }))
 
   // Written outside the turn, a worktree still runs the repository's post-checkout hook as `worktree add` would, through
-  // `core.hooksPath` as husky sets it: projects install hooks or generate code there.
+  // `core.hooksPath` as husky sets it: projects install hooks or generate code there. On a Git older than 2.36, which
+  // has no `git hook` (Xcode 13's tools ship 2.32, Ubuntu 22.04 2.34): this Git's `hook` says what theirs says.
   const hooked = repository("hooked")
   mkdirSync(join(hooked, ".husky"))
-  writeFileSync(join(hooked, ".husky", "post-checkout"), '#!/bin/sh\necho "$1 $2 $3" > .post-checkout-ran\n', { mode: 0o755 })
+  writeFileSync(join(hooked, ".husky", "post-checkout"), '#!/bin/sh\necho "$1 $2 $3 GIT_DIR=${GIT_DIR:-unset}" > .post-checkout-ran\n', { mode: 0o755 })
   git(hooked, "add", ".husky")
   git(hooked, "commit", "-q", "-m", "hooks")
   git(hooked, "config", "core.hooksPath", ".husky")
+  const olderGit = join(root, "older-git")
+  mkdirSync(olderGit)
+  writeFileSync(join(olderGit, "git"), `#!/bin/sh\nfor word in "$@"; do [ "$word" = hook ] && { echo "git: 'hook' is not a git command. See 'git --help'." >&2; exit 1; }; done\nexec "${traced.executable}" "$@"\n`, { mode: 0o755 })
+  const path = process.env.PATH
+  process.env.PATH = `${olderGit}${delimiter}${path ?? ""}`
+  const older = new Git()
+  // The Git it runs is the first on PATH, resolved once.
+  assert.equal(older.executable, join(olderGit, "git"))
+  process.env.PATH = path
+  await assert.rejects(older.output(hooked, ["hook", "run", "--ignore-missing", "post-checkout"]), /'hook' is not a git command/, "this Git has no `git hook`")
+  const onOlder = new ThreadWorktreeService(older, join(root, "older-worktrees"), threads, undefined, undefined, undefined, setup)
   const hookedId = randomUUID()
-  const started = await worktrees.prepare(hookedId, hooked, "Hooked")
+  const started = await onOlder.prepare(hookedId, hooked, "Hooked")
   const head = git(started.path, "rev-parse", "HEAD")
-  assert.equal(readFileSync(join(started.path, ".post-checkout-ran"), "utf8").trim(), `${"0".repeat(head.length)} ${head} 1`, "the post-checkout hook ran in the new worktree, with worktree add's arguments")
-  await worktrees.abandon(hookedId)
+  assert.equal(readFileSync(join(started.path, ".post-checkout-ran"), "utf8").trim(), `${"0".repeat(head.length)} ${head} 1 GIT_DIR=unset`, "the post-checkout hook ran in the new worktree, as worktree add runs it")
+  await onOlder.abandon(hookedId)
+  await onOlder.settled()
+  await older.close()
   console.log("worktree writes: spares made while Threads start and are given back never write at once in a repository, and every empty branch goes, and each new worktree runs its post-checkout hook")
 } finally {
   await traced.close()

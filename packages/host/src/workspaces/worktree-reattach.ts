@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto"
-import { existsSync } from "node:fs"
-import { mkdir, rename, rm } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { constants, existsSync } from "node:fs"
+import { access, mkdir, rename, rm } from "node:fs/promises"
+import { dirname, join, resolve } from "node:path"
 import { PARALLEL_CHECKOUT, type Git } from "@mako/git"
+import { hostCommand } from "../base/host-command.js"
 import type { ReturnProjectMissing } from "../contracts/cloud-threads.js"
 
 /**
@@ -66,13 +67,32 @@ export async function reattachWorktree(git: Git, repoRoot: string, folder: strin
 
 /**
  * Writes a worktree added `--no-checkout` (its HEAD set, its index empty), then runs the repository's post-checkout
- * hook as `worktree add` would have (`<null> <HEAD> 1`, through `core.hooksPath`): projects install their own hooks or
- * generate code there (husky), and a Mako worktree must get what any other checkout does. Outside the repository's
- * write turn, both: they take as long as the files, filters and hook do.
+ * hook as `worktree add` would have: projects install their own hooks or generate code there (husky), and a Mako
+ * worktree must get what any other checkout does. Outside the repository's write turn, both: they take as long as the
+ * files, filters and hook do.
  */
 export async function fillWorktree(git: Git, path: string): Promise<void> {
   await git.output(path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q"])
-  const head = await git.output(path, ["rev-parse", "HEAD"])
-  await git.output(path, ["hook", "run", "--ignore-missing", "post-checkout", "--", "0".repeat(head.length), head, "1"])
+  await runPostCheckout(git, path)
 }
 
+/**
+ * The post-checkout hook, run as `worktree add` runs it (`builtin/worktree.c`): in the new worktree, with `<null>
+ * <HEAD> 1`, and `GIT_DIR` and `GIT_WORK_TREE` unset so it finds the repository from there. Found by `rev-parse
+ * --git-path`, which honours `core.hooksPath`, and run only when it's there and executable, as Git does. Not through
+ * `git hook run`, which Git before 2.36 lacks (Xcode 13's tools ship 2.32, Ubuntu 22.04 2.34). A hook that fails fails
+ * the start, as it failed `worktree add`.
+ */
+async function runPostCheckout(git: Git, path: string): Promise<void> {
+  const hook = resolve(path, await git.output(path, ["rev-parse", "--git-path", "hooks/post-checkout"]))
+  if (!(await access(hook, constants.X_OK).then(() => true, () => false))) return
+  const head = await git.output(path, ["rev-parse", "HEAD"])
+  const env = { ...git.environment() }
+  delete env.GIT_DIR
+  delete env.GIT_WORK_TREE
+  // `hostCommand` rejects with the command's output on the error.
+  await hostCommand(hook, ["0".repeat(head.length), head, "1"], { cwd: path, env, maxBuffer: 16 * 1024 * 1024 }).catch((error: Error & { stderr?: string }) => {
+    const said = error.stderr?.trim().split("\n")[0]
+    throw new Error(`The repository's post-checkout hook failed in ${path}${said ? `: ${said}` : ""}`, { cause: error })
+  })
+}
