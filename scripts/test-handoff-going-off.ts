@@ -282,9 +282,12 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     step: (conversation, _move, step) => void steps.push({ conversation, kind: step.kind }),
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
   })
+  /** How many times this Mac asked its account whose its held Sessions are. */
+  let ownerAsks = 0
   away = new AwayNotes({
     file: join(base, "cloud", "away.json"),
     owner: () => async (ask) => {
+      ownerAsks += 1
       if (!ownerSays) throw new Error("this Mac can't reach its account")
       return ownerSays(ask)
     },
@@ -354,6 +357,8 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
         if (options.unanswered) throw new Error("the answer was lost as this Mac went off")
         return { note: note.note, threads: note.threads.map((each) => (each.checkpoint ? { thread: each.thread, accepted: true as const } : { thread: each.thread, accepted: false as const, why: "no-checkpoint" as const })) }
       },
+      going: () => awayNotes.going(),
+      answered: () => awayNotes.answered(),
       accepted: (note, sessions) => awayNotes.noted(note, sessions),
       goneQuiet: (why) => void order.push(`gone quiet ${why}`),
     },
@@ -379,7 +384,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     await tracker.close?.()
   }
   const owner = (says: (ask: OwnerAsk) => OwnerAnswer) => (ownerSays = says)
-  return { roots, listed, rowReads: () => rowReads, duringNote: () => ({ queued: queuedDuringNote, ran: ranDuringNote }), base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, awayNotes, owner, joined, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
+  return { ownerAsks: () => ownerAsks, roots, listed, rowReads: () => rowReads, duringNote: () => ({ queued: queuedDuringNote, ran: ranDuringNote }), base, project, world, worktrees, threadMoves, ownBranch, cloudMoves, readiness, handOffs, awayNotes, owner, joined, moved, made, checkpoints, acknowledged, notes, order, steps, personWrites, agentWrites, thread, working: startWork, close }
 }
 
 type Host = Awaited<ReturnType<typeof host>>
@@ -510,8 +515,14 @@ try {
     await sleeps(h, 20_000)
     assert.deepEqual(h.order.filter((each) => each !== "rows"), ["note", "gone quiet sleep"], "sleep: the account heard the note, then the Mac go quiet, without the desktop's suspend")
     await wentAway(h, "sleep", work, ready, began)
+    // Still going away (asleep, the job's half-minute come round): nothing asks the account, which would say the
+    // Sessions are this Mac's and end the quiet it continues them in.
+    const asked = h.ownerAsks()
+    await h.awayNotes.ask()
+    assert.equal(h.ownerAsks(), asked, "sleep: not asked while going away")
     // Back, offline: the account took the note, so its Sessions wait for its word whatever the owner check does.
     const before = h.world.prompts.length
+    h.awayNotes.back("wake")
     await h.cloudMoves.unpark()
     await h.awayNotes.ask()
     await pause(300)
@@ -577,6 +588,7 @@ try {
     await pause(300)
     assert.ok(!h.world.prompts.some((prompt) => prompt.text.includes("Fin's report")), "nor after, while the account may continue the Thread")
     h.owner((ask) => ({ sessions: ask.sessions.map((each) => ({ session: each.session, answer: "yours" as const, generation: each.generation })) }))
+    h.awayNotes.back("wake")
     await h.awayNotes.ask()
     await until("the message to run once the account says the Session is this Mac's", () => h.world.prompts.some((prompt) => prompt.conversation === queued!.conversation && prompt.text.includes("Fin's report")))
     await h.close()
@@ -602,6 +614,10 @@ try {
     assert.equal(named.others?.length, 1, "and the other's beside it")
     const other = named.others![0]!
     assert.equal(other.url, "https://github.com/acme/web")
+    // The Thread's branch is the one its move would make, on no remote: the machine clones the default, and the
+    // checkpoint lays the Thread's change on that branch (a clone of it failed the whole continue on staging).
+    assert.equal(other.branch, undefined, "names no branch to clone")
+    assert.ok(other.checkpoint.branch?.startsWith("mako/"), "its checkpoint names the Thread's branch")
     assert.ok(other.path.endsWith("/web") && !other.path.startsWith(h.project), "laid out where its worktree would be, not the project folder")
     // Its Sessions open in the project worktree, around both repositories' worktrees, from the plan readiness kept.
     assert.ok(named.project && !named.project.startsWith(h.project), "names the project worktree a move would make")
@@ -623,15 +639,18 @@ try {
     assert.equal(onApi("person.ts"), "export const person = 1\n", "never the person's")
     const onWeb = await laid(join(h.base, "web.git"), other.checkpoint, "web")
     assert.equal(onWeb("own.ts"), "export const web = 1 // the agent's\n", "the Thread's change in the other repository")
-    // Back, the way back takes out only what the note the continue came from carried (by the continue's op), against
-    // the checkpoint it went on from.
+    // Back, the way back takes out only what the note the continue came from carried (by the continue's op) and the
+    // account says its machine applied (`applied`): here, as the arrival does, both repositories' checkpoints.
     const opOf = (of: QuietNote) => autoContinueOp(named.thread, of.threads[0]!.sessions, of.note)
-    const leaving = async (op: string) => {
+    const both = [first.sha256, other.checkpoint.sha256]
+    const leaving = async (op: string, applied: readonly string[] | null = both) => {
       const kept = (await h.readiness.acknowledged(named.thread, op))!
-      return cloudHasAll(kept.acknowledged.map((each) => ({ root: each.root, sha256: each.checkpoint.sha256, changes: each.versions?.length ?? 0 })), kept.noted, first.sha256)
+      return cloudHasAll(kept.acknowledged.map((each) => ({ root: each.root, sha256: each.checkpoint.sha256, changes: each.versions?.length ?? 0 })), kept.noted, applied ?? undefined)
     }
-    assert.deepEqual((await h.readiness.acknowledged(named.thread, await opOf(note)))?.noted, [first.sha256, other.checkpoint.sha256], "the note carried both, recorded as it went")
-    assert.equal(await leaving(await opOf(note)), undefined, "both carried (a gateway at 26): the Thread's changes may leave both repositories")
+    assert.deepEqual((await h.readiness.acknowledged(named.thread, await opOf(note)))?.noted, both, "the note carried both, recorded as it went")
+    assert.equal(await leaving(await opOf(note)), undefined, "both carried (a gateway at 26) and both applied: the Thread's changes may leave both repositories")
+    assert.match((await leaving(await opOf(note), [first.sha256])) ?? "", /didn't apply .*web/, "the machine applied the first's alone: nothing leaves")
+    assert.match((await leaving(await opOf(note), null)) ?? "", /didn't say which checkpoints/, "an account that doesn't say what it applied: nothing leaves")
     assert.match((await leaving(randomUUID())) ?? "", /no going-away note/, "a continue no recorded note names (a press): nothing leaves")
     // Note A goes to a gateway at 25 (the first alone) and the account continues from it; the Mac wakes and goes away
     // again before it joins, and note B, at 26, records both. The join is A's continue: only what A carried may leave.
@@ -673,6 +692,7 @@ try {
     await sleeps(h, 20_000)
     for (const id of conversations(work)) assert.ok(h.awayNotes.holds(h.world.store.journalPlacement(id)!.session) !== undefined, "held, the answer unknown")
     const before = h.world.prompts.length
+    h.awayNotes.back("wake")
     await h.cloudMoves.unpark()
     await h.awayNotes.ask()
     await pause(300)

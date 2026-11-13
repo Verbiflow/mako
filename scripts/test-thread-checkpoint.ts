@@ -375,16 +375,18 @@ test("a change of the Thread's the cloud never got (left out of its checkpoint):
 })
 
 
-test("a Thread's changes leave the project folder only where the cloud has them all: the first's checkpoint it went on from, and every one the note carried", () => {
+test("a Thread's changes leave the project folder only where the cloud has them all: every checkpoint the note carried, and the machine says it applied", () => {
   const [a, b, b2] = ["a".repeat(64), "b".repeat(64), "c".repeat(64)]
   const one = [{ root: "/p/api", sha256: a, changes: 2 }]
   const two = [...one, { root: "/p/web", sha256: b, changes: 1 }]
-  assert.equal(cloudHasAll(one, [a], a), undefined, "one repository, its checkpoint noted and gone on from: it leaves")
-  assert.match(cloudHasAll(two, [a], a) ?? "", /\/p\/web/, "two, the continue went on from the first's alone: the second's change stays, and so does the first's")
-  assert.equal(cloudHasAll([...one, { root: "/p/web", sha256: b, changes: 0 }], [a], a), undefined, "a second with no change of the Thread's has nothing to lose")
-  assert.match(cloudHasAll(two, [a, b], a.replace("a", "f")) ?? "", /another checkpoint/, "the cloud went on from another")
-  assert.match(cloudHasAll(two, [a, b], undefined) ?? "", /didn't say/, "a continue that names no start")
-  assert.match(cloudHasAll(two, undefined, a) ?? "", /no going-away note/, "no note recorded here")
-  assert.match(cloudHasAll([...one, { root: "/p/web", sha256: b2, changes: 1 }], [a, b], a) ?? "", /\/p\/web/, "the second acknowledged anew after the note went: that one isn't on the machine")
-  assert.match(cloudHasAll([], [a], a) ?? "", /nothing/)
+  assert.equal(cloudHasAll(one, [a], [a]), undefined, "one repository, its checkpoint noted and applied: it leaves")
+  assert.equal(cloudHasAll(two, [a, b], [b, a]), undefined, "two, both noted and both applied, in any order: both leave")
+  assert.match(cloudHasAll(two, [a], [a]) ?? "", /\/p\/web/, "two, the note carried the first's alone: the second's change stays, and so does the first's")
+  assert.match(cloudHasAll(two, [a, b], [a]) ?? "", /didn't apply \/p\/web/, "the machine applied the first's alone: nothing leaves")
+  assert.equal(cloudHasAll([...one, { root: "/p/web", sha256: b, changes: 0 }], [a], [a]), undefined, "a second with no change of the Thread's has nothing to lose")
+  assert.match(cloudHasAll(two, [a, b], undefined) ?? "", /didn't say which checkpoints/, "an account that doesn't say what it applied: nothing leaves, whatever was sent")
+  assert.match(cloudHasAll(two, [a, b], []) ?? "", /didn't apply/, "it said it applied none: nothing leaves")
+  assert.match(cloudHasAll(two, undefined, [a, b]) ?? "", /no going-away note/, "no note recorded here")
+  assert.match(cloudHasAll([...one, { root: "/p/web", sha256: b2, changes: 1 }], [a, b], [a, b]) ?? "", /\/p\/web/, "the second acknowledged anew after the note went: that one isn't on the machine")
+  assert.match(cloudHasAll([], [a], [a]) ?? "", /nothing/)
 })
