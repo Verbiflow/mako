@@ -1,6 +1,8 @@
 /** What Mako itself costs this Mac now (`mako:mako-footprint`), for Settings › Diagnostics and the footprint bench. */
 export interface MakoFootprint {
   at: string
+  /** File attribution is unavailable while its owner is being recovered. */
+  attributionFailure?: string
   /** Mako's own processes: the app, its host and helpers, the sync daemon and the watcher children. */
   processes: MakoProcess[]
   /** The agents Mako started, counted apart: their work is the person's, not Mako's. */

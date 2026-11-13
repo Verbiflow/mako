@@ -221,6 +221,7 @@ const PATIENCE = {
 
 export type JournalRole =
   | { kind: "starting" }
+  | { kind: "failed"; why: string }
   | { kind: "owner" }
   | { kind: "follower"; owner: JournalHost }
   | { kind: "private"; why: string }
@@ -241,6 +242,7 @@ export interface SharingStatus {
   followers: JournalHost[]
   /** Messages a follower holds that the owner hasn't applied yet. */
   unsent: number
+  failure?: string
 }
 
 export interface SharedJournalOptions {
@@ -341,6 +343,9 @@ export class SharedJournal {
   private readonly connections = new Set<Connection>()
   /** The owner, while following. */
   private link?: Socket
+  private following?: Socket
+  private retrying?: () => void
+  private privateReason?: string
   private sent = 0
   /** What the owner hasn't applied yet, oldest first. */
   private unsent: { n: number; m: OneWay }[] = []
@@ -420,7 +425,14 @@ export class SharedJournal {
     const shared = new SharedJournal(options)
     try {
       if (options.privateReason) await shared.keepOwn(options.privateReason)
-      else await shared.elect()
+      else if (options.startOwner) {
+        // Return a visible failed client while recovery continues; accepting marks must not depend on startup succeeding.
+        let failed!: () => void
+        const unavailable = new Promise<void>(resolve => { failed = resolve })
+        const off = shared.onRole(role => { if (role.kind === "failed") failed() })
+        try { await Promise.race([shared.elect(), unavailable]) }
+        finally { off() }
+      } else await shared.elect()
       return shared
     } catch (error) {
       const [cleanup] = await Promise.allSettled([shared.close()])
@@ -462,6 +474,7 @@ export class SharedJournal {
       ...(role.kind === "follower" && { owner: role.owner }),
       followers: this.followers().map((follower) => follower.host),
       unsent: this.unsent.length,
+      ...(role.kind === "failed" && { failure: role.why }),
     }
   }
 
@@ -477,7 +490,7 @@ export class SharedJournal {
         else resolve()
       }
       const check = () => {
-        if (this.closed || !this.link) finish(new Error("The journal owner left before acknowledging its writes."))
+        if (this.closed) finish(new Error("The journal closed before acknowledging its writes."))
         else if (!this.unsent.some(message => message.n <= through)) finish()
       }
       const timer = setTimeout(() => finish(new Error("The journal owner did not acknowledge its writes before closing.")), 15_000)
@@ -490,6 +503,8 @@ export class SharedJournal {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    this.retrying?.()
+    this.following?.destroy()
     for (const check of this.acknowledgements) check()
     for (const call of this.calls.values()) {
       clearTimeout(call.timer)
@@ -515,13 +530,17 @@ export class SharedJournal {
   }
 
   private elect(): Promise<void> {
-    this.electing ??= this.electOnce().finally(() => {
+    this.electing ??= (async () => {
+      do { await this.electOnce() }
+      while (!this.closed && !this.link && !this.owned)
+    })().finally(() => {
       this.electing = undefined
     })
     return this.electing
   }
 
   private async electOnce(): Promise<void> {
+    if (this.options.startOwner) return this.electWriter(this.options.startOwner)
     const retry = this.options.timing?.retryMs ?? 25
     const maxRetry = this.options.timing?.maxRetryMs ?? 1_000
     const unanswered = this.options.timing?.unansweredMs ?? 30_000
@@ -534,16 +553,44 @@ export class SharedJournal {
         if (outcome !== "lost") return this.keepOwn(outcome.why)
         continue
       }
-      if (this.options.startOwner) {
-        if (Date.now() - began > unanswered) throw new Error("The record of changes' writing owner did not become reachable.")
-        this.address = await this.options.startOwner()
-        continue
-      }
       const lock = await acquireHostLock(this.options.folder, { purpose: "owner" }).catch((error: Error) => error)
       if (lock instanceof Error) return this.keepOwn(`the lock couldn't be taken: ${lock.message}`)
       if (lock.kind === "held") return this.own(lock)
       if (Date.now() - began > unanswered) return this.keepOwn(`another Mako (pid ${lock.holder ?? "unknown"}) holds it but doesn't answer`)
       await new Promise((done) => setTimeout(done, Math.min(maxRetry, retry * 2 ** Math.min(attempt, 6))))
+    }
+  }
+
+  /** An off-thread owner may fail repeatedly; keep the same numbered outbox through every bounded attempt. */
+  private async electWriter(start: NonNullable<SharedJournalOptions["startOwner"]>): Promise<void> {
+    const retry = this.options.timing?.retryMs ?? 25
+    const maxRetry = this.options.timing?.maxRetryMs ?? 1_000
+    for (let attempt = 0; !this.closed; attempt++) {
+      try {
+        // The first connection can follow an existing host without starting a local worker.
+        let socket = attempt === 0 && !this.privateReason ? await tryConnect(this.address) : null
+        if (!socket) {
+          this.address = await start(this.privateReason)
+          if (this.closed) return
+          socket = await tryConnect(this.address)
+        }
+        if (this.closed) { socket?.destroy(); return }
+        if (!socket) throw new Error("The record of changes' writing owner is not reachable.")
+        const outcome = await this.follow(socket)
+        if (outcome === "following" || this.closed) return
+        if (outcome !== "lost") this.privateReason = outcome.why
+        throw new Error(outcome === "lost" ? "The record of changes' writing owner did not answer." : outcome.why)
+      } catch (error) {
+        if (this.closed) return
+        const why = error instanceof Error ? error.message : String(error)
+        this.setRole({ kind: "failed", why })
+        this.options.log("the record of changes is unavailable; retrying its writing owner", { error: why })
+      }
+      await new Promise<void>(resolve => {
+        const done = () => { clearTimeout(timer); this.retrying = undefined; resolve() }
+        const timer = setTimeout(done, Math.min(maxRetry, retry * 2 ** Math.min(attempt, 6)))
+        this.retrying = done
+      })
     }
   }
 
@@ -693,11 +740,19 @@ export class SharedJournal {
   // The follower's side.
 
   private follow(socket: Socket): Promise<"following" | "lost" | { why: string }> {
+    this.following = socket
     return new Promise((settle) => {
+      const finish = (outcome: "following" | "lost" | { why: string }) => {
+        clearTimeout(timer)
+        if (this.following === socket) this.following = undefined
+        settle(outcome)
+      }
+      const timer = setTimeout(() => { socket.destroy(); finish("lost") }, this.options.timing?.unansweredMs ?? 30_000)
+      timer.unref()
       let welcomed = false
       socket.on("error", () => undefined)
       socket.on("close", () => {
-        if (!welcomed) return settle("lost")
+        if (!welcomed) return finish("lost")
         if (this.link !== socket) return
         this.link = undefined
         for (const check of this.acknowledgements) check()
@@ -717,14 +772,14 @@ export class SharedJournal {
         if (message.t === "refuse") {
           welcomed = true
           socket.destroy()
-          settle({ why: `the owner refused this Mako: ${message.why}` })
+          finish({ why: `the owner refused this Mako: ${message.why}` })
         } else if (message.t === "welcome") {
           welcomed = true
           try {
             this.options.follow(message.host)
           } catch (error) {
             socket.destroy()
-            settle({ why: `the shared journal couldn't be read: ${error instanceof Error ? error.message : String(error)}` })
+            finish({ why: `the shared journal couldn't be read: ${error instanceof Error ? error.message : String(error)}` })
             return
           }
           this.link = socket
@@ -732,7 +787,7 @@ export class SharedJournal {
           this.setRole({ kind: "follower", owner: message.host })
           this.options.log("follows the owner of the record of changes", { pid: message.host.pid, label: message.host.label })
           for (const call of this.calls.values()) this.run(call)
-          settle("following")
+          finish("following")
         } else if (message.t === "ack") {
           while (this.unsent.length && this.unsent[0]!.n <= message.n) this.unsent.shift()
           for (const check of this.acknowledgements) check()

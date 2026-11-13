@@ -1733,7 +1733,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // The fixture desk writes no store and stands in for no one's disk.
   if (!fixtureDesk) storage.schedule(shell.jobs)
   declareStorageMethods(methods, storage)
-  declareFootprintMethods(methods, () => ({ watching: watchReadings.reading(), rescans: late.attribution?.rescans() ?? null }))
+  declareFootprintMethods(methods, () => ({ watching: watchReadings.reading(), rescans: late.attribution?.rescans() ?? null, attributionFailure: late.attribution?.failure() }))
   /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`), and a lost machine's restore. */
   const arrival: MoveArrivalDeps | undefined = config.machineAgentFd === undefined ? undefined : {
     git,
@@ -2094,18 +2094,22 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         jobs.stop()
         machineTracker?.saves.stop()
         unwatchSaves?.()
-        unfollowEffects?.()
-        unfollowBounds?.()
         const callsDrained = methods.close()
         const outsideDrained = shell.stopping.stop()
         void outsideDrained.catch(() => {})
-        await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
         wake.stop()
         repositories.stop()
         sleepHandOff?.stop()
         keepAwake?.stop()
         step = "waiting for the calls under way and the providers' drains"
-        await Promise.all([callsDrained, outsideDrained, telemetry.close(), usage.close()])
+        const drained = await Promise.allSettled([callsDrained, outsideDrained, telemetry.close(), usage.close()])
+        // Turn-end marks, effects and bounds still arrive while outside work and host calls drain.
+        unfollowEffects?.()
+        unfollowBounds?.()
+        step = "closing the record of changes"
+        await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
+        const failedDrains = drained.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+        if (failedDrains.length) throw new AggregateError(failedDrains, "Host calls or outside work did not drain cleanly", { cause: failedDrains[0] })
         // Deliver their stopping answers before the socket's generic reconnect farewell.
         await new Promise<void>((resolve) => setImmediate(resolve))
         shell.closeSocket()

@@ -59,12 +59,12 @@ export interface WriterSnapshot {
 
 const HostSchema = z.object({ pid: z.number().int().positive(), dataRoot: z.string(), label: z.string() })
 const RoleSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("starting") }), z.object({ kind: z.literal("owner") }),
+  z.object({ kind: z.literal("starting") }), z.object({ kind: z.literal("failed"), why: z.string() }), z.object({ kind: z.literal("owner") }),
   z.object({ kind: z.literal("follower"), owner: HostSchema }), z.object({ kind: z.literal("private"), why: z.string() }),
 ])
 export const WriterSnapshotSchema = z.object({
   path: z.string(), address: z.string(), role: RoleSchema,
-  sharing: z.object({ role: z.enum(["starting", "owner", "follower", "private"]), folder: z.string(), owner: HostSchema.optional(), followers: z.array(HostSchema), unsent: z.number().int().nonnegative() }),
+  sharing: z.object({ role: z.enum(["starting", "failed", "owner", "follower", "private"]), folder: z.string(), owner: HostSchema.optional(), followers: z.array(HostSchema), unsent: z.number().int().nonnegative(), failure: z.string().optional() }),
   followers: z.array(z.object({ host: HostSchema, placed: z.map(z.string(), z.object({ thread: z.string(), session: z.string() })), live: z.map(z.string(), z.number()) })),
   recent: z.array(z.object({ lagMs: z.number(), hashMs: z.number(), diffMs: z.number(), writeMs: z.number() }).loose()),
   // Diagnostic rescan details are produced by the same build's tracker, never used to authorize a write.

@@ -3,7 +3,6 @@ import { postToWriter } from "./writer-messages.js"
 import { fileURLToPath } from "node:url"
 import { existsSync } from "node:fs"
 import { locate } from "@mako/git"
-import { hostStopping } from "../base/host-stopping.js"
 import { hostLog, hostWarn, hostError } from "../base/host-log.js"
 import { gitRepository } from "./ports.js"
 import type { AttributionDeps } from "./index.js"
@@ -32,6 +31,7 @@ interface Generation {
 interface WriterClientOptions {
   entry?: string
   applied?(): Promise<void>
+  timing?: { startMs?: number; askMs?: number }
 }
 
 /** The host talks to a writing worker; its normal journal client still owns replay and acknowledgements. */
@@ -45,14 +45,14 @@ export class AttributionWriter {
   private closed = false
   private closing: Promise<void> | undefined
   private state: WriterSnapshot | undefined
-  private readonly unregister: (() => void) | undefined
+  private readonly timing: { startMs: number; askMs: number }
 
   constructor(deps: AttributionDeps, settings: Omit<WriterSettings, "privateReason">, options: WriterClientOptions = {}) {
     this.deps = deps
     this.settings = settings
     this.entry = options.entry ?? defaultEntry()
     this.applied = options.applied
-    this.unregister = hostStopping()?.register("attribution writing owner", () => this.close())
+    this.timing = { startMs: options.timing?.startMs ?? START_MS, askMs: options.timing?.askMs ?? ASK_MS }
   }
 
   snapshot(): WriterSnapshot | undefined { return this.state }
@@ -68,10 +68,18 @@ export class AttributionWriter {
     }
     if (!this.generation) this.generation = this.start(privateReason)
     const generation = this.generation
-    const snapshot = await generation.ready
-    if (generation.closed || this.closed) throw new Error("The record of changes' writer stopped while opening.")
-    this.state = snapshot
-    return snapshot
+    try {
+      // A ready generation may have stopped answering since its journal link was lost.
+      const snapshot = generation.started
+        ? WriterSnapshotSchema.parse(await this.ask(generation, { kind: "snapshot" }))
+        : await generation.ready
+      if (generation.closed || this.closed) throw new Error("The record of changes' writer stopped while opening.")
+      this.state = snapshot
+      return snapshot
+    } catch (error) {
+      this.retire(generation, error instanceof Error ? error : new Error(String(error)))
+      throw error
+    }
   }
 
   async command(request: WriterCommand): Promise<WriterCommandResult> {
@@ -90,7 +98,6 @@ export class AttributionWriter {
 
   private async stop(): Promise<void> {
     this.closed = true
-    this.unregister?.()
     const generation = this.generation
     if (!generation) return
     if (!generation.started) {
@@ -127,7 +134,7 @@ export class AttributionWriter {
     const timer = setTimeout(() => {
       this.retire(generation, new Error("The record of changes' writer took too long to open."))
       void child.terminate()
-    }, START_MS)
+    }, this.timing.startMs)
     timer.unref()
     child.on("message", message => {
       const parsed = FromWriterSchema.safeParse(message)
@@ -183,9 +190,8 @@ export class AttributionWriter {
     const id = ++this.next
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        generation.pending.delete(id)
-        reject(new Error("The record of changes' writer took too long to answer."))
-      }, ASK_MS)
+        this.retire(generation, new Error("The record of changes' writer took too long to answer."))
+      }, this.timing.askMs)
       timer.unref()
       generation.pending.set(id, { resolve: reply => {
         try { resolve(WriterCommandResults[command.kind].parse(reply.value)) } catch (error) { reject(error) }

@@ -300,6 +300,7 @@ export interface Attribution {
   lost(target: { thread: string } | { path: string }): Promise<LostVersion[]>
   /** Write a kept version back, keeping what the file holds now as a version too. The person asked, so it's theirs. */
   restore(root: string, entry: number): Promise<{ path: string }>
+  failure(): string | undefined
   status(): AttributionStatus & { sharing: SharingStatus }
   /** The rescans for lost events this host's tracker made lately; null where another host owns the journal. */
   rescans(): RescanFootprint | null
@@ -597,9 +598,10 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     moved: (move) => journal.writes.moved({ ...move, at: Date.now() }),
     lost: (target) => journal.writes.lost(target),
     restore: (root, entry) => journal.writes.restore(root, entry),
+    failure: () => journal.status().failure,
     status: () => ({
       ...attributionStatus(view(), { recent: writer.snapshot()?.recent, live: writer.snapshot()?.role.kind === "owner" || writer.snapshot()?.role.kind === "private" }),
-      sharing: { ...(writer.snapshot()?.sharing ?? journal.status()), unsent: journal.status().unsent },
+      sharing: { ...(journal.role().kind === "failed" ? journal.status() : writer.snapshot()?.sharing ?? journal.status()), unsent: journal.status().unsent },
     }),
     rescans: () => { void writer.command({ kind: "snapshot" }).catch(() => {}); return writer.snapshot()?.rescans ?? null },
     async close() {
