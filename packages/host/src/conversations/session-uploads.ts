@@ -116,6 +116,9 @@ export class SessionUploads {
    */
   readonly #logged = new Set<string>()
 
+  /** The last look left something undone (`needsRetry`): a throw, or links the catalog didn't take. */
+  #retry = false
+
   constructor(sources: UploadSources) {
     this.#sources = sources
   }
@@ -125,7 +128,18 @@ export class SessionUploads {
     return this.#status
   }
 
+  /** Whether the last look left something undone (a link the catalog didn't take): it's looked at again on a backoff. */
+  needsRetry(): boolean {
+    return this.#retry
+  }
+
   async tick(): Promise<void> {
+    // A look that throws (the account's links unreadable, the catalog gone) leaves it to be retried.
+    this.#retry = true
+    await this.#tick()
+  }
+
+  async #tick(): Promise<void> {
     const links = await this.#sources.links()
     if (links.state === "off") {
       if (this.#links) {
@@ -136,16 +150,23 @@ export class SessionUploads {
       }
       this.#looked = undefined
       this.#said({ state: "off", reason: links.reason })
+      this.#retry = false
       return
     }
     const rows = this.#sources.rows()
-    if (!rows) return
+    // No list yet: nothing undone, and the list's first report looks again.
+    if (!rows) {
+      this.#retry = false
+      return
+    }
     // Once a scope was given, the links go first, whatever the scope does: a scope the catalog's process was too busy
     // to take in time once kept every renewed token from it, and its pushes went with an expired one.
     if (this.#scopeKey !== undefined) await this.#give(links)
     const scope = await this.#scope(rows)
     await this.#give(links)
     await this.#read(scope, rows)
+    // Done but for the links, if the catalog didn't take them (`#give` leaves `#links` unset then).
+    this.#retry = this.#links === undefined
   }
 
   /**

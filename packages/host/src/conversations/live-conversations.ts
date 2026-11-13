@@ -100,14 +100,35 @@ const SAVE_AGAIN_MS = 5_000
 /** The longest a timer waits; a held message due later is armed for again when this fires. */
 const MAX_TIMER_MS = 2_147_483_647
 /** What a conversation in memory is working on, as the lifecycle lists it; undefined while it works on nothing. */
-function residentWork(resident: Resident): LifecycleWork | undefined {
+/**
+ * A conversation's work's status alone, as `residentWork` says it, read with an early exit and nothing built: it's asked
+ * after every flush of every working conversation (`noteWork`).
+ */
+function residentWorkStatus(resident: Resident): LifecycleWork["status"] | undefined {
+  if (resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing) return "finishing"
+  if (!resident.driver) return undefined
   const { snapshot } = resident
-  const finishing = resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing
+  if (snapshot.permissions.length) return "waiting"
+  let busy = false
+  let working = false
+  for (const agent of snapshot.nativeAgents?.agents ?? []) {
+    if (!isBusyProviderWork(agent)) continue
+    if (agent.state.kind === "waiting") return "waiting"
+    busy = true
+    if (agent.state.kind === "working") working = true
+  }
+  if (snapshot.session.status === "running" || snapshot.session.backgroundTasks || working) return "running"
+  if (busy || snapshot.requests.some((request) => request.status === "dispatching" || request.status === "queued")) return "queued"
+  return undefined
+}
+
+function residentWork(resident: Resident): LifecycleWork | undefined {
+  const status = residentWorkStatus(resident)
+  if (!status) return undefined
+  const { snapshot } = resident
+  const finishing = status === "finishing"
   const requests = snapshot.requests.filter((request) => request.status === "dispatching" || request.status === "queued")
   const native = snapshot.nativeAgents?.agents.filter(isBusyProviderWork) ?? []
-  const background = Boolean(snapshot.session.backgroundTasks)
-  if (!finishing && (!resident.driver || (snapshot.session.status !== "running" && !background && !requests.length && !native.length && !snapshot.permissions.length))) return undefined
-  const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" || background || native.some((agent) => agent.state.kind === "working") ? "running" : "queued"
   return { id: snapshot.session.id, token: `${resident.generation}:${requests.map((request) => request.id).join(":")}:${JSON.stringify(native.map((agent) => [agent.nativeId, agent.nativeRunId ?? agent.observedAt]))}`, title: snapshot.session.title || "Untitled conversation", provider: snapshot.session.harness, cwd: snapshot.session.cwd, status, stoppable: !finishing }
 }
 
@@ -202,7 +223,11 @@ export class LiveConversations {
       },
       compact: (path) => { void this.reclaims.reclaim(path) },
       paged: (id) => this.dependencies.historyPaged?.(id),
-      released: (id) => this.dependencies.historyReleased?.(id),
+      released: (id) => {
+        // Let go of: its work is read again, from memory, when it's next loaded.
+        this.workSaid.delete(id)
+        this.dependencies.historyReleased?.(id)
+      },
     })
     this.moves = new LiveMoves({
       dependencies,
@@ -238,6 +263,7 @@ export class LiveConversations {
       add: (resident) => this.records.add(resident),
       control: conversationControl,
       flush: (resident) => this.flush(resident),
+      noteWork: (resident) => this.noteWork(resident),
       keep: (resident) => this.keep(resident),
       schedule: (resident) => this.schedule(resident),
       storageFailed: (resident, boundary) => this.storageFailed(resident, boundary),
@@ -1970,7 +1996,26 @@ export class LiveConversations {
   }
 
   /** Commits what changed to the journal and tells every window, in one batch. */
+  /** What each conversation's work was last said to be (`noteWork`), so only a move is said. */
+  private readonly workSaid = new Map<string, string>()
+
+  private noteWork(resident: Resident): void {
+    const id = resident.snapshot.session.id
+    const status = residentWorkStatus(resident) ?? "none"
+    if (this.workSaid.get(id) === status) return
+    this.workSaid.set(id, status)
+    this.dependencies.workMoved?.(id)
+  }
+
   private flush(resident: Resident): void {
+    try {
+      this.write(resident)
+    } finally {
+      this.noteWork(resident)
+    }
+  }
+
+  private write(resident: Resident): void {
     resident.snapshot = withdrawGone(resident.snapshot)
     if (this.records.isReleased(resident)) {
       hostWarn("residency", "a write reached an unloaded conversation and was dropped", { conversation: resident.snapshot.session.id })

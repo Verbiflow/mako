@@ -14,7 +14,7 @@ import { interruptRequests, unhandedRequest } from "./live-settlement.js"
 import type { LiveTransfers } from "./live-transfers.js"
 
 type ClosingAccess = Pick<LiveAccess,
-  "dependencies" | "reclaims" | "require" | "resident" | "control" | "flush" | "drain" | "clearHibernationTimer" | "declineAutoContinue">
+  "dependencies" | "reclaims" | "require" | "resident" | "control" | "flush" | "noteWork" | "drain" | "clearHibernationTimer" | "declineAutoContinue">
 
 /** The parts closing a conversation settles. */
 export interface ClosingParts {
@@ -184,6 +184,7 @@ export class LiveClosing {
       })
     }
     resident.opening = false
+    this.access.noteWork(resident)
     resident.snapshot = {
       ...resident.snapshot,
       session: {
@@ -323,6 +324,7 @@ export class LiveClosing {
       resident.generation += 1
       const driver = resident.driver
       resident.driver = null
+      this.access.noteWork(resident)
       for (const [bindingId, connection] of resident.connections) {
         closing.push(Promise.resolve().then(() => connection.driver.close(bindingId)).then(
           () => {
