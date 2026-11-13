@@ -9,7 +9,7 @@ import { GitError } from "./errors.js"
 import { Repositories } from "./open.js"
 import { onMac } from "./platform.js"
 import type { Repository } from "./repository.js"
-import { commonDirOf, REF_LOCK_WAIT, writesShared } from "./shared-writes.js"
+import { commonDirOf, REF_LOCK_WAIT, subcommandOf, writesShared } from "./shared-writes.js"
 
 /** One finished `git` process, for logs and `MAKO_GIT_TRACE`. */
 export interface GitTrace {
@@ -38,6 +38,8 @@ export interface GitRuntime {
   /** Runs a background command below foreground work, such as `nice -n 19`. */
   background?: (command: string, args: readonly string[]) => [string, string[]]
   trace?: (trace: GitTrace) => void
+  /** How long a write waits for its repository's earlier writes; `WRITE_TURN_WAIT_MS` unless a test shortens it. */
+  writeTurnWaitMs?: number
 }
 
 export interface RunOptions {
@@ -89,6 +91,11 @@ export interface OpenRepositories {
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000
+/**
+ * At most this long a write waits for its repository's earlier writes before it fails: each of them is bounded by its
+ * own timeout, but a line of them would hold a start for minutes.
+ */
+export const WRITE_TURN_WAIT_MS = 60_000
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 const STDERR_BYTES = 64 * 1024
 /** Reads at once, across every repository; more only queue behind the disk. */
@@ -118,10 +125,11 @@ export class Git {
   readonly #readsWaiting: Array<() => void> = []
   /** Idle reads waiting: each starts once no other read waits and a slot past `FOREGROUND_SLOTS` is free. */
   readonly #idleWaiting: Array<() => void> = []
-  readonly #running = new Set<{ command: string; cwd: string; started: number }>()
+  readonly #running = new Set<{ command: string; cwd: string; started: number; repository?: string }>()
   /** Each repository's last write asked for, by the folder its checkouts share: the next one starts once it ends. */
   readonly #writes = new Map<string, Promise<void>>()
   #writesWaiting = 0
+  readonly #writeTurnWaitMs: number
   #readsRunning = 0
   #executable: string | undefined
   #environment: NodeJS.ProcessEnv | undefined
@@ -129,6 +137,7 @@ export class Git {
 
   constructor(runtime: GitRuntime = {}) {
     this.#runtime = runtime
+    this.#writeTurnWaitMs = runtime.writeTurnWaitMs ?? WRITE_TURN_WAIT_MS
     this.processes = trackProcesses(runtime.processes ?? processRunner, runtime.signal, this.#children)
     this.#repositories = new Repositories(this)
   }
@@ -169,7 +178,7 @@ export class Git {
     options.signal?.throwIfAborted()
     const queued = performance.now()
     const repository = !options.read && writesShared(options.args) ? commonDirOf(options.cwd) : undefined
-    const release = options.read ? await this.#readSlot(options.idle === true) : repository ? await this.#writeTurn(repository) : undefined
+    const release = options.read ? await this.#readSlot(options.idle === true) : repository ? await this.#writeTurn(repository, options) : undefined
     try {
       options.signal?.throwIfAborted()
       return await this.#execute(options, performance.now() - queued, repository)
@@ -289,21 +298,39 @@ export class Git {
     }
   }
 
-  /** The repository's turn to write, after every write asked for before in it; the returned call ends it. */
-  async #writeTurn(repository: string): Promise<() => void> {
+  /**
+   * The repository's turn to write, after every write asked for before in it; the returned call ends it. One that
+   * waits past `WRITE_TURN_WAIT_MS` fails, naming what held the repository, and its place in the line passes on, so
+   * the writes behind it never wait on it.
+   */
+  async #writeTurn(repository: string, options: RunOptions): Promise<() => void> {
     const before = this.#writes.get(repository)
     let end!: () => void
     const turn = new Promise<void>((resolve) => (end = resolve))
     const last = (before ?? Promise.resolve()).then(() => turn)
     this.#writes.set(repository, last)
-    if (before) {
-      this.#writesWaiting += 1
-      await before
-      this.#writesWaiting -= 1
-    }
-    return () => {
+    const done = () => {
       end()
       if (this.#writes.get(repository) === last) this.#writes.delete(repository)
+    }
+    if (!before) return done
+    this.#writesWaiting += 1
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const waited = new Promise<"waited">((resolve) => { timer = setTimeout(() => resolve("waited"), this.#writeTurnWaitMs) })
+    try {
+      if ((await Promise.race([before.then(() => "turn" as const), waited])) === "waited") {
+        done()
+        const holding = [...this.#running].find((live) => live.repository === repository)
+        throw new GitError({
+          kind: "timeout",
+          command: subcommandOf(options.args).command,
+          message: `git ${subcommandOf(options.args).command} waited ${(this.#writeTurnWaitMs / 1000).toFixed(this.#writeTurnWaitMs < 10_000 ? 1 : 0)} s for the repository's earlier writes${holding ? `, behind git ${holding.command} in ${holding.cwd}` : ""}.`,
+        })
+      }
+      return done
+    } finally {
+      clearTimeout(timer)
+      this.#writesWaiting -= 1
     }
   }
 
@@ -326,7 +353,7 @@ export class Git {
 
     return new Promise<RunResult>((resolve, reject) => {
       const child = this.processes.spawn(command, argv, { cwd: options.cwd, env, stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true })
-      const live = { command: subcommand, cwd: options.cwd, started }
+      const live = { command: subcommand, cwd: options.cwd, started, ...(repository && { repository }) }
       running.add(live)
       const chunks: Buffer[] = []
       let bytes = 0

@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs"
+import { readFileSync, realpathSync, statSync } from "node:fs"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 
 /**
@@ -26,8 +26,8 @@ export function subcommandOf(args: readonly string[]) {
 const has = (rest: readonly string[], ...flags: string[]) => rest.some((word) => flags.includes(word) || flags.some((flag) => flag.startsWith("--") && word.startsWith(`${flag}=`)))
 const words = (rest: readonly string[]) => rest.filter((word) => !word.startsWith("-"))
 
-/** `worktree` verbs that change the repository's record of its worktrees. */
-const WORKTREE_WRITES = new Set(["add", "remove", "move", "prune", "repair", "lock", "unlock"])
+/** `worktree` verbs that change the repository's record of its worktrees (`add` only `--no-checkout`, below). */
+const WORKTREE_WRITES = new Set(["remove", "move", "prune", "repair", "lock", "unlock"])
 /** `branch` and `tag` options that list rather than make. */
 const LISTING = ["--list", "-l", "--show-current", "-a", "--all", "-r", "--remotes", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--format", "-v", "-vv", "--verbose", "--sort", "-n"]
 /** `remote` verbs that change the repository's configuration or refs, without reaching the network. */
@@ -54,6 +54,9 @@ export function writesShared(args: readonly string[]): boolean {
   const { command, rest } = subcommandOf(args)
   switch (command) {
     case "worktree":
+      // A worktree added with its files checks them out, hooks and all, for as long as that takes: Mako adds it
+      // `--no-checkout` in the turn and writes its files after, as its own checkout's (`reset --hard`).
+      if (rest[0] === "add") return rest.includes("--no-checkout")
       return WORKTREE_WRITES.has(rest[0] ?? "")
     case "branch":
     case "tag":
@@ -81,9 +84,19 @@ export function writesShared(args: readonly string[]): boolean {
 /**
  * The folder every checkout of `cwd`'s repository shares (`git rev-parse --git-common-dir`), read from the files Git
  * leaves rather than by starting Git: a main checkout's `.git` folder, or, for a linked worktree, the `commondir` its
- * `.git` file points through. Outside a repository, `cwd` itself.
+ * `.git` file points through. Outside a repository, `cwd` itself. Its real path, so a repository reached through a
+ * link (macOS's `/var` is `/private/var`) is one repository.
  */
 export function commonDirOf(cwd: string): string {
+  const found = findCommonDir(cwd)
+  try {
+    return realpathSync(found)
+  } catch {
+    return found
+  }
+}
+
+function findCommonDir(cwd: string): string {
   for (let folder = resolve(cwd); ; folder = dirname(folder)) {
     const dotGit = join(folder, ".git")
     const kind = (() => {

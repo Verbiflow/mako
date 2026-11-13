@@ -1733,7 +1733,7 @@ export class ThreadWorktreeService {
       if (!spare) {
         await mkdir(dirname(receipt.path), { recursive: true, mode: 0o700 })
         try {
-          await this.git.output(receipt.repoRoot, [...PARALLEL_CHECKOUT, "worktree", "add", receipt.path, receipt.branch])
+          await addWorktree(this.git, receipt.repoRoot, receipt.path, receipt.branch)
         } catch (error) {
           if (error instanceof GitError && /already (checked out|used by worktree)/i.test(error.stderr))
             throw new Error(`${receipt.branch} is checked out in another folder. Git keeps a branch in one checkout at a time, so start a new branch from it instead.`, { cause: error })
@@ -1822,7 +1822,7 @@ export class ThreadWorktreeService {
       }
       await mkdir(dirname(member.path), { recursive: true, mode: 0o700 })
       try {
-        await this.git.output(member.repoRoot, [...PARALLEL_CHECKOUT, "worktree", "add", member.path, branch])
+        await addWorktree(this.git, member.repoRoot, member.path, branch)
       } catch (error) {
         throw new Error(`Git couldn't create the worktree of ${relative(source, member.repoRoot)}: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
       }
@@ -2031,6 +2031,16 @@ export class ThreadWorktreeService {
     }
     throw new Error("Every name for this worktree is taken in one of the project's repositories. Remove some mako/ branches, then try again.")
   }
+}
+
+/**
+ * A worktree of `repoRoot` at `path` on `branch`: added `--no-checkout`, the only part that writes what the
+ * repository's checkouts share and so takes its turn (`Git.run`), then its files written as its own checkout's, outside
+ * that turn, so a start's checkout of thousands of files never holds another Thread's start or abandon.
+ */
+async function addWorktree(git: Git, repoRoot: string, path: string, branch: string): Promise<void> {
+  await git.output(repoRoot, ["worktree", "add", "--no-checkout", path, branch])
+  await git.output(path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q"])
 }
 
 /** The first line Git said of a failed command (a `GitError`'s message is its error output), without its `error:`. */

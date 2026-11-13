@@ -41,18 +41,20 @@ export async function reattachWorktree(git: Git, repoRoot: string, folder: strin
   const onBranch = branch !== undefined
     && (await git.succeeds(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]))
     && !(await git.output(repoRoot, ["worktree", "list", "--porcelain"])).split("\n").includes(`branch refs/heads/${branch}`)
-  const add = (path: string, unchecked: boolean) =>
-    git.output(repoRoot, ["worktree", "add", "--quiet", ...unchecked ? ["--no-checkout"] : [], ...onBranch && branch ? [path, branch] : ["--detach", path, "HEAD"]])
+  // Added without its files, which would hold the repository's turn while they're written (`Git.run`); filled after.
+  const add = (path: string) =>
+    git.output(repoRoot, ["worktree", "add", "--quiet", "--no-checkout", ...onBranch && branch ? [path, branch] : ["--detach", path, "HEAD"]])
   if (!existsSync(folder)) {
     await mkdir(dirname(folder), { recursive: true, mode: 0o700 })
-    await add(folder, false)
+    await add(folder)
+    await git.output(folder, ["reset", "--hard", "--quiet"])
     return
   }
   // The folder stays where the Thread's sessions know it: a worktree is added beside it unchecked out, its `.git` moved
   // in, and the repository told where it is now.
   const beside = `${folder}.mako-reattach-${randomBytes(4).toString("hex")}`
   try {
-    await add(beside, true)
+    await add(beside)
     await rename(join(beside, ".git"), join(folder, ".git"))
     await git.output(repoRoot, ["worktree", "repair", folder])
     await git.output(folder, ["reset", "--quiet"])

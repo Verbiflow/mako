@@ -135,6 +135,8 @@ try {
       ["remote", "get-url", "origin"], ["rev-list", "--count", "a..b"], ["status", "--porcelain"],
       // A checkout's own index, files and branch, hooks and all, and the network: they never take the repository's turn.
       ["reset", "--hard", "-q", "abc"], ["read-tree", "abc"], ["update-index", "-q", "--refresh"], ["commit", "-m", "x"], ["merge", "x"], ["fetch", "origin"], ["push", "origin", "x"],
+      // A worktree added with its files checks them out for as long as that takes: Mako adds it `--no-checkout`.
+      ["worktree", "add", "/x", "mako/x"],
     ]
     for (const args of writes) assert.equal(writesShared(args), true, args.join(" "))
     for (const args of reads) assert.equal(writesShared(args), false, args.join(" "))
@@ -149,6 +151,9 @@ try {
     assert.equal(commonDirOf(root), join(root, ".git"))
     assert.equal(commonDirOf(join(linked, "deep", "er")), join(root, ".git"), "a folder inside a linked worktree")
     assert.equal(commonDirOf(scratch), scratch, "outside a repository, the folder itself")
+    const { symlink } = await import("node:fs/promises")
+    await symlink(root, join(scratch, "common-dir-link"))
+    assert.equal(commonDirOf(join(scratch, "common-dir-link")), join(root, ".git"), "a repository reached through a link is the same repository")
   })
 
   await test("writes in one repository run one at a time, in the order asked; reads and other repositories don't wait", async () => {
@@ -185,6 +190,27 @@ try {
     const own = traces.filter((trace) => trace.write && trace.cwd !== other).sort((a, b) => a.end - b.end)
     assert.equal(own.length, 3)
     for (let at = 1; at < own.length; at += 1) assert.ok(own[at].end - own[at].ms >= own[at - 1].end, `${own[at].args.join(" ")} began before ${own[at - 1].args.join(" ")} ended`)
+    writes.close()
+  })
+
+  await test("a write that waits too long for its repository fails, naming what held it, and the line goes on", async () => {
+    const { PassThrough } = await import("node:stream")
+    const root = await repository("turn-wait")
+    await sh(root, "commit", "--allow-empty", "-q", "-m", "first")
+    const writes = new Git({ writeTurnWaitMs: 300 })
+    const input = new PassThrough()
+    const holding = writes.run({ cwd: root, args: ["update-ref", "--stdin"], input })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const gaveUp = writes.output(root, ["branch", "--no-track", "gave-up", "HEAD"])
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    // Asked for behind the one that gives up: it waits only for the write under way.
+    const behind = writes.output(root, ["branch", "--no-track", "behind", "HEAD"])
+    await assert.rejects(gaveUp, (error) => error instanceof GitError && error.kind === "timeout" && /waited 0\.3 s for the repository's earlier writes, behind git update-ref/.test(error.message))
+    input.end("create refs/heads/held HEAD\n")
+    await holding
+    await behind
+    assert.equal(await writes.readOutput(root, ["branch", "--list", "behind"]), "behind")
+    assert.equal(await writes.readOutput(root, ["branch", "--list", "gave-up"]), "", "the write that gave up never ran")
     writes.close()
   })
 
