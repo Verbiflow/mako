@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { activeAcp, useAcp } from "@/state/acp-state"
 import { filesScreenChunk } from "./chunks"
+import { CodeUnavailable } from "./code-unavailable"
 import { EASE_OUT, EASE_SWIFT, reducedMotion } from "./motion"
-import { followFilesHistory, leftFiles, useFilesOpen, type FilesOpen } from "./files-open"
+import { closeFiles, followFilesHistory, leftFiles, useFilesOpen, type FilesOpen } from "./files-open"
 import { leftReview, reviewOpenStore } from "./review-open"
 import type { WebForm } from "./route"
 
@@ -31,6 +32,8 @@ export function FilesLayer({ form, place }: { form: WebForm; place: string | und
   }, [open, onScreen])
 
   const screen = filesScreenChunk.use()
+  const failed = filesScreenChunk.useFailed()
+  const retry = useCallback(() => filesScreenChunk.read().then(() => undefined), [])
   useEffect(() => {
     if (open) void filesScreenChunk.read().catch(() => undefined)
   }, [open])
@@ -57,7 +60,7 @@ export function FilesLayer({ form, place }: { form: WebForm; place: string | und
   if (!shown) return null
   return (
     <div ref={layer} className="rv-layer" data-form={form} data-closing={open ? undefined : ""}>
-      {screen ? <screen.FilesScreen key={shown.conversation} open={shown} touch={form !== "desk"} /> : null}
+      {screen ? <screen.FilesScreen key={shown.conversation} open={shown} touch={form !== "desk"} /> : failed ? <CodeUnavailable what="Files" retry={retry} onClose={closeFiles} /> : null}
     </div>
   )
 }

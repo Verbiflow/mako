@@ -71,22 +71,28 @@ export function leftReview(): void {
 export interface ReviewCode<T> {
   read(): Promise<void>
   useCode(): T | undefined
+  /** Its last read failed and none has been asked since: Changes says so (`CodeUnavailable`). */
+  useFailed(): boolean
 }
 
 function lazyCode<T>(load: () => Promise<T>): ReviewCode<T> {
-  const codeStore = createStore<{ code: T | undefined; reading: Promise<void> | undefined }>({ code: undefined, reading: undefined })
+  const codeStore = createStore<{ code: T | undefined; reading: Promise<void> | undefined; failed: boolean }>({ code: undefined, reading: undefined, failed: false })
   return {
     read() {
       const { reading } = codeStore.get()
       if (reading) return reading
-      const read = load().then((code) => codeStore.set({ code }))
-      // Not here (offline before the service worker kept it): asked again next time.
-      read.catch(() => codeStore.set({ reading: undefined }))
+      const read = load().then((code) => codeStore.set({ code, failed: false }))
+      // Not here (offline before the service worker kept it): asked again next time. `failed` stands until a read
+      // succeeds, so Changes keeps saying so while it tries again.
+      read.catch(() => codeStore.set({ reading: undefined, failed: true }))
       codeStore.set({ reading: read })
       return read
     },
     useCode() {
       return useSyncExternalStore(codeStore.subscribe, () => codeStore.get().code)
+    },
+    useFailed() {
+      return useSyncExternalStore(codeStore.subscribe, () => codeStore.get().failed)
     },
   }
 }

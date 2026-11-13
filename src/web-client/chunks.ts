@@ -9,16 +9,25 @@ import { useSyncExternalStore } from "react"
 export function chunk<Module>(load: () => Promise<Module>) {
   let module: Module | undefined
   let reading: Promise<Module> | undefined
+  /** Its last read failed and none has been asked since: a screen waiting on it says so (`CodeUnavailable`). */
+  let failed = false
   const listeners = new Set<() => void>()
+  const told = () => {
+    for (const listener of listeners) listener()
+  }
   const read = (): Promise<Module> => {
+    // `failed` stands until a read succeeds: a screen saying so keeps saying it while it tries again.
     reading ??= load().then((loaded) => {
       module = loaded
-      for (const listener of listeners) listener()
+      failed = false
+      told()
       return loaded
     })
     // Not here (offline before the service worker kept it): asked again next time.
     reading.catch(() => {
       reading = undefined
+      failed = true
+      told()
     })
     return reading
   }
@@ -28,7 +37,7 @@ export function chunk<Module>(load: () => Promise<Module>) {
       listeners.delete(listener)
     }
   }
-  return { read, use: () => useSyncExternalStore(subscribe, () => module) }
+  return { read, use: () => useSyncExternalStore(subscribe, () => module), useFailed: () => useSyncExternalStore(subscribe, () => failed) }
 }
 
 /** A Thread's transcript: read as soon as the list has painted, and drawn by its screen in the frame it's opened. */
