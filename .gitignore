@@ -73,4 +73,3 @@ vendor/control-media/downloads/
 
 # Office preview workers are copied from pinned packages by the Vite plugin.
 /public/file-viewer/
-dist-ui-test

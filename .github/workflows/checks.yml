@@ -268,6 +268,9 @@ jobs:
     if: github.event_name != 'pull_request' || needs.changes.outputs.ui == 'true'
     runs-on: macos-15
     timeout-minutes: 20
+    env:
+      MAKO_UI_VITE_URL: http://127.0.0.1:5310/
+      MAKO_UI_VITE_MANUAL_URL: http://127.0.0.1:5311/
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -278,36 +281,34 @@ jobs:
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
       - run: npm run build:control-runtime
-      # The renderer built once for this shard's suites and served at one address (`MAKO_UI_VITE_URL`), where each suite
-      # started a dev server of its own and compiled every page it opened cold. It builds in seconds, so each shard builds
-      # its own rather than wait on a job's artifact. Suites that need a dev server's own behaviour still start one.
-      - run: npm run build:ui-test
+      # One Vite dev server for the job's checks and one for those that reload by hand (#662's `ui-vite-server.mjs`), at
+      # the addresses the job's env gives them, where each check started a server of its own and compiled every page it
+      # opened cold. A check needing anything else of a dev server still starts its own.
       - run: |
-          nohup node scripts/ci-ui-serve.mjs --port 4173 > "$RUNNER_TEMP/ui-serve.log" 2>&1 &
-          echo $! > "$RUNNER_TEMP/ui-serve.pid"
-          curl --retry 20 --retry-delay 1 --retry-connrefused -sf http://127.0.0.1:4173/ -o /dev/null
+          nohup node scripts/ui-vite-server.mjs --port 5310 > "$RUNNER_TEMP/ui-vite.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/ui-vite.pids"
+          nohup node scripts/ui-vite-server.mjs --port 5311 --manual > "$RUNNER_TEMP/ui-vite-manual.log" 2>&1 &
+          echo $! >> "$RUNNER_TEMP/ui-vite.pids"
+          for wait in $(seq 1 60); do
+            grep -q "UI Vite server" "$RUNNER_TEMP/ui-vite.log" && grep -q "UI Vite server" "$RUNNER_TEMP/ui-vite-manual.log" && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/ui-vite.log" "$RUNNER_TEMP/ui-vite-manual.log"
+          exit 1
       # The shard's first Electron start and page load, once and timed, before any suite pays for it.
       - run: node scripts/ci-ui-warm.mjs
-        env:
-          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
       - run: npm run test:transcript-send-ui
         env:
-          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:transcript-rows-ui
         env:
-          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:highlight-pool-ui
-        env:
-          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
       # A limit's one notice, in the Inbox, on the phone and in the laptop's browser, and a move on every list.
       - run: npm run test:limit-notice-ui
-        env:
-          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
-      # The renderer's server ends with the job, whatever the suites did.
+      # The job's Vite servers end with it, whatever the checks did.
       - if: always()
-        run: kill "$(cat "$RUNNER_TEMP/ui-serve.pid" 2>/dev/null)" 2>/dev/null || true
+        run: if [ -f "$RUNNER_TEMP/ui-vite.pids" ]; then kill $(cat "$RUNNER_TEMP/ui-vite.pids") 2>/dev/null || true; fi
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -325,6 +326,9 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3]
+    env:
+      MAKO_UI_VITE_URL: http://127.0.0.1:5310/
+      MAKO_UI_VITE_MANUAL_URL: http://127.0.0.1:5311/
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -341,25 +345,28 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
       - run: npm run build:control-runtime
-      # The renderer built once for this shard's suites and served at one address (`MAKO_UI_VITE_URL`), where each suite
-      # started a dev server of its own and compiled every page it opened cold. It builds in seconds, so each shard builds
-      # its own rather than wait on a job's artifact. Suites that need a dev server's own behaviour still start one.
-      - run: npm run build:ui-test
+      # One Vite dev server for the job's checks and one for those that reload by hand (#662's `ui-vite-server.mjs`), at
+      # the addresses the job's env gives them, where each check started a server of its own and compiled every page it
+      # opened cold. A check needing anything else of a dev server still starts its own.
       - run: |
-          nohup node scripts/ci-ui-serve.mjs --port 4173 > "$RUNNER_TEMP/ui-serve.log" 2>&1 &
-          echo $! > "$RUNNER_TEMP/ui-serve.pid"
-          curl --retry 20 --retry-delay 1 --retry-connrefused -sf http://127.0.0.1:4173/ -o /dev/null
+          nohup node scripts/ui-vite-server.mjs --port 5310 > "$RUNNER_TEMP/ui-vite.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/ui-vite.pids"
+          nohup node scripts/ui-vite-server.mjs --port 5311 --manual > "$RUNNER_TEMP/ui-vite-manual.log" 2>&1 &
+          echo $! >> "$RUNNER_TEMP/ui-vite.pids"
+          for wait in $(seq 1 60); do
+            grep -q "UI Vite server" "$RUNNER_TEMP/ui-vite.log" && grep -q "UI Vite server" "$RUNNER_TEMP/ui-vite-manual.log" && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/ui-vite.log" "$RUNNER_TEMP/ui-vite-manual.log"
+          exit 1
       # The shard's first Electron start and page load, once and timed, before any suite pays for it.
       - run: node scripts/ci-ui-warm.mjs
-        env:
-          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
       - run: node scripts/ci-suites.mjs ${{ matrix.shard }} 3
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
-          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
-      # The renderer's server ends with the job, whatever the suites did.
+      # The job's Vite servers end with it, whatever the checks did.
       - if: always()
-        run: kill "$(cat "$RUNNER_TEMP/ui-serve.pid" 2>/dev/null)" 2>/dev/null || true
+        run: if [ -f "$RUNNER_TEMP/ui-vite.pids" ]; then kill $(cat "$RUNNER_TEMP/ui-vite.pids") 2>/dev/null || true; fi
       # What a failed suite kept to say why (a host's logs when it didn't quit).
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

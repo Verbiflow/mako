@@ -19,7 +19,7 @@ export const UI_PACKAGES = ["client", "control", "control-runtime", "lazy", "pro
 
 export const JOBS = {
   // The window's suites on a Mac: whatever the renderer, the desk, the web app or the host's wire to them draws.
-  ui: [/^src\//, /^electron\//, new RegExp(`^packages/(${UI_PACKAGES.join("|")})/`), /^public\//, /^mako-icons\//, /^tsconfig[\w.-]*\.json$/, /^packages\/host\/src\/(contracts|transport)\//, /^scripts\/test-[\w-]*-ui[\w-]*\./, /^scripts\/ci-suites\.mjs$/, /^scripts\/ci-ui-serve\.mjs$/, /^vite\.test\.config\.ts$/, /^scripts\/lib\/test-/, /^index\.html$/, /^vite\./, /^tailwind/],
+  ui: [/^src\//, /^electron\//, new RegExp(`^packages/(${UI_PACKAGES.join("|")})/`), /^public\//, /^mako-icons\//, /^tsconfig[\w.-]*\.json$/, /^packages\/host\/src\/(contracts|transport)\//, /^scripts\/test-[\w-]*-ui[\w-]*\./, /^scripts\/ci-suites\.mjs$/, /^scripts\/(ui-vite-server|ci-ui-warm)\.mjs$/, /^scripts\/lib\/ui-vite\.mjs$/, /^scripts\/lib\/test-/, /^index\.html$/, /^vite\./, /^tailwind/],
   // The gate's steps that pass only on a Mac (`ci-gate.mjs`'s `MAC_STEPS`): the host, its packages and their tests.
   macHost: [/^packages\//, /^electron\//, /^scripts\/(test-|lib\/|diagnose-|check-)/, /^scripts\/ci-gate\.mjs$/],
   // The local updater's checks: the application domain, the update scripts and anything the packaged build reads.

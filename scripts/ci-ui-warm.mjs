@@ -4,12 +4,13 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 /**
- * A UI shard's first Electron start and first page load, made once before its suites and timed: on a fresh Mac runner
- * the first start of the downloaded Electron is checked by the system, and whichever suite came first paid for it
- * (about 90 s, run 43362332623). It opens the desk the shard serves (`MAKO_UI_VITE_URL`, `?mock`), waits until it draws
+ * A UI shard's first Electron start and first page load, made once before its checks and timed: on a fresh Mac runner
+ * whichever check came first paid for Electron's first start, the shared dev server's first compile and Vite's
+ * optimizing of the dependencies it finds (about 90 s, run 43362332623), and a page loaded during that optimizing is
+ * reloaded under it. It opens the desk the shard's server serves (`MAKO_UI_VITE_URL`, `?mock`), waits until it draws
  * words, and prints how long Electron took to start and the page to draw, to the job's summary too.
  *
- *   MAKO_UI_VITE_URL=http://127.0.0.1:4173/ node scripts/ci-ui-warm.mjs
+ *   MAKO_UI_VITE_URL=http://127.0.0.1:5310/ node scripts/ci-ui-warm.mjs
  */
 const base = process.env.MAKO_UI_VITE_URL
 if (!base) throw new Error("MAKO_UI_VITE_URL names the served renderer")
