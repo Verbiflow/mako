@@ -2,7 +2,7 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
 import { Git } from "@mako/git"
@@ -40,7 +40,7 @@ const repository = (name: string) => {
 }
 const suite = join(root, "suite")
 const repositories = [repository("suite/app"), repository("suite/api"), repository("solo")]
-const [, , solo] = repositories
+const solo = repositories[2]
 
 type Write = { repository: string; args: string; start: number; end: number; waited: number }
 const writes: Write[] = []
@@ -86,6 +86,30 @@ try {
   assert.ok(waited.length > 0, "writes asked for at once in one repository waited their turn")
   const verbs = (match: RegExp) => writes.filter((write) => match.test(write.args)).length
   console.log(JSON.stringify({ writes: writes.length, waited: waited.length, spareWorktrees: verbs(/worktree add --detach/), branchDeletes: verbs(/branch -D/) }))
+
+  // A start's checkout writes its files outside the turn: on a repository whose files pass through a slow filter (an LFS
+  // download, say), another write there goes while the files are still coming.
+  const filtered = repository("filtered")
+  git(filtered, "config", "filter.slow.smudge", "sleep 1; cat")
+  git(filtered, "config", "filter.slow.clean", "cat")
+  writeFileSync(join(filtered, ".gitattributes"), "*.slow filter=slow\n")
+  for (const n of [1, 2, 3]) writeFileSync(join(filtered, `asset-${n}.slow`), `asset ${n}\n`)
+  git(filtered, "add", ".")
+  git(filtered, "commit", "-q", "-m", "slow assets")
+  const slowId = randomUUID()
+  const began = performance.now()
+  let startEnded = 0
+  const starting = worktrees.prepare(slowId, filtered, "Slow checkout").then((made) => { startEnded = performance.now() - began; return made })
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  const asked = performance.now()
+  await traced.output(filtered, ["branch", "--no-track", "meanwhile", "HEAD"])
+  const meanwhileMs = performance.now() - asked
+  const slow = await starting
+  assert.equal(readFileSync(join(slow.path, "asset-3.slow"), "utf8"), "asset 3\n", "the start's files came through their filter")
+  assert.ok(startEnded >= 2_500, `the checkout took its filter's time (${Math.round(startEnded)} ms)`)
+  assert.ok(meanwhileMs < 1_500 && meanwhileMs < startEnded - 500, `a branch made during the start's checkout waited ${Math.round(meanwhileMs)} ms; the start took ${Math.round(startEnded)} ms`)
+  await worktrees.abandon(slowId)
+  console.log(JSON.stringify({ slowStartMs: Math.round(startEnded), branchDuringItMs: Math.round(meanwhileMs) }))
   console.log("worktree writes: spares made while Threads start and are given back never write at once in a repository, and every empty branch goes")
 } finally {
   await traced.close()

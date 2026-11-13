@@ -126,7 +126,7 @@ try {
       ["worktree", "add", "--detach", "--no-checkout", "/x", "HEAD"], ["worktree", "remove", "-f", "-f", "/x"], ["worktree", "prune"], ["worktree", "lock", "--reason", "spare", "/x"],
       ["branch", "-D", "mako/x"], ["branch", "--no-track", "mako/x", "abc"], ["branch", "-f", "mako/x", "HEAD"], ["branch", "--set-upstream-to=origin/main"],
       ["update-ref", "--no-deref", "HEAD", "abc"], ["update-ref", "-d", "refs/x"], ["symbolic-ref", "HEAD", "refs/heads/main"],
-      ["-c", "checkout.workers=4", "checkout", "-q", "mako/x"], ["switch", "-c", "x"], ["stash", "push", "-u"], ["stash"], ["tag", "v1"],
+      ["checkout", "-q", "-b", "mako/x"], ["switch", "-c", "x"], ["checkout", "--orphan", "x"], ["tag", "v1"],
       ["config", "branch.x.merge", "refs/heads/x"], ["config", "--unset", "branch.x.merge"], ["remote", "add", "origin", "url"],
     ]
     const reads = [
@@ -136,7 +136,7 @@ try {
       // A checkout's own index, files and branch, hooks and all, and the network: they never take the repository's turn.
       ["reset", "--hard", "-q", "abc"], ["read-tree", "abc"], ["update-index", "-q", "--refresh"], ["commit", "-m", "x"], ["merge", "x"], ["fetch", "origin"], ["push", "origin", "x"],
       // A worktree added with its files checks them out for as long as that takes: Mako adds it `--no-checkout`.
-      ["worktree", "add", "/x", "mako/x"],
+      ["worktree", "add", "/x", "mako/x"], ["-c", "checkout.workers=4", "checkout", "-q", "mako/x"], ["switch", "main"], ["stash", "push", "-u"], ["stash", "pop"],
     ]
     for (const args of writes) assert.equal(writesShared(args), true, args.join(" "))
     for (const args of reads) assert.equal(writesShared(args), false, args.join(" "))

@@ -33,7 +33,9 @@ const LISTING = ["--list", "-l", "--show-current", "-a", "--all", "-r", "--remot
 /** `remote` verbs that change the repository's configuration or refs, without reaching the network. */
 const REMOTE_WRITES = new Set(["add", "remove", "rm", "rename", "set-url", "set-head", "set-branches"])
 /** Commands that write HEAD, a branch or another ref every checkout of the repository shares. */
-const REF_WRITES = new Set(["update-ref", "checkout", "switch", "pack-refs"])
+const REF_WRITES = new Set(["update-ref", "pack-refs"])
+/** `checkout` and `switch` options that make or reset a branch; without one they move only their own checkout's HEAD. */
+const BRANCHING = ["-b", "-B", "-c", "-C", "--orphan", "--create", "--force-create"]
 
 /**
  * Whether a command writes what every checkout of a repository shares: its refs, its record of worktrees or its
@@ -49,6 +51,10 @@ const REF_WRITES = new Set(["update-ref", "checkout", "switch", "pack-refs"])
  * - `commit`, `merge`, `rebase`, `cherry-pick`, `revert` and `am`: they too move only the checkout's own branch, and
  *   run the repository's hooks for as long as those take: a pre-commit hook running tests would hold every Thread's
  *   start in the repository behind the person's commit. They wait out a held lock instead.
+ * - `checkout` and `switch` of a branch that exists, a worktree added with its files, and `stash push`/`pop`/`apply`:
+ *   they rewrite the checkout's files, through smudge and LFS filters that can reach the network, and run the
+ *   post-checkout hook, for as long as all that takes. A stash's one shared ref (`refs/stash`) waits out a held lock.
+ *   Making or resetting a branch (`checkout -b`) does take the turn.
  */
 export function writesShared(args: readonly string[]): boolean {
   const { command, rest } = subcommandOf(args)
@@ -64,8 +70,9 @@ export function writesShared(args: readonly string[]): boolean {
       return words(rest).length > 0 && !has(rest, ...LISTING)
     case "symbolic-ref":
       return has(rest, "-d", "--delete") || words(rest).length >= 2
-    case "stash":
-      return !["list", "show"].includes(rest[0] ?? "")
+    case "checkout":
+    case "switch":
+      return has(rest, ...BRANCHING)
     case "reflog":
       return ["expire", "delete"].includes(rest[0] ?? "")
     case "remote":
