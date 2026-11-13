@@ -141,7 +141,7 @@ export class LiveClosing {
     const idle = resident.snapshot.session.status === "ready"
     const generation = resident.generation
     resident.closing = true
-    this.access.declineAutoContinue(resident)
+    this.access.declineAutoContinue(resident, forExit)
     const starting = resident.starting
     if (starting) {
       hostLog("live", "Close cancels a native setup in progress", { conversation: id, harness: starting.driver.provider })
@@ -365,9 +365,9 @@ export class LiveClosing {
         ))
         closing.push(revokeTools(dependencies, bindingId, resident.snapshot.session.id))
       }
-      // A continuation this host was about to send goes with it; the next
-      // host offers the button instead of promising a send it cannot make.
-      this.access.declineAutoContinue(resident)
+      // In-memory continuation promises go with this host. A service retry is already journaled with its due time,
+      // so the next host owns it; stopping this host must not silently cancel the pending work.
+      this.access.declineAutoContinue(resident, true)
       const cut = this.cutForNextHost(resident)
       if (cut) left.push(cut)
       // One conversation Mako can't save doesn't keep the others from saving how this host left them.

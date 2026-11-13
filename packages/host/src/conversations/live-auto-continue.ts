@@ -222,11 +222,11 @@ export class LiveAutoContinue {
     hostLog("live", "a turn its harness failed for now continues by itself", { conversation: resident.snapshot.session.id, request: request.id, continues: failed.id, ...(cause && { cause }), ...(retry && { attempt: retry.attempt, at: new Date(retry.at).toISOString() }) })
   }
 
-  /** Drop a pending continuation and its stamp; a later prompt, close or host exit made it moot. */
-  decline(resident: Resident): void {
+  /** Drop a pending continuation; new input/host exit preserves a service retry, while an explicit Close cancels it. */
+  decline(resident: Resident, keepServiceRetry = false): void {
     // A failed turn's continuation that waits for its time gives way the same way.
     // One carrying a digest doesn't: it's the only way its reports are heard.
-    const waiting = resident.snapshot.requests.filter((request) => request.status === "held" && request.continues?.auto && request.retry && !request.digest)
+    const waiting = resident.snapshot.requests.filter((request) => request.status === "held" && request.continues?.auto && request.retry && !request.digest && !(keepServiceRetry && request.retry.cause === "provider-unavailable"))
     if (waiting.length) {
       const failed = new Set(waiting.map((request) => request.continues!.requestId))
       const ids = new Set(waiting.map((request) => request.id))

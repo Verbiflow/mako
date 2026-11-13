@@ -9,6 +9,8 @@ import { beginStart } from "../src/state/acp-start"
 import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
 import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
+import { nextRetry } from "@mako/host/contracts/delivery-retry"
+import { FailureRow } from "../src/components/transcript/failure-row"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
 import { agentActivity } from "../src/state/agent-activity"
@@ -487,3 +489,23 @@ console.log("PASS: native coverage reaches renderer through snapshot and coverag
   assert.deepEqual(agentActivity({ blocks: [], waiting: false, connecting: false, preparing: true, checkingOwner: true }), { kind: "connecting", label: "Checking with your account" })
 }
 console.log("PASS: a message waiting for this Mac to hear its account is the one being sent, and says so once it's a wait")
+
+// The same Cloudflare result used by the scratch host is a visible automatic wait, with no sign-in or Resume action.
+{
+  const outageId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  const error = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"
+  assert.equal(classifyProviderFailure(error).kind, "provider-unavailable")
+  const retry = nextRetry(undefined, "provider-unavailable", error, Date.now())!
+  const failed: LiveRequest = { ...request, status: "failed", failure: "provider-unavailable", error, retry }
+  const continuation: LiveRequest = { ...second, status: "held", text: continueTurnPrompt("connection-lost", "mako"), retry, continues: { requestId: failed.id, reason: "connection-lost", auto: true } }
+  acpStore.set({ activeKey: outageId })
+  applyLiveSnapshot({ ...snapshot, revision: 1, session: { ...snapshot.session, id: outageId }, requests: [failed, continuation] })
+  const pending = renderToStaticMarkup(<PromptQueue />)
+  assert.match(pending, /data-queue-retry="provider-unavailable"/)
+  assert.match(pending, /Sends again by itself at/)
+  assert.match(pending, /service failed on its side/)
+  const ended = renderToStaticMarkup(<FailureRow conversationId={outageId} request={failed} />)
+  assert.match(ended, /Continues by itself/)
+  assert.doesNotMatch(ended, /data-recovery-primary|Sign in|Continue turn/)
+}
+console.log("PASS: a Cloudflare outage shows its automatic retry time and reason, without a sign-in or Resume button")
