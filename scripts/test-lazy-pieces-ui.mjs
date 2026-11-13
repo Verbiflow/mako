@@ -249,7 +249,7 @@ async function check() {
     await untilCheck(() => says(".rv-layer [data-code-loading]", `Loading ${what}`), `${what} loading`)
     await capture(`${what.toLowerCase()}-loading.png`)
     await release(pattern, "continue")
-    await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-loading]')", `${what} drawn`)
+    await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('.rv-layer [data-code-loading]')", `${what} drawn`)
   }
   await letGo()
 
@@ -271,7 +271,7 @@ async function check() {
   assert.equal(paused.get(FILES).length > 0, true, "its code still held, neither arrived nor failed")
   await capture("files-slow.png")
   await release(FILES, "continue")
-  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-loading]')", "Files drawn once its late code landed")
+  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('.rv-layer [data-code-loading]')", "Files drawn once its late code landed")
   await letGo()
   // Past its patience a read follows the network: offline it's a failure, and given up, so going back online starts a
   // new read, which says it's still loading past its own patience. Handed back the stalled read, Retry would end on
@@ -302,7 +302,7 @@ async function check() {
   await untilCheck(() => says(".rv-layer [data-code-slow]", "Still loading Files"), "back online, Files loading again in a new read")
   assert.equal(await evaluate("Boolean(document.querySelector('.rv-layer [data-code-unavailable]'))"), false, "back online and loading, not a failure")
   await release(FILES, "continue")
-  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-loading]')", "Files drawn from its new load")
+  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('.rv-layer [data-code-loading]')", "Files drawn from its new load")
   await letGo()
   // Changes (`lazyCode`): offline when its patience runs out is a failure, and back online its code is asked for anew.
   const CHANGES = "src/web-client/desk-review.tsx"
@@ -319,7 +319,7 @@ async function check() {
   await untilCheck(() => says(".rv-layer [data-code-slow]", "Still loading Changes"), "back online, Changes loading again in a new read")
   assert.equal(await evaluate("Boolean(document.querySelector('.rv-layer [data-code-unavailable]'))"), false, "back online and loading, not a failure")
   await release(CHANGES, "continue")
-  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-unavailable]') && !document.querySelector('[data-code-loading]')", "Changes drawn from its new load")
+  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('.rv-layer [data-code-unavailable]') && !document.querySelector('.rv-layer [data-code-loading]')", "Changes drawn from its new load")
   await letGo()
   await hold(FILES)
   await filesOpen("the web desk, Files' code failing")
