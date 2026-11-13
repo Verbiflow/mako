@@ -593,7 +593,7 @@
       }
     ],
     "extraMetadata": {
-      "main": "dist-electron/entry.js",
+      "main": "dist-electron/main/entry.js",
       "makoDistribution": "unsigned"
     },
     "mac": {
