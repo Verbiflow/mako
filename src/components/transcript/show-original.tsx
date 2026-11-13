@@ -1,13 +1,30 @@
-import { lazy, Suspense, useMemo, useState } from "react"
+import { Suspense, use, useMemo, useState } from "react"
 import { FileCode2Icon } from "lucide-react"
 import type { MessageOrigin, OriginEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { usePrefs } from "@/state/prefs"
 import { canReadOriginals } from "@/state/thread-viewing"
+import { LazyBoundary } from "@/components/ui/lazy-boundary"
 import { useTranscriptSource } from "./source-context"
 
-/** The dialog and its readers (the code highlighter among them): read the first time it opens, a debugging aid few turn on. */
-const OriginalDialog = lazy(() => import("./show-original-dialog").then((module) => ({ default: module.OriginalDialog })))
+/**
+ * The dialog and its readers (the code highlighter among them): read the first time it opens, a debugging aid few turn
+ * on. A read that failed is forgotten, so Retry reads it afresh.
+ */
+let dialogReading: Promise<typeof import("./show-original-dialog")> | undefined
+function readDialog(): Promise<typeof import("./show-original-dialog")> {
+  dialogReading ??= import("./show-original-dialog")
+  dialogReading.catch(() => {
+    dialogReading = undefined
+  })
+  return dialogReading
+}
+
+/** The dialog once its code is here: suspends until then, and throws to its `LazyBoundary` if it can't arrive. */
+function OriginalDialogLoader(props: { entries: readonly Recorded[]; onClose: () => void }) {
+  const { OriginalDialog } = use(readDialog())
+  return <OriginalDialog {...props} />
+}
 
 /** An entry with the bytes it names: the session whose record files those are, and the live conversation that holds it. */
 export interface Recorded { path?: string; live?: string; entry: OriginEntry }
@@ -56,9 +73,19 @@ export function ShowOriginal({ origins, className, always = false }: {
         <span>Original</span>
       </button>
       {open ? (
-        <Suspense fallback={null}>
-          <OriginalDialog entries={entries} onClose={() => setOpen(false)} />
-        </Suspense>
+        <LazyBoundary
+          fallback={(retry) => (
+            <span role="alert" data-original-unavailable="" className="flex items-center gap-1.5 text-negative">
+              Couldn't open the original.
+              <button type="button" className="pressable px-1 text-foreground underline" onClick={retry}>
+                Retry
+              </button>
+            </span>
+          )}>
+          <Suspense fallback={<span data-original-loading="" aria-live="polite">Opening the original…</span>}>
+            <OriginalDialogLoader entries={entries} onClose={() => setOpen(false)} />
+          </Suspense>
+        </LazyBoundary>
       ) : null}
     </>
   )

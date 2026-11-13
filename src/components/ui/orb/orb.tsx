@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSP
 import type { OrbSize, OrbState } from "thinking-orbs"
 import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import { cn } from "@/lib/utils"
+import { LazyBoundary } from "@/components/ui/lazy-boundary"
 import { mountOrb, orbWorkerAvailable, tintOf, type OrbHandle } from "./orb-client"
 
 /**
@@ -72,18 +73,21 @@ export function Orb({ state, size, paused = false, className, style, ...data }: 
 
   if (!offThread)
     return (
-      <Suspense fallback={<span aria-hidden {...data} className={cn("activity-orb inline-block shrink-0", className)} style={{ width: size, height: size, ...style }} />}>
-        <ThinkingOrb
-          state={state}
-          size={size}
-          theme={theme}
-          paused={paused}
-          aria-hidden
-          className={cn("activity-orb shrink-0", className)}
-          style={style}
-          {...data}
-        />
-      </Suspense>
+      // The orb's place, still, while the library arrives, and for good if it can't: never the window's error screen.
+      <LazyBoundary fallback={() => <span aria-hidden data-orb-unavailable="" {...data} className={cn("activity-orb inline-block shrink-0", className)} style={{ width: size, height: size, ...style }} />}>
+        <Suspense fallback={<span aria-hidden {...data} className={cn("activity-orb inline-block shrink-0", className)} style={{ width: size, height: size, ...style }} />}>
+          <ThinkingOrb
+            state={state}
+            size={size}
+            theme={theme}
+            paused={paused}
+            aria-hidden
+            className={cn("activity-orb shrink-0", className)}
+            style={style}
+            {...data}
+          />
+        </Suspense>
+      </LazyBoundary>
     )
   return (
     <span

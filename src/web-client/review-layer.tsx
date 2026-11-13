@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { activeAcp, useAcp } from "@/state/acp-state"
 import { openTurnReviewWith } from "@/state/review-scope"
-import { CodeUnavailable } from "./code-unavailable"
+import { CodeLoading, CodeUnavailable } from "./code-unavailable"
 import { EASE_OUT, EASE_SWIFT, reducedMotion } from "./motion"
 import { closeReview, deskReviewCode, followReviewHistory, leftReview, openReview, touchReviewCode, useReviewOpen, type ReviewOpen } from "./review-open"
 import type { WebForm } from "./route"
@@ -65,7 +65,7 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
   if (!shown) return null
   return (
     <div ref={layer} className="rv-layer" data-form={form} data-closing={open ? undefined : ""}>
-      {!code ? failed ? <CodeUnavailable what="Changes" retry={retry} onClose={closeReview} /> : <div className="rv-screen" /> : "DeskReview" in code ? <code.DeskReview key={shown.conversation} open={shown} onClose={closeReview} /> : <code.ReviewScreen key={shown.conversation} open={shown} onClose={closeReview} />}
+      {!code ? failed ? <CodeUnavailable what="Changes" retry={retry} onClose={closeReview} /> : <CodeLoading what="Changes" /> : "DeskReview" in code ? <code.DeskReview key={shown.conversation} open={shown} onClose={closeReview} /> : <code.ReviewScreen key={shown.conversation} open={shown} onClose={closeReview} />}
     </div>
   )
 }
