@@ -6,6 +6,8 @@ const FAILURE_TITLES = {
   "transcript-rejected": "Session history was rejected",
   "context-exhausted": "Conversation context is full",
   auth: "Sign-in required",
+  permission: "Access refused",
+  "sign-in-check": "Check your sign-in",
   plan: "The plan doesn't cover this request",
   "wrong-account": "Signed in as a different account",
   "rate-limited": "Model temporarily unavailable",

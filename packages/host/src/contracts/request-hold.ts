@@ -45,8 +45,9 @@ export function holdOf(request: Pick<LiveRequest, "status" | "signIn" | "editing
   return { kind: "paused", by: "mako" }
 }
 
-/** Whether a request goes on the next turn that can run: what waits to go again, or a digest resting. */
-export function goesNext(request: Parameters<typeof holdOf>[0]): boolean {
+/** Whether new input releases a retry/resting digest. An outage still waits for its time; an explicit move can go now. */
+export function goesNext(request: Parameters<typeof holdOf>[0], keepServiceRetry = false): boolean {
+  if (keepServiceRetry && request.retry?.cause === "provider-unavailable") return false
   const kind = holdOf(request)?.kind
   return kind === "retry" || kind === "resting"
 }

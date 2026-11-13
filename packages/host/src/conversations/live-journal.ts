@@ -1,3 +1,4 @@
+import { ProviderFailureEvidenceSchema } from "../contracts/provider-failure-evidence.js"
 import { LiveInputQuestionSchema } from "../contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts/approval-response.js"
 import { PromptDeliverySchema } from "../contracts/prompt-delivery.js"
@@ -190,6 +191,7 @@ export const LiveRequestSchema = z.object({
     .transform(readStoredReason)
     .optional(),
   failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
+  failureEvidence: ProviderFailureEvidenceSchema.optional(),
   /** The session's usage reading when this request was dispatched; `spend` is measured from it. */
   usageFrom: z.object({
     tokens: TokenCountsSchema.optional(),
@@ -249,6 +251,7 @@ const MetadataSchema = z.object({
     configOptions: z.array(ModelOptionSchema),
     settings: SessionSettingsSchema.optional(),
     lastStop: z.string().optional(),
+    failureEvidence: ProviderFailureEvidenceSchema.optional(),
     error: z.string().optional(),
     // How full the context is and the harness's own session totals belong to
     // the conversation and reopen with it; what was spent belonged to the

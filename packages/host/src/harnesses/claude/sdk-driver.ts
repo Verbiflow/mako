@@ -1,3 +1,4 @@
+import { ProviderFailureError } from "../../contracts/provider-failure.js"
 import type { ChildProcess } from "node:child_process"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
@@ -331,6 +332,7 @@ async function openProviderTurn(engine: Engine, live: Live): Promise<void> {
     nativeRunId: undefined,
     lastStop: undefined,
     error: undefined,
+    failureEvidence: undefined,
   })
   const found = await providerTurnLines(live, at)
   if (live.closed) return
@@ -464,17 +466,21 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       }
       logTranscriptReads(live)
       // SDK subtype "success" also carries API failures; is_error is authoritative.
-      const failure = message.is_error
-        ? (message.subtype === "success" ? message.result : message.errors.join("\n")).slice(0, 2000) ||
+      const nativeFailure = message.is_error
+        ? (message.subtype === "success" ? message.result : message.errors.join("\n")) ||
           claudeStopReason(message) || "Claude ended the turn with an error"
         : undefined
+      const failure = nativeFailure?.slice(0, 2000)
       if (failure) live.authDiagnostics.failure(failure)
+      const failureEvidence = await live.authDiagnostics.failureEvidence(nativeFailure)
+      if (live.closed) return
       engine.patch(live, {
         nativePath: live.transcript.path,
         nativeForkId,
         status: message.is_error ? "failed" : "ready",
         lastStop: message.is_error ? "failed" : "completed",
         error: failure,
+        failureEvidence,
       })
       live.finishing = false
       if (live.compaction) {
@@ -510,6 +516,7 @@ async function reportGoal(live: Live): Promise<void> {
 async function disconnect(engine: Engine, live: Live, detail: string): Promise<void> {
   if (live.closed) return
   live.authDiagnostics.failure(detail)
+  const failureEvidence = await live.authDiagnostics.failureEvidence(detail)
   const nativePath = await live.transcript.locate(live.state.nativeId)
   if (live.closed) return
   stop(live)
@@ -518,6 +525,7 @@ async function disconnect(engine: Engine, live: Live, detail: string): Promise<v
     status: "failed",
     connection: "disconnected",
     error: detail,
+    failureEvidence,
     lastStop: "failed",
     backgroundTasks: 0,
   })
@@ -769,7 +777,12 @@ export function createClaudeSdkDriver(
           canUseTool: permissions.tool,
           onElicitation: permissions.elicitation,
         },
-      }) } catch (error) { await disposeApprovals(); throw error }
+      }) } catch (error) {
+        await disposeApprovals()
+        const message = error instanceof Error ? error.message : String(error)
+        const evidence = await authDiagnostics.failureEvidence(message)
+        throw evidence ? new ProviderFailureError(message, evidence, { cause: error }) : error
+      }
       processGone = (detail) => void disconnect(engine, live, detail)
       const context = launchContext("claude-agent-sdk", CLAUDE_NATIVE_IDENTITY, account, config.pathToClaudeCodeExecutable)
       const live: Live = {
@@ -864,7 +877,10 @@ export function createClaudeSdkDriver(
         // Claude printed is the cause either way.
         const detail = stderrDetail(startupStderr())
         const message = error instanceof Error ? error.message : String(error)
-        throw detail && !message.includes(detail) ? new Error(`${message}: ${detail}`, { cause: error }) : error
+        const combined = detail && !message.includes(detail) ? `${message}: ${detail}` : message
+        const evidence = await authDiagnostics.failureEvidence(combined)
+        if (evidence) throw new ProviderFailureError(combined, evidence, { cause: error })
+        throw combined !== message ? new Error(combined, { cause: error }) : error
       } finally {
         startupFinished = true
         clearTimeout(timer)
@@ -877,7 +893,12 @@ export function createClaudeSdkDriver(
         if (live.state.status === "running")
           throw new TurnInProgressError("Claude")
         const content = await claudeInputContent(text, attachments)
-        await tune(live, settings)
+        try { await tune(live, settings) } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          const evidence = await live.authDiagnostics.failureEvidence(message)
+          if (evidence) throw new ProviderFailureError(message, evidence, { cause: error })
+          throw error
+        }
         return { live, content }
       })
       preparePrompt(dispatch, () => {
@@ -923,6 +944,7 @@ export function createClaudeSdkDriver(
         nativeRunId: uuid,
         lastStop: undefined,
         error: undefined,
+        failureEvidence: undefined,
       })
       engine.emitUpdate(live, { kind: "user", text })
     },
@@ -987,6 +1009,7 @@ export function createClaudeSdkDriver(
         nativeRunId: uuid,
         lastStop: undefined,
         error: undefined,
+        failureEvidence: undefined,
       })
       live.input.send({
         type: "user",
@@ -1055,6 +1078,7 @@ export function createClaudeSdkDriver(
           connection: "disconnected",
           lastStop: "interrupted",
           error: undefined,
+          failureEvidence: undefined,
           backgroundTasks: 0,
         })
       }

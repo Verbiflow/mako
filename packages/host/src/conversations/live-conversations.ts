@@ -320,7 +320,7 @@ export class LiveConversations {
         this.autoContinue.schedule(resident, settled)
         this.autoContinue.continueFailed(resident, settled)
       },
-      declineAutoContinue: (resident) => this.autoContinue.decline(resident),
+      declineAutoContinue: (resident, keepServiceRetry) => this.autoContinue.decline(resident, keepServiceRetry),
       goalSettled: (resident, settled) => this.goals.settled(resident, settled),
       turnSettled: (resident, settled) => this.dependencies.agents?.()?.settled(resident.snapshot.session.id, settled),
       goalObserved: (resident, goal) => this.goals.observe(resident, goal),
@@ -919,11 +919,11 @@ export class LiveConversations {
     if (resident.snapshot.session.status === "closed") this.reopenClosed(resident)
     const rested = (request.createdAt ?? Date.now()) - (resident.snapshot.requests.at(-1)?.createdAt ?? Number.POSITIVE_INFINITY)
     if (rested > ASLEEP_AFTER_MS) hostLog("residency", "a message reaches a session asleep a day or more", { conversation: id, request: requestId, restedMs: rested })
-    // The user's own message supersedes any continuation Mako was about to send.
-    this.autoContinue.decline(resident)
-    // A new message is the moment to try again: what waits to go again goes now, ahead of it, as it kept its place.
-    if (resident.snapshot.requests.some(goesNext))
-      resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (goesNext(request) ? released(request) : request)) }
+    // A new message supersedes a pending continuation, except for a service outage's timed retry: queuing more work
+    // cannot make its service available or bypass its backoff. An explicit Stop, Resume or move still controls it.
+    this.autoContinue.decline(resident, true)
+    if (resident.snapshot.requests.some((request) => goesNext(request, true)))
+      resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (goesNext(request, true) ? released(request) : request)) }
     if (marks.goal?.step !== "continue") this.goals.decline(resident)
     this.hibernation.clearHibernationTimer(resident)
     const pause = signInPause(resident.snapshot.requests)
