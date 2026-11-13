@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, rename, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import type { Git } from "@mako/git"
+import { PARALLEL_CHECKOUT, type Git } from "@mako/git"
 import type { ReturnProjectMissing } from "../contracts/cloud-threads.js"
 
 /**
@@ -47,7 +47,7 @@ export async function reattachWorktree(git: Git, repoRoot: string, folder: strin
   if (!existsSync(folder)) {
     await mkdir(dirname(folder), { recursive: true, mode: 0o700 })
     await add(folder)
-    await git.output(folder, ["reset", "--hard", "--quiet"])
+    await fillWorktree(git, folder)
     return
   }
   // The folder stays where the Thread's sessions know it: a worktree is added beside it unchecked out, its `.git` moved
@@ -63,3 +63,16 @@ export async function reattachWorktree(git: Git, repoRoot: string, folder: strin
   }
   if (!(await workingCheckout(git, folder))) throw new Error(`Git couldn't make ${folder} a worktree of ${repoRoot} again.`)
 }
+
+/**
+ * Writes a worktree added `--no-checkout` (its HEAD set, its index empty), then runs the repository's post-checkout
+ * hook as `worktree add` would have (`<null> <HEAD> 1`, through `core.hooksPath`): projects install their own hooks or
+ * generate code there (husky), and a Mako worktree must get what any other checkout does. Outside the repository's
+ * write turn, both: they take as long as the files, filters and hook do.
+ */
+export async function fillWorktree(git: Git, path: string): Promise<void> {
+  await git.output(path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q"])
+  const head = await git.output(path, ["rev-parse", "HEAD"])
+  await git.output(path, ["hook", "run", "--ignore-missing", "post-checkout", "--", "0".repeat(head.length), head, "1"])
+}
+

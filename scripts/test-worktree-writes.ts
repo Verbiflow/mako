@@ -110,7 +110,21 @@ try {
   assert.ok(meanwhileMs < 1_500 && meanwhileMs < startEnded - 500, `a branch made during the start's checkout waited ${Math.round(meanwhileMs)} ms; the start took ${Math.round(startEnded)} ms`)
   await worktrees.abandon(slowId)
   console.log(JSON.stringify({ slowStartMs: Math.round(startEnded), branchDuringItMs: Math.round(meanwhileMs) }))
-  console.log("worktree writes: spares made while Threads start and are given back never write at once in a repository, and every empty branch goes")
+
+  // Written outside the turn, a worktree still runs the repository's post-checkout hook as `worktree add` would, through
+  // `core.hooksPath` as husky sets it: projects install hooks or generate code there.
+  const hooked = repository("hooked")
+  mkdirSync(join(hooked, ".husky"))
+  writeFileSync(join(hooked, ".husky", "post-checkout"), '#!/bin/sh\necho "$1 $2 $3" > .post-checkout-ran\n', { mode: 0o755 })
+  git(hooked, "add", ".husky")
+  git(hooked, "commit", "-q", "-m", "hooks")
+  git(hooked, "config", "core.hooksPath", ".husky")
+  const hookedId = randomUUID()
+  const started = await worktrees.prepare(hookedId, hooked, "Hooked")
+  const head = git(started.path, "rev-parse", "HEAD")
+  assert.equal(readFileSync(join(started.path, ".post-checkout-ran"), "utf8").trim(), `${"0".repeat(head.length)} ${head} 1`, "the post-checkout hook ran in the new worktree, with worktree add's arguments")
+  await worktrees.abandon(hookedId)
+  console.log("worktree writes: spares made while Threads start and are given back never write at once in a repository, and every empty branch goes, and each new worktree runs its post-checkout hook")
 } finally {
   await traced.close()
 }

@@ -12,14 +12,14 @@ import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { previewDiffs, projectRepositories } from "../git/index.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
-import { GitError, numstatEntries, PARALLEL_CHECKOUT, untrackedLines, type Git } from "@mako/git"
+import { GitError, numstatEntries, untrackedLines, type Git } from "@mako/git"
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, type AdjustHooks, type MoveLedger, type MovePlan } from "./worktree-move.js"
 import type { MoveHaste, MoveOutcome, MoveShares } from "../contracts/workspace-moves.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { githubRepositoryUrl } from "../contracts/cloud-threads.js"
-import { ProjectMissingError, reattachWorktree, workingCheckout } from "./worktree-reattach.js"
+import { fillWorktree, ProjectMissingError, reattachWorktree, workingCheckout } from "./worktree-reattach.js"
 import { HEAD_MARKER, INDEX_MARKER, watchGitMarkers, type GitDirWatch } from "./git-dir-watch.js"
 
 /** Git's own markers for work under way, which a removal would throw away. */
@@ -2040,7 +2040,7 @@ export class ThreadWorktreeService {
  */
 async function addWorktree(git: Git, repoRoot: string, path: string, branch: string): Promise<void> {
   await git.output(repoRoot, ["worktree", "add", "--no-checkout", path, branch])
-  await git.output(path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q"])
+  await fillWorktree(git, path)
 }
 
 /** The first line Git said of a failed command (a `GitError`'s message is its error output), without its `error:`. */
