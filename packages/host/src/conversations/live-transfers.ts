@@ -21,7 +21,7 @@ import { SessionHeldError } from "../threads/index.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { prepareLiveContext } from "./live-context.js"
-import { bindingPath, launchAccount, launchCalls, launchRouting, noteCarriedFolders } from "./live-runtime.js"
+import { bindingPath, launchAccount, launchCalls, launchRouting, neverRan, noteCarriedFolders } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import type {
   LiveAccess,
@@ -77,6 +77,11 @@ export class LiveTransfers {
   constructor(host: LiveAccess) {
     this.host = host
   }
+  /** A session prepared and let go: its events are no longer the conversation's, unless its binding is one it holds. */
+  private forgetPrepared(resident: Resident, preparedId: string): void {
+    if (!this.host.control(resident).bindings.some((binding) => binding.id === preparedId)) this.host.bindingOwners.delete(preparedId)
+  }
+
   private async revokeTools(
     bindingId: string,
     conversationId: string
@@ -351,8 +356,12 @@ export class LiveTransfers {
       // (`lost`), the active one or a pick of it: refusing that dropped every
       // message sent to it. Any other record that won't reopen refuses.
       const lost = verdict?.kind === "unavailable" && verdict.lost === true && (!target || target === control.activeBindingId)
+      // A session Mako started that never ran a turn has no record to find: Claude writes a session's file with its
+      // first turn, so a Fin moved to it that took none before its host went names a session that never existed. It
+      // isn't lost; it starts now, in its own binding, with the whole conversation, as it would have.
+      const unstarted = lost && currentBinding !== undefined && neverRan(currentBinding, source.requests) ? currentBinding : undefined
       if (lost)
-        hostLog("transfer", "a session its harness can't find goes on as a new one with the whole conversation", {
+        hostLog("transfer", unstarted ? "a session that never ran a turn starts now with the whole conversation" : "a session its harness can't find goes on as a new one with the whole conversation", {
           conversation: source.session.id,
           harness: transfer.input.provider,
           binding: currentBinding?.id ?? "",
@@ -399,7 +408,7 @@ export class LiveTransfers {
       if (!driver) throw new Error("The destination provider was removed")
       // A fork the harness doesn't make itself goes on from the transcript of its history, as a switch to another harness does.
       const forking = !bindings.length && control.ancestry?.kind === "fork"
-      const bindingId = prior?.id ?? randomUUID()
+      const bindingId = prior?.id ?? unstarted?.id ?? randomUUID()
       const modeId = reconnect
         ? transfer.input.modeId ??
           source.session.currentMode ??
@@ -511,7 +520,7 @@ export class LiveTransfers {
         if (preparedId) {
           await prepared.driver.close(preparedId)
           void this.revokeTools(preparedId, source.session.id)
-          this.host.bindingOwners.delete(preparedId)
+          this.forgetPrepared(resident, preparedId)
         }
         if (held)
           this.host.dependencies.memory?.release(
@@ -563,7 +572,7 @@ export class LiveTransfers {
         if (preparedId) {
           await destination.driver.close(preparedId)
           await this.revokeTools(preparedId, source.session.id)
-          this.host.bindingOwners.delete(preparedId)
+          this.forgetPrepared(resident, preparedId)
         }
         if (held)
           this.host.dependencies.memory?.release(
@@ -624,7 +633,7 @@ export class LiveTransfers {
           // Its history goes with whichever goes next.
           ...merged && transcript.length > 0 && { merges: [...previousControl.merges, { id: transfer.input.id, sourceId: transfer.input.id, sourceRevision: 0, manifest, status: "pending" as const }] },
           activeBindingId: bindingId,
-          bindings: (prior ? latestBindings : [...latestBindings, binding]).map(
+          bindings: (prior ? latestBindings : unstarted ? latestBindings.map((candidate) => (candidate.id === unstarted.id ? { ...candidate, ...binding } : candidate)) : [...latestBindings, binding]).map(
             (candidate) =>
               candidate.id === bindingId
                 ? {
@@ -770,7 +779,7 @@ export class LiveTransfers {
             })
           }
         await this.revokeTools(preparedId, resident.snapshot.session.id)
-        this.host.bindingOwners.delete(preparedId)
+        this.forgetPrepared(resident, preparedId)
       }
       if (held && preparedClosed)
         this.host.dependencies.memory?.release(
