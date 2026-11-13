@@ -13,9 +13,11 @@ on:
 permissions:
   contents: read
 
+# A pull request's newer push cancels its older run. A push to main never cancels: each merge's run finishes, so main
+# always has a complete run to compare with.
 concurrency:
-  group: checks-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: checks-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:
@@ -468,6 +470,10 @@ jobs:
       - uses: ./.github/actions/install-dependencies
       # Recording needs ffmpeg and ffprobe, which the Mac runner doesn't have.
       - run: brew install ffmpeg
+        env:
+          # Homebrew's own update and cleanup, not ffmpeg, were most of this step (29 s to 105 s).
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
       - run: npm run build:control-runtime
       - run: node scripts/ci-suites.mjs ${{ matrix.shard }} 3
         env:

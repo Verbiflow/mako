@@ -1,5 +1,5 @@
 name: Install dependencies
-description: Install npm packages once, then fetch Electron with a versioned cache and bounded retries.
+description: Restore the installed packages by lockfile, or install and keep them, then fetch Electron with a versioned cache and bounded retries.
 inputs:
   electron:
     description: Whether this job needs the Electron binary.
@@ -7,6 +7,9 @@ inputs:
 runs:
   using: composite
   steps:
+    - id: node
+      shell: bash
+      run: echo "version=$(node -p process.versions.node)" >> "$GITHUB_OUTPUT"
     - id: electron
       if: inputs.electron == 'true'
       shell: bash
@@ -17,10 +20,28 @@ runs:
       with:
         path: ${{ runner.temp }}/electron-cache
         key: electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}
-    - shell: bash
+    # The installed tree, keyed by everything that decides it: the lockfile, the patches its postinstall applies, and
+    # the runner and Node it was built for. A hit skips `npm ci` (about 75 s on Linux, 2 minutes on a Mac); a miss
+    # installs and saves the tree before Electron's binary is added below, so every job saves and restores the same one.
+    - id: modules
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+        key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.version }}-${{ hashFiles('package-lock.json', 'scripts/patch-cursor-sdk.mjs', 'scripts/patch-zod.mjs') }}
+    - if: steps.modules.outputs.cache-hit != 'true'
+      shell: bash
       env:
         ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       run: npm ci
+    - if: steps.modules.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+        key: ${{ steps.modules.outputs.cache-primary-key }}
     - if: inputs.electron == 'true'
       shell: bash
       env:
