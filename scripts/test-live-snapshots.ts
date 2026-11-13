@@ -272,6 +272,36 @@ try {
   console.log(
     "PASS: cancellation during baseline capture never dispatches the prompt"
   )
+
+  // A checkpoint held past the deadline: the turn goes without it, says so, and takes it when it lands.
+  {
+    owner.stop()
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200 })
+    const lateId = randomUUID(), lateRequest = randomUUID()
+    await owner.start("test", cwd, { conversationId: lateId })
+    await until(() => owner.snapshot(lateId)?.session.status === "ready")
+    let release = () => {}
+    const holding = new Promise<void>((resolve) => (release = resolve))
+    const original = snapshots.beginRun.bind(snapshots)
+    const beginRun = mock.method(snapshots, "beginRun", async (id: string, folder: string, frozen?: () => void) => {
+      await holding
+      return original(id, folder, frozen)
+    })
+    try {
+      const before = sent.length
+      owner.submit(lateId, lateRequest, "late checkpoint")
+      await until(() => sent.length === before + 1)
+      assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.before.kind, "unavailable", "the turn went without its checkpoint, and says so")
+      release()
+      await until(() => owner.snapshot(lateId)?.requests[0].snapshots?.before.kind === "ready")
+      const landed = owner.snapshot(lateId)?.requests[0].snapshots?.before
+      assert.ok(landed?.kind === "ready" && (landed.heldAfterTurnMs ?? 0) > 0, "the late checkpoint lands on the turn, marked as held after it went")
+    } finally {
+      beginRun.mock.restore()
+      release()
+    }
+    console.log("PASS: a checkpoint held past the deadline lets the turn go, and lands on it when it's saved")
+  }
 } finally {
   owner.stop()
   snapshots.close()

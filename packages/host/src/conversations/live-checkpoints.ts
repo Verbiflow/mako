@@ -10,9 +10,16 @@ import type { CheckpointComparison } from "../workspaces/index.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
-import { hostWarn } from "../base/host-log.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import { join } from "node:path"
 import type { LiveTurnChanges } from "./live-turn-changes.js"
+
+/**
+ * How long a turn waits for its checkpoint to hold the workspace before it goes without one. Behind a slow save of the
+ * last turn's checkpoint, in a checkout under constant builds, a send once waited 127 s; the capture goes on, and lands
+ * on the turn when it ends (`heldAfterTurnMs`).
+ */
+export const BEFORE_CHECKPOINT_WAIT_MS = 10_000
 
 /** Turns kept open for reading their files; each holds one object reader. */
 const OPEN_TURNS = 4
@@ -92,24 +99,31 @@ export class LiveCheckpoints {
     const release = this.hold(resident)
     this.preparing.add(request.id)
     const generation = resident.generation
+    const conversation = resident.snapshot.session.id
+    const began = Date.now()
+    let heldAt: number | undefined
+    let wentAt: number | undefined
     let frozen = () => {}
-    const held = new Promise<void>((resolve) => (frozen = resolve))
+    const held = new Promise<void>((resolve) => (frozen = () => {
+      heldAt ??= Date.now()
+      resolve()
+    }))
     const saved = (async () => {
       try {
         await snapshots.assertAvailable(resident.snapshot.session.cwd)
         let before: RunSnapshots["before"]
         try {
-          before = {
-            kind: "ready",
-            snapshot: await snapshots.beginRun(
-              request.id,
-              resident.snapshot.session.cwd,
-              frozen
-            ),
-          }
+          const snapshot = await snapshots.beginRun(request.id, resident.snapshot.session.cwd, frozen)
+          const late = wentAt === undefined ? 0 : (heldAt ?? Date.now()) - wentAt
+          before = { kind: "ready", snapshot, ...late > 0 && { heldAfterTurnMs: late } }
         } catch (error) {
           before = { kind: "unavailable", reason: errorMessage({ error }) }
         }
+        // Each turn's checkpoint says how long it took to hold the workspace and to be saved, so a slow one is seen.
+        hostLog("checkpoints", "a turn's checkpoint was saved", {
+          conversation, request: request.id, kind: before.kind, heldMs: heldAt === undefined ? null : heldAt - began,
+          savedMs: Date.now() - began, ...wentAt !== undefined && { wentWithoutMs: wentAt - began },
+        })
         if (generation !== resident.generation) return
         resident.snapshot = {
           ...resident.snapshot,
@@ -124,9 +138,29 @@ export class LiveCheckpoints {
     })()
     // A failure after the turn went is the request's `before`, said above; one before it fails the start as ever.
     void saved.catch(() => undefined)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const waited = new Promise<"late">((resolve) => {
+      timer = setTimeout(() => resolve("late"), this.host.dependencies.checkpointWaitMs ?? BEFORE_CHECKPOINT_WAIT_MS)
+    })
     try {
-      await Promise.race([held, saved])
+      const outcome = await Promise.race([held, saved, waited])
+      if (outcome === "late" && heldAt === undefined) {
+        // Never a send waiting minutes on its checkpoint: the turn goes, said so, and the capture lands on it if it ends.
+        wentAt = Date.now()
+        hostWarn("checkpoints", "a turn went before its checkpoint held the workspace", { conversation, request: request.id, waitedMs: wentAt - began })
+        if (generation === resident.generation) {
+          const reason = "The checkpoint was still waiting when the turn went; it's kept if it finishes"
+          resident.snapshot = {
+            ...resident.snapshot,
+            requests: resident.snapshot.requests.map((item) =>
+              item.id === request.id && !item.snapshots?.before ? { ...item, snapshots: { ...item.snapshots, before: { kind: "unavailable", reason } } } : item
+            ),
+          }
+          this.host.flush(resident)
+        }
+      }
     } finally {
+      clearTimeout(timer)
       this.preparing.delete(request.id)
       // The turn goes on, steered and stopped as any: what the checkpoint still saves holds only the workspace's own
       // lock, which the turn's end and the next turn's checkpoint wait behind.
