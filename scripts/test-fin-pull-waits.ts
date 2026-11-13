@@ -41,6 +41,11 @@ const check = (name: string, state: PullReading["checks"][number]["state"], at?:
   const known = reading({ checks: [check("lint", "failed", SINCE - 5), check("e2e", "running")] })
   assert.deepEqual(pullOutcome(known, "checks", SINCE), { kind: "failed", check: "lint", running: 1 }, "a current-head failure already present when the wait was registered still answers it")
   assert.equal(pullOutcome(reading(), "checks", SINCE), undefined, "no checks yet: a push GitHub hasn't started on")
+  const lone = reading({ checks: [check("lint", "passed"), check("e2e", "cancelled")] })
+  assert.deepEqual(pullOutcome(lone, "checks", SINCE), { kind: "settled", passed: 1, failed: [], cancelled: ["e2e"] }, "a cancelled check nothing replaced settles as cancelled, not failed")
+  const both = reading({ checks: [check("lint", "failed"), check("e2e", "cancelled"), check("unit", "passed")] })
+  assert.deepEqual(pullOutcome(both, "checks", SINCE), { kind: "settled", passed: 1, failed: ["lint"], cancelled: ["e2e"] })
+  assert.equal(pullOutcome(reading({ checks: [check("e2e", "cancelled"), check("lint", "running")] }), "checks", SINCE), undefined, "a cancelled check isn't a failure that wakes while others run")
 
   const approved = reading({ reviews: [{ login: "ada", state: "approved", at: SINCE + 20 }] })
   assert.deepEqual(pullOutcome(approved, "review", SINCE), { kind: "review", by: "ada", state: "approved" })
@@ -72,6 +77,13 @@ console.log("outcomes: settled, first failure, review, merged and closed, each m
   assert.equal(pullWakeNote("acme/app#9", URL, { kind: "settled", passed: 0, failed: ["a", "b", "c", "d", "e", "f"] }), `Mako: PR acme/app#9 checks settled: 6 failed (a, b, c, d, 2 more). ${URL}`)
   assert.deepEqual(pullWakeWords(note), { line: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).", url: URL }, "its event line says the note's words")
   assert.deepEqual(pullWakeWords("Mako: PR #371 merged."), { line: "Mako: PR #371 merged." })
+  const cancelledNote = pullWakeNote("acme/app#371", URL, { kind: "settled", passed: 3, failed: [], cancelled: ["e2e"] })
+  assert.equal(cancelledNote, `Mako: PR acme/app#371 checks settled: 3 passed, 1 cancelled (e2e). ${URL}`)
+  assert.deepEqual(pullWakeWords(cancelledNote), { line: "Mako: PR acme/app#371 checks settled: 3 passed, 1 cancelled (e2e).", url: URL })
+  const mixedNote = pullWakeNote("acme/app#371", URL, { kind: "settled", passed: 1, failed: ["lint"], cancelled: ["e2e", "docs"] })
+  assert.equal(mixedNote, `Mako: PR acme/app#371 checks settled: 1 failed (lint), 2 cancelled (e2e, docs). ${URL}`)
+  assert.deepEqual(pullWakeWords(mixedNote), { line: "Mako: PR acme/app#371 checks settled: 1 failed (lint), 2 cancelled (e2e, docs).", url: URL })
+  assert.equal(pullWakeNote("#3", undefined, { kind: "settled", passed: 1, failed: [], cancelled: [] }), "Mako: PR #3 checks settled: 1 passed.", "no cancelled names, no cancelled words")
   assert.equal(pullWakeWords("Mako: PR acme/app#371 merged. Please fix it."), undefined, "a person's words that start the same aren't the note")
   assert.equal(pullWakeWords("Check the PR"), undefined)
 
@@ -119,6 +131,31 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
     checks: [{ name: "lint", state: "failed", at: Date.parse("2026-11-04T10:00:00Z") }, { name: "deploy", state: "running", at: Date.parse("2026-11-04T09:59:00Z") }],
     reviews: [{ login: "ada", state: "approved", at: Date.parse("2026-11-04T10:05:00Z") }],
   })
+
+  // A push twice (or a retarget) runs the head again and GitHub cancels the older run: that run is replaced, not failed.
+  // gh lists a check's runs as GitHub keeps them, and doesn't say which event started each.
+  const runs = (...rollup: object[]) => readPull({ number: 635, cwd: "/work" }, async () => JSON.stringify({ state: "OPEN", url: URL, statusCheckRollup: rollup }))
+  const run = (workflowName: string, name: string, conclusion: string, startedAt: string, status = "COMPLETED") => ({ __typename: "CheckRun", workflowName, name, status, conclusion, startedAt, completedAt: startedAt })
+  const superseded = await runs(
+    run("CI", "test", "CANCELLED", "2026-11-13T10:00:00Z"),
+    run("CI", "lint", "SUCCESS", "2026-11-13T10:00:00Z"),
+    run("CI", "test", "SUCCESS", "2026-11-13T10:02:00Z"),
+    run("CI", "lint", "SUCCESS", "2026-11-13T10:02:00Z"),
+  )
+  assert.deepEqual(superseded?.checks.map((each) => [each.name, each.state]), [["lint", "passed"], ["test", "passed"], ["lint", "passed"]], "the cancelled run a newer run of its check replaced is dropped")
+  assert.deepEqual(pullOutcome(superseded!, "checks", SINCE), { kind: "settled", passed: 3, failed: [] }, "and wakes no one with a failure")
+  const replacing = await runs(run("CI", "test", "CANCELLED", "2026-11-13T10:00:00Z"), run("CI", "test", "", "0001-01-01T00:00:00Z", "QUEUED"))
+  assert.deepEqual(replacing?.checks.map((each) => each.state), ["running"], "a replacing run not started yet (gh's zero time) still replaces it")
+  const lone = await runs(run("CI", "test", "CANCELLED", "2026-11-13T10:00:00Z"), run("CI", "lint", "SUCCESS", "2026-11-13T10:00:00Z"))
+  assert.deepEqual(lone?.checks.map((each) => [each.name, each.state]), [["test", "cancelled"], ["lint", "passed"]], "a cancelled run nothing replaced says cancelled")
+  assert.deepEqual(pullOutcome(lone!, "checks", SINCE), { kind: "settled", passed: 1, failed: [], cancelled: ["test"] })
+  const twice = await runs(run("CI", "test", "CANCELLED", "2026-11-13T10:02:00Z"), run("CI", "test", "CANCELLED", "2026-11-13T10:00:00Z"))
+  assert.deepEqual(twice?.checks.map((each) => each.state), ["cancelled"], "of runs all cancelled, the check says cancelled once")
+  const apart = await runs(run("CI", "test", "CANCELLED", "2026-11-13T10:00:00Z"), run("Nightly", "test", "SUCCESS", "2026-11-13T10:02:00Z"))
+  assert.deepEqual(apart?.checks.map((each) => each.state), ["cancelled", "passed"], "a job of the same name in another workflow is another check")
+  const events = await runs(run("CI", "test", "FAILURE", "2026-11-13T10:00:00Z"), run("CI", "test", "SUCCESS", "2026-11-13T10:00:05Z"))
+  assert.deepEqual(events?.checks.map((each) => each.state), ["failed", "passed"], "a failure is never hidden by another run of its check (push and pull_request runs read alike)")
+
   const bare = await readPull({ number: 12, cwd: "/work" }, async (_cwd, args) => (asked.push({ cwd: _cwd, args }), JSON.stringify({ state: "MERGED", url: URL })))
   assert.deepEqual(asked.at(-1)?.args, ["pr", "view", "12", "--json", "state,url,headRefOid,author,statusCheckRollup,latestReviews"], "a bare number is read in the Fin's folder")
   assert.equal(bare?.state, "merged")
