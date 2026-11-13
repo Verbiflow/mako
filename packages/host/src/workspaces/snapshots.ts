@@ -55,6 +55,7 @@ const OperationSchema = z.object({
 })
 type RestoreOperation = z.infer<typeof OperationSchema>
 const RowSchema = z.object({ value: z.string() })
+const SnapshotIdSchema = z.string().uuid()
 /** Files a checkpoint takes at most: Git reads again only the ones whose stat changed, so this is the listing's cost, not hashing's. */
 const MAX_FILES = 250_000
 /** Past this many changed paths a checkpoint reads the whole workspace again rather than only them. */
@@ -749,7 +750,7 @@ export class WorkspaceSnapshots {
       )
   }
   private get(id: string): SnapshotRecord {
-    z.string().uuid().parse(id)
+    SnapshotIdSchema.parse(id)
     const row = this.db
       .prepare("SELECT value FROM snapshots WHERE id=?")
       .get(id)
