@@ -80,6 +80,174 @@ async function lostSession(restart: "closed" | "crashed"): Promise<void> {
   await f.w.close()
 }
 
+/** The Fin's conversations, as its Thread's Sessions list them. */
+const conversationsOf = (f: Awaited<ReturnType<typeof world>>) => f.w.store.thread(ThreadIdSchema.parse(f.child))!.sessions.flatMap((session) => f.w.store.conversationsOf(session))
+
+/** The Fin's conversation, still there under its own ID: a session started under its binding never renames it. */
+function kept(f: Awaited<ReturnType<typeof world>>) {
+  const snapshot = f.w.live.snapshot(f.conversation())
+  assert.ok(snapshot, "the Fin's conversation is there under its own ID")
+  assert.equal(snapshot.session.id, f.conversation(), "and its session says so")
+  return snapshot
+}
+
+/**
+ * 2026-11-11: Fins an agent moved from Codex to Claude took no turn there before the host restarted. Their Claude
+ * binding, a session Mako started and Claude never wrote (it writes a session's file with its first turn), was started
+ * again for the next message under the conversation's ID rather than its own, so every message after failed "The agent
+ * execution owner is unavailable. Reconnect before sending." for hours. Here each harness runs through execution
+ * admission, as the host's do.
+ */
+async function movedThenRestarted(restart: "closed" | "crashed", via: "apex" | "person"): Promise<void> {
+  const f = await world("codex", { unlocated: ["claude"], accounts: { codex: [{ name: "default" }], claude: [{ name: "default" }] } })
+  const own = f.conversation()
+  const moved = await f.move("claude")
+  assert.ok(!("refused" in moved) && moved.moved[0]!.state === "moved", JSON.stringify(moved))
+  const snapshot = () => kept(f)
+  const binding = () => snapshot().control!.bindings.find((each) => each.id === snapshot().control!.activeBindingId)!
+  assert.equal(binding().provider, "claude")
+  assert.notEqual(binding().id, f.conversation(), "the move's binding is its own, not the conversation's")
+  assert.ok(!binding().path, "the repro: Claude never wrote the session, so nothing locates it")
+  const movedBinding = binding().id
+  await (restart === "closed" ? f.w.restart() : f.w.crashed())
+  const before = f.prompts().length
+  // From its Apex (`agents_send`, which reopens it first), or straight into its conversation: the person writing in the
+  // Fin's Thread, or what its queue held when the host went, let go on the next.
+  if (via === "apex") {
+    const said = await f.send("Which labels are left?")
+    assert.ok(!("refused" in said), `the message was refused: ${"refused" in said ? said.why : ""}`)
+  } else f.w.live.submit(f.conversation(), randomUUID(), "Which labels are left?", [])
+  await until("the message to reach Claude", () => f.prompts().length === before + 1 || snapshot().requests.some((request) => request.status === "failed"))
+  assert.deepEqual(snapshot().requests.filter((request) => request.status === "failed").map((request) => request.error), [], "the message failed")
+  const prompt = f.prompts().at(-1)!
+  assert.equal(prompt.harness, "claude", "on the harness it was moved to")
+  assert.ok(prompt.text.includes("Which labels are left?"))
+  await f.w.settle(40, 20_000)
+  const failed = snapshot().requests.filter((request) => request.status === "failed")
+  assert.deepEqual(failed.map((request) => request.error), [], "no message failed")
+  assert.equal(binding().id, movedBinding, "it goes on in the binding the move made")
+  assert.equal(f.w.launches.at(-1)?.harness, "claude")
+  // A second message goes to the same session, warm.
+  if (via === "apex") await f.send("And after those?")
+  else f.w.live.submit(f.conversation(), randomUUID(), "And after those?", [])
+  await until("the second message", () => f.prompts().length === before + 2)
+  await f.w.settle(40, 20_000)
+  assert.deepEqual(snapshot().requests.filter((request) => request.status === "failed").map((request) => request.error), [], "nor the next")
+  console.log(`moved to Claude, then a ${restart} host, messages from the ${via}: ${f.prompts().length - before} reached it`)
+  assert.deepEqual(conversationsOf(f), [own], "the Fin's Session holds its one conversation, under its own ID")
+  await f.w.close()
+}
+
+/**
+ * The same Fins, as the person's host met them: a message to one was under way on Claude when the host went, and the
+ * next host goes on with the turn it cut (`LeftTurn.always`) by starting the session again, which never ran a turn.
+ */
+async function movedThenCut(): Promise<void> {
+  let hang = true
+  const script: Script = (turn) => turn.harness === "claude" && hang && turn.text.includes("Which labels are left?") ? new Promise<string>(() => {}) : turn.text.includes("You're fin:") ? "Labels finished." : "ok"
+  const f = await world("codex", { unlocated: ["claude"], accounts: { codex: [{ name: "default" }], claude: [{ name: "default" }] }, script })
+  const own = f.conversation()
+  const moved = await f.move("claude")
+  assert.ok(!("refused" in moved) && moved.moved[0]!.state === "moved", JSON.stringify(moved))
+  const snapshot = () => kept(f)
+  const binding = () => snapshot().control!.bindings.find((each) => each.id === snapshot().control!.activeBindingId)!
+  const movedBinding = binding().id
+  const before = f.prompts().length
+  f.w.live.submit(f.conversation(), randomUUID(), "Which labels are left?", [])
+  await until("the message under way on Claude", () => f.prompts().length === before + 1)
+  // The host goes mid-turn, and Claude, as for the person's Fins, never wrote the session.
+  hang = false
+  await f.w.crashed()
+  await until("the cut turn to go on, or fail", () => f.prompts().length > before + 1 || snapshot().requests.some((request) => request.status === "failed"), 20_000)
+  assert.deepEqual(snapshot().requests.filter((request) => request.status === "failed").map((request) => request.error), [], "the turn the exit cut failed")
+  assert.equal(f.prompts().at(-1)!.harness, "claude", "it goes on on Claude")
+  // A turn ran on that binding, so it isn't one that never started: Claude would have its file, and resume it. Its
+  // records here are never located, so it goes on as a session its harness can't find, with the whole conversation.
+  assert.notEqual(binding().id, movedBinding, "a session that ran a turn and can't be found isn't taken for one that never started")
+  await f.w.settle(40, 20_000)
+  f.w.live.submit(f.conversation(), randomUUID(), "And after those?", [])
+  await until("the next message", () => f.prompts().some((prompt) => prompt.text.includes("And after those?")) || snapshot().requests.some((request) => request.status === "failed"))
+  await f.w.settle(40, 20_000)
+  assert.deepEqual(snapshot().requests.filter((request) => request.status === "failed").map((request) => request.error), [], "the next message failed")
+  console.log(`moved to Claude, cut mid-turn by a crash: the turn went on and the next message reached it`)
+  assert.deepEqual(conversationsOf(f), [own], "the Fin's Session holds its one conversation, under its own ID")
+  await f.w.close()
+}
+
+/**
+ * The same Fins as the person's host met them under load: the moved session's start failed once (Claude's SDK
+ * initialisation went silent), and the next message started it again (`relaunch`).
+ */
+async function movedStartFailed(): Promise<void> {
+  let failNext = false
+  const f = await world("codex", { unlocated: ["claude"], accounts: { codex: [{ name: "default" }], claude: [{ name: "default" }] }, starting: async (_id, harness) => {
+    if (harness === "claude" && failNext) {
+      failNext = false
+      throw new Error("SDK initialization silent 25719ms")
+    }
+  } })
+  const own = f.conversation()
+  const moved = await f.move("claude")
+  assert.ok(!("refused" in moved) && moved.moved[0]!.state === "moved", JSON.stringify(moved))
+  const snapshot = () => kept(f)
+  const binding = () => snapshot().control!.bindings.find((each) => each.id === snapshot().control!.activeBindingId)!
+  const movedBinding = binding().id
+  await f.w.crashed()
+  failNext = true
+  const before = f.prompts().length
+  f.w.live.submit(f.conversation(), randomUUID(), "Which labels are left?", [])
+  await until("its start to fail", () => !failNext)
+  await f.w.settle(40, 20_000)
+  f.w.live.submit(f.conversation(), randomUUID(), "And after those?", [])
+  await until("a message to reach Claude, or fail", () => f.prompts().length > before || snapshot().requests.filter((request) => request.status === "failed").length > 1, 20_000)
+  await f.w.settle(40, 20_000)
+  const failed = snapshot().requests.filter((request) => request.status === "failed").map((request) => request.error)
+  assert.ok(!failed.some((error) => /owner is unavailable/.test(error ?? "")), `a message was sent to an owner nobody started: ${failed.join(" | ")}`)
+  assert.ok(f.prompts().slice(before).some((prompt) => prompt.harness === "claude" && prompt.text.includes("And after those?")), `the message after the failed start reached Claude (failed: ${failed.join(" | ")})`)
+  assert.equal(binding().id, movedBinding, "in the binding the move made")
+  console.log(`moved to Claude, its start failed once: the next message reached it`)
+  assert.deepEqual(conversationsOf(f), [own], "the Fin's Session holds its one conversation, under its own ID")
+  await f.w.close()
+}
+
+/**
+ * The same Fins as the person's host met them: a message waited in the Fin's queue (held for its time, as a paused or
+ * deferred one does) when the host went, and the next host, finding no session to wake, started the conversation again
+ * (`relaunch`) for it: under the conversation's ID, so the message went to an owner nobody had started.
+ */
+async function movedThenHeld(): Promise<void> {
+  const f = await world("codex", { unlocated: ["claude"], accounts: { codex: [{ name: "default" }], claude: [{ name: "default" }] } })
+  const own = f.conversation()
+  const moved = await f.move("claude")
+  assert.ok(!("refused" in moved) && moved.moved[0]!.state === "moved", JSON.stringify(moved))
+  const snapshot = () => kept(f)
+  const binding = () => snapshot().control!.bindings.find((each) => each.id === snapshot().control!.activeBindingId)!
+  const movedBinding = binding().id
+  const before = f.prompts().length
+  // As Claude takes each message, the conversation is still its own: the session a relaunch started reports under
+  // its binding, and once renamed the conversation (and a second one in its Session) was what CI read.
+  const seenAs: (string | undefined)[] = []
+  f.w.options.heard = (event) => {
+    if (event.kind === "prompt" && event.harness === "claude") seenAs.push(f.w.live.snapshot(own)?.session.id)
+  }
+  f.w.live.submit(f.conversation(), randomUUID(), "Which labels are left?", [], undefined, undefined, undefined, undefined, { wake: { at: Date.now() + 1_500, after: "the host is back" } })
+  await f.w.restart()
+  await until("the held message to reach Claude, or fail", () => f.prompts().length > before || snapshot().requests.some((request) => request.status === "failed"), 20_000)
+  await f.w.settle(40, 20_000)
+  const failed = snapshot().requests.filter((request) => request.status === "failed").map((request) => request.error)
+  assert.deepEqual(failed, [], "the held message failed")
+  assert.ok(f.prompts().slice(before).some((prompt) => prompt.harness === "claude" && prompt.text.includes("Which labels are left?")), "the held message reached Claude")
+  assert.equal(binding().id, movedBinding, "in the binding the move made")
+  f.w.live.submit(f.conversation(), randomUUID(), "And after those?", [])
+  await until("the next message", () => f.prompts().some((prompt) => prompt.text.includes("And after those?")) || snapshot().requests.some((request) => request.status === "failed"))
+  await f.w.settle(40, 20_000)
+  assert.deepEqual(snapshot().requests.filter((request) => request.status === "failed").map((request) => request.error), [], "the next message failed")
+  assert.ok(seenAs.length >= 2 && seenAs.every((id) => id === own), `the conversation took each message as itself: ${JSON.stringify(seenAs)}`)
+  console.log(`moved to Claude, a held message's time came on the next host: it and the next reached it`)
+  assert.deepEqual(conversationsOf(f), [own], "the Fin's Session holds its one conversation, under its own ID")
+  await f.w.close()
+}
+
 /** A reopening that fails is said as failed, never as taken. */
 async function reopenFails(): Promise<void> {
   const f = await world("claude")
@@ -172,7 +340,7 @@ async function carriedAcross(): Promise<void> {
 }
 
 /** `CASE=<name>` runs that one alone. */
-const cases = { lostAfterExit: () => lostSession("closed"), lostAfterCrash: () => lostSession("crashed"), reopenFails, sameHarnessModel, carriedAcross }
+const cases = { lostAfterExit: () => lostSession("closed"), lostAfterCrash: () => lostSession("crashed"), movedThenExit: () => movedThenRestarted("closed", "apex"), movedThenCrash: () => movedThenRestarted("crashed", "apex"), movedThenPerson: () => movedThenRestarted("closed", "person"), movedThenCrashPerson: () => movedThenRestarted("crashed", "person"), movedThenCut, movedStartFailed, movedThenHeld, reopenFails, sameHarnessModel, carriedAcross }
 try {
   for (const [name, run] of Object.entries(cases)) if (!process.env.CASE || process.env.CASE === name) await run()
   console.log("fin reopen ok")

@@ -9,7 +9,8 @@ import { useKeyboardInset } from "./keyboard"
 import { ThreadList } from "./list"
 import { followNotices } from "./open-notice"
 import { RETURNED_EVENT, returnedOf } from "./resume"
-import { parseRoute, routeHref, useForm, useRoute, type ScreenRoute } from "./route"
+import { parseRoute, routeHref, useForm, useRoute, type ScreenRoute, type WebForm } from "./route"
+import { deskReviewCode, touchReviewCode } from "./review-open"
 import { ScreenStack } from "./screens"
 import { startedFromHere } from "./started"
 import type { Started } from "./start"
@@ -19,7 +20,7 @@ import { useThread } from "./use-thread"
 import { ReviewLayer } from "./review-layer"
 import { FilesLayer } from "./files-layer"
 import { arrivedUpdated, takeUpdates } from "./update"
-import { chunk, transcriptChunk } from "./chunks"
+import { chunk, filesScreenChunk, transcriptChunk } from "./chunks"
 
 /**
  * What the list paints without, each a chunk of its own (`chunk`): a Thread (its screen, then its transcript, the
@@ -36,10 +37,16 @@ const Settings = lazy(() => import("./settings").then((module) => ({ default: mo
 const InboxScreen = lazy(() => import("./inbox-screen").then((module) => ({ default: module.InboxScreen })))
 const SetupScreen = lazy(() => import("./setup-screen").then((module) => ({ default: module.SetupScreen })))
 
-/** A Thread's code first, the screen most often opened next, then New's: one after the other, each has the line to itself. */
-async function readNextScreens(): Promise<void> {
+/**
+ * A Thread's code first, the screen most often opened next, then New's, then a Thread's Changes and Files: one after the
+ * other, each has the line to itself, and none is read while a Thread opens, where it would share the line and the main
+ * thread with the Thread's own answer.
+ */
+async function readNextScreens(form: WebForm): Promise<void> {
   await Promise.allSettled([threadChunk.read(), transcriptChunk.read(), conversationsChunk.read()])
   await startChunk.read().catch(() => undefined)
+  await (form === "desk" ? deskReviewCode : touchReviewCode).read().catch(() => undefined)
+  await filesScreenChunk.read().catch(() => undefined)
 }
 
 /** Runs `then` in a task of its own once the list's first frame is on screen: work the first paint shouldn't wait on. */
@@ -80,18 +87,18 @@ export function WebApp() {
   // Opened again, the app's files are on this device (its service worker keeps them): a Thread's are read at once, as
   // the list paints from the list kept here. The first time, they wait for the list, which has the network to itself.
   useEffect(() => {
-    if (navigator.serviceWorker?.controller) void readNextScreens()
-  }, [])
+    if (navigator.serviceWorker?.controller) void readNextScreens(form)
+  }, [form])
   useEffect(() => {
     if (!painted || settled) return
     return afterFirstPaint(() => {
       setSettled(true)
       // Then the page's own work, so a service worker keeping these files finds them already fetched.
-      void readNextScreens()
+      void readNextScreens(form)
         .catch(() => undefined)
         .then(() => client.options.painted?.())
     })
-  }, [painted, settled, client])
+  }, [painted, settled, client, form])
   // New's sheet is mounted from its first opening on, so it leaves on its own path when closed. Wide, New is a pane.
   const [startOpened, setStartOpened] = useState(false)
   if (route.kind === "new" && !startOpened) setStartOpened(true)

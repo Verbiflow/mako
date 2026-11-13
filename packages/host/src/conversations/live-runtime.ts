@@ -556,6 +556,16 @@ export function launched(binding: ProviderBinding | undefined): binding is Provi
   return Boolean(binding?.nativeId && binding.path)
 }
 
+/**
+ * A binding whose session Mako started and that never ran a turn: never resumed nor seeded, never located, never
+ * checkpointed, and no request of the conversation ran on it (`nativeRun`, stamped as its harness reports a run). Its
+ * harness may have written nothing (Claude writes a session's file with its first turn), so there's no record to
+ * resume, and nothing of it to lose.
+ */
+export function neverRan(binding: ProviderBinding, requests: readonly LiveRequest[]): boolean {
+  return !binding.resumed && !binding.seeded && !binding.path && !binding.checkpoint && !requests.some((request) => request.nativeRun?.bindingId === binding.id)
+}
+
 /** A conversation as it is held in memory once its journal is open, with nothing connected. */
 export function residentOf(snapshot: LiveSnapshot, journal: LiveJournal, state: Partial<Resident> = {}): Resident {
   return {
