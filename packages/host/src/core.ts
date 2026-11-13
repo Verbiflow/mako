@@ -787,6 +787,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     // A look that left something undone goes again on its own, 5 s after, doubling to the reconcile's minute.
     let retryMs = UPLOADS_RETRY_MS
     let retry: ReturnType<typeof setTimeout> | undefined
+    // A retry armed as the host stops never runs.
+    shell.stopping.signal.addEventListener("abort", () => {
+      if (retry) clearTimeout(retry)
+      retry = undefined
+    }, { once: true })
     const look = (): Promise<void> => {
       if (looking) {
         again = true
