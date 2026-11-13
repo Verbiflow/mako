@@ -104,14 +104,19 @@ export const STEPS = [
   [33, "npm run test:resume-holds"],
   [36, "npm run test:fin-states"],
   // What comes back: a crash, a recovery or a Fin moved, with its queue kept through SIGKILL.
-  [142, "npm run test:fin-move"],
+  [50, "MAKO_TEST_HARNESSES=claude,codex npm run test:fin-move"],
+  [50, "MAKO_TEST_HARNESSES=cursor,grok npm run test:fin-move"],
+  [50, "MAKO_TEST_HARNESSES=opencode,devin npm run test:fin-move"],
   [20, "npm run test:request-holds"],
   [67, "MAKO_TEST_HARNESSES=claude,codex npm run test:wake-queue"],
   [67, "MAKO_TEST_HARNESSES=cursor,grok npm run test:wake-queue"],
   [67, "MAKO_TEST_HARNESSES=opencode,devin npm run test:wake-queue"],
-  [73, "MAKO_TEST_HARNESSES=claude,codex npm run test:orch-crash"],
-  [73, "MAKO_TEST_HARNESSES=cursor,grok npm run test:orch-crash"],
-  [73, "MAKO_TEST_HARNESSES=opencode,devin npm run test:orch-crash"],
+  [52, "MAKO_TEST_HARNESSES=claude npm run test:orch-crash"],
+  [52, "MAKO_TEST_HARNESSES=codex npm run test:orch-crash"],
+  [52, "MAKO_TEST_HARNESSES=cursor npm run test:orch-crash"],
+  [52, "MAKO_TEST_HARNESSES=grok npm run test:orch-crash"],
+  [52, "MAKO_TEST_HARNESSES=opencode npm run test:orch-crash"],
+  [52, "MAKO_TEST_HARNESSES=devin npm run test:orch-crash"],
   [78, "npm run test:orch-recovery"],
   // Each message queued, steered or interrupting as its sender chose, answered, routed, and going again by itself.
   [112, "npm run test:orch-answer"],
@@ -260,6 +265,8 @@ const BUILT = new Set(["npm run build:control-runtime", "npm run -s build:contro
  * it. A chain's seconds are shared equally among its parts until they're measured.
  */
 export function parts([seconds, command]) {
+  const workspace = /^npm test -w (@mako\/[\w-]+)$/.exec(command)
+  if (workspace) return workspaceParts(seconds, command, workspace[1])
   const match = /^((?:\w+=\S+ )*)npm run (?:-s )?(test:[\w:-]+)$/.exec(command)
   const body = match && scripts[match[2]]
   if (!body || !body.includes(" && ")) return [{ seconds, command, builds: [], script: match?.[2] ?? command }]
@@ -297,11 +304,35 @@ function scoped(env, part) {
   }).join(" ")
 }
 
+/** A workspace's `npm test` chain taken apart the same way, each part run from the workspace's folder. */
+function workspaceParts(seconds, command, name) {
+  const folder = `packages/${name.slice("@mako/".length)}`
+  const body = JSON.parse(readFileSync(new URL(`../${folder}/package.json`, import.meta.url), "utf8")).scripts?.test
+  if (!body?.includes(" && ")) return [{ seconds, command, builds: [], script: command }]
+  const units = []
+  let builds = []
+  for (const part of body.split(" && ")) {
+    if (BUILD.test(part)) builds.push(`cd ${folder} && ${part}`)
+    else {
+      units.push({ command: `cd ${folder} && ${part}`, builds, script: command })
+      builds = []
+    }
+  }
+  return units.map((unit) => ({ ...unit, seconds: Math.max(1, Math.round((seconds || DEFAULT_SECONDS) / units.length)) }))
+}
+
 /** Every step's parts, each part once: a part two chains share runs in the first. */
 export function units(steps) {
   const seen = new Set()
   return steps.flatMap((step) => parts(step)).filter((unit) => !seen.has(unit.command) && seen.add(unit.command))
+    .map((unit) => (MEASURED[unit.command] === undefined ? unit : { ...unit, seconds: MEASURED[unit.command] }))
 }
+
+/**
+ * Each part's seconds as CI last measured it (`scripts/ci-gate-times.json`), which sizes the shards in place of a
+ * chain's median shared among its parts. `--learn` reads a run's logs on stdin and prints the file anew.
+ */
+const MEASURED = JSON.parse(readFileSync(new URL("./ci-gate-times.json", import.meta.url), "utf8"))
 
 /** `steps` in `count` shards, longest first onto the shard with the least so far, each shard in the steps' own order. */
 export function shards(steps, count) {
@@ -318,6 +349,12 @@ export function shards(steps, count) {
 
 const mac = process.argv[2] === "--mac"
 const args = process.argv.slice(mac ? 3 : 2)
+if (args[0] === "--learn") {
+  const learned = { ...MEASURED }
+  for (const [, command, seconds] of readFileSync(0, "utf8").matchAll(/(?:passed|FAILED): (.+) in (\d+) s$/gm)) learned[command] = Number(seconds)
+  console.log(JSON.stringify(Object.fromEntries(Object.entries(learned).sort(([a], [b]) => a.localeCompare(b))), null, 2))
+  process.exit(0)
+}
 const listed = mac ? MAC_STEPS : STEPS
 /**
  * Each shard runs `LANES` of its parts at once: most of them wait on timers and child processes rather than the CPU,
