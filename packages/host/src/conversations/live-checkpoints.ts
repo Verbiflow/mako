@@ -16,8 +16,8 @@ import type { LiveTurnChanges } from "./live-turn-changes.js"
 
 /**
  * How long a turn waits for its checkpoint to hold the workspace before it goes without one. Behind a slow save of the
- * last turn's checkpoint, in a checkout under constant builds, a send once waited 127 s; the capture goes on, and lands
- * on the turn when it ends (`heldAfterTurnMs`).
+ * last turn's checkpoint, in a checkout under constant builds, a send once waited 127 s. The capture still runs (its run
+ * is what the turn's end checkpoints against), but what it holds after the turn went is never the turn's `before`.
  */
 export const BEFORE_CHECKPOINT_WAIT_MS = 10_000
 
@@ -115,7 +115,11 @@ export class LiveCheckpoints {
         try {
           const snapshot = await snapshots.beginRun(request.id, resident.snapshot.session.cwd, frozen)
           const late = wentAt === undefined ? 0 : (heldAt ?? Date.now()) - wentAt
-          before = { kind: "ready", snapshot, ...late > 0 && { heldAfterTurnMs: late } }
+          // Held after the turn went, it may already hold the turn's own edits: a rewind to it would keep them and the
+          // turn's diff would leave them out, so it's never the turn's `before`. The capture still ran for `endRun`.
+          before = late > 0
+            ? { kind: "unavailable", reason: `The checkpoint held the workspace ${Math.round(late / 1000)} s after the turn went, so it may hold the turn's own edits` }
+            : { kind: "ready", snapshot }
         } catch (error) {
           before = { kind: "unavailable", reason: errorMessage({ error }) }
         }
@@ -149,7 +153,7 @@ export class LiveCheckpoints {
         wentAt = Date.now()
         hostWarn("checkpoints", "a turn went before its checkpoint held the workspace", { conversation, request: request.id, waitedMs: wentAt - began })
         if (generation === resident.generation) {
-          const reason = "The checkpoint was still waiting when the turn went; it's kept if it finishes"
+          const reason = "The checkpoint was still waiting when the turn went"
           resident.snapshot = {
             ...resident.snapshot,
             requests: resident.snapshot.requests.map((item) =>
@@ -257,7 +261,7 @@ export class LiveCheckpoints {
       (position === "after" && request?.status !== "completed") ||
       boundary?.kind !== "ready"
     )
-      throw new Error("This turn has no workspace checkpoint at that point")
+      throw new Error(`This turn has no workspace checkpoint at that point${boundary?.kind === "unavailable" ? `: ${boundary.reason}` : ""}`)
     return { resident, snapshot: boundary.snapshot }
   }
 

@@ -16,15 +16,7 @@ export const WorkspaceSnapshotSchema = z.object({
 export type WorkspaceSnapshot = z.infer<typeof WorkspaceSnapshotSchema>
 export const RunSnapshotsSchema = z.object({
   before: z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("ready"),
-      snapshot: WorkspaceSnapshotSchema,
-      /**
-       * The checkpoint held the workspace this long after its turn went (`BEFORE_CHECKPOINT_WAIT_MS`): the agent may
-       * already have changed files in it, so a rewind to it may keep those changes.
-       */
-      heldAfterTurnMs: z.number().nonnegative().optional(),
-    }),
+    z.object({ kind: z.literal("ready"), snapshot: WorkspaceSnapshotSchema }),
     z.object({ kind: z.literal("unavailable"), reason: z.string() }),
   ]),
   after: z

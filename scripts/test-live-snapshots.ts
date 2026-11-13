@@ -293,14 +293,18 @@ try {
       await until(() => sent.length === before + 1)
       assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.before.kind, "unavailable", "the turn went without its checkpoint, and says so")
       release()
-      await until(() => owner.snapshot(lateId)?.requests[0].snapshots?.before.kind === "ready")
-      const landed = owner.snapshot(lateId)?.requests[0].snapshots?.before
-      assert.ok(landed?.kind === "ready" && (landed.heldAfterTurnMs ?? 0) > 0, "the late checkpoint lands on the turn, marked as held after it went")
+      // Held after the turn went, it may hold the turn's own edits: it never becomes the turn's `before`.
+      const reasonOf = () => { const before = owner.snapshot(lateId)?.requests[0].snapshots?.before; return before?.kind === "unavailable" ? before.reason : "" }
+      await until(() => /after the turn went/.test(reasonOf()))
+      assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.before.kind, "unavailable", "a late checkpoint is never the turn's before")
+      finish(lateId, "late answer")
+      await until(() => owner.snapshot(lateId)?.requests[0].snapshots?.after?.kind === "ready")
+      await assert.rejects(owner.previewRewind(lateId, lateRequest, "before"), /no workspace checkpoint at that point: The checkpoint held the workspace .* after the turn went/, "a rewind to before it refuses, and says why")
     } finally {
       beginRun.mock.restore()
       release()
     }
-    console.log("PASS: a checkpoint held past the deadline lets the turn go, and lands on it when it's saved")
+    console.log("PASS: a checkpoint held past the deadline lets the turn go; held late, it is never the turn's before, and a rewind to it refuses")
   }
 } finally {
   owner.stop()
