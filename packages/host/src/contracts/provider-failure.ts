@@ -212,7 +212,7 @@ export function classifyProviderFailure(
   evidence?: ProviderFailureEvidence
 ): ProviderFailure {
   const text = failureText(message)
-  const kind = evidence?.kind ?? (usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown")
+  const kind = evidence && evidence.kind !== "unknown" ? evidence.kind : (usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown")
   return describeProviderFailure(kind, providerLabel)
 }
 
@@ -256,13 +256,13 @@ export function describeProviderFailure(
       return {
         kind, retriable: false,
         title: `${providerLabel} refused access`,
-        guidance: "This account lacks the required permission, scope or organisation access. Choose an authorised account or ask its administrator for access.",
+        guidance: `${providerLabel} refused this account's permission, scope or organisation access; choose an authorised account or ask its administrator for access.`,
       }
     case "sign-in-check":
       return {
         kind, retriable: false,
         title: `Check your ${providerLabel} sign-in`,
-        guidance: "Automatic retries could not confirm sign-in after an hour. Sign in again in Settings › Agents, then resume the work.",
+        guidance: "Mako could not confirm sign-in after an hour of automatic retries; sign in again in Settings › Agents, then resume the work.",
       }
     case "plan":
       return {

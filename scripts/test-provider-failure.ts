@@ -90,6 +90,10 @@ const cases: [string, string][] = [
 for (const [text, kind] of cases)
   assert.equal(classifyProviderFailure(text).kind, kind, `"${text.slice(0, 60)}" → ${kind}`)
 
+assert.equal(classifyProviderFailure('API Error: 401 {"error":{"type":"some_new_error"}}', "Claude", { kind: "unknown", source: "provider-error" }).kind, "auth", "unlisted provider JSON must retain the ordinary 401 sign-in verdict")
+assert.equal(classifyStartFailure('API Error: 401 {"error":{"type":"some_new_error"}}', true, { kind: "unknown", source: "provider-error" }), "auth", "startup uses the same fallback")
+assert.equal(classifyProviderFailure("unrecognised failure", "Claude", { kind: "unknown", source: "provider-error" }).kind, "unknown", "fallback does not invent a cause when the text has none")
+
 // A specific fault wins over the broad HTTP family it could also trip: a
 // rejected transcript arrives as a 400 invalid_request_error.
 assert.equal(

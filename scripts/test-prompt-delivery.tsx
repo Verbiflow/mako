@@ -516,24 +516,33 @@ console.log("PASS: a gateway outage shows its automatic retry time and reason, w
   const error = "Failed to authenticate"
   const now = Date.now()
   const retry = { at: now - 1, attempt: 10, since: now - GIVE_UP_MS["provider-unavailable"], cause: "provider-unavailable" as const, reason: error }
+  let revision = 0
   for (const evidence of [
     { kind: "permission", source: "provider-permission-error" },
     { kind: "provider-unavailable", source: "unconfirmed-auth" },
+    { kind: "unknown", source: "provider-error" },
   ] as const) {
-    const ended: LiveRequest = { ...request, status: "failed", retry: undefined, error, failureEvidence: evidence,
-      failure: failureAfterRetry(classifyProviderFailure(error, undefined, evidence).kind, evidence, retry, now) }
-    assert.equal(ended.failure, evidence.kind === "permission" ? "permission" : "sign-in-check")
+    const detail = evidence.kind === "unknown" ? 'API Error: 401 {"error":{"type":"some_new_error"}}' : error
+    const ended: LiveRequest = { ...request, status: "failed", retry: undefined, error: detail, failureEvidence: evidence,
+      failure: failureAfterRetry(classifyProviderFailure(detail, undefined, evidence).kind, evidence, retry, now) }
     acpStore.set({ activeKey: conversationId })
-    applyLiveSnapshot({ ...snapshot, revision: evidence.kind === "permission" ? 1 : 2, session: { ...snapshot.session, id: conversationId }, requests: [ended] })
+    applyLiveSnapshot({ ...snapshot, revision: ++revision, session: { ...snapshot.session, id: conversationId }, requests: [ended] })
     const markup = renderToStaticMarkup(<FailureRow conversationId={conversationId} request={ended} />)
-    assert.doesNotMatch(markup, /Continues by itself|Send again|Send another copy|signed out|Start a new/)
+    assert.doesNotMatch(markup, /Continues by itself|Send again|Send another copy|Start a new/)
     if (evidence.kind === "permission") {
+      assert.equal(ended.failure, "permission")
       assert.match(markup, /Access refused/)
       assert.match(markup, /permission, scope or organisation access/)
-      assert.doesNotMatch(markup, /Sign in/)
+      assert.doesNotMatch(markup, /Sign in|signed out/)
+    } else if (evidence.kind === "unknown") {
+      assert.equal(ended.failure, "auth")
+      assert.match(markup, /Sign-in required/)
+      assert.match(markup, /Sign in/)
     } else {
+      assert.equal(ended.failure, "sign-in-check")
       assert.match(markup, /Check your sign-in/)
       assert.match(markup, /Sign in/)
+      assert.doesNotMatch(markup, /signed out/)
     }
   }
 }

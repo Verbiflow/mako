@@ -209,9 +209,9 @@ function recoveryGuidance(
     case "auth":
       return delivered === "received" ? `${agent} signed out after it got this; sign in again, then continue the turn.` : `${agent} is signed out; sign in again, then send it.`
     case "permission":
-      return "This account lacks the required permission, scope or organisation access. Choose an authorised account or ask its administrator for access."
+      return `${agent} refused this account's permission, scope or organisation access; choose an authorised account or ask its administrator for access.`
     case "sign-in-check":
-      return "Automatic retries could not confirm sign-in after an hour. Sign in again in Settings › Agents, then resume the work."
+      return "Mako could not confirm sign-in after an hour of automatic retries; sign in again in Settings › Agents, then resume the work."
     case "context-exhausted":
       return context.compacted
         ? "The conversation is compacted now, so the message may fit."

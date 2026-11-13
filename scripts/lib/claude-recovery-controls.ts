@@ -8,7 +8,8 @@ import { claudeFailureEvidence } from "@mako/host/harnesses/claude/failure-evide
 import type { ClaudeCredentialState } from "@mako/host/harnesses/claude/accounts"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { ProviderFailureEvidence } from "@mako/host/contracts/provider-failure-evidence"
-import { ProviderFailureError } from "@mako/host/contracts/provider-failure"
+import { classifyProviderFailure, ProviderFailureError } from "@mako/host/contracts/provider-failure"
+import { transientCause } from "@mako/host/contracts/delivery-retry"
 import { admitted } from "../fixtures/admitted-start.ts"
 
 const HTML = 'Failed to authenticate. API Error: 403 <!doctype html><html><head><title>Temporary access check</title></head><body>Please wait.</body></html>'
@@ -40,7 +41,8 @@ export async function claudeRecoveryControls(dependencies: ClaudeSdkDependencies
   const now = Date.now()
   const valid: ClaudeCredentialState = { store: "file", scoped: true, access: true, refresh: "present", expiresAt: new Date(now + 60 * 60_000).toISOString(), refreshExpiresAt: new Date(now + 24 * 60 * 60_000).toISOString() }
   const expired: ClaudeCredentialState = { ...valid, expiresAt: new Date(now - 1_000).toISOString() }
-  const cases: { name: string; error: string; nativeOrg?: boolean; state?: ClaudeCredentialState; expected: ProviderFailureEvidence }[] = [
+  const cases: { name: string; error: string; nativeOrg?: boolean; state?: ClaudeCredentialState; expected: ProviderFailureEvidence; failure?: "auth" }[] = [
+    { name: "valid-unlisted-json-401", error: 'API Error: 401 {"error":{"type":"some_new_error"}}', state: valid, expected: { kind: "unknown", source: "provider-error" }, failure: "auth" },
     { name: "valid-permission", error: 'Failed to authenticate. API Error: 403 {"error":{"type":"permission_error","message":"Model access refused"}}', state: valid, expected: { kind: "permission", source: "provider-permission-error" } },
     { name: "valid-native-organisation", error: "Failed to authenticate", nativeOrg: true, state: valid, expected: { kind: "permission", source: "provider-permission-error" } },
     { name: "valid-forbidden-code", error: 'API Error: 403 {"error":{"code":"forbidden"}}', state: valid, expected: { kind: "permission", source: "provider-permission-error" } },
@@ -115,6 +117,11 @@ export async function claudeRecoveryControls(dependencies: ClaudeSdkDependencies
       }
       await until(() => session()?.status === "failed", `${test.name}: terminal SDK failure`)
       assert.deepEqual(session()?.failureEvidence, test.expected, `${test.name}: evidence must survive the actual SDK boundary`)
+      if (test.failure) {
+        const failure = classifyProviderFailure(session()?.error, "Claude", session()?.failureEvidence).kind
+        assert.equal(failure, test.failure, "current credentials must not hide the unlisted JSON 401 sign-in verdict")
+        assert.equal(transientCause(session()!.error!, failure, false, session()?.failureEvidence), undefined, "the 401 is not retried")
+      }
       assert.equal(inspected, test.error === REFRESH_FAILED ? 2 : 1, "one classification read, plus the existing first-category refresh diagnostic")
       assert.equal(session()?.error, test.error.slice(0, 2_000), "provider words are retained separately from the verdict")
       await prompt(); messages.send(result())
