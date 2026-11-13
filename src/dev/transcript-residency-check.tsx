@@ -27,6 +27,46 @@ const fixture = document.createElement("div")
 fixture.className = "fixed bottom-0 right-0 flex w-full"
 page.append(button, output, fixture)
 const root = createRoot(fixture)
+
+/**
+ * What happened while the checks ran, kept for one that fails: each reading every pane published (what `protected`
+ * reads), the input on the panes, the frames waited for, each check, and the page's errors. On CI's runner "releasing a
+ * drag keeps cleanup paused until scroll motion ends" once found a settled reading where a moving one was due, and
+ * nothing here reproduced it; the next failure says which pane published what, and when.
+ */
+const started = performance.now()
+/** One thing that happened: a pane's name, a reading's flags, an offset, a message. */
+type TraceDetail = string | Record<string, string | number | boolean | null | undefined>
+const trace: ([number, string] | [number, string, TraceDetail])[] = []
+let dropped = 0
+function note(kind: string, detail?: TraceDetail) {
+  if (trace.length >= 600) { trace.shift(); dropped++ }
+  const at = Math.round((performance.now() - started) * 10) / 10
+  trace.push(detail === undefined ? [at, kind] : [at, kind, detail])
+}
+const attach = transcriptReaders.attach.bind(transcriptReaders)
+transcriptReaders.attach = (source, pane) => {
+  const lease = attach(source, pane)
+  const name = pane === undefined ? "unnamed" : String(pane)
+  note("attach", name)
+  return {
+    report: (reading) => {
+      note("report", { pane: name, moving: reading.moving, interacting: reading.interacting, visible: reading.visible.length, following: reading.following })
+      lease.report(reading)
+    },
+    release: () => {
+      note("release", name)
+      lease.release()
+    },
+  }
+}
+for (const type of ["pointerdown", "pointerup", "wheel", "scroll", "scrollend"])
+  fixture.addEventListener(type, (event) => {
+    const target = event.target instanceof HTMLElement ? event.target : undefined
+    note(type, { pane: target?.closest("[data-reader-pane]")?.getAttribute("data-reader-pane"), top: target && Math.round(target.scrollTop * 10) / 10, trusted: event.isTrusted })
+  }, { capture: true, passive: true })
+addEventListener("error", (event) => note("error", event.message))
+addEventListener("unhandledrejection", (event) => note("rejection", String(event.reason)))
 const views = new Map<string, LiveSnapshot>()
 getMako().liveRead = async (id, input) => {
   const snapshot = views.get(id)
@@ -43,6 +83,7 @@ getMako().liveRead = async (id, input) => {
 }
 
 function check(condition: boolean, message: string): asserts condition {
+  note("check", { message, passed: condition })
   if (!condition) throw new Error(message)
   output.textContent += `\nPASS ${message}`
 }
@@ -54,7 +95,10 @@ async function until(test: () => boolean) {
   }
 }
 async function frames(count = 4) {
-  for (let index = 0; index < count; index++) await new Promise(resolve => requestAnimationFrame(resolve))
+  for (let index = 0; index < count; index++) {
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    note("frame")
+  }
 }
 
 function makeView(turns: number): LiveSnapshot {
@@ -219,6 +263,9 @@ button.onclick = async () => {
     await residency(true)
     await partialAnswer()
     output.textContent += "\nAll history residency checks passed."
-  } catch (error) { output.textContent += `\nFAIL ${error instanceof Error ? error.message : String(error)}` }
+  } catch (error) {
+    output.textContent += `\nFAIL ${error instanceof Error ? error.message : String(error)}`
+    output.textContent += `\nEvidence ${JSON.stringify({ dropped, trace })}`
+  }
   finally { button.disabled = false }
 }
