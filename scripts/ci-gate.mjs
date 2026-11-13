@@ -300,7 +300,9 @@ const BUILT = new Set(["npm run build:control-runtime", "npm run -s build:contro
  * A step as the parts it runs: an `npm run test:…` chain (`a && b && c`) taken apart, nested chains too, so one long
  * chain spreads over shards and fails part by part. Each part keeps the builds before it (`builds`), its script
  * (for `NEEDS` and `ON_FAILURE`) and the step's environment prefix; a bundle (`esbuild …`) stays with the run after
- * it. A chain's seconds are shared equally among its parts until they're measured.
+ * it. A build is every later part's, not the next one's alone: a part may land in another shard, or on the Mac, than
+ * the one after the build (test-host-exit-hold went to the Mac without the `build:electron` before it). A chain's
+ * seconds are shared equally among its parts until they're measured.
  */
 export function parts([seconds, command]) {
   const workspace = /^npm test -w (@mako\/[\w-]+)$/.exec(command)
@@ -317,9 +319,8 @@ export function parts([seconds, command]) {
     else {
       const nested = /^npm run (?:-s )?(test:[\w:-]+)$/.exec(part)
       const found = nested ? parts([0, `${env}npm run ${nested[1]}`]) : [{ command: `${scoped(env, part)}${bundle}${part}`, builds: [], script }]
-      found[0].builds = [...builds, ...found[0].builds]
+      for (const unit of found) unit.builds = [...builds, ...unit.builds.filter((each) => !builds.includes(each))]
       units.push(...found)
-      builds = []
       bundle = ""
     }
   }
@@ -352,8 +353,7 @@ function workspaceParts(seconds, command, name) {
   for (const part of body.split(" && ")) {
     if (BUILD.test(part)) builds.push(`cd ${folder} && ${part}`)
     else {
-      units.push({ command: `cd ${folder} && ${part}`, builds, script: command })
-      builds = []
+      units.push({ command: `cd ${folder} && ${part}`, builds: [...builds], script: command })
     }
   }
   return units.map((unit) => ({ ...unit, seconds: Math.max(1, Math.round((seconds || DEFAULT_SECONDS) / units.length)) }))
