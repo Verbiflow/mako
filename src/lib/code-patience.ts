@@ -36,5 +36,6 @@ export function whenSlow(reading: Promise<unknown>, late: (offline: boolean) => 
  */
 export function noteReadStarted(): void {
   if (!import.meta.env.DEV) return
-  Reflect.set(globalThis, "__makoCodeReads", Number(Reflect.get(globalThis, "__makoCodeReads") ?? 0) + 1)
+  const page: typeof globalThis & { __makoCodeReads?: number } = globalThis
+  page.__makoCodeReads = (page.__makoCodeReads ?? 0) + 1
 }
