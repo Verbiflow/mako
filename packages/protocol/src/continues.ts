@@ -58,6 +58,9 @@ export const ContinueSessionSchema = z
 export type ContinueSession = z.infer<typeof ContinueSessionSchema>
 
 /** A continue as the account keeps it, and every route about it answers. */
+/** At most this many checkpoints a continue's arrival applies: a project folder's first repository and its others. */
+export const CONTINUE_APPLIED_MAX = 32
+
 export const ContinueStateSchema = z
   .object({
     op: z.uuid(),
@@ -80,6 +83,13 @@ export const ContinueStateSchema = z
      * is weighed against, as a move's own checkpoint is, so what the device has that the clone hadn't is never written over.
      */
     start: MoveCheckpointSchema.optional(),
+    /**
+     * The checkpoints the machine's arrival applied, each by its SHA-256: the first repository's and each other one's
+     * of a project folder (a quiet device's `others`), once the arrival applied them all. Absent before then, and for a
+     * continue that carried none. A device takes the Thread's changes out of its own checkouts only for the
+     * repositories named here: one it doesn't find here kept nothing of its in the cloud.
+     */
+    applied: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(CONTINUE_APPLIED_MAX).optional(),
     /** The cloud Thread's machine, once it has one: what its logs and its provider name it by. Said by newer accounts. */
     machine: z.string().min(1).max(200).optional(),
     at: z.iso.datetime(),
