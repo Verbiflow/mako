@@ -187,7 +187,7 @@ async function digestFirst(harness: string): Promise<void> {
     if (turn.text.includes("You're fin:")) return turn.world.hold(turn.conversation).then(() => "Report: all labelled.")
     return "Done."
   }
-  const world = new AgentsWorld({ root: join(root, `${harness}-digest`), script, accounts, selected: {}, catalogs: CATALOGS, order: [harness, elsewhere, next] })
+  const world = new AgentsWorld({ root: join(root, `${harness}-digest`), script, accounts, moveOnLimit: () => true, selected: {}, catalogs: CATALOGS, order: [harness, elsewhere, next] })
   try {
     const apex = await world.apex(harness, "full")
     world.say(apex.conversation, "Start the Fins.")

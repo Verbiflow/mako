@@ -706,7 +706,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.generation = Math.max(1, Math.floor(this.now()))
     const accounts = deps.accounts
     this.moves = accounts && new FinMoves({
-      on: () => deps.moveOnLimit?.() ?? true,
+      on: () => deps.moveOnLimit?.() ?? false,
       accounts,
       ...(deps.connections && { connections: deps.connections }),
       continuation: (harness) => deps.accountContinuation?.(harness),
@@ -3565,6 +3565,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A turn cut short continues, by Mako's continuation or the next host's (`LeftTurn.always`), or its Apex hears it didn't.
     if (ended.status === "interrupted" && ended.interruption?.reason !== "stopped") return this.watchCut(conversation)
     if (this.limitMove(edge, conversation, ended, reply)) return
+    if (this.deps.live.snapshot(conversation)?.requests.some(request => request.status === "held" && request.retry?.cause === "rate-limited" && request.continues?.auto && request.continues.requestId === ended.id)) {
+      this.awaiting.delete(edge.child)
+      return this.childMoved(edge, false)
+    }
     if (ended.status === "completed" && this.store()!.finTurn(edge.child)) this.store()!.clearFinTurn(edge.child)
     this.turnReported(edge, conversation, request, ended, reply)
   }
@@ -4332,8 +4336,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const messageHold = !busy && this.messageHold(conversation)
     const waiting = this.personWaiting(conversation) ?? (messageHold ? { for: "needs-you" as const, line: messageHold } : undefined)
     const last = held?.requests.filter((request) => request.status !== "queued" && request.status !== "held").at(-1)
+    // A provider reset keeps logical work pending without taking an execution place.
+    const reset = !busy && !waiting ? held?.requests.find(request => request.status === "held" && request.pause !== "stop" && request.retry?.cause === "rate-limited" && request.continues?.auto) : undefined
+    const resetWait = reset?.retry && `${this.deps.harnessLabel(session.harness)}'s usage limit to reset at ${resetWords(reset.retry.until ?? reset.retry.at, this.now())}`
     // A turn that ended on its own Fins' work or its move is still at work, on that.
-    const waits = !busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined
+    const waits = resetWait || (!busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined)
     const working = busy || waits !== undefined
     const workSince = waits ? held?.activityAt : last && (last.dispatchedAt ?? last.createdAt)
     const thread = this.store()?.thread(edge.child)

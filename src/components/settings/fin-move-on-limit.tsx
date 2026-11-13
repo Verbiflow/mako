@@ -7,11 +7,11 @@ const TITLE = "When an account runs out, continue on the next one"
 /**
  * Settings › Fins: whether a Fin whose harness's account reaches its limit goes on at the next step of its order
  * (`contracts/fin-fallback.ts`): the person's next account of that harness, a connection serving its model, then
- * their next harness. On by default; off keeps a Fin where it is, as before.
+ * their next harness. Off until chosen; a Fin otherwise waits in place for its limit to reset.
  */
 export function FinMoveOnLimit() {
   const reading = useFinDefaults((state) => state.reading)
-  const on = reading?.moveOnLimit ?? true
+  const on = reading?.moveOnLimit ?? false
   return (
     <section data-fin-move-on-limit className="flex flex-col gap-3">
       <ListCard>

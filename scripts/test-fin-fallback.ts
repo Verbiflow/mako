@@ -96,7 +96,7 @@ async function until(what: string, done: () => boolean, timeoutMs = 15_000): Pro
     await pause(10)
   }
 }
-const NOW = Date.UTC(2026, 10, 4, 20)
+const NOW = Date.now()
 const began = performance.now()
 // What the next reads of the clock say, ahead of the time itself.
 const clockSays: number[] = []
@@ -132,7 +132,7 @@ async function run(name: string, options: Partial<WorldOptions> & { fin: FinScri
     if (turn.text.includes(FROM_AGENTS)) wakes.push(turn.text)
     return "ok"
   }
-  const world = new AgentsWorld({ root: join(root, name), script, now: clock, catalogs: CATALOGS, order: ["claude", "cursor", "codex", "grok", "opencode", "devin"], ladders: { cursor: [{ id: "full", name: "Full", access: "full" }] }, ...options })
+  const world = new AgentsWorld({ root: join(root, name), script, now: clock, moveOnLimit: () => true, catalogs: CATALOGS, order: ["claude", "cursor", "codex", "grok", "opencode", "devin"], ladders: { cursor: [{ id: "full", name: "Full", access: "full" }] }, ...options })
   const apex = await world.apex(options.apexOn ?? "claude", "auto")
   const started = await world.agents.start(apex.caller, { brief: { objective: "Label the snippets" }, name: "labels", clientKey: "labels", cwd: world.root, ...options.start })
   if ("refused" in started) {
@@ -861,8 +861,7 @@ try {
   }
   console.log("a restart mid-turn: never back to an account the turn ran on, and out of accounts it stops saying so")
 
-  // Switch off: today's behaviour exactly. At a start the next harness for a Fin that named none, a refusal for one that
-  // named it; mid-run the turn fails and reports so.
+  // Without opt-in, existing start admission remains; an established turn waits in place until reset.
   {
     const held = accounts()
     held.claude[0]!.spentUntil = RESET
@@ -888,15 +887,14 @@ try {
       },
     })
     assert.ok(!("refused" in midRun))
-    await until("its failure", () => { const state = midRun.world.agents.roster(midRun.apex.conversation)[0]?.child?.state; return state?.kind === "ended" && state.outcome === "failed" })
-    await midRun.world.settle(300, 20_000, "ignore")
+    await until("its reset wait", () => midRun.world.live.snapshot(midRun.fin())?.requests.some(request => request.status === "held" && request.retry?.until === RESET) === true)
     assert.equal(midRun.finTurns().length, 1, "no continuation")
     assert.deepEqual(midRun.world.launches.filter((launch) => launch.conversation === midRun.fin()).map((launch) => launch.account), ["personal"], "no other launch")
     assert.equal(edgeOf(midRun).tuned?.rerouted, undefined)
     assert.equal(noted(midRun, "Moved to Claude (work)"), false)
     await midRun.world.close()
   }
-  console.log("switch off: today's next-harness rule at a start, a refusal when named, and a failed turn mid-run")
+  console.log("switch off: existing start admission and an established turn held in place until reset")
   console.log("fin fallback: ok")
 } finally {
   rmSync(root, { recursive: true, force: true })
