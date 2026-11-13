@@ -202,9 +202,13 @@ export class AccountList {
     let failures = 0
     while (!this.#stopped) {
       try {
+        // The devices are asked beside the list on its first read, not after it: the list paints once both are here, a
+        // round trip sooner on a phone's network.
+        const devices = this.#devicesAsked ? undefined : this.refreshDevices().catch((error) => this.#failed({ error }))
         const listings = SessionListingsSchema.parse(await this.#gateway.rest("GET", "/v1/sessions"))
         this.#list.listed(listings)
-        if (!this.#devicesAsked || this.#unnamedDevice()) await this.refreshDevices().catch((error) => this.#failed({ error }))
+        if (devices) await devices
+        else if (this.#unnamedDevice()) await this.refreshDevices().catch((error) => this.#failed({ error }))
         this.#publish("live")
         failures = 0
         const subscription = this.#gateway.session.subscribe({ stream: accountStream(this.#accountId), after: listings.seq })
