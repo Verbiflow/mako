@@ -16,7 +16,7 @@ import { AccessChoicesAnswerSchema, AccessChoosingSchema, applyAccessChoosing, s
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
 import { ATTENTION_SUMMARY_FROM, ATTENTION_WORDS, AttentionKindSchema, asks, attentionFact, attentionHeadline, attentionKey, attentionLine, attentionSummary, foldedBody, needsYouWaiting, questionWaiting, requestWaiting, rowWaitingFor, factStands, noticeTag, readNotice } from "../dist/attention.js"
 import { ASKING_VERSION, CONTINUE_VERSION, FIN_STATES_VERSION, FINS_VERSION, FORKS_VERSION, BORROW_LINK_VERSION, SESSION_ORDER_VERSION } from "../dist/version.js"
-import { ContinueOfferSchema, ContinueStateSchema, cloudRuntimeOf, continueCloudThread, continueHandOver, continueRefusal, continueRefusalText, namedUuid as continueUuid } from "../dist/continues.js"
+import { CONTINUE_APPLIED_MAX, ContinueOfferSchema, ContinueStateSchema, cloudRuntimeOf, continueCloudThread, continueHandOver, continueRefusal, continueRefusalText, namedUuid as continueUuid } from "../dist/continues.js"
 import { ArchivedThreadSchema, LISTED_FINS, ListedSessionSchema, QuietDeviceSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import { BorrowPushSchema } from "../dist/borrow.js"
@@ -2498,6 +2498,11 @@ describe("a Session continued in the cloud while its device is off", () => {
       sessions: [{ session: row.session, conversation: row.conversation, harness: "codex", nativeId: "019a2b3c", generation: 3, folder: row.folder, holdings: { rollout: 41 } }],
       at: "2026-10-24T20:10:00.000Z", changedAt: "2026-10-24T20:10:00.000Z",
     })
+    assert.equal(state.applied, undefined, "made, nothing applied yet")
+    const applied = ["a".repeat(64), "b".repeat(64)]
+    assert.deepEqual(ContinueStateSchema.parse({ ...state, phase: "continued", applied }).applied, applied, "continued: the checkpoints its arrival applied, by SHA-256")
+    assert.throws(() => ContinueStateSchema.parse({ ...state, applied: ["not-a-sha"] }), "only SHA-256s")
+    assert.throws(() => ContinueStateSchema.parse({ ...state, applied: Array.from({ length: CONTINUE_APPLIED_MAX + 1 }, () => "c".repeat(64)) }), "at most a project's repositories")
     const waiting = [{ id: "22222222-3333-4444-8555-666666666666", conversation: row.conversation, text: "and the retries" }]
     const actor = { kind: "client", client: "phone", deviceId: phone }
     const request = await continueHandOver(state, { account: "33333333-4444-4555-8666-777777777777", actor, waiting, releasedAt: 1_000 })

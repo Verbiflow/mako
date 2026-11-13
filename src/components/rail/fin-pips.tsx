@@ -3,7 +3,7 @@ import { finsWord } from "@mako/host/contracts/agents"
 import { memo } from "react"
 import { observePhaseLockedAnimation } from "@/lib/visible-animation"
 import { apexPips, pipsCounts, type Pips } from "@/state/fin-pips"
-import { useAcp } from "@/state/acp"
+import { useAcp } from "@/state/acp-state"
 
 const PIP = new Map([["n", "needs"], ["w", "working"], ["l", "lead"], ["q", "queued"], ["i", "idle"], ["f", "failed"], ["d", "done"]])
 const MAX_PIPS = 16

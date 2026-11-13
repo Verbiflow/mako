@@ -14,6 +14,8 @@ export async function auditPackage(app, target, output) {
   assert.deepEqual(files.filter((path) => !roots.has(path.split("/")[0])), [], "Unexpected repository files in app archive")
   const unwanted = files.filter((path) =>
     /(^|\/)(__pycache__|\.git)(\/|$)|\.py[co]$|\.map$/.test(path) ||
+    // TypeScript never runs from app.asar: sources and declarations are dead weight.
+    /^node_modules\/.*\.(ts|mts|cts|tsx)$/.test(path) ||
     path.startsWith("node_modules/@trycua/") ||
     /node_modules\/@(?:anthropic-ai\/claude-agent-sdk|cursor\/sdk|esbuild|img\/sharp(?:-libvips)?)-?(?:\/)?(?:darwin|linux|win32)-/.test(path) &&
       !path.includes(target)

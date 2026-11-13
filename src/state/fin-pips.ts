@@ -1,7 +1,7 @@
 import { childGroup, childStateOf, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { threadAsking, threadChildren, threadRollup } from "@/state/apex-fins"
-import { useAcp, type AcpState } from "@/state/acp"
+import { threadAsking, threadRollup } from "@/state/fin-rollup"
+import { threadChildren, useAcp, type AcpState } from "@/state/acp-state"
 
 /**
  * One letter per Fin, in `orderedChildren`' order: `n` needs the person, `w` working, `l` working while it asks its

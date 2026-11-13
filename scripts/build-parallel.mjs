@@ -52,3 +52,6 @@ if (failed.length > 0) {
   for (const failure of failed) console.error(failure.reason.message)
   process.exit(1)
 }
+
+// The packaged main process: what tsgo just emitted, bundled (scripts/bundle-main.mjs).
+await lane("main-bundle", process.execPath, ["scripts/bundle-main.mjs"])

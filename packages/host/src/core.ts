@@ -34,7 +34,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
+import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -82,8 +82,13 @@ type WebHost = Awaited<ReturnType<typeof startWebHost>>
 const HELD_WAKES_AFTER_START_MS = 2_000
 /** A project whose checkout this host couldn't read, or let go of, is asked about again at most this often. */
 const HEAD_ASK_AGAIN_MS = 60_000
-/** How long attribution's read of the catalog stands with nothing said to move it (`cataloguedRows`). */
-const CATALOGUED_FRESH_MS = 30_000
+/**
+ * How long attribution's read of the catalog stands with nothing said to move it (`cataloguedRows`): a safety net, not a
+ * refresh. Rows the catalog moves are put in place, placements move it, and a folder's worktree origin is read once and
+ * kept (`WorktreeOrigins.of`; only a missing folder is looked for again, and its session's next write moves its row).
+ * At 30 s it was the one thing still listing the catalog whole: every 30 s, about 170 ms, on a quiet host.
+ */
+const CATALOGUED_FRESH_MS = 10 * 60_000
 
 /** What the host gives its core: the socket, the method table, and the domains that load on their own. */
 /** When a stop still running says where it is: well before the 15 s a machine's agent or a test waits for it. */
@@ -231,6 +236,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const { environment, fixtureDesk } = config
   const { crashes } = owner
   const web = () => shell.web()
+  // Every probe that only reads the machine (`ps`, `lsof`, `sysctl`) runs in this one child from here on (`hostProbe`),
+  // so none spawns on the loop; it starts at the first ask and reads the apps' processes too.
+  const probes = childProcessReader()
+  shell.stopping.probes = probes
   const git = hostGit(config.gitTrace ?? false)
   const admission = new Admission()
   const machine = processMachine()
@@ -443,6 +452,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     .map((terminal) => `the terminal “${terminal.title}”`)
   const workspaces = openWorkspaces({
     git,
+    probes,
     dataRoot: environment.dataRoot,
     recipes,
     // A recipe runs as its place says: a cloud machine's host is started by the machine's agent.
@@ -543,6 +553,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     web()?.terminal({ type: "wake" })
     late.cloud?.wake()
     late.cloudConversations?.wake()
+    late.awayNotes?.back("wake")
   })
   const telemetry = await declareTelemetryMethods(methods, {
     environment,
@@ -913,6 +924,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         ownerChecked: () => {
           late.conversations?.live.moves.ownerChecked()
           // Sessions a going-away named, which the account may have continued: whose they are is asked now, never given up on.
+          // The account's link checked again is this Mac back.
+          late.awayNotes?.back("link")
           void late.awayNotes?.ask()
           // Turns paused as this Mac went off, for a Thread still here, go on now (`CloudMoves.unpark`).
           void late.cloudMoves?.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
@@ -1182,12 +1195,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const attribution = late.attribution
     if (!thread || !acknowledged || !attribution) return
     const repositories = acknowledged.acknowledged.map((each) => ({ root: each.root, versions: each.versions ?? [] }))
-    // Only if the cloud has all of it: it went on from the first repository's very checkpoint, and the going-away note it
-    // came from (by its op, never a later note's) carried that and every other repository's with a change of the Thread's. A continue on a clone of the branch the
-    // device last pushed, or a repository the note left out or acknowledged since, doesn't have the Thread's changes
-    // there, and taking them out here would lose them: then all of it stays.
+    // Only if the cloud has all of it, by its word: its machine applied (`applied`) the first repository's very checkpoint
+    // and every other repository's with a change of the Thread's, and the going-away note it came from (by its op, never a
+    // later note's) carried each. A continue on a clone, a repository the note left out or acknowledged since, or an
+    // account that doesn't say what it applied: taking them out here could lose them, so all of it stays.
     const state = await late.cloud?.continueState?.(session, op).catch(() => undefined)
-    const why = cloudHasAll(acknowledged.acknowledged.map((each) => ({ root: each.root, sha256: each.checkpoint.sha256, changes: each.versions?.length ?? 0 })), acknowledged.noted, state?.start?.sha256)
+    const why = cloudHasAll(acknowledged.acknowledged.map((each) => ({ root: each.root, sha256: each.checkpoint.sha256, changes: each.versions?.length ?? 0 })), acknowledged.noted, state?.applied)
     const fromOurs = why === undefined
     const left = fromOurs
       ? await checkoutLeave.leave(thread, repositories[0]!.root, repositories, {
@@ -1196,7 +1209,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         mako: (write) => attribution.mako(write),
       })
       : { kind: "stayed" as const, paths: repositories.flatMap((each) => each.versions.map((version) => version.path)).sort() }
-    if (!fromOurs) hostLog("leaving", "a Thread the cloud took keeps its changes in the project folder: the cloud doesn't have all of them", { thread, op, why, start: state?.start?.sha256 ?? "none" })
+    if (!fromOurs) hostLog("leaving", "a Thread the cloud took keeps its changes in the project folder: the cloud doesn't have all of them", { thread, op, why, applied: state?.applied?.length ?? "none" })
     // Nothing of the Thread's sits in the project folder unannounced: its row says what stayed, and the commits the cloud took.
     const unpushed = acknowledged.acknowledged.reduce((sum, each) => sum + each.unpushed, 0)
     if (left.kind === "stayed" || unpushed) {
@@ -1273,6 +1286,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     })
     // Asked again while any waits and the account couldn't answer: on the account's next link too, through the owner check.
     shell.jobs.every("ask the account whose the Sessions held as this Mac went away are", 30_000, async () => {
+      // A going-away that didn't happen (this Mac still runs long after) is over: asking goes on.
+      late.awayNotes?.lapse()
       if (late.awayNotes?.any() && !cloudConversations?.ownerCheck(false)) await late.awayNotes.ask()
     })
   }
@@ -1434,6 +1449,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       others: async (thread) => (await late.readiness?.noteOthers(thread)) ?? [],
       project: async (thread) => late.readiness?.noteProject(thread),
       projectFrom: async (thread) => late.readiness?.noteProjectFrom(thread),
+      going: () => late.awayNotes?.going(),
+      answered: () => late.awayNotes?.answered(),
       noted: async (sent) => late.readiness?.noted(sent),
       refused: async (note, threads) => late.readiness?.refused(note, threads),
       quiet: async (note, record) => {
