@@ -2,13 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { ConversationSkeleton } from "@/components/viewer/conversation-skeleton"
 import { ShowAgentsContext } from "@/components/viewer/show-agents"
-import { Composer as DeskComposer } from "@/components/composer/composer"
 import { TranscriptEndContext, type TranscriptEnd } from "@/components/transcript/transcript-end"
 import { ExchangeNoteContext, PromptNoteContext } from "@/components/transcript/transcript-notes"
 import { CompactPresentationContext, type CompactPresentation } from "@/components/transcript/compact-presentation"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
 import { AgentsSheet } from "./agents"
+import { deskComposerChunk } from "./chunks"
 import { useWebClient } from "./client"
 import { openingThread } from "./probe"
 import { useSyncing } from "./syncing"
@@ -110,6 +110,10 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
   const [agents, setAgents] = useState(false)
   const showAgents = useCallback(() => setAgents(true), [])
   const elsewhere = useSendElsewhere(session, thread, openedBy, onSession)
+  const deskComposer = deskComposerChunk.use()
+  useEffect(() => {
+    if (desk && !deskComposer) void deskComposerChunk.read().catch(() => undefined)
+  }, [desk, deskComposer])
   if (desk)
     return (
       <PromptNoteContext value={note}>
@@ -123,7 +127,7 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
               </div>
             ) : null}
           </div>
-          {active ? <DeskComposer /> : null}
+          {active && deskComposer ? <deskComposer.Composer /> : null}
         </div>
       </PromptNoteContext>
     )

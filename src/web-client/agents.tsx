@@ -1,6 +1,6 @@
-import { use, useCallback } from "react"
+import { use, useCallback, useEffect } from "react"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { ConversationAgents } from "@/components/inspector/agents-panel"
+import { agentsPanelChunk } from "./chunks"
 import { OpenChildContext } from "./fin-of-apex"
 import { Sheet } from "./sheet"
 
@@ -18,11 +18,15 @@ export function AgentsSheet({ conversation, open, onDismiss }: { conversation: s
     },
     [onDismiss, openChild]
   )
+  const panel = agentsPanelChunk.use()
+  useEffect(() => {
+    if (open && !panel) void agentsPanelChunk.read().catch(() => undefined)
+  }, [open, panel])
   return (
     <Sheet open={open} onDismiss={onDismiss} label="Agents" expandable>
       <h3 className="web-sheet-title">Agents</h3>
       <div data-agents-sheet className="flex min-h-0 flex-1 flex-col pb-[env(safe-area-inset-bottom)]">
-        {open ? <ConversationAgents conversation={conversation} transcripts={false} onOpenChild={openChild ? opened : undefined} /> : null}
+        {open && panel ? <panel.ConversationAgents conversation={conversation} transcripts={false} onOpenChild={openChild ? opened : undefined} /> : null}
       </div>
     </Sheet>
   )

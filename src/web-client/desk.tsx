@@ -37,6 +37,7 @@ import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { AgentsLayer } from "./agents-layer"
+import { deskComposerChunk } from "./chunks"
 import { SetupLayer } from "./setup-layer"
 import { closeSetup, setupOpenStore } from "./setup-open"
 import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
@@ -107,6 +108,8 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   // The Thread on screen's `+`, which its pane answers with its own Add a Session.
   const addSession = useRef<(() => boolean) | null>(null)
   useEffect(() => followListing(), [])
+  // The desktop's composer, which a Thread here draws under its transcript: read now, before one opens.
+  useEffect(() => void deskComposerChunk.read().catch(() => undefined), [])
   // A browser has no file manager to show a path in and no folder chooser: the desk's pieces don't offer either.
   useEffect(() => store.set({ machine: { fileManager: null, chooseFolder: false } }), [])
   const latest = useRef({ open, newThread, list })

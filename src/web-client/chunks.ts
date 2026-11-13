@@ -36,3 +36,12 @@ export const transcriptChunk = chunk(() => import("./live-session"))
 
 /** The Files screen's code (its browser, its file kinds, its reader): read after the list's next screens, or when Files opens. */
 export const filesScreenChunk = chunk(() => import("./files-screen"))
+
+/**
+ * The desktop's composer, which only a laptop's browser (the desk) draws under a Thread: read as the desk mounts, so it's
+ * here before a Thread opens there, and never on a phone or a tablet, whose Thread has the web's own dock.
+ */
+export const deskComposerChunk = chunk(() => import("@/components/composer/composer"))
+
+/** The roster a phone's Agents sheet draws (the desk's Agents panel): read when the sheet first opens. */
+export const agentsPanelChunk = chunk(() => import("@/components/inspector/agents-panel"))
