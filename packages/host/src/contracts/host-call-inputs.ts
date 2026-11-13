@@ -292,6 +292,13 @@ const inputs = {
           for: z.literal("person").optional(),
           told: z.literal(true).optional(),
           implicit: z.literal(true).optional(),
+          handoff: z
+            .object({
+              to: z.string(),
+              child: z.string().optional(),
+              text: z.string().optional(),
+            })
+            .optional(),
         }),
         standing: z
           .object({
@@ -499,6 +506,7 @@ const inputs = {
             ])
           )
           .optional(),
+        handoff: z.object({ to: z.string() }).optional(),
         clientKey: z.string(),
       }),
     ]),
@@ -1700,8 +1708,8 @@ const inputs = {
               z.object({
                 kind: z.literal("service"),
                 name: z.union([
-                  z.literal("workspace"),
                   z.literal("handoff"),
+                  z.literal("workspace"),
                   z.literal("goal"),
                   z.literal("catalog"),
                   z.literal("migration"),

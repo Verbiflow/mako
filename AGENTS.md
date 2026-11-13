@@ -783,10 +783,15 @@ its last step, what it was asked when it is a Fin too, and each other Fin as
 the front door's note names it (name, harness, state, what it was asked, its
 branch and last report). The person's direct words to a Fin stay out. It
 reads typed state, never a transcript, and its brief's first line says it's
-there. Crew discovery grants no sibling-send authority. A refused sibling
-send names the target and parent, sends nothing, and points to an explicit
-`agents_report` parent relay; `delivered: notice` proves that handoff, not
-a send to the sibling. `npm run test:orch-comms` covers all three.
+there. Crew discovery grants no sibling-send authority. A sibling send is
+refused as `relayed`: nothing reaches the sibling, and its words go to the
+Apex instead as a handoff (`Report.handoff`, a progress report that wakes it),
+which the digest lists under "hands work to another Fin" for the Apex to pass
+on with one `agents_send`. A progress report that says it hands work to
+another Fin of its Apex (`agents_report`'s `handoff: {to}`, or `fin:<name>` in
+its summary) is a handoff too and wakes the Apex; a Fin merely mentioned by
+its name or Thread is progress, and stays quiet. `npm run test:orch-comms` covers all three, and `test:orch-deliver` the
+refusal.
 An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
 (`AgentsApexes`): every tree's top Apex but its own whose conversation is
 open here, each with its title, harness, whether it works and its last step,
