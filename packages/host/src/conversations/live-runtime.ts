@@ -272,6 +272,8 @@ export interface Dependencies {
   work?: Pick<HostWork, "current">
   mcpSnapshot?(cwd: string): Promise<McpRegistrySnapshot>
   workspaceSnapshots?: WorkspaceSnapshots
+  /** How long a turn waits for its checkpoint to hold the workspace before it goes without (`BEFORE_CHECKPOINT_WAIT_MS`). */
+  checkpointWaitMs?: number
   /** Who changed each of these files (absolute) since `since`, as the attribution journal knows; undefined while it isn't open. */
   rewindWriters?(paths: readonly string[], since: number): FileWriters | undefined
   appPath: string
@@ -554,6 +556,16 @@ export function activeBinding(resident: Resident): ProviderBinding | undefined {
 /** Whether a binding's native session exists, stored against the folder it ran in. */
 export function launched(binding: ProviderBinding | undefined): binding is ProviderBinding & { nativeId: string; path: string } {
   return Boolean(binding?.nativeId && binding.path)
+}
+
+/**
+ * A binding whose session Mako started and that never ran a turn: never resumed nor seeded, never located, never
+ * checkpointed, and no request of the conversation ran on it (`nativeRun`, stamped as its harness reports a run). Its
+ * harness may have written nothing (Claude writes a session's file with its first turn), so there's no record to
+ * resume, and nothing of it to lose.
+ */
+export function neverRan(binding: ProviderBinding, requests: readonly LiveRequest[]): boolean {
+  return !binding.resumed && !binding.seeded && !binding.path && !binding.checkpoint && !requests.some((request) => request.nativeRun?.bindingId === binding.id)
 }
 
 /** A conversation as it is held in memory once its journal is open, with nothing connected. */

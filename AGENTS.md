@@ -119,7 +119,17 @@ lifetimes at the named launch exceptions. `check-host-children.mjs` (in lint) re
 raw Node process starts in the host and every local package it references,
 except its documented owner and handoff boundaries. Git's commands and object
 reader use one independent process runner; `hostGit` injects the host's scoped
-adapter, and `Git.close()` joins child cleanup. `HostStopping.run` also binds
+adapter, and `Git.close()` joins child cleanup. A write to what a repository's
+checkouts share (its refs, its worktrees, its configuration: `writesShared`)
+waits for the writes asked for before it in that repository, keyed by the
+folder they share (`commonDirOf`), so Mako's own writes (a spare being made, a
+Thread's branch made or deleted) never meet at a lock; network commands,
+those that run hooks or rewrite files (`commit`, `merge`, `stash`, a `checkout` of an existing branch) stay out of
+that turn (a worktree is added `--no-checkout` in it, then filled and its post-checkout hook run as `worktree add` runs it, `fillWorktree`), and a
+write that waits past `WRITE_TURN_WAIT_MS` fails naming what held it. Every
+non-read command waits out a ref lock another program holds
+(`REF_LOCK_WAIT`, 3 s), and a failed write is logged with Git's own words.
+`test:git` and `test-worktree-writes.ts` hold it. `HostStopping.run` also binds
 the control-runtime and sessions adapters per async context, so package code
 cannot start an unregistered child under a host call. Standalone workers keep
 their own lifetime; no process adapter is changed globally. UTF-8 buffered
@@ -1526,8 +1536,16 @@ located (`ResumeVerdict` `unavailable` with `lost`) goes on in a new session
 of that harness with the whole conversation, as a record kept closed does,
 and `agents_send` answers only once the session opened: a reopening that
 fails is refused with why, one waiting to go again says so, never "takes it
-now" (`Agents.reopening`). `npm run test:fin-reopen` reproduces each on a
-scratch host.
+now" (`Agents.reopening`). A session Mako started that never ran a turn
+(`neverRan`: not resumed or seeded, never located or checkpointed, no request
+run on it) has no record to find, since Claude writes a session's file with
+its first turn: it starts in its own binding with the whole conversation, not
+as a lost one. A conversation started again after its first start failed
+(`relaunch`) starts under its active binding's ID, which its messages are
+sent to: under the conversation's, a Fin a move had put on Claude failed
+every message "The agent execution owner is unavailable" (2026-11-11).
+`npm run test:fin-reopen` reproduces each on a scratch host, with a Fin moved
+from Codex to Claude and a restart before its first turn there.
 `agents_start` and `agents_send` attach another Thread as a person's `@` chip
 does (`context: [{ thread }]`, a ref, a Thread ID or a Fin's name; `agents_list`
 `scope: threads` finds a ref). What can be attached can be read and exported, so

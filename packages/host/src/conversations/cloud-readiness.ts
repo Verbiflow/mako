@@ -212,6 +212,8 @@ export class CloudReadiness {
   readonly #captured = new Map<string, { at: number; fingerprints: Map<string, string> }>()
   /** By local Thread: tries again of a round a write or a turn's end asked for that failed. */
   readonly #retries = new Map<string, { count: number; timer?: ReturnType<typeof setTimeout> }>()
+  /** File work under way (scratch folders, the worktree's checkpoint, the ready file), which `ioSettled` waits out. */
+  readonly #io = new Set<Promise<unknown>>()
 
   constructor(options: CloudReadinessOptions) {
     this.#options = options
@@ -321,13 +323,15 @@ export class CloudReadiness {
   /**
    * The other repositories a going-away names for a Thread in a project folder: each but the first with the checkpoint
    * the cloud acknowledged of it, where it sits in the Thread's folder and its GitHub repository. One without a place or
-   * a GitHub repository can't be laid out on a machine, so it isn't named; its changes stay here.
+   * a GitHub repository can't be laid out on a machine, so it isn't named; its changes stay here. Each names no branch
+   * to clone: the Thread's own is the one its move would make, new and on no remote, so the machine clones the default,
+   * as it does the first's, and lays the checkpoint on the Thread's branch, which the checkpoint names.
    */
   async noteOthers(thread: string): Promise<QuietRepository[]> {
     const entry = (await this.#load())[thread]
     return (entry?.acknowledged ?? []).slice(1).flatMap((each) => {
       const url = each.url && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(each.url) ? each.url : undefined
-      return each.folder && url ? [{ path: each.folder, url, ...each.checkpoint.branch && { branch: each.checkpoint.branch }, checkpoint: each.checkpoint }] : []
+      return each.folder && url ? [{ path: each.folder, url, checkpoint: each.checkpoint }] : []
     })
   }
 
@@ -545,8 +549,8 @@ export class CloudReadiness {
         fingerprints.set(root, fingerprint)
         continue
       }
-      await mkdir(this.#options.scratch, { recursive: true })
-      const scratch = await mkdtemp(join(this.#options.scratch, "thread-"))
+      await this.#disk(mkdir(this.#options.scratch, { recursive: true }))
+      const scratch = await this.#disk(mkdtemp(join(this.#options.scratch, "thread-")))
       try {
         const capture = this.#options.capture ?? captureThreadCheckpoint
         const taken = await capture({ git: this.#options.git, ledger, thread, repoRoot: root, branch, folder: scratch, partition })
@@ -571,7 +575,7 @@ export class CloudReadiness {
         // Kept only once the cloud holds what this fingerprint names: a failure before leaves the repository to capture again.
         fingerprints.set(root, fingerprint)
       } finally {
-        await rm(scratch, { recursive: true, force: true })
+        await this.#disk(rm(scratch, { recursive: true, force: true }))
       }
     }
     this.#captured.set(thread, { at: Date.now(), fingerprints })
@@ -591,10 +595,10 @@ export class CloudReadiness {
 
   /** The worktree's checkpoint, sent when it changed since the last; answers it whole when it went. */
   async #sendWorktreeCheckpoint(account: ReadinessAccount, entry: ReadyEntry): Promise<MoveCheckpoint | undefined> {
-    await mkdir(this.#options.scratch, { recursive: true })
-    const scratch = await mkdtemp(join(this.#options.scratch, "ready-"))
+    await this.#disk(mkdir(this.#options.scratch, { recursive: true }))
+    const scratch = await this.#disk(mkdtemp(join(this.#options.scratch, "ready-")))
     try {
-      const { checkpoint, file } = await captureMoveCheckpoint(this.#options.git, entry.folder, scratch)
+      const { checkpoint, file } = await this.#disk(captureMoveCheckpoint(this.#options.git, entry.folder, scratch))
       // Unchanged, the cloud has it already; kept whole if it wasn't yet (an entry from before it was).
       if (checkpoint.sha256 === entry.checkpoint) {
         entry.sent ??= checkpoint
@@ -603,7 +607,7 @@ export class CloudReadiness {
       await account.sendCheckpoint(entry.cloudThread, checkpoint, file)
       return checkpoint
     } finally {
-      await rm(scratch, { recursive: true, force: true })
+      await this.#disk(rm(scratch, { recursive: true, force: true }))
     }
   }
 
@@ -623,20 +627,40 @@ export class CloudReadiness {
 
   async #load(): Promise<Record<string, ReadyEntry>> {
     if (this.#entries) return this.#entries
-    const saved = ReadyFileSchema.safeParse(JSON.parse(await readFile(this.#options.file, "utf8").catch(() => "null")))
+    const saved = ReadyFileSchema.safeParse(JSON.parse(await this.#disk(readFile(this.#options.file, "utf8").catch(() => "null"))))
     this.#entries = saved.success ? saved.data.threads : {}
     return this.#entries
   }
 
   #save(): Promise<void> {
-    const write = this.#saving.then(async () => {
+    const write = this.#disk(this.#saving.then(async () => {
       const threads = await this.#load()
       await mkdir(dirname(this.#options.file), { recursive: true })
       await writeFile(`${this.#options.file}.tmp`, JSON.stringify(ReadyFileSchema.parse({ version: 1, threads })), { mode: 0o600 })
       await rename(`${this.#options.file}.tmp`, this.#options.file)
-    })
+    }))
     this.#saving = write.catch(() => {})
     return write
+  }
+
+  /** `work`, counted as file work under way until it settles. */
+  #disk<T>(work: Promise<T>): Promise<T> {
+    this.#io.add(work)
+    void work.then(() => this.#io.delete(work), () => this.#io.delete(work))
+    return work
+  }
+
+  /**
+   * Resolves once no file work it started is under way, and what each piece of it went on to do has run up to its next
+   * wait. Its timers' times are what a test asserts, and the disk's own pace is the runner's: a test that moves the
+   * clock itself waits here after each step, so time moves only while nothing real is under way (`test-checkpoint-trigger.ts`).
+   */
+  async ioSettled(): Promise<void> {
+    for (;;) {
+      await new Promise<void>((next) => setImmediate(next))
+      if (!this.#io.size) return
+      await Promise.allSettled([...this.#io])
+    }
   }
 }
 

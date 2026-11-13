@@ -13,6 +13,27 @@ export class HostStoppingError extends Error {
 
 const hosts = new AsyncLocalStorage<HostStopping>()
 
+/** What a probe that only reads the machine (`ps`, `lsof`, `sysctl`) is run with. */
+export interface ProbeOptions {
+  env?: NodeJS.ProcessEnv
+  cwd?: string
+  timeout?: number
+  maxBuffer?: number
+  signal?: AbortSignal
+}
+
+/**
+ * Probes run in a long-lived child of the host's, answering by message (`childProcessReader`), so the host never
+ * spawns one on its loop: a spawn from a host of several hundred megabytes held the loop for tens of milliseconds
+ * on a busy Mac, and its probes spawned hundreds a minute (`hostCommand` routes them here).
+ */
+export interface HostProbes {
+  /** `file` with `args`, answered as `hostCommand` answers: its output, or an error carrying `code`, `stdout` and `stderr`. */
+  run(file: string, args: readonly string[], options: ProbeOptions): Promise<{ stdout: string; stderr: string }>
+  /** When `pid` started, as `ps -o lstart` says; every pid asked about in one turn is read by one `ps`. */
+  startedAt(pid: number, signal?: AbortSignal): Promise<number>
+}
+
 /**
  * Outside work ends before host calls drain; local commits and cleanup then
  * finish while their stores are open. Each host owns its own cancellation.
@@ -21,6 +42,8 @@ export class HostStopping {
   private readonly controller = new AbortController()
   private readonly owners = new Map<() => void | Promise<void>, string>()
   private stopped: Promise<void> | undefined
+  /** Where this host's probes run, once composition gives it one; without it they're spawned here. */
+  probes: HostProbes | undefined
 
   get signal(): AbortSignal { return this.controller.signal }
 

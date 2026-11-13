@@ -1,6 +1,7 @@
 export { forgetStartingRepository, REPOSITORY_VARIABLES } from "./environment.js"
-export { Git, PARALLEL_CHECKOUT, type GitActivity, type GitRuntime, type OpenRepositories, type GitTrace, type RunOptions, type RunResult } from "./run.js"
+export { Git, PARALLEL_CHECKOUT, WRITE_TURN_WAIT_MS, type GitActivity, type GitRuntime, type OpenRepositories, type GitTrace, type RunOptions, type RunResult } from "./run.js"
 export { classify, GitError, type GitErrorKind } from "./errors.js"
+export { commonDirOf, REF_LOCK_WAIT, REF_LOCK_WAIT_MS, subcommandOf, writesShared } from "./shared-writes.js"
 export { parseStatus, statusCode, statusMismatches, within, type Change, type ParsedStatus, type StatusEntry, type StatusHead, type StatusMismatch } from "./status.js"
 export { commitMessage, LINE_COUNT_LIMIT, locate, pathList, Repository, staged, type Diagnosis, type Operation, type RepositoryLocation, type RepositoryStatus } from "./repository.js"
 export { withIndexWriteLock } from "./index-lock.js"
