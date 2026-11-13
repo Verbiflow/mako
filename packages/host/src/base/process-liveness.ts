@@ -5,6 +5,14 @@ import { onLinux, onMac, onWindows } from "./platform.js"
 
 const run = hostCommand
 const START_TOLERANCE_MS = 30_000
+/**
+ * How far a start read here (`processStartedAt`) may sit from a moment the host took itself, at a spawn or its own
+ * start. The reading is whole seconds: Linux's is the boot time and the process's ticks, each truncated, so it runs up
+ * to 2 s before the real start, and the moment taken comes a little after it. At 1.5 s about one launch in eight read
+ * as another process on Linux: a child's identity was never taken, a reap dropped a child the host had spawned, and
+ * a live host's holds could read as a stale one's (#635).
+ */
+export const START_READING_TOLERANCE_MS = 3_000
 /** The kernel's clock ticks per second in /proc: USER_HZ, 100 on every architecture Node runs Linux on. */
 const USER_HZ = 100
 

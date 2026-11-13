@@ -9,18 +9,10 @@ import {
   processExecutableMatches,
   processIdentityMatches,
   observeProcessIdentity,
-  processStartMatches,
-} from "./process-liveness.js"
+  processStartMatches, START_READING_TOLERANCE_MS } from "./process-liveness.js"
 import { onWindows } from "./platform.js"
 import { topic } from "./topic.js"
 
-/**
- * How far a child's start as the OS reports it may sit from the moment the host recorded its spawn. The reading is
- * whole seconds: Linux's is the boot time and the process's ticks, each truncated (`processStartedAt`), so it runs up
- * to 2 s before the real start, and the host records the spawn a moment after it. At 1.5 s a child about one launch in
- * eight read as another process, and its identity was never taken (#635, test-provider-children).
- */
-const SPAWN_READING_TOLERANCE_MS = 3_000
 
 /**
  * Provider processes the host has spawned and would otherwise orphan.
@@ -204,7 +196,7 @@ export class ProviderChildren {
           !processStartMatches(
             record.processStartedAt ?? record.startedAt,
             identity.startedAt,
-            record.processStartedAt === undefined ? SPAWN_READING_TOLERANCE_MS : 0
+            record.processStartedAt === undefined ? START_READING_TOLERANCE_MS : 0
           )
         )
           return
@@ -316,7 +308,7 @@ export class ProviderChildren {
           startedAt: entry.processStartedAt ?? entry.startedAt,
           signal,
           exact: entry.processStartedAt !== undefined,
-          toleranceMs: entry.processStartedAt === undefined ? 1_500 : undefined,
+          toleranceMs: entry.processStartedAt === undefined ? START_READING_TOLERANCE_MS : undefined,
         }))
       )
         return "gone"

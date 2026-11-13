@@ -1,4 +1,4 @@
-import { processIdentityMatches } from "../base/process-liveness.js"
+import { processIdentityMatches, START_READING_TOLERANCE_MS } from "../base/process-liveness.js"
 import { existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { makoUserRoot } from "@mako/sessions/mako-root"
@@ -247,7 +247,7 @@ export class SessionMemory {
     this.now = options.now ?? Date.now
     this.alive = options.alive ?? processAlive
     this.listening = options.listening ?? existsSync
-    this.identityCurrent = options.identityCurrent ?? ((pid, startedAt, signal) => processIdentityMatches({ pid, startedAt, signal, toleranceMs: 1_500 }))
+    this.identityCurrent = options.identityCurrent ?? ((pid, startedAt, signal) => processIdentityMatches({ pid, startedAt, signal, toleranceMs: START_READING_TOLERANCE_MS }))
     this.build = options.format ?? { writableBy: SESSION_MEMORY_SCHEMA, readableBy: SESSION_MEMORY_READS }
     // Read before anything is created, so a newer Mako's layout gets none of this build's tables.
     const found = inspectStoreFormat(path, "store_meta")
