@@ -121,6 +121,10 @@ export function nodeHostExit(): HostLifecycleOptions["exit"] {
       })
       successor.unref()
     }
+    // A test's stand-in for an exit macOS keeps going after every thread ended (`MAKO_EXIT_HOLD_MS`): the process stays,
+    // holding nothing, as the person's did.
+    const hold = Number(process.env.MAKO_EXIT_HOLD_MS)
+    if (hold > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, hold)
     process.exit(code)
   }
 }
