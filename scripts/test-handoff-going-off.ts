@@ -614,6 +614,10 @@ try {
     assert.equal(named.others?.length, 1, "and the other's beside it")
     const other = named.others![0]!
     assert.equal(other.url, "https://github.com/acme/web")
+    // The Thread's branch is the one its move would make, on no remote: the machine clones the default, and the
+    // checkpoint lays the Thread's change on that branch (a clone of it failed the whole continue on staging).
+    assert.equal(other.branch, undefined, "names no branch to clone")
+    assert.ok(other.checkpoint.branch?.startsWith("mako/"), "its checkpoint names the Thread's branch")
     assert.ok(other.path.endsWith("/web") && !other.path.startsWith(h.project), "laid out where its worktree would be, not the project folder")
     // Its Sessions open in the project worktree, around both repositories' worktrees, from the plan readiness kept.
     assert.ok(named.project && !named.project.startsWith(h.project), "names the project worktree a move would make")
