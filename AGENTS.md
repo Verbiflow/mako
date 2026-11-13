@@ -1521,8 +1521,16 @@ located (`ResumeVerdict` `unavailable` with `lost`) goes on in a new session
 of that harness with the whole conversation, as a record kept closed does,
 and `agents_send` answers only once the session opened: a reopening that
 fails is refused with why, one waiting to go again says so, never "takes it
-now" (`Agents.reopening`). `npm run test:fin-reopen` reproduces each on a
-scratch host.
+now" (`Agents.reopening`). A session Mako started that never ran a turn
+(`neverRan`: not resumed or seeded, never located or checkpointed, no request
+run on it) has no record to find, since Claude writes a session's file with
+its first turn: it starts in its own binding with the whole conversation, not
+as a lost one. A conversation started again after its first start failed
+(`relaunch`) starts under its active binding's ID, which its messages are
+sent to: under the conversation's, a Fin a move had put on Claude failed
+every message "The agent execution owner is unavailable" (2026-11-11).
+`npm run test:fin-reopen` reproduces each on a scratch host, with a Fin moved
+from Codex to Claude and a restart before its first turn there.
 `agents_start` and `agents_send` attach another Thread as a person's `@` chip
 does (`context: [{ thread }]`, a ref, a Thread ID or a Fin's name; `agents_list`
 `scope: threads` finds a ref). What can be attached can be read and exported, so

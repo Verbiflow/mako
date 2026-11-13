@@ -1,4 +1,5 @@
-import { hostCommand } from "./host-command.js"
+import { hostCommand, hostProbe } from "./host-command.js"
+import { hostStopping } from "./host-stopping.js"
 import { readFile, readlink, realpath } from "node:fs/promises"
 import { basename, isAbsolute } from "node:path"
 import { onLinux, onMac, onWindows } from "./platform.js"
@@ -27,6 +28,9 @@ export async function processStartedAt(
       throw new Error("Process start time is unreadable")
     return (bootSeconds + Math.floor(ticks / USER_HZ)) * 1_000
   }
+  // Batched with every other pid asked about this turn, in the host's probe child.
+  const probes = hostStopping()?.probes
+  if (probes) return probes.startedAt(pid, signal)
   const { stdout } = await run("ps", ["-p", String(pid), "-o", "lstart="], {
     maxBuffer: 4_096,
     timeout: 1_500,
@@ -44,7 +48,7 @@ async function processExecutables(
 ): Promise<string[]> {
   if (onLinux()) return [await readlink(`/proc/${pid}/exe`)]
   if (onMac()) {
-    const { stdout } = await run(
+    const { stdout } = await hostProbe(
       "/usr/sbin/lsof",
       ["-nP", "-a", "-p", String(pid), "-d", "txt", "-Fn"],
       { maxBuffer: 64_000, timeout: 1_500, signal }
