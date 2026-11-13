@@ -8,6 +8,7 @@ import type { ListedContinue } from "@mako/protocol/continues"
 import type { OwnerAnswer, OwnerAsk } from "@mako/protocol/handoff"
 import { AwayNotes, GOING_LAPSES_MS } from "@mako/host/conversations/away-notes"
 import { ownerHold } from "@mako/host/conversations/owner-check"
+import { CloudHandOffs } from "@mako/host/conversations/cloud-handoffs"
 
 /*
  * The Sessions a going-away's note named that the account took (`AwayNotes`): they wait for the account's word with no
@@ -155,6 +156,55 @@ test("a going-away that didn't happen lapses two minutes after its note settled,
   assert.equal(asked.length, 1, "asked again")
   assert.equal(away.holds(sessions.c), undefined, "yours: let go")
   assert.equal(away.lapse(), false, "nothing going: nothing lapses")
+})
+
+test("a going-away cut short after parking (its flush throws) still settles: two minutes on it lapses and asks", async () => {
+  let now = 1_000_000
+  const asked: OwnerAsk[] = []
+  const folder = mkdtempSync(join(tmpdir(), "mako-away-"))
+  const away = new AwayNotes({
+    file: join(folder, "away.json"),
+    owner: () => async (ask) => {
+      asked.push(ask)
+      return { sessions: [{ session: sessions.a, answer: "yours", generation: 1 }] }
+    },
+    deviceId: async () => undefined,
+    join: () => {},
+    released: () => {},
+    now: () => now,
+  })
+  const handOffs = new CloudHandOffs({
+    file: join(folder, "handoff.json"),
+    working: () => [{ conversationId: "c-1", thread: "t-1", harness: "codex" }],
+    moves: {
+      move: async () => ({ kind: "moved", cloudThread: "" }),
+      refusal: async () => undefined,
+      leaving: () => false,
+      settled: async () => 0,
+      goAway: async () => ({ thread: "t-1", sessions: [{ session: sessions.a, generation: 1 }], parked: [{ conversation: randomUUID(), request: randomUUID(), continuation: randomUUID(), stopped: [] }] }),
+    },
+    unavailable: async () => undefined,
+    goingAway: {
+      flush: async () => { throw new Error("the disk is full") },
+      checkpoint: async () => undefined,
+      quiet: async () => "unserved",
+      accepted: (note, held) => away.noted(note, held),
+      going: () => away.going(),
+      answered: () => away.answered(),
+    },
+    changed: () => {},
+  })
+  await assert.rejects(handOffs.handOff(randomUUID(), "sleep"), /the disk is full/, "the going-away says why it stopped")
+  assert.ok(away.holds(sessions.a) !== undefined, "the Session was held as it was parked")
+  await away.ask()
+  assert.equal(asked.length, 0, "still going: nothing asked at once")
+  now += GOING_LAPSES_MS - 1_000
+  assert.equal(away.lapse(), false)
+  now += 2_000
+  assert.equal(away.lapse(), true, "it settled as it stopped, so two minutes on it lapses: never stuck until a wake or restart")
+  await away.ask()
+  assert.equal(asked.length, 1, "and asks")
+  assert.equal(away.holds(sessions.a), undefined, "yours: let go")
 })
 
 test("the owner check holds a conversation of a held Session, and nothing else", async () => {
