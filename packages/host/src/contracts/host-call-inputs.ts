@@ -1707,8 +1707,8 @@ const inputs = {
               z.object({
                 kind: z.literal("service"),
                 name: z.union([
-                  z.literal("workspace"),
                   z.literal("handoff"),
+                  z.literal("workspace"),
                   z.literal("goal"),
                   z.literal("catalog"),
                   z.literal("migration"),
