@@ -34,6 +34,7 @@ export function makoFacts(snapshot: Pick<LiveSnapshot, "requests" | "permissions
 
 /** Control's lists, in the order its schema declares them. */
 const CONTROL_LIST_NAMES = z.enum(["questions", "approvalResponses", "approvalObservations", "actions", "asks", "merges", "bindings", "transfers"])
+const ControlListsSchema = z.array(CONTROL_LIST_NAMES).catch([])
 type ControlList = z.infer<typeof CONTROL_LIST_NAMES>
 /** The name each list's events take. */
 const CONTROL_LISTS = {
@@ -195,7 +196,7 @@ export class MakoLogState {
 
   private controlOf(fields: JsonObject): JsonObject {
     const { lists, ...control } = jsonOf(fields)
-    for (const name of z.array(CONTROL_LIST_NAMES).catch([]).parse(lists)) control[name] = this.items(CONTROL_LISTS[name])
+    for (const name of ControlListsSchema.parse(lists)) control[name] = this.items(CONTROL_LISTS[name])
     return control
   }
 

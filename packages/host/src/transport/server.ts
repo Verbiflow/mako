@@ -35,6 +35,7 @@ const STREAM_BEHIND_BYTES = 8 * 1024 * 1024
  * batches add only a notice, so only a reader that has stopped reading gets here.
  */
 const STREAM_LOST_BYTES = 64 * 1024 * 1024
+const WorkspaceClientSchema = z.string().uuid().optional()
 
 /** One client's subscription to `/events`. */
 type EventStream = {
@@ -195,7 +196,7 @@ export async function startWebHost(
       else desktop(request, response)
       return
     }
-    const client = z.string().uuid().optional().safeParse(request.headers["x-mako-window"] ?? new URL(request.url ?? "/", "http://localhost").searchParams.get("client") ?? undefined)
+    const client = WorkspaceClientSchema.safeParse(request.headers["x-mako-window"] ?? new URL(request.url ?? "/", "http://localhost").searchParams.get("client") ?? undefined)
     if (!client.success) { response.writeHead(400).end("Invalid workspace client"); return }
     const clientId = client.data ? `web:${client.data}` : "web"
     if (request.method === "GET" && request.url?.startsWith("/file/")) {

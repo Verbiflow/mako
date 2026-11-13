@@ -352,6 +352,7 @@ const ThreadRowSchema = z.object({
 const OperationRowSchema = z.object({ kind: z.string(), digest: z.string(), result: z.string() })
 const PlacementSchema = z.object({ thread: ThreadIdSchema, session: SessionIdSchema })
 const CountSchema = z.object({ count: z.number() })
+const ReportPositionSchema = z.object({ position: z.number() })
 const FirstJournalSchema = z.object({ count: z.number(), first: z.number().nullable() })
 const VersionSchema = z.object({ data_version: z.number() })
 const TotalChangesSchema = z.object({ count: z.number() })
@@ -1393,10 +1394,9 @@ export class ThreadStore {
   private reportActionPage(scope: string, args: string[], after?: string): ReportActionsPage {
     this.syncVersion()
     if (!this.sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_report_actions'").get()) return { items: [], total: 0 }
-    const count = z.object({ count: z.number() })
-    const total = count.parse(this.sql(`SELECT count(*) AS count FROM agent_report_actions WHERE (${scope}) AND pending = 1`).get(...args)).count
+    const total = CountSchema.parse(this.sql(`SELECT count(*) AS count FROM agent_report_actions WHERE (${scope}) AND pending = 1`).get(...args)).count
     const cursor = after === undefined ? undefined : this.sql(`SELECT rowid AS position FROM agent_report_actions WHERE report = ? AND (${scope})`).get(after, ...args)
-    const position = cursor ? z.object({ position: z.number() }).parse(cursor).position : undefined
+    const position = cursor ? ReportPositionSchema.parse(cursor).position : undefined
     if (after !== undefined && position === undefined) throw new ThreadOperationConflictError(after)
     const rows = this.sql(`SELECT record FROM agent_report_actions WHERE (${scope}) AND pending = 1 AND rowid > ? ORDER BY rowid LIMIT 9`).all(...args, position ?? 0)
     const items = rows.slice(0, 8).map(row => ReportActionSchema.parse(JSON.parse(RecordRowSchema.parse(row).record)))

@@ -12,6 +12,7 @@ import { onWindows } from "../../base/platform.js"
 /** `ps` reports start times to the second. */
 const START_SLACK_MS = 2_000
 const MAX_LOCKS = 100_000
+const PrintedOnExitSchema = z.object({ code: z.literal(1), stdout: z.string() })
 
 export interface DevinProcess {
   pid: number
@@ -51,7 +52,7 @@ async function printed(probe: Promise<{ stdout: string }>): Promise<string> {
   try {
     return (await probe).stdout
   } catch (error) {
-    const matched = z.object({ code: z.literal(1), stdout: z.string() }).safeParse(error)
+    const matched = PrintedOnExitSchema.safeParse(error)
     if (matched.success) return matched.data.stdout
     throw error
   }
