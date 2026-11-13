@@ -399,12 +399,12 @@ async function check() {
   await notBroken("the Agents sheet")
   await recovers("the Agents sheet", rosterDrawn, "[data-agents-sheet]", openSheet)
 
-  // The web app's own screens (`?app` mounts `WebApp` on the desk fixture's client), as a phone draws them under a finger.
+  // The web app's own screens (`?webapp` mounts `WebApp` on the desk fixture's client), as a phone draws them under a finger.
   const phoneInput = async (on) => {
     await send("Emulation.setEmulatedMedia", { features: on ? [{ name: "pointer", value: "coarse" }, { name: "hover", value: "none" }, { name: "any-pointer", value: "coarse" }, { name: "any-hover", value: "none" }] : [] })
     await send("Emulation.setTouchEmulationEnabled", on ? { enabled: true, maxTouchPoints: 5 } : { enabled: false })
   }
-  const appPage = "/scripts/web-desk.html?app&theme=dark"
+  const appPage = "/scripts/web-desk.html?webapp&theme=dark"
   const listed = "document.querySelectorAll('[data-thread]').length > 0"
   await viewport(390, 844)
   await phoneInput(true)

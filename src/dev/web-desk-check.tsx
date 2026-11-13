@@ -167,7 +167,7 @@ function opened(session: WebSession): LiveSnapshot {
 const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   account: { id: "account-check", name: "You", email: "you@example.com", image: null, entitlements: [] },
   deviceId: "browser-check",
-  options: { origin: location.origin, base: search.get("app") !== null ? "/scripts/web-desk.html/" : "/", build: "fixture" },
+  options: { origin: location.origin, base: search.get("webapp") !== null ? "/scripts/web-desk.html/" : "/", build: "fixture" },
   gateway: { wake: () => undefined, connection: async () => ({ cloud: location.origin }), rest: async (_method: string, path: string) => ((search.get("setup") || search.get("side") === "setup") && path.startsWith("/v1/borrow/") ? { grants: [], leases: [], events: [], asks: [] } : Promise.reject(new Error("The fixture has no gateway"))) },
   list: { refreshDevices: async () => undefined },
   push: { seen: async () => undefined, standing: async () => ({ standing: "unsupported", quietHours: null, timeZone: "UTC" }) },
@@ -210,7 +210,7 @@ function initialRoute(): WebRoute {
 }
 
 /**
- * The desk, read as the app reads it: a module of its own, so `?app` keeps the app's own chunks (the desk, a Thread, New)
+ * The desk, read as the app reads it: a module of its own, so `?webapp` keeps the app's own chunks (the desk, a Thread, New)
  * apart from the page's first code, as `test-lazy-pieces-ui.mjs` needs to hold and fail them.
  */
 const Desk = lazy(() => import("@/web-client/desk"))
@@ -225,10 +225,10 @@ export function WebDeskPage() {
   )
 }
 
-// `?app` mounts the web app itself (`WebApp`) on the same stand-in client, in whatever form the page's input and width
+// `?webapp` mounts the web app itself (`WebApp`) on the same stand-in client (`app=` names the scene, as before), in whatever form the page's input and width
 // ask for, with its screens read as code of their own: what `test-lazy-pieces-ui.mjs` holds and fails.
 createRoot(document.getElementById("root")!).render(
-  search.get("app") !== null ? (
+  search.get("webapp") !== null ? (
     <WebClientContext value={client}>
       <WebApp />
     </WebClientContext>
