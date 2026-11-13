@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { mkdir, mkdtemp, realpath, readFile, rm, unlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, realpath, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -314,6 +314,43 @@ try {
     await assert.rejects(readFile(join(repo.gitDir, "index.lock")), { code: "ENOENT" })
     await repo.stage(["file"])
     assert.equal(await sh(root, "show", ":file"), "contents")
+  })
+
+  await test("concurrent index owners publish complete records and await both releases", async () => {
+    const root = await repository("async-index-owners")
+    const repo = await runner.openRepository(root)
+    const { withReservedIndex } = await import("../dist/index-lock.js")
+    let active = 0
+    const called = []
+    await Promise.all(Array.from({ length: 16 }, (_, id) => git.withIndexWriteLock(repo.gitDir, () => withReservedIndex(repo.gitDir, async () => {
+      assert.equal(++active, 1, "one protected action, even across asynchronous publication")
+      const names = ["mako-index-write.lock", "index.lock"]
+      const owners = await Promise.all(names.map(async (name) => JSON.parse(await readFile(join(repo.gitDir, name), "utf8"))))
+      for (const owner of owners) {
+        assert.equal(owner.owner, "mako-git-index")
+        assert.equal(owner.pid, process.pid)
+        assert.match(owner.token, /^[0-9a-f-]{36}$/)
+      }
+      await new Promise((resolve) => setImmediate(resolve))
+      for (const [index, name] of names.entries())
+        assert.equal(JSON.parse(await readFile(join(repo.gitDir, name), "utf8")).token, owners[index].token)
+      called.push(id)
+      active--
+    }))))
+    assert.deepEqual(called.sort((a, b) => a - b), Array.from({ length: 16 }, (_, id) => id))
+    assert.deepEqual((await readdir(repo.gitDir)).filter((name) => name.endsWith(".lock")), [], "settlement includes private preparations and public releases")
+  })
+
+  await test("index cleanup settles before a falsey action failure is handed back", async () => {
+    const root = await repository("falsey-index-failure")
+    const repo = await runner.openRepository(root)
+    for (const primary of [undefined, null, false, 0]) {
+      let caught = false
+      try { await repo.withLockedIndex(async () => { throw primary }) }
+      catch (error) { caught = true; assert.equal(error, primary) }
+      assert.ok(caught)
+      assert.deepEqual((await readdir(repo.gitDir)).filter((name) => name.endsWith(".lock")), [])
+    }
   })
 
   await test("another host waits before staging and resumes after release; a crashed host is reclaimed", async () => {

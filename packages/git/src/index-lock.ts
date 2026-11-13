@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { linkSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import { link, readFile, unlink, writeFile } from "node:fs/promises"
 import { hostname } from "node:os"
 import { dirname, join } from "node:path"
 import { setTimeout as pause } from "node:timers/promises"
@@ -14,8 +14,8 @@ const Owner = z.object({
 })
 type Owner = z.infer<typeof Owner>
 
-function readOwner(path: string): Owner | undefined {
-  try { return Owner.safeParse(JSON.parse(readFileSync(path, "utf8"))).data }
+async function readOwner(path: string): Promise<Owner | undefined> {
+  try { return Owner.safeParse(JSON.parse(await readFile(path, "utf8"))).data }
   catch { return undefined }
 }
 
@@ -25,24 +25,24 @@ function dead(owner: Owner): boolean {
   catch (error) { return error instanceof Error && "code" in error && error.code === "ESRCH" }
 }
 
-function release(path: string, token: string): void {
-  if (readOwner(path)?.token === token) unlinkSync(path)
+async function release(path: string, token: string): Promise<void> {
+  if ((await readOwner(path))?.token === token) await unlink(path)
 }
 
-/** Exclusive creation publishes ownership before any asynchronous work starts. */
-function create(path: string): (() => void) | undefined {
+/** Atomic linking publishes the complete owner before the protected action starts. */
+async function create(path: string): Promise<(() => Promise<void>) | undefined> {
   const owner: Owner = { owner: "mako-git-index", pid: process.pid, token: randomUUID(), host: hostname() }
   const prepared = `${path}.${owner.token}.lock`
-  writeFileSync(prepared, JSON.stringify(owner), { flag: "wx", mode: 0o600 })
+  await writeFile(prepared, JSON.stringify(owner), { flag: "wx", mode: 0o600 })
   try {
     // The hard link publishes a complete owner atomically and fails if a lock
     // exists. A process killed before publication leaves only its private
     // preparation file, never an empty lock blocking the next writer.
-    linkSync(prepared, path)
+    await link(prepared, path)
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "EEXIST") return undefined
     throw error
-  } finally { unlinkSync(prepared) }
+  } finally { await unlink(prepared) }
   return () => release(path, owner.token)
 }
 
@@ -52,19 +52,19 @@ function create(path: string): (() => void) | undefined {
  * An interrupted reclaimer is recovered by the same protocol, with a bounded
  * depth; malformed ownership and a reused PID are conservatively left alone.
  */
-function recover(path: string, depth = 0): boolean {
-  const previous = readOwner(path)
+async function recover(path: string, depth = 0): Promise<boolean> {
+  const previous = await readOwner(path)
   if (!previous || !dead(previous) || depth >= 8) return false
   const guard = join(dirname(path), `mako-index-recover-${previous.token}.lock`)
-  let done = create(guard)
-  if (!done && recover(guard, depth + 1)) done = create(guard)
+  let done = await create(guard)
+  if (!done && await recover(guard, depth + 1)) done = await create(guard)
   if (!done) return false
   try {
-    const current = readOwner(path)
+    const current = await readOwner(path)
     if (current?.token !== previous.token || !dead(current)) return false
-    unlinkSync(path)
+    await unlink(path)
     return true
-  } finally { done() }
+  } finally { await done() }
 }
 
 function busy(): GitError {
@@ -79,9 +79,9 @@ function busy(): GitError {
 export async function withIndexWriteLock<T>(gitDir: string, action: () => Promise<T>, timeoutMs = 30_000): Promise<T> {
   const deadline = performance.now() + timeoutMs
   const path = join(gitDir, "mako-index-write.lock")
-  let done: (() => void) | undefined
-  while (!(done = create(path))) {
-    if (recover(path)) continue
+  let done: (() => Promise<void>) | undefined
+  while (!(done = await create(path))) {
+    if (await recover(path)) continue
     // Unknown ownership is never reclaimed. It may be a legacy host still
     // writing its owner record, so wait rather than failing at publication.
     if (performance.now() >= deadline) throw busy()
@@ -92,20 +92,20 @@ export async function withIndexWriteLock<T>(gitDir: string, action: () => Promis
     // before staging, and wait for live checkpoints without replaying Git writes.
     for (const marker of ["mako-snapshots.lock", "index.lock"]) {
       const lock = join(gitDir, marker)
-      while (readOwner(lock)) {
-        if (recover(lock)) continue
+      while (await readOwner(lock)) {
+        if (await recover(lock)) continue
         if (performance.now() >= deadline) throw busy()
         await pause(25)
       }
     }
     return await action()
-  } finally { done() }
+  } finally { await done() }
 }
 
 /** Called inside the coordinator, for operations copying the real index and writing a private one. */
 export async function withReservedIndex<T>(gitDir: string, action: () => Promise<T>): Promise<T> {
-  const done = create(join(gitDir, "index.lock"))
+  const done = await create(join(gitDir, "index.lock"))
   if (!done) throw busy()
   try { return await action() }
-  finally { done() }
+  finally { await done() }
 }
