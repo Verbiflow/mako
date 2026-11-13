@@ -1,4 +1,7 @@
-import { CloudOffIcon, XIcon } from "lucide-react"
+import { useEffect, useState } from "react"
+import { ChevronLeftIcon, CloudOffIcon, XIcon } from "lucide-react"
+import { CODE_PATIENCE_MS } from "@/lib/code-patience"
+import { LazyFailed } from "@/components/ui/lazy-failed"
 import { cn } from "@/lib/utils"
 import { useCodeRetry } from "./code-retry"
 
@@ -78,6 +81,71 @@ export function CodeLine({ what, retry, className }: { what: string; retry: () =
       <button type="button" className="pressable h-7 shrink-0 border border-hairline px-2.5 text-ui text-foreground" onClick={() => location.reload()}>
         Reload
       </button>
+    </div>
+  )
+}
+
+/**
+ * How a wait for code stands by the clock and the network, for a piece whose read has no state of its own (a
+ * `React.lazy` screen's fallback): waiting, then past its patience slow, or failed while the browser is offline.
+ */
+function useOwnPatience(enabled: boolean): "waiting" | "slow" | "offline" {
+  const [late, setLate] = useState<"waiting" | "slow" | "offline">("waiting")
+  useEffect(() => {
+    if (!enabled) return
+    const say = () => setLate(navigator.onLine ? "slow" : "offline")
+    const timer = setTimeout(() => {
+      say()
+      addEventListener("online", say)
+      addEventListener("offline", say)
+    }, CODE_PATIENCE_MS)
+    return () => {
+      clearTimeout(timer)
+      removeEventListener("online", say)
+      removeEventListener("offline", say)
+    }
+  }, [enabled])
+  return late
+}
+
+/**
+ * A screen whose code is on its way (Settings, the Inbox, Setup, New, the desk): a quiet line where it will draw. Past
+ * its patience the download is still under way: "Still loading…" with Reload. `slow` is a chunk's own word on it
+ * (`chunk().useSlow()`); without it (a `React.lazy` screen) the screen times its own wait, and offline says it
+ * couldn't load.
+ */
+export function ScreenLoading({ what, slow, className }: { what: string; slow?: boolean; className?: string }) {
+  const own = useOwnPatience(slow === undefined)
+  if (slow === undefined && own === "offline")
+    return (
+      <div data-screen-unavailable="" className={cn("flex min-h-0 flex-1 items-center bg-surface", className)}>
+        <LazyFailed what={what.charAt(0).toUpperCase() + what.slice(1)} className="w-full" />
+      </div>
+    )
+  return (
+    <div data-code-loading-screen="" className={cn("flex min-h-0 flex-1 items-center justify-center bg-surface", className)}>
+      <CodeSlowLine what={what} slow={slow ?? own === "slow"} />
+    </div>
+  )
+}
+
+/**
+ * A screen whose code didn't arrive: Back where the screen has one, and one line saying so. With `retry` (a chunk's
+ * read) it offers Retry and tries again once online; without (a `React.lazy` screen, which keeps its failure) Reload.
+ */
+export function ScreenFailed({ what, retry, onBack, className }: { what: string; retry?: () => Promise<void>; onBack?: () => void; className?: string }) {
+  return (
+    <div data-screen-unavailable="" className={cn("flex min-h-0 flex-1 flex-col bg-surface", className)}>
+      {onBack ? (
+        <header className="web-bar flex shrink-0 items-center gap-1 px-1.5">
+          <button type="button" aria-label="Back" onClick={onBack} className="web-icon-button">
+            <ChevronLeftIcon className="size-6" strokeWidth={2} />
+          </button>
+        </header>
+      ) : null}
+      <div className="flex flex-1 items-center">
+        {retry ? <CodeLine what={what} retry={retry} className="w-full" /> : <LazyFailed what={what} className="w-full" />}
+      </div>
     </div>
   )
 }

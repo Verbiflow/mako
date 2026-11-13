@@ -8,9 +8,10 @@ export const CODE_PATIENCE_MS = 8_000
 /**
  * Calls `late` if `reading` is still unsettled once `CODE_PATIENCE_MS` has passed, saying whether the browser is
  * offline, and again each time the browser goes offline or back online while it stays unsettled, so what the piece
- * says follows the network.
+ * says follows the network. The `stop` it returns ends the watch for a read given up before it settles (one Safari
+ * leaves pending for good would otherwise keep its listeners forever).
  */
-export function whenSlow(reading: Promise<unknown>, late: (offline: boolean) => void): void {
+export function whenSlow(reading: Promise<unknown>, late: (offline: boolean) => void): () => void {
   let settled = false
   const say = () => {
     if (!settled) late(!navigator.onLine)
@@ -28,6 +29,7 @@ export function whenSlow(reading: Promise<unknown>, late: (offline: boolean) => 
     removeEventListener("offline", say)
   }
   reading.then(done, done)
+  return done
 }
 
 /**

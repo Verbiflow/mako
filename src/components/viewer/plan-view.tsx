@@ -9,6 +9,8 @@ import { Action, Chip } from "@/components/ui/kit"
 import { proposedPlanFilename, proposedPlanTitle } from "@/lib/proposed-plan"
 import { useLatestPlan, useSourcePlan } from "@/state/plan-mode"
 import { viewer, type PlanOf, type ViewerDocument } from "@/state/viewer"
+import { LazyBoundary } from "@/components/ui/lazy-boundary"
+import { LazyFailed } from "@/components/ui/lazy-failed"
 
 const View = lazy(() =>
   import("@/components/viewer/file-view").then((module) => ({ default: module.FileView }))
@@ -77,12 +79,14 @@ export function PlanDocumentView({ document, of }: { document: ViewerDocument; o
             <Prose text={plan.text} streaming={plan.status !== "proposed"} />
           </article>
         ) : (
-          <Suspense fallback={<GitLoading kind="diff" label={`Opening ${title}`} />}>
-            <View
-              mode="source"
-              file={{ path: proposedPlanFilename(plan.text), contents: plan.text, size: plan.text.length, binary: false, truncated: false }}
-            />
-          </Suspense>
+          <LazyBoundary fallback={() => <LazyFailed what="The plan" />}>
+            <Suspense fallback={<GitLoading kind="diff" label={`Opening ${title}`} />}>
+              <View
+                mode="source"
+                file={{ path: proposedPlanFilename(plan.text), contents: plan.text, size: plan.text.length, binary: false, truncated: false }}
+              />
+            </Suspense>
+          </LazyBoundary>
         )}
       </div>
     </TranscriptSourceContext>

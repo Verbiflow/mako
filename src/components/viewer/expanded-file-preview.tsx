@@ -3,6 +3,8 @@ import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react"
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { FileIcon } from "@/components/ui/file-icon"
 import type { FileContents } from "@/lib/types"
+import { LazyBoundary } from "@/components/ui/lazy-boundary"
+import { LazyFailed } from "@/components/ui/lazy-failed"
 
 const RichFilePreview = lazy(() => import("./rich-file-preview"))
 
@@ -58,9 +60,9 @@ export function ExpandedFilePreview({ file, name, mode, open, onOpenChange, focu
         </DialogClose>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {open ? <Suspense fallback={<p role="status" className="p-4 text-ui text-faint">Loading preview…</p>}>
+        {open ? <LazyBoundary fallback={() => <LazyFailed what="The preview" />}><Suspense fallback={<p role="status" className="p-4 text-ui text-faint">Loading preview…</p>}>
           {file ? <RichFilePreview key={identity} file={file} name={name} mode={selectedMode} expanded /> : <p role="status" className="p-4 text-ui text-faint">{error ?? `Reading ${name}…`}</p>}
-        </Suspense> : null}
+        </Suspense></LazyBoundary> : null}
       </div>
     </DialogContent>
   </Dialog>
