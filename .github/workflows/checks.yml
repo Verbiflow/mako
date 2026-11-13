@@ -91,7 +91,11 @@ jobs:
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
       - run: npm run build:control-runtime
-      - run: node scripts/ci-gate.mjs ${{ matrix.shard }} 24
+      # Electron's sandbox helper must be root's and setuid on Linux, which an npm install can't make it.
+      - run: sudo chown root:root node_modules/electron/dist/chrome-sandbox && sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+      # A display for the suites that open Electron, and no XDG_CONFIG_HOME: the runner points it at its own home,
+      # which a scratch-home test rightly refuses to write outside.
+      - run: env -u XDG_CONFIG_HOME xvfb-run -a node scripts/ci-gate.mjs ${{ matrix.shard }} 24
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
       - if: failure()

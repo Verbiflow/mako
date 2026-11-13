@@ -199,8 +199,18 @@ export const STEPS = [
 const DEFAULT_SECONDS = 30
 /** Past this a step has hung. */
 const STEP_MS = 15 * 60_000
-/** So has one that says nothing for this long. */
-const QUIET_MS = 5 * 60_000
+/** So has one that says nothing for this long: `test:notifications` works quietly for over five minutes. */
+const QUIET_MS = 10 * 60_000
+
+/** What a step needs on the runner beyond the job's own setup, installed once in a shard that picks it. */
+const NEEDS = {
+  "npm run -s test:mcp": "ffmpeg",
+  "npm run -s test:control-recording-continuous": "ffmpeg",
+}
+const INSTALL = {
+  // Recording reads ffmpeg and ffprobe on PATH; the runner's image has neither.
+  ffmpeg: "command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg)",
+}
 
 /** Evidence a failed step leaves, run after it: its own exit stays the result. */
 const ON_FAILURE = {
@@ -231,8 +241,15 @@ if (!Number.isInteger(shard) || !Number.isInteger(count) || shard < 1 || shard >
   process.exit(2)
 }
 
+const picked = shards(STEPS, count)[shard - 1].steps
+for (const need of new Set(picked.flatMap(([, command]) => (NEEDS[command] ? [NEEDS[command]] : [])))) {
+  console.log(`::group::install ${need}`)
+  await runSuite("bash", ["-c", INSTALL[need]], { limitMs: 5 * 60_000, quietMs: 5 * 60_000 })
+  console.log("::endgroup::")
+}
+
 const results = []
-for (const [, command] of shards(STEPS, count)[shard - 1].steps) {
+for (const [, command] of picked) {
   console.log(`::group::${command}`)
   const began = Date.now()
   const code = await runSuite("bash", ["-c", command], { limitMs: STEP_MS, quietMs: QUIET_MS })
