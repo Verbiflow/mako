@@ -500,7 +500,29 @@ async function check() {
   await load(appPage)
   await until("document.querySelectorAll('[data-thread-row]').length > 0", "the desk")
 
-  console.log(`Lazy pieces UI: the composer, Files, Changes, Show original, the Agents sheet, a Thread, New, Settings and the desk each load, fail, run past their patience and come back without a blank or the error screen (${root})`)
+  // A preview read with React.lazy (here Files' reader, `FileView`) still on its way past its patience: its own loading
+  // look with "Still loading the file…" and Reload, not a failure; drawn once its code lands.
+  const VIEW = "src/components/viewer/file-view.tsx"
+  await letGo()
+  await viewport(1440, 900)
+  await hold(VIEW)
+  await load(desk)
+  await until("document.querySelectorAll('[data-thread-row]').length > 0", "the web desk, the file viewer's code held")
+  await click("button[aria-label='Show the right sidebar']:not(:disabled)")
+  await press("[data-side-rail] [data-surface-id=files]")
+  await untilCheck(() => hasButton(".rv-layer", "package.json"), "Files listing package.json")
+  await clickText(".rv-layer", "package.json")
+  await held(VIEW)
+  await untilCheck(() => says("[data-lazy-slow]", "Still loading the file"), "the file's preview past its patience, still loading")
+  assert.ok(await hasButton("[data-lazy-slow]", "Reload"), "the preview's Reload while it's slow")
+  assert.equal(await evaluate("Boolean(document.querySelector('[data-lazy-failed]'))"), false, "slow is not a failure")
+  await capture("preview-slow.png")
+  await release(VIEW, "continue")
+  await until("!document.querySelector('[data-lazy-slow]')", "the file's preview drawn once its late code landed")
+  await notBroken("the file's preview")
+  await letGo()
+
+  console.log(`Lazy pieces UI: the composer, Files, Changes, Show original, the Agents sheet, a Thread, New, Settings, the desk and a preview each load, fail, run past their patience and come back without a blank or the error screen (${root})`)
   guard.done()
   app.exit(0)
 }

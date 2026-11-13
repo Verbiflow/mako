@@ -11,6 +11,7 @@ import { useLatestPlan, useSourcePlan } from "@/state/plan-mode"
 import { viewer, type PlanOf, type ViewerDocument } from "@/state/viewer"
 import { LazyBoundary } from "@/components/ui/lazy-boundary"
 import { LazyFailed } from "@/components/ui/lazy-failed"
+import { PatientFallback } from "@/components/ui/patient-fallback"
 
 const View = lazy(() =>
   import("@/components/viewer/file-view").then((module) => ({ default: module.FileView }))
@@ -80,7 +81,7 @@ export function PlanDocumentView({ document, of }: { document: ViewerDocument; o
           </article>
         ) : (
           <LazyBoundary fallback={() => <LazyFailed what="The plan" />}>
-            <Suspense fallback={<GitLoading kind="diff" label={`Opening ${title}`} />}>
+            <Suspense fallback={<PatientFallback what="the plan"><GitLoading kind="diff" label={`Opening ${title}`} /></PatientFallback>}>
               <View
                 mode="source"
                 file={{ path: proposedPlanFilename(plan.text), contents: plan.text, size: plan.text.length, binary: false, truncated: false }}

@@ -1,5 +1,6 @@
 import { LazyBoundary } from "@/components/ui/lazy-boundary"
 import { LazyFailed } from "@/components/ui/lazy-failed"
+import { PatientFallback } from "@/components/ui/patient-fallback"
 import { BinaryDiff } from "@/components/inspector/binary-diff"
 import {
   Fragment,
@@ -418,7 +419,7 @@ export function DocumentView({ document }: { document: ViewerDocument }) {
           <CenterDiff diff={document.diff} />
         ) : (document.kind === "file" || document.kind === "transcript") && document.file ? (
           <LazyBoundary fallback={() => <LazyFailed what="The file" />}>
-            <Suspense fallback={<GitLoading kind="diff" label={`Opening ${document.title}`} />}>
+            <Suspense fallback={<PatientFallback what="the file"><GitLoading kind="diff" label={`Opening ${document.title}`} /></PatientFallback>}>
               <View
                 file={document.file}
                 line={document.line}
@@ -532,7 +533,7 @@ const LazyDiff = lazy(async () => {
 function CenterDiff({ diff }: { diff: ViewerDiff }) {
   return (
     <LazyBoundary fallback={() => <LazyFailed what="The diff" />}>
-      <Suspense fallback={<GitLoading kind="diff" label="Loading diff" />}>
+      <Suspense fallback={<PatientFallback what="the diff"><GitLoading kind="diff" label="Loading diff" /></PatientFallback>}>
         <LazyDiff diff={diff} />
       </Suspense>
     </LazyBoundary>
