@@ -392,14 +392,17 @@ async function siblingRefusalNamesRelay(): Promise<void> {
     const before = world.live.snapshot(fin.cursor!)!.requests.length
     for (const to of ["cursor", "fin:cursor", sibling.child]) {
       const receipt = await world.agents.send(caller, { to, text: "Coordinate this change.", clientKey: to })
-      assert.ok("refused" in receipt && receipt.refused === "unknown-child")
+      // Refused as a send, and relayed: the message goes to their Apex, which passes it on.
+      assert.ok("refused" in receipt && receipt.refused === "relayed", JSON.stringify(receipt))
       assert.match(receipt.why, /sibling/)
       assert.ok(receipt.why.includes(sibling.child), "the refused target is identified")
       assert.ok(receipt.why.includes(sibling.parent), "the relay owner is identified")
-      assert.match(receipt.why, /agents_report.*done/)
-      assert.match(receipt.why, /No message was sent/)
+      assert.match(receipt.why, /went to your Apex instead/)
+      assert.match(receipt.why, /nothing reached cursor directly/)
     }
     assert.equal(world.live.snapshot(fin.cursor!)!.requests.length, before, "refusal does not deliver to the sibling")
+    await world.settle()
+    assert.ok(world.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes("Coordinate this change.") && prompt.text.includes("→ cursor")), "the parent receives what it was sent, naming the sibling")
     const relay = await world.agents.report(caller, { status: "done", summary: `Please relay this change to cursor (${sibling.child}).`, clientKey: "relay" })
     assert.ok(!("refused" in relay) && relay.delivered === "notice", "an explicit parent relay uses the existing wake receipt")
     await world.settle()
