@@ -25,14 +25,14 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const args = process.argv.slice(2)
   const portAt = args.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(args.splice(portAt, 2)[1])
   const root = testScratch("mako-tool-rows-ui-")
   const evidence = args[0] ? resolve(args[0]) : process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "tool-rows") : root
   await mkdir(evidence, { recursive: true })
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: port !== 0, hmr: false } })
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: port !== 0, hmr: false } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-tool-rows-check", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_ROWS_ROOT: root, MAKO_ROWS_EVIDENCE: evidence, MAKO_ROWS_URL: server.resolvedUrls.local[0] }
