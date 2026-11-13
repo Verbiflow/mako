@@ -43,6 +43,13 @@ export class AwayNotes {
   readonly #options: AwayNotesOptions
   #held: AwayFile | undefined
   #asking: Promise<void> | undefined
+  /**
+   * A going-away is under way: the account isn't asked until this Mac is back (`back`). Asked before the note goes, or
+   * before this Mac is off, the account says the Sessions are this Mac's, as they are until it's quiet; they'd be let
+   * go here, its parked turn would run, and an ask ends the quiet the account would continue them in. In memory only:
+   * a host that starts is back.
+   */
+  #going = false
   #writing: Promise<void> = Promise.resolve()
 
   constructor(options: AwayNotesOptions) {
@@ -65,6 +72,16 @@ export class AwayNotes {
     return Boolean(this.#held?.sessions.length)
   }
 
+  /** This Mac is going away: nothing asks the account whose the held Sessions are until it's back. */
+  going(): void {
+    this.#going = true
+  }
+
+  /** This Mac is back (a wake, its account's link again): asking goes on. */
+  back(): void {
+    this.#going = false
+  }
+
   /** The account took a going-away's note: these Sessions wait for its word from now. */
   async noted(note: string, sessions: OwnerAsk["sessions"]): Promise<void> {
     this.#held = sessions.length ? { version: 1, note, at: (this.#options.now ?? Date.now)(), sessions: [...sessions] } : undefined
@@ -76,7 +93,7 @@ export class AwayNotes {
    * (on the next link, the next owner check, the job) while it can't be answered; nothing is let go meanwhile.
    */
   ask(): Promise<void> {
-    if (!this.#held) return Promise.resolve()
+    if (!this.#held || this.#going) return Promise.resolve()
     this.#asking ??= this.#ask().finally(() => (this.#asking = undefined))
     return this.#asking
   }
