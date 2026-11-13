@@ -22,21 +22,24 @@ import { MovePlanSchema, onDisk, resumeMove, rewriteInPlace, sidesOf, type InPla
 export type LeftRepository = { root: string; versions: ReadonlyArray<{ path: string; ref: string | null }> }
 
 /**
- * Whether the cloud has every change of the Thread's that would leave the project folder, by what's known here: why not,
- * or undefined when it has. The continue went on from `start`, which must be the first repository's acknowledged
- * checkpoint (its cloud Thread is made for that one); and the going-away note carried (`sent`) that checkpoint and every
- * other repository's holding a change of the Thread's. A repository the note left out (a gateway that doesn't take the
- * others, one with nowhere to be laid out) or acknowledged anew after it went isn't on the machine: its changes would be
- * lost, so nothing leaves, all or nothing as `leave` is.
+ * Whether the cloud has every change of the Thread's that would leave the project folder, by what it said and what was
+ * sent: why not, or undefined when it has. The continue's arrival applied (`applied`, its word) the first repository's
+ * acknowledged checkpoint (its cloud Thread is made for that one) and every other repository's holding a change of the
+ * Thread's, and the going-away note it came from carried (`sent`) each of them. A repository the note left out (a
+ * gateway that doesn't take the others, one with nowhere to be laid out), one acknowledged anew after it went, or one
+ * the arrival didn't apply isn't on the machine: its changes would be lost, so nothing leaves, all or nothing as `leave`
+ * is. An account that doesn't say what its arrival applied leaves nothing either: removing the person's files rests on
+ * its word, never on an inference.
  */
-export function cloudHasAll(repositories: ReadonlyArray<{ root: string; sha256: string; changes: number }>, sent: readonly string[] | undefined, start: string | undefined): string | undefined {
-  const [first] = repositories
-  if (!first) return "nothing was acknowledged"
-  if (start === undefined) return "the continue didn't say what it went on from"
-  if (first.sha256 !== start) return "the cloud went on from another checkpoint than the one acknowledged"
+export function cloudHasAll(repositories: ReadonlyArray<{ root: string; sha256: string; changes: number }>, sent: readonly string[] | undefined, applied: readonly string[] | undefined): string | undefined {
+  if (!repositories.length) return "nothing was acknowledged"
+  if (!applied) return "the account didn't say which checkpoints its machine applied"
   if (!sent) return "no going-away note named its checkpoints"
-  const missing = repositories.filter((each, index) => (index === 0 || each.changes > 0) && !sent.includes(each.sha256))
-  return missing.length ? `the going-away note didn't carry ${missing.map((each) => each.root).join(", ")} as acknowledged` : undefined
+  const needed = repositories.filter((each, index) => index === 0 || each.changes > 0)
+  const unsent = needed.filter((each) => !sent.includes(each.sha256))
+  if (unsent.length) return `the going-away note didn't carry ${unsent.map((each) => each.root).join(", ")} as acknowledged`
+  const unapplied = needed.filter((each) => !applied.includes(each.sha256))
+  return unapplied.length ? `the machine didn't apply ${unapplied.map((each) => each.root).join(", ")} as acknowledged` : undefined
 }
 
 export type LeaveLedger = Pick<MoveLedger, "mako"> & {
