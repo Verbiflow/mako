@@ -36,6 +36,25 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
 
+  # A cold install on every push to main: the jobs above restore the installed tree by its key, which skips `npm ci`,
+  # so this is where a lockfile that no longer installs, or a package gone from the registry, still fails.
+  install-cold:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          cache: "false"
+      - run: npm run typecheck
+
   # The protocol's conformance suite, every host call over the socket and the gateway, the host as a cloud
   # machine's runtime, linked by a stand-in for the machine's agent, and where this Mac sends a cloud conversation's
   # calls as its Thread moves to the cloud and back, and the way back itself.
