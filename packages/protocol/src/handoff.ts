@@ -58,8 +58,9 @@ export const QUIET_OTHERS_MAX = 31
 
 /**
  * Another repository of a Thread's project folder, beside the first its cloud Thread is made for: where it sits in
- * the Thread's folder (`path`, as the machine lays it out), the GitHub repository a machine clones it from, the branch,
- * and the checkpoint of the Thread's own changes in it that the cloud acknowledged on the same standby as the first's.
+ * the Thread's folder (`path`, as the machine lays it out), the GitHub repository a machine clones it from, the branch
+ * it clones (one GitHub has; absent, the repository's default), and the checkpoint of the Thread's own changes in it
+ * that the cloud acknowledged on the same standby as the first's, which names the branch it lays them on.
  * The arrival clones it when it isn't there and applies its checkpoint, all or nothing with the first, as a move's
  * carry does (`MoveCarryRepositorySchema`).
  */
