@@ -251,15 +251,28 @@ jobs:
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
       - run: npm run build:control-runtime
+      # The renderer built once for this shard's suites and served at one address (`MAKO_UI_VITE_URL`), where each suite
+      # started a dev server of its own and compiled every page it opened cold. It builds in seconds, so each shard builds
+      # its own rather than wait on a job's artifact. Suites that need a dev server's own behaviour still start one.
+      - run: npm run build:ui-test
+      - run: |
+          nohup node scripts/ci-ui-serve.mjs --port 4173 > "$RUNNER_TEMP/ui-serve.log" 2>&1 &
+          curl --retry 20 --retry-delay 1 --retry-connrefused -sf http://127.0.0.1:4173/ -o /dev/null
       - run: npm run test:transcript-send-ui
         env:
+          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:transcript-rows-ui
         env:
+          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:highlight-pool-ui
+        env:
+          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
       # A limit's one notice, in the Inbox, on the phone and in the laptop's browser, and a move on every list.
       - run: npm run test:limit-notice-ui
+        env:
+          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -293,9 +306,17 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
       - run: npm run build:control-runtime
+      # The renderer built once for this shard's suites and served at one address (`MAKO_UI_VITE_URL`), where each suite
+      # started a dev server of its own and compiled every page it opened cold. It builds in seconds, so each shard builds
+      # its own rather than wait on a job's artifact. Suites that need a dev server's own behaviour still start one.
+      - run: npm run build:ui-test
+      - run: |
+          nohup node scripts/ci-ui-serve.mjs --port 4173 > "$RUNNER_TEMP/ui-serve.log" 2>&1 &
+          curl --retry 20 --retry-delay 1 --retry-connrefused -sf http://127.0.0.1:4173/ -o /dev/null
       - run: node scripts/ci-suites.mjs ${{ matrix.shard }} 3
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
+          MAKO_UI_VITE_URL: http://127.0.0.1:4173/
       # What a failed suite kept to say why (a host's logs when it didn't quit).
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

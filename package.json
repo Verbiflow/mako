@@ -394,6 +394,7 @@
     "test:control-driver-install": "node scripts/test-control-driver-install.mjs",
     "prepare:control-media": "node scripts/build-control-media.mjs",
     "build:control-runtime": "node scripts/prune-host-output.mjs && tsgo -b packages/lazy && tsgo -b packages/control && tsgo -b packages/control-runtime && tsgo -b packages/host && tsgo -b packages/client",
+    "build:ui-test": "NODE_ENV=development vite build --config vite.test.config.ts --mode development",
     "test:control-packages": "npm run build:control-runtime && npm run test:control-cleanup && node packages/control-runtime/test/lifecycle.mjs && node packages/control-runtime/test/media.mjs && node scripts/test-control-session-build.mjs && node scripts/test-control-private-socket.mjs && node scripts/test-control-package-consumer.mjs && node scripts/test-control-runtime-package.mjs && node scripts/linux-control/test-acceptance-payload.mjs",
     "probe:plan-turn": "node scripts/probe-plan-turn.mjs",
     "probe:opencode-api": "tsx --tsconfig tsconfig.app.json scripts/probe-opencode-api.ts",
