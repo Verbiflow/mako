@@ -1,21 +1,21 @@
-import { Suspense, use, useMemo, useState } from "react"
+import { Suspense, use, useEffect, useMemo, useState } from "react"
 import { FileCode2Icon } from "lucide-react"
 import type { MessageOrigin, OriginEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { usePrefs } from "@/state/prefs"
 import { canReadOriginals } from "@/state/thread-viewing"
 import { LazyBoundary } from "@/components/ui/lazy-boundary"
-import { withPatience } from "@/lib/code-patience"
+import { CODE_PATIENCE_MS } from "@/lib/code-patience"
 import { useTranscriptSource } from "./source-context"
 
 /**
  * The dialog and its readers (the code highlighter among them): read the first time it opens, a debugging aid few turn
- * on. One read, within its patience (an import still pending then won't settle), the same promise on every render
- * until Retry forgets it (`forgetDialog`), so `use` never meets a new one.
+ * on. One read, the same promise on every render until Retry forgets it (`forgetDialog`), so `use` never meets a new
+ * one. Past its patience it's still opening, not failed (`OpeningOriginal`); only a read that fails is.
  */
 let dialogReading: Promise<typeof import("./show-original-dialog")> | undefined
 function readDialog(): Promise<typeof import("./show-original-dialog")> {
-  dialogReading ??= withPatience(import("./show-original-dialog"), "The original's viewer")
+  dialogReading ??= import("./show-original-dialog")
   return dialogReading
 }
 function forgetDialog(): void {
@@ -42,6 +42,30 @@ function recorded(origins: readonly (MessageOrigin | undefined)[], live: string 
 }
 
 /**
+ * "Opening the original…" while the viewer's code is on its way; past its patience "Still opening…" with Retry and
+ * Reload, the download still under way, not failed. With the browser offline by then it says it couldn't open.
+ */
+function OpeningOriginal({ onRetry }: { onRetry: () => void }) {
+  const [late, setLate] = useState<"slow" | "offline" | undefined>()
+  useEffect(() => {
+    const timer = setTimeout(() => setLate(navigator.onLine ? "slow" : "offline"), CODE_PATIENCE_MS)
+    return () => clearTimeout(timer)
+  }, [])
+  if (!late) return <span data-original-loading="" aria-live="polite">Opening the original…</span>
+  return (
+    <span role={late === "offline" ? "alert" : undefined} {...(late === "offline" ? { "data-original-unavailable": "" } : { "data-original-loading": "", "data-original-slow": "" })} className={cn("flex items-center gap-1.5", late === "offline" && "text-negative")}>
+      {late === "offline" ? "Couldn't open the original." : "Still opening the original…"}
+      <button type="button" className="pressable px-1 text-foreground underline" onClick={onRetry}>
+        Retry
+      </button>
+      <button type="button" className="pressable px-1 text-foreground underline" onClick={() => location.reload()}>
+        Reload
+      </button>
+    </span>
+  )
+}
+
+/**
  * "Original", when Settings › Diagnostics turns it on: the records a prompt, an answer or a marker was read from, as
  * the harness wrote them, and in a live conversation the lines of its
  * transport Mako recorded it from as it streamed. Only entries that name
@@ -57,6 +81,12 @@ export function ShowOriginal({ origins, className, always = false }: {
   always?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  // Each Retry reads the viewer afresh: a new attempt mounts a new boundary and a new wait.
+  const [attempt, setAttempt] = useState(0)
+  const retry = () => {
+    forgetDialog()
+    setAttempt((count) => count + 1)
+  }
   const { liveId } = useTranscriptSource()
   const entries = useMemo(() => recorded(origins, liveId), [origins, liveId])
   // A debugging aid, so it's offered only to someone who turned it on (Settings › Diagnostics).
@@ -76,6 +106,7 @@ export function ShowOriginal({ origins, className, always = false }: {
       </button>
       {open ? (
         <LazyBoundary
+          key={attempt}
           onRetry={forgetDialog}
           fallback={(retry) => (
             <span role="alert" data-original-unavailable="" className="flex items-center gap-1.5 text-negative">
@@ -89,7 +120,7 @@ export function ShowOriginal({ origins, className, always = false }: {
               </button>
             </span>
           )}>
-          <Suspense fallback={<span data-original-loading="" aria-live="polite">Opening the original…</span>}>
+          <Suspense fallback={<OpeningOriginal onRetry={retry} />}>
             <OriginalDialogLoader entries={entries} onClose={() => setOpen(false)} />
           </Suspense>
         </LazyBoundary>

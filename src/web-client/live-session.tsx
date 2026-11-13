@@ -9,7 +9,7 @@ import { activeLiveAcp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
 import { AgentsSheet } from "./agents"
 import { deskComposerChunk } from "./chunks"
-import { CodeLine } from "./code-unavailable"
+import { CodeLine, CodeSlowLine } from "./code-unavailable"
 import { useWebClient } from "./client"
 import { openingThread } from "./probe"
 import { useSyncing } from "./syncing"
@@ -116,6 +116,7 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
   const elsewhere = useSendElsewhere(session, thread, openedBy, onSession)
   const deskComposer = deskComposerChunk.use()
   const composerFailed = deskComposerChunk.useFailed()
+  const composerSlow = deskComposerChunk.useSlow()
   const readComposer = useCallback(() => deskComposerChunk.read().then(() => undefined), [])
   useEffect(() => {
     if (desk && !deskComposer) void readComposer().catch(() => undefined)
@@ -140,7 +141,7 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
               // The composer's room while its code arrives, so the transcript above doesn't move when it does; a line
               // saying so with Retry if it can't.
               <div data-composer-pending="" aria-busy={!composerFailed} aria-label="Loading the composer" className="flex shrink-0 items-center bg-surface" style={{ height: DESK_COMPOSER_HEIGHT }}>
-                {composerFailed ? <CodeLine what="The composer" retry={readComposer} className="w-full" /> : null}
+                {composerFailed ? <CodeLine what="The composer" retry={readComposer} className="w-full" /> : composerSlow ? <CodeSlowLine what="the composer" slow className="px-4" /> : null}
               </div>
             )
           ) : null}

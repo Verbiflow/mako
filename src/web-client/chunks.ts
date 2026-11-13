@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react"
-import { withPatience } from "@/lib/code-patience"
+import { whenSlow } from "@/lib/code-patience"
 
 /**
  * A chunk of the app the list paints without, read once: its module as soon as it has arrived, and until then nothing.
@@ -10,32 +10,40 @@ import { withPatience } from "@/lib/code-patience"
 export function chunk<Module>(load: () => Promise<Module>) {
   let module: Module | undefined
   let reading: Promise<Module> | undefined
-  /** Its last read failed and none has been asked since: a screen waiting on it says so (`CodeUnavailable`). */
+  /** Its last read failed (or is still pending with the browser offline): a screen waiting on it says so (`CodeUnavailable`). */
   let failed = false
+  /** Its read is still under way past its patience (`CODE_PATIENCE_MS`): a screen waiting on it says "Still loading…". */
+  let slow = false
   const listeners = new Set<() => void>()
   const told = () => {
     for (const listener of listeners) listener()
   }
   const read = (): Promise<Module> => {
-    // `failed` stands until a read succeeds: a screen saying so keeps saying it while it tries again. A read that
-    // arrives after its patience ran out still lands, and the screen draws then.
-    reading ??= withPatience(
-      load().then((loaded) => {
-        module = loaded
-        failed = false
-        told()
-        return loaded
-      }),
-      "This code"
-    )
-    // Not here (offline before the service worker kept it), or not within its patience: asked again next time.
-    reading.catch(() => {
-      reading = undefined
+    // `failed` stands until a read succeeds: a screen saying so keeps saying it while it tries again. A read still
+    // under way past its patience is slow, not failed (offline, it is failed), and draws when it lands.
+    if (reading) return reading
+    const started = load().then((loaded) => {
+      module = loaded
+      failed = false
+      slow = false
+      told()
+      return loaded
+    })
+    reading = started
+    whenSlow(started, (offline) => {
       if (module) return
+      if (offline) failed = true
+      else slow = true
+      told()
+    })
+    // Not here (offline before the service worker kept it): asked again next time.
+    started.catch(() => {
+      reading = undefined
+      slow = false
       failed = true
       told()
     })
-    return reading
+    return started
   }
   const subscribe = (listener: () => void) => {
     listeners.add(listener)
@@ -43,7 +51,12 @@ export function chunk<Module>(load: () => Promise<Module>) {
       listeners.delete(listener)
     }
   }
-  return { read, use: () => useSyncExternalStore(subscribe, () => module), useFailed: () => useSyncExternalStore(subscribe, () => failed) }
+  return {
+    read,
+    use: () => useSyncExternalStore(subscribe, () => module),
+    useFailed: () => useSyncExternalStore(subscribe, () => failed),
+    useSlow: () => useSyncExternalStore(subscribe, () => slow),
+  }
 }
 
 /** A Thread's transcript: read as soon as the list has painted, and drawn by its screen in the frame it's opened. */

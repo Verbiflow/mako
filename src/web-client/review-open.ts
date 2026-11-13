@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react"
 import { z } from "zod"
 import { createHook, createStore } from "@/state/store"
-import { withPatience } from "@/lib/code-patience"
+import { whenSlow } from "@/lib/code-patience"
 
 /*
  * Which Changes screen is open, if any: one Session's turn, or every turn of
@@ -74,19 +74,24 @@ export interface ReviewCode<T> {
   useCode(): T | undefined
   /** Its last read failed and none has been asked since: Changes says so (`CodeUnavailable`). */
   useFailed(): boolean
+  /** Its read is still under way past its patience: Changes says "Still loading…". */
+  useSlow(): boolean
 }
 
 function lazyCode<T>(load: () => Promise<T>): ReviewCode<T> {
-  const codeStore = createStore<{ code: T | undefined; reading: Promise<void> | undefined; failed: boolean }>({ code: undefined, reading: undefined, failed: false })
+  const codeStore = createStore<{ code: T | undefined; reading: Promise<void> | undefined; failed: boolean; slow: boolean }>({ code: undefined, reading: undefined, failed: false, slow: false })
   return {
     read() {
       const { reading } = codeStore.get()
       if (reading) return reading
-      // Within its patience, as every chunk's read (`chunk`): one that arrives later still lands.
-      const read = withPatience(load().then((code) => codeStore.set({ code, failed: false })), "Changes")
+      // As every chunk's read (`chunk`): slow past its patience (failed if offline), and drawn whenever it lands.
+      const read = load().then((code) => codeStore.set({ code, failed: false, slow: false }))
+      whenSlow(read, (offline) => {
+        if (codeStore.get().code === undefined) codeStore.set(offline ? { failed: true } : { slow: true })
+      })
       // Not here (offline before the service worker kept it): asked again next time. `failed` stands until a read
       // succeeds, so Changes keeps saying so while it tries again.
-      read.catch(() => codeStore.set({ reading: undefined, failed: codeStore.get().code === undefined }))
+      read.catch(() => codeStore.set({ reading: undefined, failed: true, slow: false }))
       codeStore.set({ reading: read })
       return read
     },
@@ -95,6 +100,9 @@ function lazyCode<T>(load: () => Promise<T>): ReviewCode<T> {
     },
     useFailed() {
       return useSyncExternalStore(codeStore.subscribe, () => codeStore.get().failed)
+    },
+    useSlow() {
+      return useSyncExternalStore(codeStore.subscribe, () => codeStore.get().slow)
     },
   }
 }

@@ -18,6 +18,7 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
   const code = reader.useCode()
   const readReviewCode = reader.read
   const failed = reader.useFailed()
+  const slow = reader.useSlow()
   const retry = useCallback(() => readReviewCode(), [readReviewCode])
   useEffect(() => followReviewHistory(), [])
   useEffect(
@@ -65,7 +66,7 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
   if (!shown) return null
   return (
     <div ref={layer} className="rv-layer" data-form={form} data-closing={open ? undefined : ""}>
-      {!code ? failed ? <CodeUnavailable what="Changes" retry={retry} onClose={closeReview} /> : <CodeLoading what="Changes" /> : "DeskReview" in code ? <code.DeskReview key={shown.conversation} open={shown} onClose={closeReview} /> : <code.ReviewScreen key={shown.conversation} open={shown} onClose={closeReview} />}
+      {!code ? failed ? <CodeUnavailable what="Changes" retry={retry} onClose={closeReview} /> : <CodeLoading what="Changes" slow={slow} /> : "DeskReview" in code ? <code.DeskReview key={shown.conversation} open={shown} onClose={closeReview} /> : <code.ReviewScreen key={shown.conversation} open={shown} onClose={closeReview} />}
     </div>
   )
 }

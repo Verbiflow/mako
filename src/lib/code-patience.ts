@@ -1,22 +1,19 @@
 /**
- * How long a piece of the window's code may take to arrive before the piece says it couldn't load: an import still
- * pending this long won't settle (a stalled connection, or Safari leaving a module it failed once pending for good).
+ * How long a piece of the window's code may take to arrive before the piece says it's slow: a download still under
+ * way then hasn't failed, so the piece keeps its loading look, says "Still loading…" and offers Reload, and draws when
+ * the code lands. Only a read that fails, or one still pending with the browser offline, is a failure.
  */
 export const CODE_PATIENCE_MS = 8_000
 
-/** The code that didn't arrive within `CODE_PATIENCE_MS`. */
-export class CodeTooSlowError extends Error {
-  constructor(what: string) {
-    super(`${what} didn't arrive within ${CODE_PATIENCE_MS / 1000} s`)
-    this.name = "CodeTooSlowError"
+/** Calls `late` if `reading` is still unsettled once `CODE_PATIENCE_MS` has passed, saying whether the browser is offline. */
+export function whenSlow(reading: Promise<unknown>, late: (offline: boolean) => void): void {
+  let settled = false
+  const timer = setTimeout(() => {
+    if (!settled) late(!navigator.onLine)
+  }, CODE_PATIENCE_MS)
+  const done = () => {
+    settled = true
+    clearTimeout(timer)
   }
-}
-
-/** `reading`, or a `CodeTooSlowError` once `CODE_PATIENCE_MS` has passed without it. */
-export function withPatience<T>(reading: Promise<T>, what: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const late = new Promise<never>((_, fail) => {
-    timer = setTimeout(() => fail(new CodeTooSlowError(what)), CODE_PATIENCE_MS)
-  })
-  return Promise.race([reading, late]).finally(() => clearTimeout(timer))
+  reading.then(done, done)
 }

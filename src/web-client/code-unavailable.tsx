@@ -6,13 +6,28 @@ import { useCodeRetry } from "./code-retry"
 // with Retry (and Reload where the page won't fetch it again, `useCodeRetry`), and nothing is left blank. Drawn without
 // the kit's module (`Blank`), since the Files layer that uses them is part of the list's first code.
 
-/** A layer whose code is on its way (Files, Changes): a quiet line where it will draw. */
-export function CodeLoading({ what }: { what: string }) {
+/**
+ * A piece whose code is on its way: a quiet line where it will draw. Past its patience (`slow`) the download is still
+ * under way, not failed: the same look, saying "Still loading…", with Reload for someone who won't wait.
+ */
+export function CodeSlowLine({ what, slow, className }: { what: string; slow: boolean; className?: string }) {
   return (
-    <div className="rv-screen" data-code-loading="">
-      <p className="m-auto text-ui text-faint" aria-live="polite">
-        Loading {what}…
-      </p>
+    <p data-code-loading="" data-code-slow={slow ? "" : undefined} aria-live="polite" className={cn("flex items-center gap-2 text-ui text-faint", className)}>
+      <span>{slow ? `Still loading ${what}…` : `Loading ${what}…`}</span>
+      {slow ? (
+        <button type="button" className="pressable h-7 shrink-0 border border-hairline px-2.5 text-ui text-foreground" onClick={() => location.reload()}>
+          Reload
+        </button>
+      ) : null}
+    </p>
+  )
+}
+
+/** A layer whose code is on its way (Files, Changes): its loading line where it will draw. */
+export function CodeLoading({ what, slow }: { what: string; slow: boolean }) {
+  return (
+    <div className="rv-screen" data-code-loading-layer="">
+      <CodeSlowLine what={what} slow={slow} className="m-auto" />
     </div>
   )
 }

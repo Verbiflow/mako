@@ -33,6 +33,7 @@ export function FilesLayer({ form, place }: { form: WebForm; place: string | und
 
   const screen = filesScreenChunk.use()
   const failed = filesScreenChunk.useFailed()
+  const slow = filesScreenChunk.useSlow()
   const retry = useCallback(() => filesScreenChunk.read().then(() => undefined), [])
   useEffect(() => {
     if (open) void filesScreenChunk.read().catch(() => undefined)
@@ -60,7 +61,7 @@ export function FilesLayer({ form, place }: { form: WebForm; place: string | und
   if (!shown) return null
   return (
     <div ref={layer} className="rv-layer" data-form={form} data-closing={open ? undefined : ""}>
-      {screen ? <screen.FilesScreen key={shown.conversation} open={shown} touch={form !== "desk"} /> : failed ? <CodeUnavailable what="Files" retry={retry} onClose={closeFiles} /> : <CodeLoading what="Files" />}
+      {screen ? <screen.FilesScreen key={shown.conversation} open={shown} touch={form !== "desk"} /> : failed ? <CodeUnavailable what="Files" retry={retry} onClose={closeFiles} /> : <CodeLoading what="Files" slow={slow} />}
     </div>
   )
 }

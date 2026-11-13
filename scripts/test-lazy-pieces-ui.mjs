@@ -246,20 +246,30 @@ async function check() {
   }
   await letGo()
 
-  // Code that neither arrives nor fails (a stalled connection; Safari leaving an import it failed once pending): past
-  // its patience the piece says it couldn't load, never "Loading…" for good, and draws if the code lands after all.
+  // Code still on its way past its patience (a slow or stalled download) isn't a failure: the piece keeps its loading
+  // look, says "Still loading…" with Reload, and draws when the code lands. Only a read that fails says it couldn't.
   const FILES = "src/web-client/files-screen.tsx"
+  const filesOpen = async (label) => {
+    await load(desk)
+    await until("document.querySelectorAll('[data-thread-row]').length > 0", label)
+    await click("button[aria-label='Show the right sidebar']:not(:disabled)")
+    await press("[data-side-rail] [data-surface-id=files]")
+    await held(FILES)
+  }
   await hold(FILES)
-  await load(desk)
-  await until("document.querySelectorAll('[data-thread-row]').length > 0", "the web desk, Files' code stalled")
-  await click("button[aria-label='Show the right sidebar']:not(:disabled)")
-  await press("[data-side-rail] [data-surface-id=files]")
-  await held(FILES)
-  await untilCheck(() => says(".rv-layer [data-code-unavailable]", "Files couldn't load"), "Files past its patience, saying it couldn't load")
+  await filesOpen("the web desk, Files' code slow")
+  await untilCheck(() => says(".rv-layer [data-code-slow]", "Still loading Files"), "Files past its patience, still loading")
+  assert.ok(await hasButton(".rv-layer [data-code-loading-layer]", "Reload"), "Files' Reload while it's slow")
+  assert.equal(await evaluate("Boolean(document.querySelector('.rv-layer [data-code-unavailable]'))"), false, "slow is not a failure")
   assert.equal(paused.get(FILES).length > 0, true, "its code still held, neither arrived nor failed")
-  await capture("files-past-patience.png")
+  await capture("files-slow.png")
   await release(FILES, "continue")
-  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-unavailable]')", "Files drawn once its late code landed")
+  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-loading]')", "Files drawn once its late code landed")
+  await letGo()
+  await hold(FILES)
+  await filesOpen("the web desk, Files' code failing")
+  await release(FILES, "fail")
+  await untilCheck(() => says(".rv-layer [data-code-unavailable]", "Files couldn't load"), "Files' failed read saying it couldn't load")
   await letGo()
 
   // Show original's dialog: a line while it opens, a line with Retry if it can't, never the window's error screen.
@@ -297,15 +307,19 @@ async function check() {
   await answered()
   await click("[data-show-original]")
   await seen("[data-original-dialog]")
-  // Its viewer's code stalled: past its patience the line says so, with Retry and Reload, never "Opening…" for good.
+  // Its viewer's code slow: past its patience "Still opening the original…" with Retry and Reload, not a failure, and
+  // the dialog once the code lands.
   await hold(DIALOG)
   await load(streams)
   await answered()
   await click("[data-show-original]")
   await held(DIALOG)
-  await untilCheck(() => says("[data-original-unavailable]", "Couldn't open the original"), "Show original past its patience")
-  assert.ok((await hasButton("[data-original-unavailable]", "Retry")) && (await hasButton("[data-original-unavailable]", "Reload")), "Show original's Retry and Reload")
-  await notBroken("Show original, stalled")
+  await untilCheck(() => says("[data-original-slow]", "Still opening the original"), "Show original past its patience, still opening")
+  assert.ok((await hasButton("[data-original-slow]", "Retry")) && (await hasButton("[data-original-slow]", "Reload")), "Show original's Retry and Reload while it's slow")
+  assert.equal(await evaluate("Boolean(document.querySelector('[data-original-unavailable]'))"), false, "slow is not a failure")
+  await notBroken("Show original, slow")
+  await release(DIALOG, "continue")
+  await seen("[data-original-dialog]")
   await letGo()
 
   // The phone's Agents sheet: a loading line while its roster's code arrives, a line with Retry and Reload if it can't.
@@ -330,7 +344,7 @@ async function check() {
   await notBroken("the Agents sheet")
   await recovers("the Agents sheet", rosterDrawn, "[data-agents-sheet]", openSheet)
 
-  console.log(`Lazy pieces UI: the composer, Files, Changes, Show original and the Agents sheet each load, fail, stall past their patience and come back without a blank or the error screen (${root})`)
+  console.log(`Lazy pieces UI: the composer, Files, Changes, Show original and the Agents sheet each load, fail, run past their patience and come back without a blank or the error screen (${root})`)
   guard.done()
   app.exit(0)
 }
