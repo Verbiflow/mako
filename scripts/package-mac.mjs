@@ -197,6 +197,10 @@ try {
         "!**/__pycache__/**",
         "!**/*.pyc",
         "!**/*.pyo",
+        // Nothing at runtime reads a package's TypeScript (Node refuses to strip types under
+        // node_modules) or its readme and changelog; effect alone shipped 22 MB of sources.
+        "!**/node_modules/**/*.{ts,mts,cts,tsx}",
+        "!**/node_modules/**/{README,Readme,readme,CHANGELOG,changelog,CHANGES,HISTORY}{,.md,.markdown,.txt}",
         // These packages come from the frozen FileSets below. Collecting them
         // again through workspace dependencies duplicates ASAR destinations
         // and can leave headers pointing into another file's bytes.
@@ -219,7 +223,7 @@ try {
           .map((entry) => ({
             ...entry,
             from: join(stage, entry.from),
-            filter: [...(entry.filter ?? []), "!**/*.map"],
+            filter: [...(entry.filter ?? []), "!**/*.map", "!**/*.d.ts"],
           })),
       ],
       extraResources: [
@@ -289,8 +293,8 @@ try {
       file.path === "package.json" ||
       file.path.startsWith("build/") ||
       file.path.endsWith(".map") ||
-      (/^packages\/(?:control|control-runtime|host)\//.test(file.path) &&
-        (file.path.endsWith(".d.ts") || file.path.endsWith("README.md")))
+      (file.path.startsWith("packages/") && file.path.endsWith(".d.ts")) ||
+      (/^packages\/(?:control|control-runtime|host)\//.test(file.path) && file.path.endsWith("README.md"))
     )
       continue
     const target = file.path.replace(
