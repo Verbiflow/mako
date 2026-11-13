@@ -282,6 +282,8 @@ export class AgentsWorld {
   constructor(options: WorldOptions) {
     this.root = options.root
     this.options = options
+    // A world opened on a store a host left (a test's next process after a kill) is a host after another, as `restart` is.
+    this.restartedSinceSettle = existsSync(join(options.root, "threads.sqlite"))
     mkdirSync(join(options.root, "journals"), { recursive: true })
     this.open()
   }
