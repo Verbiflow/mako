@@ -267,7 +267,7 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.ui == 'true'
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       MAKO_UI_VITE_URL: http://127.0.0.1:5310/
       MAKO_UI_VITE_MANUAL_URL: http://127.0.0.1:5311/
@@ -297,15 +297,21 @@ jobs:
           exit 1
       # The shard's first Electron start and page load, once and timed, before any suite pays for it.
       - run: node scripts/ci-ui-warm.mjs
+      # Each check is bounded on its own, so one that hangs fails its step and leaves its log and evidence, where a
+      # job cut at its own limit ends cancelled with neither (#635, transcript-rows-ui).
       - run: npm run test:transcript-send-ui
+        timeout-minutes: 4
         env:
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:transcript-rows-ui
+        timeout-minutes: 9
         env:
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:highlight-pool-ui
+        timeout-minutes: 4
       # A limit's one notice, in the Inbox, on the phone and in the laptop's browser, and a move on every list.
       - run: npm run test:limit-notice-ui
+        timeout-minutes: 4
       # The job's Vite servers end with it, whatever the checks did.
       - if: always()
         run: if [ -f "$RUNNER_TEMP/ui-vite.pids" ]; then kill $(cat "$RUNNER_TEMP/ui-vite.pids") 2>/dev/null || true; fi
