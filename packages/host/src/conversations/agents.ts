@@ -3563,6 +3563,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     const ended = reply?.request
     if (!ended || (ended.status !== "completed" && ended.status !== "failed" && ended.status !== "interrupted")) return
     // A turn cut short continues, by Mako's continuation or the next host's (`LeftTurn.always`), or its Apex hears it didn't.
+    if (ended.signIn) {
+      this.awaiting.delete(edge.child)
+      return this.childMoved(edge, false)
+    }
     if (ended.status === "interrupted" && ended.interruption?.reason !== "stopped") return this.watchCut(conversation)
     if (this.limitMove(edge, conversation, ended, reply)) return
     if (this.deps.live.snapshot(conversation)?.requests.some(request => request.status === "held" && request.retry?.cause === "rate-limited" && request.continues?.auto && request.continues.requestId === ended.id)) {
@@ -6096,7 +6100,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       const hold = holdOf(request)
       if (!hold || !keepsLine(hold)) continue
       if (hold.kind === "edit") return "a message is paused for editing. Resume it in its Thread."
-      if (hold.kind === "sign-in") return "its account is signed out. Sign in and Resume in its Thread."
+      if (hold.kind === "sign-in") return hold.hold.verification !== undefined && request.pause !== "stop"
+        ? "its account is signed out. Sign in once in Settings; held work resumes automatically."
+        : "its account is signed out. Sign in and Resume in its Thread."
       if (hold.kind === "paused") return "a message is paused. Resume it in its Thread."
       return undefined
     }

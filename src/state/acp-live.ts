@@ -13,6 +13,7 @@ import {
   noteOutcome,
   noticeId,
   retireNotice,
+  retargetNotice,
   retireSubject,
   subjectId,
   subjectWorkspace,
@@ -94,12 +95,24 @@ function permissionWaiting(permission: LivePermissionRequest): Waiting {
  * the same subject, its Fins' asks included.
  */
 const announcedOwnAsks = new Map<string, string>()
-const announcedSignIns = new Map<string, { at: number; notice: string }>()
+const announcedSignIns = new Map<string, { generation: string; notice: string; subject: NotificationSubject; cohort?: string }>()
+
+function retireSignIn(key: string): void {
+  const previous = announcedSignIns.get(key)
+  announcedSignIns.delete(key)
+  if (!previous) return
+  const sibling = [...announcedSignIns.values()].find(entry => entry.notice === previous.notice)
+  if (sibling) retargetNotice(previous.notice, sibling.subject)
+  else retireNotice(previous.notice)
+}
 /** What a Session another device runs last asked here (`noteListedOutcome`), by the notice it was said as. */
 const listedAsks = new Map<string, string>()
 
 /** A session paused on a sign-out waits on the person, like a question; it hasn't failed. */
 function signedOutDetail(conversation: LiveAcpConversation): string {
+  const pause = signInPause(conversation.requests ?? [])
+  if (pause?.hold.verification !== undefined && !conversation.requests?.some(request => request.signIn && request.pause === "stop"))
+    return `${harnessLabel(conversation.harness)} signed out. Sign in once in Settings; held work resumes automatically.`
   return `${harnessLabel(conversation.harness)} signed out. Sign in again, then Resume.`
 }
 
@@ -136,20 +149,24 @@ function noteLiveOutcome(
   }
   const pause = own ? undefined : signInPause(conversation.requests ?? [])
   const signIn = announcedSignIns.get(conversation.key)
-  if (signIn && signIn.at !== pause?.hold.at) {
-    announcedSignIns.delete(conversation.key)
-    retireNotice(signIn.notice)
-  }
+  const signInGeneration = pause && (pause.hold.id ?? String(pause.hold.at))
+  if (signIn && signIn.generation !== signInGeneration) retireSignIn(conversation.key)
   if (own) return
   if (session.status === "closed") {
+    retireSignIn(conversation.key)
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id)
     return
   }
   if (pause) {
-    if (signIn?.at !== pause.hold.at) {
-      const marker = `sign-in:${pause.hold.at}`
-      announcedSignIns.set(conversation.key, { at: pause.hold.at, notice: noticeId(subject, "needs-you", marker) })
-      noteOutcome({ kind: "needs-you", subject, marker, detail: signedOutDetail(conversation), quiet })
+    if (signIn?.generation !== signInGeneration) {
+      // One account owns one sign-in notice while any member still waits.
+      const cohort = pause.hold.verification !== undefined
+        ? JSON.stringify([pause.hold.harness, pause.hold.account]) : undefined
+      const peer = cohort ? [...announcedSignIns.values()].find(entry => entry.cohort === cohort) : undefined
+      const marker = `sign-in:${signInGeneration}`
+      const notice = peer?.notice ?? noticeId(subject, "needs-you", marker)
+      announcedSignIns.set(conversation.key, { generation: signInGeneration!, notice, subject, ...(cohort && { cohort }) })
+      if (!peer) noteOutcome({ kind: "needs-you", subject, marker, detail: signedOutDetail(conversation), quiet })
     }
     return
   }

@@ -162,7 +162,7 @@ export const LiveRequestSchema = z.object({
   ownerCheck: z.object({ since: z.number() }).optional(),
   editing: z.literal(true).optional(),
   pause: z.literal("stop").optional(),
-  signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
+  signIn: z.object({ id: z.string().uuid().optional(), verification: z.number().int().nonnegative().optional(), harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
   retry: RequestRetrySchema.optional(),
   digest: z.object({ notices: z.array(NoticeSchema), lines: z.array(z.string()).optional(), sentAt: z.number().optional(), heard: z.literal(true).optional(), resting: z.literal(true).optional(), nextTry: z.number().optional() }).optional(),
@@ -562,7 +562,7 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
  * router's word on a conversation it relays or reads from the account's copy, never a journal's. `parent` is its
  * Thread's edge, read from the Thread store whenever it's listed, and `children` its children's count, read from them.
  */
-type UnstoredMetadata = "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt" | "order"
+type UnstoredMetadata = "hasSignInHold" | "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt" | "order"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -797,7 +797,8 @@ export class LiveJournal {
     const wakeAt = sooner(this.wakeAt(), transferWakeAt)
     const promptedAt = laterPrompt(this.requestedAt(), steeredAt)
     const unsettled = this.unsettled()
-    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled } }
+    const hasSignInHold = this.db.prepare(`SELECT 1 FROM requests WHERE value LIKE '%"signIn":%' AND json_extract(value, '$.signIn') IS NOT NULL AND json_extract(value, '$.status') != 'canceled' LIMIT 1`).get() !== undefined
+    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled }, ...hasSignInHold && { hasSignInHold: true } }
   }
 
   /** Whether a message here was waiting, paused or running as the journal was last written; only rows that name such a status are parsed. */

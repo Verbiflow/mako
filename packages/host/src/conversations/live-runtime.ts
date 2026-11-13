@@ -303,6 +303,12 @@ export interface Dependencies {
   accountEnv?(binding: ProviderBinding): Promise<NodeJS.ProcessEnv>
   /** The account a harness has selected and a digest of `account`'s credentials. Without it, work paused on a sign-out waits to be resumed by hand. */
   signInState?(harness: string, account: string): Promise<{ selected: string; credential: string }>
+  /** Opaque, durable receipt of a provider-verified login. Principal equality alone is not renewed authentication. */
+  signInProof?(harness: string, account: string): import("../harnesses/index.js").VerifiedSignIn | undefined
+  signInSequence?(harness: string): number | undefined
+  signInEvents?(listener: (receipt: import("../harnesses/index.js").VerifiedSignIn) => void): () => void
+  /** The archive/ownership boundary, checked again before automatic release. */
+  signInAllowed?(id: string): boolean
   /** Who has a saved binding's native session and whether its record moved; see `ResumeVerdict`. */
   resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   /** The same folder in the project a since-removed worktree holding `cwd` was made from; undefined while `cwd` is there. */
@@ -412,6 +418,7 @@ export interface Dependencies {
  * what it depends on; `LiveConversations` wires them.
  */
 export interface LiveAccess {
+  stopMark(id: string): number
   dependencies: Dependencies
   /** Compacts the journals this host closes with much of them free. */
   reclaims: JournalReclaims

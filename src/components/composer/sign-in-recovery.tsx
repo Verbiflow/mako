@@ -15,8 +15,9 @@ import { signInPause, type SignInPause } from "@mako/host/contracts/sign-in-hold
  * its account signed out. It says what is waiting, offers the way back in
  * (Mako's own sign-in for an account it keeps, the CLI's login command for
  * the terminal's), and turns into Resume once the account is signed in
- * again or another one is chosen. Resume is the user's, once; nothing sends
- * before it. The draft, transcript and scroll are left alone.
+ * again or another one is chosen. A verified Settings sign-in resumes its
+ * held account cohort automatically; legacy and terminal-only recovery keeps
+ * the explicit Resume. The draft, transcript and scroll are left alone.
  *
  * A notice producer (`registerNotice`).
  */
@@ -65,13 +66,16 @@ export function useSignInRecoveryNotice(): ComposerNotice | null {
   const label = provider?.label ?? harnessLabel(harness)
   const who = account ? accountIdentity(account) : name === "default" ? "your terminal’s login" : name
   const keptByMako = account?.source === "mako" && provider?.nativeLogin === true
+  const automatic = keptByMako && pause.hold.verification !== undefined && !live.requests?.some(request => request.signIn && request.pause === "stop")
   const resume = (anyway: boolean) => void signInRecovery.resume(id, at, anyway)
   const ready = reading === "ready"
-  const switched = ready && selected && selected.name !== name ? accountIdentity(selected) : undefined
-  const detail = describe(pause, label, ready)
+  const switched = !automatic && ready && selected && selected.name !== name ? accountIdentity(selected) : undefined
+  const detail = automatic
+    ? [pause.cut?.outcome === "review" ? reviewWords(label) : "", ready ? "Held work resumes automatically as execution places become available." : "Sign in once in Settings. Mako then continues held turns and sends their queued messages automatically."].filter(Boolean).join(" ")
+    : describe(pause, label, ready)
   const actions: ComposerNoticeAction[] = []
   if (ready || reading === "resuming")
-    actions.push({ label: reading === "resuming" ? "Resuming…" : "Resume", primary: true, disabled: reading === "resuming", onClick: () => resume(false) })
+    actions.push({ label: automatic || reading === "resuming" ? "Resuming…" : "Resume", primary: true, disabled: automatic || reading === "resuming", onClick: () => resume(false) })
   else if (keptByMako)
     actions.push({
       label: signingIn ? "Signing in…" : "Sign in again",
@@ -100,7 +104,7 @@ export function useSignInRecoveryNotice(): ComposerNotice | null {
 function describe(pause: SignInPause, label: string, ready: boolean): string {
   const waiting = pause.waiting.length
   const messages = waiting === 1 ? "1 message" : `${waiting} messages`
-  const review = `Mako can’t tell whether your last message reached ${label}, so it stays below for you to review.`
+  const review = reviewWords(label)
   if (ready) {
     if (pause.cut?.outcome === "continue")
       return waiting ? `Resume continues the turn where it stopped, then sends ${messages}.` : "Resume continues the turn where it stopped."
@@ -112,4 +116,8 @@ function describe(pause: SignInPause, label: string, ready: boolean): string {
     : pause.cut?.outcome === "review" ? review : ""
   const held = waiting ? `${messages} ${waiting === 1 ? "waits" : "wait"} to send.` : ""
   return [cut, held].filter(Boolean).join(" ") || "Nothing sends until you resume."
+}
+
+function reviewWords(label: string): string {
+  return `Mako can’t tell whether your last message reached ${label}, so it stays below for you to review.`
 }
