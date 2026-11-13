@@ -25,11 +25,11 @@ if (process.versions.electron) {
 } else {
   const args = process.argv.slice(2)
   const option = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined)
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const root = testScratch("mako-asleep-app-ui-")
   const out = option("--out") ? resolve(option("--out")) : root
   await mkdir(out, { recursive: true })
-  const server = await createServer({
+  const server = await uiVite({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],
