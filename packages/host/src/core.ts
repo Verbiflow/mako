@@ -1192,12 +1192,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const attribution = late.attribution
     if (!thread || !acknowledged || !attribution) return
     const repositories = acknowledged.acknowledged.map((each) => ({ root: each.root, versions: each.versions ?? [] }))
-    // Only if the cloud has all of it: it went on from the first repository's very checkpoint, and the going-away note it
-    // came from (by its op, never a later note's) carried that and every other repository's with a change of the Thread's. A continue on a clone of the branch the
-    // device last pushed, or a repository the note left out or acknowledged since, doesn't have the Thread's changes
-    // there, and taking them out here would lose them: then all of it stays.
+    // Only if the cloud has all of it, by its word: its machine applied (`applied`) the first repository's very checkpoint
+    // and every other repository's with a change of the Thread's, and the going-away note it came from (by its op, never a
+    // later note's) carried each. A continue on a clone, a repository the note left out or acknowledged since, or an
+    // account that doesn't say what it applied: taking them out here could lose them, so all of it stays.
     const state = await late.cloud?.continueState?.(session, op).catch(() => undefined)
-    const why = cloudHasAll(acknowledged.acknowledged.map((each) => ({ root: each.root, sha256: each.checkpoint.sha256, changes: each.versions?.length ?? 0 })), acknowledged.noted, state?.start?.sha256)
+    const why = cloudHasAll(acknowledged.acknowledged.map((each) => ({ root: each.root, sha256: each.checkpoint.sha256, changes: each.versions?.length ?? 0 })), acknowledged.noted, state?.applied)
     const fromOurs = why === undefined
     const left = fromOurs
       ? await checkoutLeave.leave(thread, repositories[0]!.root, repositories, {
@@ -1206,7 +1206,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         mako: (write) => attribution.mako(write),
       })
       : { kind: "stayed" as const, paths: repositories.flatMap((each) => each.versions.map((version) => version.path)).sort() }
-    if (!fromOurs) hostLog("leaving", "a Thread the cloud took keeps its changes in the project folder: the cloud doesn't have all of them", { thread, op, why, start: state?.start?.sha256 ?? "none" })
+    if (!fromOurs) hostLog("leaving", "a Thread the cloud took keeps its changes in the project folder: the cloud doesn't have all of them", { thread, op, why, applied: state?.applied?.length ?? "none" })
     // Nothing of the Thread's sits in the project folder unannounced: its row says what stayed, and the commits the cloud took.
     const unpushed = acknowledged.acknowledged.reduce((sum, each) => sum + each.unpushed, 0)
     if (left.kind === "stayed" || unpushed) {
