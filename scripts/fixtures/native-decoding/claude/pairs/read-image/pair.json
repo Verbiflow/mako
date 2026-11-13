@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.322"
+    "version": "2.1.323"
   },
   "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/764ae9cb-6a56-4489-b3ac-17e71ac909cf.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/b82700e7-0ca4-4a34-b4ae-51f8d2f9d6ad.jsonl",
       "known": []
     }
   ]
