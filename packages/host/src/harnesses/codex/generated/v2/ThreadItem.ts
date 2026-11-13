@@ -10,6 +10,7 @@ import type { SleepItem } from "../SleepItem.js"
 import type { WebSearchItem } from "../WebSearchItem.js"
 import type { JsonValue } from "../serde_json/JsonValue.js"
 import type { AgentMessageDelivery } from "./AgentMessageDelivery.js"
+import type { AgentMessageModeration } from "./AgentMessageModeration.js"
 import type { AsyncUserInputQuestion } from "./AsyncUserInputQuestion.js"
 import type { CollabAgentState } from "./CollabAgentState.js"
 import type { CollabAgentTool } from "./CollabAgentTool.js"
@@ -53,6 +54,7 @@ export type ThreadItem = {
   | { type: "hookPrompt"; id: string; fragments: Array<HookPromptFragment> }
   | {
       type: "agentMessage"
+      moderation: AgentMessageModeration | null
       id: string
       text: string
       phase: MessagePhase | null
