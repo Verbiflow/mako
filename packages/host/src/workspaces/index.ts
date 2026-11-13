@@ -28,7 +28,7 @@ export { RecipeAccounts } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { beginTrace, TraceRefresh } from "./app-probe.js"
-import { childHistory, childProcessTable, type DaemonRestarts } from "./watch-backend.js"
+import { childHistory, childProcessReader, type DaemonRestarts } from "./watch-backend.js"
 import type { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
@@ -174,14 +174,18 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     const found = thread.success ? store?.thread(thread.data) : undefined
     return found ? { id: found.id, title: found.title || "Untitled Thread" } : undefined
   }
+  // Starts its child at the first ask.
+  const reader = childProcessReader()
   const processes = shared
     ? new ThreadProcesses({
         root: join(shared, "thread-environments"),
         listening: portListening,
         whose: whoseApp,
         cameUp: (folder, at) => beginTrace(folder, at, fileHistory),
-        // `ps` in a child of its own, for the sampler's looks (`ThreadAppSampler`), so its spawn leaves the loop.
-        readTable: childProcessTable(),
+        // `ps` in a child of its own, for the sampler's looks (`ThreadAppSampler`), so its spawn leaves the loop, and
+        // the matching of its rows to the apps' runs with it (`readMembers`).
+        readTable: () => reader.table(),
+        readMembers: (runs, self) => reader.members(runs, self),
       })
     : null
   if (processes) {

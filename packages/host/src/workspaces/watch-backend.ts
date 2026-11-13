@@ -6,6 +6,7 @@ import { SLOW_DELIVERY_MS, WatcherReplySchema, type DropReason, type HistoryMark
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { onMac } from "../base/platform.js"
 import { WatchReadings, type ChildStart } from "./watch-readings.js"
+import type { Row, RunLeader } from "./process-table.js"
 import { sendToChild } from "@mako/sessions/child-input"
 
 export interface WatchListener {
@@ -412,17 +413,26 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
 /** A table this late means the child is stuck; it's ended and the caller reads its own. */
 const TABLE_ASK_MS = 20_000
 
+/** The process table read off the host's loop (`childProcessReader`). */
+export interface ProcessReader {
+  /** Every process, as `ps` prints it. */
+  table(): Promise<string>
+  /** Only the processes of `runs`, parsed and matched in the child (`membersOnly`); `self` is the host. */
+  members(runs: RunLeader[], self: number): Promise<Row[]>
+}
+
 /**
  * The process table read in a watcher child of its own, so `ps`'s spawn and its wait leave the host's loop: what
  * reads the apps' marks and traces asks every few seconds while an app runs, and on a busy Mac one spawn from the
- * host's thread held it for seconds. The child starts at the first ask and goes after `IDLE_MS` without one; one that
+ * host's thread held it for seconds. `members` leaves the parsing and matching there too, and sends back only the
+ * rows the runs asked about. The child starts at the first ask and goes after `IDLE_MS` without one; one that
  * doesn't answer in time is ended with what it had, and the next ask starts another.
  */
-export function childProcessTable(script = defaultChildScript()): () => Promise<string> {
+export function childProcessReader(script = defaultChildScript()): ProcessReader {
   let child: ChildProcess | undefined
   let nextId = 1
   let idle: NodeJS.Timeout | undefined
-  const pending = new Map<number, { child: ChildProcess; settle(text: string): void; fail(error: Error): void; timer: NodeJS.Timeout }>()
+  const pending = new Map<number, { child: ChildProcess; settle(reply: WatcherReply): void; fail(error: Error): void; timer: NodeJS.Timeout }>()
 
   const end = (gone: ChildProcess, error: Error) => {
     if (child === gone) child = undefined
@@ -464,8 +474,8 @@ export function childProcessTable(script = defaultChildScript()): () => Promise<
       if (!request) return
       pending.delete(reply.data.id)
       clearTimeout(request.timer)
-      if (reply.data.t === "table") request.settle(reply.data.text)
-      else request.fail(new Error(reply.data.t === "failed" ? reply.data.message : `Unexpected reply ${reply.data.t}`))
+      if (reply.data.t === "failed") request.fail(new Error(reply.data.message))
+      else request.settle(reply.data)
       if (![...pending.values()].some((other) => other.child === next)) rest(next)
     })
     next.once("exit", () => end(next, new Error("The process table's reader stopped")))
@@ -473,15 +483,27 @@ export function childProcessTable(script = defaultChildScript()): () => Promise<
     return next
   }
 
-  return () => new Promise<string>((settle, fail) => {
+  const ask = (request: (id: number) => WatcherRequest) => new Promise<WatcherReply>((settle, fail) => {
     const current = running()
     current.ref()
     current.channel?.ref()
     const id = nextId++
     const timer = setTimeout(() => end(current, new Error(`The process table's reader didn't answer within ${Math.round(TABLE_ASK_MS / 1000)} seconds`)), TABLE_ASK_MS)
     pending.set(id, { child: current, settle, fail, timer })
-    sendToChild(current, { t: "table", id }).catch((error: Error) => end(current, error))
+    sendToChild(current, request(id)).catch((error: Error) => end(current, error))
   })
+  const unexpected = (reply: WatcherReply) => new Error(`Unexpected reply ${reply.t}`)
+
+  return {
+    table: () => ask((id) => ({ t: "table", id })).then((reply) => {
+      if (reply.t === "table") return reply.text
+      throw unexpected(reply)
+    }),
+    members: (runs, self) => ask((id) => ({ t: "members", id, self, runs: runs.map(({ pid, startedMs }) => ({ pid, startedMs })) })).then((reply) => {
+      if (reply.t === "members") return reply.rows
+      throw unexpected(reply)
+    }),
+  }
 }
 
 /**

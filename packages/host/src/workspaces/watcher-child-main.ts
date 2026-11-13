@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { homedir, tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { OTHER_APPS_DATA } from "../base/other-apps-data.js"
+import { membersOnly, parseTable, PS_ARGS, type RunLeader } from "./process-table.js"
 import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, WatcherRequestSchema, type CanaryTest, type DropReason, type HistoryMark, type WatcherReply } from "../contracts/watcher-child.js"
 
 /*
@@ -25,8 +26,10 @@ process.on("message", (raw) => {
   const request = WatcherRequestSchema.safeParse(raw)
   if (!request.success) return
   const { id } = request.data
-  if (request.data.t === "table") {
-    void readTable(id).catch((error) => reply({ t: "failed", id, message: error instanceof Error ? error.message : String(error) }))
+  if (request.data.t === "table" || request.data.t === "members") {
+    const asked = request.data
+    void (asked.t === "table" ? readTable().then((text) => reply({ t: "table", id, text })) : readMembers(id, asked.runs, asked.self))
+      .catch((error) => reply({ t: "failed", id, message: error instanceof Error ? error.message : String(error) }))
     return
   }
   if (request.data.t === "mark" || request.data.t === "since" || request.data.t === "probe") {
@@ -426,13 +429,17 @@ const TABLE_BYTES = 16 * 1024 * 1024
 /** A `ps` this slow is stuck; the host reads its own table instead. */
 const TABLE_MS = 15_000
 
-/** The process table, for the host to parse: one `ps` per ask, in this child's process group, ended with it. */
-async function readTable(id: number): Promise<void> {
-  const text = await new Promise<string>((done, fail) => {
-    execFile("ps", ["-A", "-o", "pid=,ppid=,pgid=,rss=,lstart=,command="], { env: { ...process.env, LC_ALL: "C" }, maxBuffer: TABLE_BYTES, timeout: TABLE_MS }, (error, stdout) => {
+/** The process table as `ps` prints it: one `ps` per ask, in this child's process group, ended with it. */
+function readTable(): Promise<string> {
+  return new Promise<string>((done, fail) => {
+    execFile("ps", [...PS_ARGS], { env: { ...process.env, LC_ALL: "C" }, maxBuffer: TABLE_BYTES, timeout: TABLE_MS }, (error, stdout) => {
       if (error) fail(error)
       else done(stdout)
     })
   })
-  reply({ t: "table", id, text })
+}
+
+/** Only `runs`' processes of the table, parsed and matched here, off the host's loop. */
+async function readMembers(id: number, runs: RunLeader[], self: number): Promise<void> {
+  reply({ t: "members", id, rows: membersOnly(parseTable(await readTable()), runs, self) })
 }

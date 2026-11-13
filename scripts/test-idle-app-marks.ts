@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AppKeySchema } from "@mako/host/contracts/thread-environments"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
-import { childProcessTable } from "@mako/host/workspaces/watch-backend"
+import { childProcessReader } from "@mako/host/workspaces/watch-backend"
 
 /**
  * An idle host's app marks read no process table. Every window asks for the marks every few seconds, and each look
@@ -61,8 +61,9 @@ try {
   assert.ok(spawned() >= 1, "a look with a run alive reads the table")
   assert.equal(busy.length, 1, "the live run is seen")
 
-  // Read through the watcher child (`childProcessTable`): the same run is seen, and `ps` ran in the child, not here.
-  const viaChild = new ThreadProcesses({ root: records, listening: async () => false, readTable: childProcessTable() })
+  // Read through the watcher child (`childProcessReader`): the same run is seen, and `ps` ran in the child, not here.
+  const reader = childProcessReader()
+  const viaChild = new ThreadProcesses({ root: records, listening: async () => false, readTable: () => reader.table(), readMembers: (runs, self) => reader.members(runs, self) })
   const spawnedBefore = spawned()
   const seen = await viaChild.active()
   assert.equal(seen.length, 1, "the live run is seen through the child's table")
