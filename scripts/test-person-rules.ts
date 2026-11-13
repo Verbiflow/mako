@@ -71,9 +71,16 @@ const promptsOf = (world: AgentsWorld, conversation: string) => world.prompts.fi
 const note = (text: string | undefined) => (text ? /^<mako-local-control>\n([\s\S]*?)\n<\/mako-local-control>\n\n/.exec(text)?.[1] : undefined)
 const last = (world: AgentsWorld, conversation: string) => note(promptsOf(world, conversation).at(-1))
 
-/** Exact standing guidance, when due, followed by the current single-Fin roster; no role-rule line when empty. */
-function apexNote(world: AgentsWorld, conversation: string, guidance: boolean): string {
-  const text = last(world, conversation)!
+/**
+ * Exact standing guidance, when due, followed by the current single-Fin roster; no role-rule line when empty. Read
+ * from the prompt that carried the person's `said`: a digest of the Fin's reports can reach the Apex after it, and
+ * carries no note.
+ */
+function apexNote(world: AgentsWorld, conversation: string, guidance: boolean, said: string): string {
+  const prompt = promptsOf(world, conversation).findLast((text) => text.includes(said))
+  assert.ok(prompt, `the Apex was sent "${said}"`)
+  const text = note(prompt)
+  assert.ok(text, `"${said}" went with Mako's note`)
   const lines = text.split("\n")
   const standing = guidance ? ["For messages from the person:", ...FRONT_DOOR_GUIDANCE] : []
   assert.deepEqual(lines.slice(0, -1), [...standing, "You're this Thread's Apex: the person writes to you, and you decide who handles it. Your Fins now:"])
@@ -108,13 +115,13 @@ async function emptyIsUnchanged(): Promise<void> {
     assert.equal(last(world, fin), undefined, "no note before a Fin's next turn")
     world.say(apex.conversation, "How is it going?")
     await world.settle()
-    assert.ok(apexNote(world, apex.conversation, true).includes("Done."))
+    assert.ok(apexNote(world, apex.conversation, true, "How is it going?").includes("Done."))
     const report = await world.agents.report(world.caller(fin), { clientKey: "fresh-roster", status: "done", summary: "The Android check failed; the mutation outcome is unknown." })
     assert.ok(!("refused" in report))
     await world.settle(undefined, undefined, "ignore")
     world.say(apex.conversation, "What changed?")
     await world.settle(undefined, undefined, "ignore")
-    assert.ok(apexNote(world, apex.conversation, false).includes("The Android check failed; the mutation outcome is unknown."), "the new report reaches the roster without repeating guidance")
+    assert.ok(apexNote(world, apex.conversation, false, "What changed?").includes("The Android check failed; the mutation outcome is unknown."), "the new report reaches the roster without repeating guidance")
   } finally {
     await world.close()
   }
@@ -144,7 +151,7 @@ async function finRules(): Promise<void> {
     assert.equal(last(world, fin), FIN_NONE, "and after a restart, still told, never silence that leaves the brief's rules standing")
     world.say(apex.conversation, "Anything new?")
     await world.settle(undefined, undefined, "ignore")
-    apexNote(world, apex.conversation, true) // Exact guidance and roster, with no Fin-rule or rule-removal line.
+    apexNote(world, apex.conversation, true, "Anything new?") // Exact guidance and roster, with no Fin-rule or rule-removal line.
   } finally {
     await world.close()
   }

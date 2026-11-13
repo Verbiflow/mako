@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { mock } from "node:test"
 import { ASK_EVERY_MS } from "@mako/host/contracts/children"
 import { FROM_AGENTS, WAKES_PER_MINUTE } from "@mako/host/conversations/agent-wakes"
-import { AgentsWorld, HARNESSES } from "./lib/agents-world.ts"
+import { AgentsWorld, TESTED_HARNESSES } from "./lib/agents-world.ts"
 
 /**
  * A digest holding a question doesn't wait for the minute's budget (`npm run test:wake-queue`), with each harness as
@@ -150,9 +150,9 @@ async function storm(root: string, harness: string): Promise<void> {
 
 const root = mkdtempSync(join(tmpdir(), "mako-question-budget-"))
 try {
-  for (const harness of HARNESSES) await run(join(root, harness), harness, false)
+  for (const harness of TESTED_HARNESSES) await run(join(root, harness), harness, false)
   // The two that take a message at a step steer it into the running turn, so no digest waits for its end.
-  for (const harness of HARNESSES.filter((each) => each !== "claude" && each !== "opencode")) await storm(join(root, `storm-${harness}`), harness)
+  for (const harness of TESTED_HARNESSES.filter((each) => each !== "claude" && each !== "opencode")) await storm(join(root, `storm-${harness}`), harness)
   await run(join(root, "held"), "claude", true)
 } finally {
   rmSync(root, { recursive: true, force: true })

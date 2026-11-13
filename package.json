@@ -292,7 +292,7 @@
     "test:appshot-ui": "node scripts/test-appshot-ui.mjs",
     "test:appshot-live": "node --import tsx scripts/test-appshot-live.mjs",
     "test:background-work": "tsx scripts/test-background-work.ts",
-    "test:background-agents": "tsx scripts/test-background-agents.ts",
+    "test:background-agents": "tsx scripts/test-internal-native-agents.ts && tsx scripts/test-background-agents.ts",
     "test:start-interleavings": "tsx scripts/test-start-interleavings.ts",
     "test:switch-interleavings": "tsx scripts/test-switch-interleavings.ts",
     "test:followed-stop-crash": "tsx scripts/test-followed-stop-crash.ts",

@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { DIGEST_AGAIN } from "@mako/host/contracts/children"
 import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
-import { AgentsWorld, HARNESSES, type Heard } from "./lib/agents-world.ts"
+import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Heard } from "./lib/agents-world.ts"
 
 /**
  * A Fin's question through a real SIGKILL between its hand-off and its receipt (`npm run test:wake-queue`), on each
@@ -194,7 +194,7 @@ else {
   const failures: string[] = []
   try {
     for (const point of POINTS)
-      for (const harness of point.startsWith("steer") ? STEERS : HARNESSES) {
+      for (const harness of (point.startsWith("steer") ? STEERS : HARNESSES).filter((harness) => TESTED_HARNESSES.some((tested) => tested === harness))) {
         const dir = join(root, `${point}-${harness}`)
         try {
           const killed = spawnSync(process.execPath, ["--import", "tsx", import.meta.filename, "--host", dir, harness, point], { stdio: ["ignore", "ignore", "pipe"], timeout: 40_000, encoding: "utf8" })
