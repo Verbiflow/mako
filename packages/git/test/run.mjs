@@ -19,7 +19,7 @@ Object.assign(process.env, {
 })
 
 const git = await import("../dist/index.js")
-const { Git, parseStatus, remote, push, log, commitFiles, listFiles, grep, draftCommit, commitDraft, draftPullRequest, GitError, COMMIT_STYLE, sensitivePath } = git
+const { Git, parseStatus, remote, push, log, commitFiles, listFiles, grep, draftCommit, commitDraft, draftPullRequest, GitError, COMMIT_STYLE, sensitivePath, writesShared, commonDirOf } = git
 
 /** What a test hears of each finished Git process; none by default. */
 let heard = () => {}
@@ -121,6 +121,122 @@ async function stopHost({ child, exited }) {
 }
 
 try {
+  await test("a write to what a repository's checkouts share is told from a read", () => {
+    const writes = [
+      ["worktree", "add", "--detach", "--no-checkout", "/x", "HEAD"], ["worktree", "remove", "-f", "-f", "/x"], ["worktree", "prune"], ["worktree", "lock", "--reason", "spare", "/x"],
+      ["branch", "-D", "mako/x"], ["branch", "--no-track", "mako/x", "abc"], ["branch", "-f", "mako/x", "HEAD"], ["branch", "--set-upstream-to=origin/main"],
+      ["update-ref", "--no-deref", "HEAD", "abc"], ["update-ref", "-d", "refs/x"], ["symbolic-ref", "HEAD", "refs/heads/main"],
+      ["checkout", "-q", "-b", "mako/x"], ["switch", "-c", "x"], ["checkout", "--orphan", "x"], ["tag", "v1"],
+      ["config", "branch.x.merge", "refs/heads/x"], ["config", "--unset", "branch.x.merge"], ["remote", "add", "origin", "url"],
+    ]
+    const reads = [
+      ["worktree", "list", "--porcelain"], ["branch", "--list", "mako/x"], ["branch", "--show-current"], ["branch"], ["branch", "-a", "--contains", "abc"],
+      ["symbolic-ref", "-q", "--short", "HEAD"], ["stash", "list"], ["tag", "-l", "v*"], ["config", "--get", "branch.x.merge"], ["config", "branch.x.merge"],
+      ["remote", "get-url", "origin"], ["rev-list", "--count", "a..b"], ["status", "--porcelain"],
+      // A checkout's own index, files and branch, hooks and all, and the network: they never take the repository's turn.
+      ["reset", "--hard", "-q", "abc"], ["read-tree", "abc"], ["update-index", "-q", "--refresh"], ["commit", "-m", "x"], ["merge", "x"], ["fetch", "origin"], ["push", "origin", "x"],
+      // A worktree added with its files checks them out for as long as that takes: Mako adds it `--no-checkout`.
+      ["worktree", "add", "/x", "mako/x"], ["-c", "checkout.workers=4", "checkout", "-q", "mako/x"], ["switch", "main"], ["stash", "push", "-u"], ["stash", "pop"],
+    ]
+    for (const args of writes) assert.equal(writesShared(args), true, args.join(" "))
+    for (const args of reads) assert.equal(writesShared(args), false, args.join(" "))
+  })
+
+  await test("a linked worktree's writes share its repository's turn", async () => {
+    const root = await repository("common-dir")
+    await sh(root, "commit", "--allow-empty", "-q", "-m", "first")
+    const linked = join(scratch, "common-dir-linked")
+    await sh(root, "worktree", "add", "-q", "--detach", linked)
+    await mkdir(join(linked, "deep", "er"), { recursive: true })
+    assert.equal(commonDirOf(root), join(root, ".git"))
+    assert.equal(commonDirOf(join(linked, "deep", "er")), join(root, ".git"), "a folder inside a linked worktree")
+    assert.equal(commonDirOf(scratch), scratch, "outside a repository, the folder itself")
+    // A worktree Git is still adding: its .git file is written, its commondir not yet.
+    const adding = join(scratch, "common-dir-adding")
+    await mkdir(join(root, ".git", "worktrees", "adding"), { recursive: true })
+    await mkdir(adding, { recursive: true })
+    await writeFile(join(adding, ".git"), `gitdir: ${join(root, ".git", "worktrees", "adding")}\n`)
+    assert.equal(commonDirOf(adding), join(root, ".git"), "a worktree being added is its repository's before its commondir is written")
+    const { symlink } = await import("node:fs/promises")
+    await symlink(root, join(scratch, "common-dir-link"))
+    assert.equal(commonDirOf(join(scratch, "common-dir-link")), join(root, ".git"), "a repository reached through a link is the same repository")
+  })
+
+  await test("writes in one repository run one at a time, in the order asked; reads and other repositories don't wait", async () => {
+    const { PassThrough } = await import("node:stream")
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 100))
+    const one = await repository("turns-one")
+    const other = await repository("turns-other")
+    for (const root of [one, other]) await sh(root, "commit", "--allow-empty", "-q", "-m", "first")
+    const linked = join(scratch, "turns-one-linked")
+    await sh(one, "worktree", "add", "-q", "--detach", linked)
+    const traces = []
+    const writes = new Git({ trace: (trace) => traces.push({ ...trace, end: performance.now() }) })
+    // `update-ref --stdin` holds the repository's turn until its input ends.
+    const input = new PassThrough()
+    const holding = writes.run({ cwd: one, args: ["update-ref", "--stdin"], input })
+    await settle()
+    const order = []
+    const behind = [
+      writes.output(linked, ["branch", "--no-track", "from-linked", "HEAD"]).then(() => order.push("from-linked")),
+      writes.output(one, ["branch", "--no-track", "from-main", "HEAD"]).then(() => order.push("from-main")),
+    ]
+    await settle()
+    assert.deepEqual(order, [], "a write from the main checkout or a linked worktree waits for the one under way")
+    assert.equal(writes.activity().writesQueued, 2)
+    assert.match(await writes.readOutput(one, ["rev-parse", "HEAD"]), /^[0-9a-f]{40}$/, "a read doesn't wait")
+    await writes.output(other, ["branch", "--no-track", "elsewhere", "HEAD"])
+    assert.equal(await writes.readOutput(other, ["branch", "--list", "elsewhere"]), "elsewhere", "another repository's write doesn't wait")
+    input.end("create refs/heads/held HEAD\n")
+    await holding
+    await Promise.all(behind)
+    assert.deepEqual(order, ["from-linked", "from-main"], "they go in the order asked")
+    assert.equal(writes.activity().writesQueued, 0)
+    // In the repository's own turn: each write began after the last one ended.
+    const own = traces.filter((trace) => trace.write && trace.cwd !== other).sort((a, b) => a.end - b.end)
+    assert.equal(own.length, 3)
+    for (let at = 1; at < own.length; at += 1) assert.ok(own[at].end - own[at].ms >= own[at - 1].end, `${own[at].args.join(" ")} began before ${own[at - 1].args.join(" ")} ended`)
+    writes.close()
+  })
+
+  await test("a write that waits too long for its repository fails, naming what held it, and the line goes on", async () => {
+    const { PassThrough } = await import("node:stream")
+    const root = await repository("turn-wait")
+    await sh(root, "commit", "--allow-empty", "-q", "-m", "first")
+    const writes = new Git({ writeTurnWaitMs: 300 })
+    const input = new PassThrough()
+    const holding = writes.run({ cwd: root, args: ["update-ref", "--stdin"], input })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const gaveUp = writes.output(root, ["branch", "--no-track", "gave-up", "HEAD"])
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    // Asked for behind the one that gives up: it waits only for the write under way.
+    const behind = writes.output(root, ["branch", "--no-track", "behind", "HEAD"])
+    await assert.rejects(gaveUp, (error) => error instanceof GitError && error.kind === "timeout" && /waited 0\.3 s for the repository's earlier writes, behind git update-ref/.test(error.message))
+    input.end("create refs/heads/held HEAD\n")
+    await holding
+    await behind
+    assert.equal(await writes.readOutput(root, ["branch", "--list", "behind"]), "behind")
+    assert.equal(await writes.readOutput(root, ["branch", "--list", "gave-up"]), "", "the write that gave up never ran")
+    writes.close()
+  })
+
+  await test("a write waits out a ref lock another program holds, and names it when it stays", async () => {
+    const root = await repository("held-lock")
+    await sh(root, "commit", "--allow-empty", "-q", "-m", "first")
+    await sh(root, "branch", "held")
+    const lock = join(root, ".git", "refs", "heads", "held.lock")
+    // An agent's own Git, holding the branch for half a second: Git's default 100 ms wait failed this delete.
+    await writeFile(lock, "")
+    setTimeout(() => { void unlink(lock) }, 500)
+    await sh(root, "branch", "-D", "held")
+    assert.equal(await sh(root, "branch", "--list", "held"), "")
+    await sh(root, "branch", "stuck")
+    await writeFile(join(root, ".git", "refs", "heads", "stuck.lock"), "")
+    const began = performance.now()
+    await assert.rejects(sh(root, "branch", "-D", "stuck"), (error) => error instanceof GitError && /stuck\.lock/.test(error.stderr))
+    assert.ok(performance.now() - began >= 2_500, "it waited before giving up")
+  })
+
   await test("staging recovers only confirmed dead Mako owners, including interrupted recovery", async () => {
     const root = await repository("dead-owner")
     const repo = await runner.openRepository(root)
