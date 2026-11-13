@@ -55,6 +55,8 @@ export type CloudHandOffsOptions = {
      * left out what its gateway doesn't take. The way back takes a Thread's changes out of the project folder only where
      * the note carried them. Without it, nothing is recorded, and nothing leaves.
      */
+    /** A going-away starts: the held Sessions' owner isn't asked until this Mac is back (`AwayNotes.going`). */
+    going?(): void
     noted?(sent: QuietNote): Promise<void>
     /** The account took none of these Threads of the note (it refused them, or took no notes): their record of it goes. */
     refused?(note: string, threads: readonly string[]): Promise<void>
@@ -176,6 +178,7 @@ export class CloudHandOffs {
     const unavailable = await this.#options.unavailable()
     const working = this.#options.working().filter(({ thread }) => !this.#options.moves.leaving(thread))
     if (unavailable || !working.length) return working.map(({ conversationId }) => ({ conversationId, outcome: { kind: "kept-here", reason: unavailable ?? "" } }))
+    goingAway.going?.()
     const handing: ThreadHandOff = { why, ...releaseBy !== undefined && { releaseBy } }
     const parked = await Promise.all(working.map(async (each) => {
       try {
