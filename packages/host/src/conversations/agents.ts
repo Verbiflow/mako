@@ -2081,9 +2081,12 @@ export class Agents implements AgentOperations, ConversationChildren {
       ownerGeneration: this.generation,
       at: this.now(),
     }
-    // Progress that hands work to another Fin of its Apex is a handoff: the Apex has to act on it, so it wakes.
-    const handed = input.status === "progress" ? this.siblingNamed(edge, `${input.summary}\n${input.action ?? ""}`) : undefined
-    if (handed) report.handoff = { to: handed.name, child: ThreadIdSchema.parse(handed.child) }
+    // Progress that hands work to another Fin of its Apex, said so (`handoff`, or `fin:<name>`), is a handoff: the Apex
+    // has to act on it, so it wakes. A Fin merely mentioned ("waiting on loop-holds' PR") is progress.
+    const handedTo = input.handoff ? this.siblingOf(edge, input.handoff.to) : undefined
+    if (input.handoff && !handedTo) return { refused: "unknown-child", why: `No other ${FIN_WORD} of your ${APEX_WORD} is ${input.handoff.to}: handoff names one by its name or Thread. agents_list with scope crew lists them.` }
+    const handed = handedTo ?? (input.status === "progress" ? this.siblingNamed(edge, `${input.summary}\n${input.action ?? ""}`) : undefined)
+    if (handed && input.status === "progress") report.handoff = { to: handed.name, child: ThreadIdSchema.parse(handed.child) }
     const kept = this.keepReport(edge, report)
     if ("refused" in kept) return kept
     return { id: kept.report.id, ...(kept.report.followUp && { followUp: this.store()!.reportAction(kept.report.id) }), ...(kept.deduped && { deduped: true as const }), delivered: kept.report.status === "progress" && !kept.report.handoff ? "none" : "notice", ...(kept.report.waitingOn?.length && { subscriptions: this.waitSubscriptions(edge, kept.report) }), ...(kept.report.supersedes?.length && { superseded: kept.report.supersedes }) }
@@ -4826,19 +4829,23 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { refused: "relayed", why: `${sibling.name} (${sibling.child}) is your sibling, owned by your ${APEX_WORD} (${sibling.parent}); you can't send to it. Your message went to your ${APEX_WORD} instead, which it wakes, to pass on to ${sibling.name}: nothing reached ${sibling.name} directly (report ${kept.report.id}).` }
   }
 
+  /** Another open Fin of `edge`'s Apex, by its name, `fin:<name>` or its Thread. */
+  private siblingOf(edge: ThreadParent, ref: string): ThreadParent | undefined {
+    const name = finName(ref)
+    return this.store()!.edges().children(edge.parent).find((other) => other.child !== edge.child && other.closedAt === undefined && (other.child === ref || other.name === name))
+  }
+
   /**
-   * Another Fin of `edge`'s Apex a report names: by `fin:<name>`, its Thread, or its bare name where that isn't an
-   * ordinary word (it holds a hyphen, an underscore or a digit, as `mac-capacity`), so a Fin called `review` isn't
-   * named by every report that says "review".
+   * Another Fin of `edge`'s Apex a report hands work to in its words: only as `fin:<name>`, the explicit form. A bare
+   * name or a Thread is a mention ("waiting on loop-holds' PR"), not a handoff.
    */
   private siblingNamed(edge: ThreadParent, text: string): ThreadParent | undefined {
     const words = text.toLowerCase()
-    const named = (name: string) => {
-      const bare = name.toLowerCase()
-      const word = (said: string) => new RegExp(`(^|[^a-z0-9_-])${said.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9_-])`).test(words)
-      return word(`fin:${bare}`) || (/[-_0-9]/.test(bare) && word(bare))
-    }
-    return this.store()!.edges().children(edge.parent).find((other) => other.child !== edge.child && other.closedAt === undefined && (words.includes(other.child.toLowerCase()) || named(other.name)))
+    return this.store()!.edges().children(edge.parent).find((other) => {
+      if (other.child === edge.child || other.closedAt !== undefined) return false
+      const said = `fin:${other.name.toLowerCase()}`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      return new RegExp(`(^|[^a-z0-9_-])${said}($|[^a-z0-9_-])`).test(words)
+    })
   }
 
   /** A Fin by its name, `fin:<name>` (`child:<name>` before the names) or its Thread: the Apex's own, or with `deep` a descendant's. */

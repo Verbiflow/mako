@@ -315,6 +315,8 @@ export interface AgentsReportInput {
   decides?: "apex" | "person"
   /** What it waits on outside its tree, with a question it asks. */
   waitingOn?: WaitingOn[]
+  /** Work this hands to another Fin of your Apex, by its name or Thread: a progress report with it wakes your Apex to pass it on. */
+  handoff?: { to: string }
   /** A repeat with the same key is the same report. */
   clientKey: string
 }
@@ -766,13 +768,14 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_report",
-      description: `Tell this Thread's ${APEX_WORD}, the Thread that started it, how its work stands: done, failed, blocked or needs-input (which wake it), or progress (which doesn't, unless it hands work to another Fin by name, fin:<name>). Its first sentence is the line it reads. ${REPORT_FOLLOW_UP_INSTRUCTIONS}`,
+      description: `Tell this Thread's ${APEX_WORD}, the Thread that started it, how its work stands: done, failed, blocked or needs-input (which wake it), or progress (which doesn't, unless it hands work to another Fin: handoff, or fin:<name> in its summary). Its first sentence is the line it reads. ${REPORT_FOLLOW_UP_INSTRUCTIONS}`,
       fields: {
         status: "done, failed, blocked, needs-input or progress.",
         summary: "What happened, first sentence first; where to read more.",
         artifacts: "Branches, commits, pull requests, files, screenshots or test runs, each by reference.",
         question: "For blocked or needs-input: the decision you need. With done: the decision your finished work leaves (a merge, a pick between results), with its options.",
         decides: "With a done question: apex (default) or person, who decides it.",
+        handoff: "Work you hand to another Fin of your Apex: {to: its name or Thread}. Progress with it, or naming fin:<name> in its summary, wakes your Apex to pass it on; a mere mention of a Fin doesn't.",
         waitingOn: 'Automatic wakes: {kind:"pull-request", ref:"owner/repo#412" or its URL, until:"checks"|"review"|"merge"}. {kind:"person",what} and {kind:"other",text} record prose only: NO automatic subscription, including for Actions runs or main-commit CI. Inspect subscriptions in the result; an unsupported/unavailable wait needs a verified external notification or an explicit owner to verify its outcome.',
         options: "For a decision: the answers to pick from, each a label of a few words and what it does (detail). The person can pick one with a tap.",
         recommended: "The option you recommend, by its place in options, from 0.",

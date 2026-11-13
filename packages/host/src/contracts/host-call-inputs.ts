@@ -506,6 +506,7 @@ const inputs = {
             ])
           )
           .optional(),
+        handoff: z.object({ to: z.string() }).optional(),
         clientKey: z.string(),
       }),
     ]),
