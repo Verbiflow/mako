@@ -11,8 +11,8 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * something stands in its place, and if the code can't arrive it says so with a way to try again; nothing is left blank,
  * and nothing takes the window down to its error screen. Each piece's module is held (`Fetch.requestPaused`) to see it
  * loading, then failed as a network would fail it: the web desk's composer, Files and Changes, the phone's Agents sheet,
- * Show original's dialog, and the thinking orb's library where the orb worker can't run. Screenshots land in the
- * printed directory. `--url <base>` uses a running Vite server instead of starting one.
+ * and Show original's dialog. (The thinking orb isn't one: it draws whenever a Thread works, so it loads with the
+ * Thread.) Screenshots land in the printed directory. `--url <base>` uses a running Vite server instead of starting one.
  */
 
 if (process.versions.electron) {
@@ -194,20 +194,6 @@ async function check() {
   }
   await letGo()
 
-  // The thinking orb where the orb worker can't run (no OffscreenCanvas): its library fails, and the orb's place stays still.
-  await send("Page.enable")
-  const noWorker = await send("Page.addScriptToEvaluateOnNewDocument", { source: "delete globalThis.OffscreenCanvas; delete HTMLCanvasElement.prototype.transferControlToOffscreen" })
-  await hold("thinking-orbs.js")
-  await load("/?mock&app=apex")
-  assert.equal(await evaluate("'OffscreenCanvas' in globalThis || 'transferControlToOffscreen' in HTMLCanvasElement.prototype"), false, "a page where the orb worker can't run")
-  await until("document.querySelectorAll('.activity-orb').length > 0", "an orb on the page")
-  await held("thinking-orbs.js")
-  await release("thinking-orbs.js", "fail")
-  await until("document.querySelectorAll('[data-orb-unavailable]').length > 0", "the orb's place, still, its library out of reach")
-  await notBroken("the orb")
-  await letGo()
-  await send("Page.removeScriptToEvaluateOnNewDocument", { identifier: noWorker.identifier })
-
   // Show original's dialog: a line while it opens, a line with Retry if it can't, never the window's error screen.
   const DIALOG = "src/components/transcript/show-original-dialog.tsx"
   const streams = "/?mock&app=streams"
@@ -265,7 +251,7 @@ async function check() {
   await notBroken("the Agents sheet")
   await recovers("the Agents sheet", rosterDrawn, "[data-agents-sheet]", openSheet)
 
-  console.log(`Lazy pieces UI: the composer, Files, Changes, the orb, Show original and the Agents sheet each load, fail and come back without a blank or the error screen (${root})`)
+  console.log(`Lazy pieces UI: the composer, Files, Changes, Show original and the Agents sheet each load, fail and come back without a blank or the error screen (${root})`)
   guard.done()
   app.exit(0)
 }
