@@ -67,6 +67,10 @@ const lifecycle = hostLifecycle({
   cleanup: async () => {
     await host.stop()
     await log.flush()
+    // The data root goes to whoever's next (a restart's or an update's host) as this one finishes, not when the kernel
+    // has torn its process down: on macOS that has taken seconds after its exit, every thread already gone (15 s on a
+    // CI runner, 2026-11-13), and the next host waited on the lock all that while.
+    if (lock.kind === "held") await lock.release()
   },
   exit,
   log: (message, fields) => hostLog("lifecycle", message, fields),
