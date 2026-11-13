@@ -31,7 +31,8 @@ import { ACCESS_TIER_NAMES, accessModeId } from "@mako/host/contracts/access"
  * Every turn asks for one word ("Reply with the single word X."), and the scripted model says it back: the words it
  * heard are the turns that ran on this Mac, and a turn that ran anywhere else never reaches it. A held turn (`hold`)
  * first has its agent write `agent-<word>.md` in its Session's folder, a change of the Thread's own for a checkpoint
- * or a move to carry, then holds mid-way.
+ * or a move to carry, and with `--other` also `agent-<word>-beside.md` in the other repository beside it, so each
+ * repository holds a change of the Thread's; then it holds mid-way.
  *
  * With `--opencode <version>`, that version of OpenCode is installed in the root and first on the host's `PATH`, else
  * it runs the person's. Give it the version the cloud's machines run: a Session goes to the cloud only from a version
@@ -142,6 +143,8 @@ const moving = (text: string): ScriptedReply | undefined => {
 }
 /** The file a held turn's agent writes before it holds, in its Session's folder: `agent-<word>.md`. */
 const agentFile = (word: string) => `agent-${word}.md`
+/** With `--other`, the one it writes in the other repository too, beside its Session's: `agent-<word>-beside.md`. */
+const besideFile = (word: string) => `agent-${word}-beside.md`
 /** A word `hold` asks for: its turn stays mid-way here, the model answering only after this long. */
 const HELD = "HOLD"
 const HELD_MS = 15 * 60_000
@@ -153,6 +156,9 @@ const model = await scriptedModel({
     if (!word) return { text: "OK" }
     // A held turn writes a file of the agent's own first (`agentFile`), a change the Thread's checkpoint carries, then holds.
     if (word.startsWith(HELD) && !text.includes(agentFile(word))) return { call: { id: `call_write_${word}`, name: "write", arguments: { path: agentFile(word), content: `written by the agent in ${word}\n` } } }
+    // In a project folder of two repositories, one in the other repository too: each has a change of the Thread's.
+    if (word.startsWith(HELD) && values.other && !text.includes(besideFile(word)))
+      return { call: { id: `call_write_beside_${word}`, name: "write", arguments: { path: join(project, named(values.other), besideFile(word)), content: `written by the agent beside, in ${word}\n` } } }
     heard.push(word)
     if (word.startsWith(HELD)) return new Promise((resolve) => setTimeout(() => resolve({ text: word }), HELD_MS).unref())
     return { text: word }

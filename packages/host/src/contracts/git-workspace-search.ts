@@ -114,7 +114,11 @@ export interface GitHubStatus {
 
 export interface CheckSummary {
   name: string
-  state: "passed" | "failed" | "running" | "unknown"
+  /**
+   * A run GitHub cancelled because another run of the same check replaced it (a push twice, a retarget) is never read;
+   * one cancelled that nothing replaced is `cancelled`, never `failed`.
+   */
+  state: "passed" | "failed" | "running" | "cancelled" | "unknown"
   url?: string
 }
 

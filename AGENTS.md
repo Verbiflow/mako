@@ -119,7 +119,17 @@ lifetimes at the named launch exceptions. `check-host-children.mjs` (in lint) re
 raw Node process starts in the host and every local package it references,
 except its documented owner and handoff boundaries. Git's commands and object
 reader use one independent process runner; `hostGit` injects the host's scoped
-adapter, and `Git.close()` joins child cleanup. `HostStopping.run` also binds
+adapter, and `Git.close()` joins child cleanup. A write to what a repository's
+checkouts share (its refs, its worktrees, its configuration: `writesShared`)
+waits for the writes asked for before it in that repository, keyed by the
+folder they share (`commonDirOf`), so Mako's own writes (a spare being made, a
+Thread's branch made or deleted) never meet at a lock; network commands,
+those that run hooks or rewrite files (`commit`, `merge`, `stash`, a `checkout` of an existing branch) stay out of
+that turn (a worktree is added `--no-checkout` in it, then filled and its post-checkout hook run as `worktree add` runs it, `fillWorktree`), and a
+write that waits past `WRITE_TURN_WAIT_MS` fails naming what held it. Every
+non-read command waits out a ref lock another program holds
+(`REF_LOCK_WAIT`, 3 s), and a failed write is logged with Git's own words.
+`test:git` and `test-worktree-writes.ts` hold it. `HostStopping.run` also binds
 the control-runtime and sessions adapters per async context, so package code
 cannot start an unregistered child under a host call. Standalone workers keep
 their own lifetime; no process adapter is changed globally. UTF-8 buffered
@@ -773,10 +783,15 @@ its last step, what it was asked when it is a Fin too, and each other Fin as
 the front door's note names it (name, harness, state, what it was asked, its
 branch and last report). The person's direct words to a Fin stay out. It
 reads typed state, never a transcript, and its brief's first line says it's
-there. Crew discovery grants no sibling-send authority. A refused sibling
-send names the target and parent, sends nothing, and points to an explicit
-`agents_report` parent relay; `delivered: notice` proves that handoff, not
-a send to the sibling. `npm run test:orch-comms` covers all three.
+there. Crew discovery grants no sibling-send authority. A sibling send is
+refused as `relayed`: nothing reaches the sibling, and its words go to the
+Apex instead as a handoff (`Report.handoff`, a progress report that wakes it),
+which the digest lists under "hands work to another Fin" for the Apex to pass
+on with one `agents_send`. A progress report that says it hands work to
+another Fin of its Apex (`agents_report`'s `handoff: {to}`, or `fin:<name>` in
+its summary) is a handoff too and wakes the Apex; a Fin merely mentioned by
+its name or Thread is progress, and stays quiet. `npm run test:orch-comms` covers all three, and `test:orch-deliver` the
+refusal.
 An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
 (`AgentsApexes`): every tree's top Apex but its own whose conversation is
 open here, each with its title, harness, whether it works and its last step,
