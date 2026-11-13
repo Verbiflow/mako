@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.2.7"
+    "version": "2.3.0"
   },
   "about": "Read missing.md and tell me what it says. Don't look for it anywhere else. A read of a file that does not exist fails, and the answer says so.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e3a0994f9ffec1HYFkycdK4E6w",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e2aa9029bffeEn453o7YSZVj5n",
       "known": []
     }
   ]
