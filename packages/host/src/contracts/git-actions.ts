@@ -11,12 +11,14 @@ export function summarizeChecks(checks: readonly CheckSummary[]) {
   let passed = 0
   let failed = 0
   let running = 0
+  let cancelled = 0
   for (const check of checks) {
     if (check.state === "passed") passed += 1
     else if (check.state === "failed") failed += 1
     else if (check.state === "running") running += 1
+    else if (check.state === "cancelled") cancelled += 1
   }
-  return { total: checks.length, passed, failed, running }
+  return { total: checks.length, passed, failed, running, cancelled }
 }
 
 /** Why GitHub won't merge the pull request now, or undefined when it will. */
@@ -26,6 +28,7 @@ export function pullMergeReason(pull: Pick<PullRequest, "state" | "mergeable" | 
   if (pull.mergeable === "conflicting") return "Resolve merge conflicts first"
   if (checks.failed > 0) return "Fix failing checks first"
   if (checks.running > 0) return "Wait for checks to finish"
+  if (checks.cancelled > 0) return "Run the cancelled checks again first"
   if (pull.reviewDecision === "changes") return "Address requested changes first"
   return undefined
 }
