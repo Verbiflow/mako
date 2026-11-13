@@ -82,6 +82,7 @@ export class LiveCheckpoints {
       const left = (this.capturing.get(resident) ?? 1) - 1
       this.capturing.set(resident, left)
       resident.checkpointing = left > 0
+      this.host.noteWork(resident)
     }
   }
 
@@ -352,6 +353,7 @@ export class LiveCheckpoints {
       return this.host.require(command.id).snapshot
     } finally {
       resident.rewinding = false
+      this.host.noteWork(resident)
     }
   }
 
@@ -377,6 +379,7 @@ export class LiveCheckpoints {
         restored.push(this.host.require(plan.fork.id).snapshot)
       } finally {
         resident.rewinding = false
+        this.host.noteWork(resident)
       }
     }
     return restored

@@ -1,3 +1,4 @@
+import { ProviderFailureEvidenceSchema } from "../contracts/provider-failure-evidence.js"
 import { LiveInputQuestionSchema } from "../contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts/approval-response.js"
 import { PromptDeliverySchema } from "../contracts/prompt-delivery.js"
@@ -190,6 +191,7 @@ export const LiveRequestSchema = z.object({
     .transform(readStoredReason)
     .optional(),
   failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
+  failureEvidence: ProviderFailureEvidenceSchema.optional(),
   /** The session's usage reading when this request was dispatched; `spend` is measured from it. */
   usageFrom: z.object({
     tokens: TokenCountsSchema.optional(),
@@ -249,6 +251,7 @@ const MetadataSchema = z.object({
     configOptions: z.array(ModelOptionSchema),
     settings: SessionSettingsSchema.optional(),
     lastStop: z.string().optional(),
+    failureEvidence: ProviderFailureEvidenceSchema.optional(),
     error: z.string().optional(),
     // How full the context is and the harness's own session totals belong to
     // the conversation and reopen with it; what was spent belonged to the
@@ -1492,13 +1495,14 @@ const BaseHeaderSchema = z.object({
   entries: z.number().nullable(),
 })
 const RowBytesSchema = z.object({ bytes: z.number().nullable() })
+const OptionalBaseHeaderSchema = BaseHeaderSchema.optional()
 
 /** How many rows of a copy one step of `baseHeader` sums: a couple of milliseconds' reading. */
 const ROWS_SUMMED = 512
 
 /** The base row's page, read without decoding its entries, and the bytes of the copy it names: 0 when it names none. */
 function* baseHeader(db: DatabaseSync) {
-  const header = BaseHeaderSchema.optional().parse(db.prepare(`SELECT length(value) AS bytes,
+  const header = OptionalBaseHeaderSchema.parse(db.prepare(`SELECT length(value) AS bytes,
     json_extract(value, '$.start') AS start, json_extract(value, '$.hasEarlier') AS hasEarlier, json_extract(value, '$.preview') AS preview,
     json_extract(value, '$.ref.harness') AS harness, json_extract(value, '$.ref.nativeId') AS nativeId, json_extract(value, '$.ref.path') AS path,
     json_extract(value, '$.entryRows') AS entryRows, json_array_length(value, '$.entries') AS entries FROM base WHERE id=1`).get())

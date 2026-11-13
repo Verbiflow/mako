@@ -298,6 +298,38 @@ async function check() {
   await click("button[aria-label='Close Sheet motion on iPad']")
   await until("!document.querySelector('[data-child-tab]')", "the Apex again")
 
+  // Changes and Files opened with their code out of reach (offline before the service worker kept it): each says so,
+  // with Retry, never an empty layer. Back online it reads again by itself, and where the browser won't fetch a module
+  // it failed once (this Chromium keeps the failure; Safari can leave it pending) it offers Reload, which brings it.
+  await page.debugger.sendCommand("Network.enable")
+  const unreachable = async (pattern, what, open) => {
+    await page.debugger.sendCommand("Network.setBlockedURLs", { urls: [pattern] })
+    await load("/scripts/web-desk.html?thread=apex&theme=dark")
+    await until("document.querySelectorAll('[data-thread-row]').length > 0", `the web desk, ${what}'s code out of reach`)
+    await open()
+    await until(`document.querySelector('.rv-layer [data-code-unavailable]')?.innerText.includes(${JSON.stringify(`${what} couldn't load`)})`, `${what} saying it couldn't load`)
+    assert.ok(await evaluate("Boolean([...document.querySelectorAll('.rv-layer [data-code-unavailable] button')].find((button) => button.textContent === 'Retry'))"), `${what}'s Retry`)
+    await capture(`web-${what.toLowerCase()}-unavailable.png`)
+    await page.debugger.sendCommand("Network.setBlockedURLs", { urls: [] })
+    await evaluate("window.dispatchEvent(new Event('online')); true")
+    const drawn = "Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-unavailable]')"
+    await until(`(${drawn}) || Boolean(document.querySelector('[data-code-unavailable=stuck]'))`, `${what} back online, or offering Reload`)
+    if (await evaluate("Boolean(document.querySelector('[data-code-unavailable=stuck]'))")) {
+      assert.ok(await evaluate("Boolean([...document.querySelectorAll('[data-code-unavailable] button')].find((button) => button.textContent === 'Reload'))"), `${what}'s Reload`)
+      await capture(`web-${what.toLowerCase()}-reload.png`)
+      await evaluate("[...document.querySelectorAll('[data-code-unavailable] button')].find((button) => button.textContent === 'Reload').click(); true")
+      await until("!document.querySelector('[data-code-unavailable]') && document.querySelectorAll('[data-thread-row]').length > 0", `the web desk reloaded for ${what}`)
+      await open()
+    }
+    await until(drawn, `${what} drawn`)
+  }
+  await unreachable("*desk-review*", "Changes", () => click("button[aria-label='Show the right sidebar']:not(:disabled)"))
+  await unreachable("*files-screen*", "Files", async () => {
+    await click("button[aria-label='Show the right sidebar']:not(:disabled)")
+    await press("[data-side-rail] [data-surface-id=files]")
+  })
+  await click("button[aria-label='Hide the right sidebar']")
+
   // The phone: the crew card holds the Fins, the bar counts them, and no chip repeats one.
   await viewport(390, 844)
   await load("/scripts/phone-apex.html?app=apex")
@@ -311,7 +343,7 @@ async function check() {
   await click(`[data-crew-row="${needing}"] button`)
   await until("Boolean(document.querySelector('[data-child-of]'))", "the Fin from the crew card")
 
-  console.log("Right rail UI: the twin's rows and tone, readings, list-first Changes, arrows, a Fin's one tab, the web's rail and the phone passed")
+  console.log("Right rail UI: the twin's rows and tone, readings, list-first Changes, arrows, a Fin's one tab, the web's rail, Changes and Files out of reach, and the phone passed")
   guard.done()
   app.exit(0)
 }

@@ -197,6 +197,11 @@ const ThreadWriteRow = z.object({ seq: z.number(), root: z.string(), path: z.str
 const TurnChangesRow = z.object({ summary: z.string() })
 const TurnSeqRow = z.object({ turn: z.string(), seq: z.number() })
 const SeqRow = z.object({ seq: z.number() })
+const NullableSeqRow = SeqRow.extend({ seq: z.number().nullable() })
+const AuthorRow = z.object({ author: z.string() })
+const ProvenanceRow = z.object({ git: z.number().nullable(), gap: z.number().nullable() })
+const NamedPathsSchema = z.array(z.string())
+const ActivitySessionRow = z.object({ session: z.string() })
 const RootAtRow = z.object({ root: z.string(), at: z.number() })
 const WorkedRow = z.object({ checkout: z.string().nullable(), cwd: z.string().nullable(), at: z.number() })
 const WorkedKeyRow = WorkedRow.extend({ session: z.string(), kind: z.string(), id: z.string() })
@@ -676,14 +681,14 @@ export class JournalStore {
 
   author(seq: number): Attribution | undefined {
     const row = this.statement("SELECT author FROM entries WHERE seq=?").get(seq)
-    return row ? AttributionSchema.parse(JSON.parse(z.object({ author: z.string() }).parse(row).author)) : undefined
+    return row ? AttributionSchema.parse(JSON.parse(AuthorRow.parse(row).author)) : undefined
   }
 
   /** Whether Git wrote the entry, and whether it was found after lost events (a rescan or a restart's catch-up). */
   provenance(seq: number): { git: boolean; lost: boolean } | undefined {
     const row = this.statement("SELECT git, gap FROM entries WHERE seq=?").get(seq)
     if (!row) return undefined
-    const { git, gap } = z.object({ git: z.number().nullable(), gap: z.number().nullable() }).parse(row)
+    const { git, gap } = ProvenanceRow.parse(row)
     return { git: Boolean(git), lost: gap !== null }
   }
 
@@ -705,6 +710,15 @@ export class JournalStore {
   /** A file's entries after `after` through `upTo`, oldest first, with their line maps; a rename away from it counts. */
   chain(root: string, path: string, after = 0, upTo = Number.MAX_SAFE_INTEGER): StoredEntry[] {
     return this.statement("SELECT * FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 AND seq <= ?4 ORDER BY seq").all(root, path, after, upTo).map((row) => this.entryOf(row))
+  }
+
+  /** A bounded page of a file's chain, without line maps; both paths use their index before the bounded merge. */
+  chainPage(root: string, path: string, after: number, upTo: number, limit: number): StoredEntry[] {
+    return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map
+      FROM entries WHERE seq IN (
+        SELECT seq FROM (SELECT seq FROM entries WHERE root=?1 AND path=?2 AND seq > ?3 AND seq <= ?4 ORDER BY seq LIMIT ?5)
+        UNION SELECT seq FROM (SELECT seq FROM entries WHERE root=?1 AND from_path=?2 AND seq > ?3 AND seq <= ?4 ORDER BY seq LIMIT ?5)
+        ORDER BY seq LIMIT ?5) ORDER BY seq`).all(root, path, after, upTo, limit).map((row) => this.entryOf(row))
   }
 
   /** A file's entries after `after` that changed it after `since`, oldest first, without line maps; a rename away from it counts. */
@@ -778,7 +792,7 @@ export class JournalStore {
   /** The first entry journaled at `at` or after; undefined when none was. */
   firstSeqFrom(at: number): number | undefined {
     // Through the times' index: by the numbering, SQLite walked every entry older than `at` first.
-    return SeqRow.extend({ seq: z.number().nullable() }).parse(this.statement("SELECT min(seq) AS seq FROM entries INDEXED BY entries_at WHERE at >= ?").get(at)).seq ?? undefined
+    return NullableSeqRow.parse(this.statement("SELECT min(seq) AS seq FROM entries INDEXED BY entries_at WHERE at >= ?").get(at)).seq ?? undefined
   }
 
   /** `entriesBetween` over a window of the journal's numbering, `after` to `upTo`: up to `limit` of them. */
@@ -900,7 +914,7 @@ export class JournalStore {
     const row = ActivityRow.parse(value)
     return {
       kind: row.kind, id: row.id, session: row.session, thread: row.thread, turn: optional(row.turn), checkout: optional(row.checkout), cwd: optional(row.cwd),
-      label: optional(row.label), named: z.array(z.string()).parse(JSON.parse(row.named)), record: optional(row.record), start: row.started_at, end: row.ended_at,
+      label: optional(row.label), named: NamedPathsSchema.parse(JSON.parse(row.named)), record: optional(row.record), start: row.started_at, end: row.ended_at,
       effects: row.effects ? StoredEffectSchema.parse(JSON.parse(row.effects)) : undefined,
       ...(row.status && { status: row.status }),
       ...(row.run && { run: row.run }),
@@ -911,7 +925,7 @@ export class JournalStore {
   turn(thread: string, turn: string): StoredActivity | undefined {
     // Found by the Thread's index alone, then read: read whole as it went, a Thread of 85,000 calls took 140 ms.
     const key = this.statement("SELECT session FROM activity WHERE thread=? AND kind='turn' AND id=? ORDER BY started_at DESC LIMIT 1").get(thread, turn)
-    return key ? this.activity(z.object({ session: z.string() }).parse(key).session, "turn", turn) : undefined
+    return key ? this.activity(ActivitySessionRow.parse(key).session, "turn", turn) : undefined
   }
 
   /** Activity that overlaps `[from, to]`. */

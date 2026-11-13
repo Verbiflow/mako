@@ -1,3 +1,6 @@
+import type { ProviderFailureEvidence } from "./provider-failure-evidence.js"
+import type { FailureBoundary } from "./error-message.js"
+
 /**
  * What a failed turn means for the person reading it.
  *
@@ -9,7 +12,7 @@
  * string once, on the host, and the request carries the verdict; the
  * renderer never pattern-matches error text.
  *
- * Kept free of imports so the renderer and the host share it.
+ * Kept free of runtime imports so the renderer and the host share it.
  */
 export const PROVIDER_FAILURE_KINDS = [
   /** The model API refused the session's saved history; only a new session escapes it. */
@@ -18,6 +21,10 @@ export const PROVIDER_FAILURE_KINDS = [
   "context-exhausted",
   /** The provider's account is signed out or its key is invalid; signing in again fixes it. */
   "auth",
+  /** The provider explicitly refused this account's permission, scope or organisation access. */
+  "permission",
+  /** Automatic recovery could not confirm sign-in before its retry budget ended. */
+  "sign-in-check",
   /** The account is signed in but its plan, billing or credits do not cover the request. */
   "plan",
   /** The agent reported a different signed-in identity than the account the session runs as; nothing was sent. */
@@ -65,6 +72,18 @@ interface Rule {
  */
 const USAGE_LIMIT = /\bhit your (?:[\w-]+ )?limit|\breached (?:your|its|the) (?:[\w-]+ )?(?:usage |rate )?limit|\busage limit\b|\b(?:session|weekly|daily|monthly|five-hour|5-hour) limit (?:reached|hit)|\bquota (?:exhausted|exceeded)\b|usage_limit_(?:reached|exceeded)/i
 
+/**
+ * Claude prefixes temporary failures from its authentication request with "Failed to authenticate". Classify the
+ * actual response, without checking or changing credentials. Explicit invalid-key/revocation text inside it still
+ * wins under the ordinary rules. Unknown failures and ordinary 401/403 responses keep their authentication reading.
+ */
+function failureText(message: string | undefined): string {
+  const text = message ?? ""
+  const response = text.replace(/^Failed to authenticate[.:]\s*/i, "")
+  if (response === text) return text
+  const transient = /^(?:API Error:\s*)?(?:429|50[0234]|529)\b|^(?:fetch failed|(?:read )?ECONNRESET\b|ECONNREFUSED\b|ETIMEDOUT\b|ENOTFOUND\b|EAI_AGAIN\b|socket hang up)/i.test(response)
+  return transient ? response : text
+}
 
 /**
  * Order matters: the first rule that matches wins, and the specific faults
@@ -103,9 +122,18 @@ const rules: Rule[] = [
       /subscription|billing|payment required|\b402\b|insufficient (?:credits|balance|funds)|out of credits|credit balance|plan does not|not (?:included|available) (?:in|on|with) your plan|upgrade your plan/i,
   },
   {
+    kind: "permission",
+    match: /\bpermission_error\b|\boauth_org_not_allowed\b|\binsufficient (?:permissions?|scope)\b/i,
+  },
+  {
     kind: "auth",
     match:
       /\b401\b|\b403\b|unauthori[sz]ed|unauthenticated|authentication|failed to authenticate|oauth session (?:has )?expired|auth_required|invalid (?:api[_ ]?key|token|credentials)|api[_ ]?key|not (?:logged|signed) in|signed out|(?:log|sign) in (?:again|to)|login required|login (?:has )?expired|run \/login|credentials|token (?:has )?(?:expired|been revoked)|expired token|insufficient (?:permissions|scope)/i,
+  },
+  {
+    // Anthropic's HTTP overload response is service trouble, not evidence that an account used its quota.
+    kind: "provider-unavailable",
+    match: /^(?:API Error:\s*|HTTP\s+)?529\b/i,
   },
   {
     kind: "rate-limited",
@@ -148,7 +176,7 @@ const rules: Rule[] = [
 
 /** The kinds a second attempt can't fix, whatever else the message says. */
 const PERMANENT = new Set<ProviderFailureKind>([
-  "transcript-rejected", "context-exhausted", "auth", "plan", "wrong-account", "rejected-input", "missing-folder", "transport-limit", "launch-failed",
+  "transcript-rejected", "context-exhausted", "auth", "permission", "sign-in-check", "plan", "wrong-account", "rejected-input", "missing-folder", "transport-limit", "launch-failed",
 ])
 
 /** A client error other than a timeout (408), a rate limit (429) or a plan's refusal (402), named by its status alone. */
@@ -164,7 +192,7 @@ function personsFault(text: string): boolean {
  * other fault only the person can fix stands, whichever is said first: an invalid key doesn't clear at a reset.
  */
 export function usageLimitWords(message: string | undefined): boolean {
-  const text = message ?? ""
+  const text = failureText(message)
   return USAGE_LIMIT.test(text) && !personsFault(text)
 }
 
@@ -173,17 +201,18 @@ export function usageLimitWords(message: string | undefined): boolean {
  * a provider's "API error: 400 Bad Request: unknown model x" is a refused setting under a service's words.
  */
 export function permanentFailure(message: string | undefined): boolean {
-  const text = message ?? ""
+  const text = failureText(message)
   if (usageLimitWords(text)) return false
   return personsFault(text) || rules.some((rule) => rule.kind === "plan" && rule.match.test(text))
 }
 
 export function classifyProviderFailure(
   message: string | undefined,
-  providerLabel = "The provider"
+  providerLabel = "The provider",
+  evidence?: ProviderFailureEvidence
 ): ProviderFailure {
-  const text = message ?? ""
-  const kind = usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown"
+  const text = failureText(message)
+  const kind = evidence && evidence.kind !== "unknown" ? evidence.kind : (usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown")
   return describeProviderFailure(kind, providerLabel)
 }
 
@@ -192,8 +221,8 @@ export function classifyProviderFailure(
  * keeps that cause; one that failed for no classifiable reason while
  * reopening a session is Mako's failure to resume, not the provider's.
  */
-export function classifyStartFailure(message: string | undefined, resuming: boolean): ProviderFailureKind {
-  const kind = classifyProviderFailure(message).kind
+export function classifyStartFailure(message: string | undefined, resuming: boolean, evidence?: ProviderFailureEvidence): ProviderFailureKind {
+  const kind = classifyProviderFailure(message, undefined, evidence).kind
   return kind === "unknown" && resuming ? "resume-failed" : kind
 }
 
@@ -222,6 +251,18 @@ export function describeProviderFailure(
         retriable: false,
         title: `${providerLabel} is signed out`,
         guidance: `Sign in to ${providerLabel} again, then send the message.`,
+      }
+    case "permission":
+      return {
+        kind, retriable: false,
+        title: `${providerLabel} refused access`,
+        guidance: `${providerLabel} refused this account's permission, scope or organisation access; choose an authorised account or ask its administrator for access.`,
+      }
+    case "sign-in-check":
+      return {
+        kind, retriable: false,
+        title: `Check your ${providerLabel} sign-in`,
+        guidance: "Mako could not confirm sign-in after an hour of automatic retries; sign in again in Settings › Agents, then resume the work.",
       }
     case "plan":
       return {
@@ -308,4 +349,19 @@ export function describeProviderFailure(
         guidance: `${providerLabel} ended the turn without saying why; what it did is in the conversation.`,
       }
   }
+}
+
+/** A preflight refusal retains the same secret-free verdict as a provider's terminal session event. */
+export class ProviderFailureError extends Error {
+  readonly failureEvidence: ProviderFailureEvidence
+
+  constructor(message: string, failureEvidence: ProviderFailureEvidence, options?: ErrorOptions) {
+    super(message, options)
+    this.name = "ProviderFailureError"
+    this.failureEvidence = failureEvidence
+  }
+}
+
+export function failureEvidenceOf({ error }: FailureBoundary): ProviderFailureEvidence | undefined {
+  return error instanceof ProviderFailureError ? error.failureEvidence : undefined
 }
