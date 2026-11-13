@@ -148,6 +148,8 @@ export interface WorldOptions {
   starting?: (conversation: string, harness: string) => Promise<void> | void
   /** Hears each prompt and steer as its harness takes it, before its turn goes on: what a killed host's harnesses took stays known. */
   heard?: (heard: Heard) => void
+  /** Hears each conversation's work move (`LiveConversations.noteWork`), as the account's row of it is told. */
+  workMoved?: (conversation: string) => void
   /** What a new conversation of each harness starts on, as its profile says (Mako's pick). */
   defaults?: Partial<Record<string, SessionSettings>>
   /** Each harness's catalog, as its profile lists it; a harness without one has none read. */
@@ -289,6 +291,7 @@ export class AgentsWorld {
     const live = new LiveConversations({
       ...(this.options.stopping && { stopping: this.options.stopping }),
       ...(this.options.ownerCheck && { ownerCheck: this.options.ownerCheck }),
+      workMoved: (conversation) => this.options.workMoved?.(conversation),
       appPath: this.root,
       root: join(this.root, "journals"),
       driver: (provider) => drivers.get(provider),

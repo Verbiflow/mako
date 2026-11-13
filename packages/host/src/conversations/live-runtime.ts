@@ -402,6 +402,8 @@ export interface Dependencies {
   historyReleased?(id: string): void
   /** Test clock for deterministic residency decisions. */
   now?: () => number
+  /** A conversation's work moved (running, waiting, finishing, none), with or without a batch: its row is told now. */
+  workMoved?(conversation: string): void
 }
 
 /**
@@ -433,6 +435,11 @@ export interface LiveAccess {
   add(resident: Resident): void
   control(resident: Resident): ConversationControl
   flush(resident: Resident): void
+  /**
+   * Its work may have moved without a write (a checkpoint released, a start or a close settled, a driver let go): the
+   * account's row of it hears so (`Dependencies.workMoved`) when its work's status did move.
+   */
+  noteWork(resident: Resident): void
   /**
    * A flush of what the conversation observed, which goes on whether or not the journal takes it: when it can't, memory
    * keeps it for the next commit that works (`storageFailed`). A flush that must be saved before Mako acts (a prompt

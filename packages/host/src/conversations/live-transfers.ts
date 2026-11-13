@@ -814,6 +814,7 @@ export class LiveTransfers {
       phase.phase = "done"
       if (resident.transferPhase === phase) resident.transferPhase = undefined
       resident.transferring = false
+      this.host.noteWork(resident)
       resident.transferOpening = undefined
       // `preparing` is an attempt under way: one held back as it ran waits as it did before.
       const left = this.unsettled(resident, transfer.input.id)

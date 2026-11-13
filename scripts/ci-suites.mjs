@@ -36,7 +36,7 @@ const SUITES = [
   "test:local-signing", "test:mcp", "test:message-queue", "test:mobile-behavior", "test:model-connections-ui",
   "test:moves", "test:native-authoring", "test:node-host-secrets", "test:opencode-agents", "test:opencode-api",
   "test:owner-check", "test:plugins", "test:proposed-plans", "test:provider-launch-options", "test:provider-ui",
-  "test:host-load-memory", "test:queued-steering", "test:zod-patch", "test:rail-list", "test:roster-delta", "test:recovery-admission", "test:scripted-model", "test:secrets-keychain", "test:side-rail-ui", "test:fin-transitions-ui",
+  "test:host-load-memory", "test:queued-steering", "test:zod-patch", "test:rail-list", "test:roster-delta", "test:recovery-admission", "test:scripted-model", "test:secrets-keychain", "test:side-rail-ui", "test:lazy-pieces-ui", "test:fin-transitions-ui",
   "test:simulators-remote", "test:skills", "test:telemetry", "test:terminal", "test:terminal-ui",
   "test:run-suite", "test:test-scratch", "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees", "test:transfer-scheduling",
   "test:tree-watcher", "test:update-local", "test:usage-worker", "test:web-delivery", "test:window-boot",
