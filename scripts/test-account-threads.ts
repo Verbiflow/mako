@@ -796,7 +796,7 @@ test("a conversation's work moving with no batch (a checkpoint released, a start
   let whole = 0
   const asked: string[][] = []
   const sent: SessionsReport[] = []
-  let state = "working"
+  let state: ReportedSession["state"] = "working"
   const soon: Array<() => void> = []
   let serving: SessionLink | undefined
   const publisher = new SessionPublisher({
@@ -854,8 +854,8 @@ test("a native session's write or catalog row reworks its own rows, never the wh
   const sent: SessionsReport[] = []
   let gone = false
   // Three native sessions at /n/1, /n/2 and /n/3, their rows s-1 to s-3; /n/2's goes working.
-  let second = "idle"
-  const nativeRow = (n: number, state = "idle") => ({ ...row(n, state), conversation: `native:${n}`, session: `s-${n}` })
+  let second: ReportedSession["state"] = "idle"
+  const nativeRow = (n: number, state: ReportedSession["state"] = "idle") => ({ ...row(n, state), conversation: `native:${n}`, session: `s-${n}` })
   const publisher = new SessionPublisher({
     rows: () => (whole++, [nativeRow(1), nativeRow(2, second), nativeRow(3)]),
     rowsOfNative: (paths) => {
