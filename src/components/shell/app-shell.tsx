@@ -1,12 +1,11 @@
 import { HostConnectionNotice } from "./host-connection-notice"
 import { FileEventsNotice } from "./file-events-notice"
 import { ApplicationDialog, ApplicationNotice } from "@/components/settings/application-dialog"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { CommandPalette } from "@/components/palette/command-palette"
 import { Guide } from "@/components/onboarding/guide"
 import { ConversionOverlay } from "@/components/viewer/conversion-overlay"
-import { SettingsDialog } from "@/components/settings/settings-dialog"
 import { usePlugins } from "@/extend/use-plugins"
 import { SessionRail } from "@/components/rail/session-rail"
 import { TitleBar } from "@/components/shell/title-bar"
@@ -22,9 +21,19 @@ import { bindTheme, prefsStore, setPref, usePrefs } from "@/state/prefs"
 import { PlugZapIcon } from "lucide-react"
 import { WorkspaceFocusProvider } from "@/components/stage/workspace-focus"
 
+/**
+ * Settings, every section and what each imports (the plugin compiler among them), isn't part of a
+ * launch: it loads once the window is idle, so the first open is as quick as before.
+ */
+const loadSettings = () => import("@/components/settings/settings-dialog")
+const SettingsDialog = lazy(() => loadSettings().then((module) => ({ default: module.SettingsDialog })))
+
 export function AppShell() {
   const bootHost = actions.boot
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Mounted from its first open on, so it closes with its animation and keeps its state.
+  const [settingsMounted, setSettingsMounted] = useState(false)
+  if (settingsOpen && !settingsMounted) setSettingsMounted(true)
   const [settingsSection, setSettingsSection] = useState("agents")
   const phase = useSession((state) => state.phase)
   const fault = useSession((state) => state.fault)
@@ -33,6 +42,10 @@ export function AppShell() {
   const railRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => bindTheme(), [])
+  useEffect(() => {
+    const idle = requestIdleCallback(() => void loadSettings(), { timeout: 5_000 })
+    return () => cancelIdleCallback(idle)
+  }, [])
   useEffect(() => followFirstRunAgent(), [])
 
   useEffect(() => {
@@ -154,14 +167,18 @@ export function AppShell() {
         <CommandPalette />
         {/* Settings takes the whole window under the palette's z-50, so the
           palette can still open over it; Radix owns Escape and the focus trap. */}
-        <SettingsDialog
-          open={settingsOpen}
-          section={settingsSection}
-          onOpenChange={(open) => {
-            if (!open) setSettingsOpen(false)
-          }}
-          onSectionChange={setSettingsSection}
-        />
+        {settingsMounted && (
+          <Suspense fallback={null}>
+            <SettingsDialog
+              open={settingsOpen}
+              section={settingsSection}
+              onOpenChange={(open) => {
+                if (!open) setSettingsOpen(false)
+              }}
+              onSectionChange={setSettingsSection}
+            />
+          </Suspense>
+        )}
         <Guide />
         <ConversionOverlay />
         <ApplicationDialog />

@@ -1,5 +1,5 @@
 import { windowRoutesStore } from "@/state/window-routes"
-import { childGroup, childStateOf, rollup, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
+import { childGroup, childStateOf, rosterChildren, sameRollup, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { AgentsDirected, AgentsRedirected, AgentsRedirectInput } from "@mako/host/contracts/agents"
 import type { ThreadRef } from "@/lib/types"
@@ -10,6 +10,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
 import { acp, acpStore, useAcp, type AcpState } from "@/state/acp"
 import { finSources, newestSaid, threadChildren, type AcpConversation } from "@/state/acp-state"
+import { threadAsking, threadRollup } from "@/state/fin-rollup"
 import { createHook, createStore } from "@/state/store"
 import { currentOnScreen } from "@/state/thread-sessions"
 import { threads } from "@/state/threads"
@@ -18,9 +19,8 @@ import { threadGroupsStore } from "@/state/thread-groups"
 import { inboxView } from "@/state/inbox-view"
 
 const NO_CHILDREN: readonly NativeAgent[] = []
-const listedByThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, Rollup> }>()
 
-export { threadChildren }
+export { threadAsking, threadChildren, threadRollup }
 
 /**
  * What opens for a Fin's row: its live conversation in this window (its own device's, or listed from the device it
@@ -48,38 +48,7 @@ export function useFinOpenable(child: NativeAgent): boolean {
   return useAcp((state) => finOpening(state, child) !== undefined)
 }
 
-/** As its host listed it (`LiveSummary.children`): an Apex's count before this window holds its roster, its newest Session's. */
-function listedRollup(state: AcpState, thread: string): Rollup | undefined {
-  let held = listedByThread.get(state.conversations)
-  if (!held || held.order !== state.threadSessions) {
-    held = { order: state.threadSessions, index: newestSaid(state, (conversation) => (conversation.children ? [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: conversation.children, fullness: 0 }] : [])) }
-    listedByThread.set(state.conversations, held)
-  }
-  return held.index.get(thread)
-}
-
 /** A Thread's Fins counted by group: one selector for the rail's badge, the strip's count and the phone's row. */
-export function threadRollup(state: AcpState, thread: string | undefined): Rollup {
-  const children = threadChildren(state, thread)
-  return children.length || !thread ? rollup(children) : (listedRollup(state, thread) ?? rollup(children))
-}
-
-const askingOf = new WeakMap<readonly NativeAgent[], readonly NativeAgent[]>()
-
-/**
- * A Thread's Fins that wait on the person, in its roster's order, the same array while its roster is. Empty until this
- * window holds the roster; the Inbox reads the roster of every Apex whose count says one waits (`useInboxRosters`).
- */
-export function threadAsking(state: AcpState, thread: string | undefined): readonly NativeAgent[] {
-  const children = threadChildren(state, thread)
-  let held = askingOf.get(children)
-  if (!held) {
-    const asking = children.filter((agent) => childGroup(childStateOf(agent)) === "needs")
-    held = asking.length ? asking : NO_CHILDREN
-    askingOf.set(children, held)
-  }
-  return held
-}
 
 export function useThreadRollup(thread: string | undefined): Rollup {
   return useAcp((state) => threadRollup(state, thread), sameRollup)
