@@ -33,6 +33,11 @@ export function signInPause(requests: readonly LiveRequest[]): SignInPause | und
   return hold && { hold, waiting, cut }
 }
 
+/** Verified work waiting only for its execution place, unless someone explicitly stopped it meanwhile. */
+export function signInResuming(pause: SignInPause | undefined, requests: readonly LiveRequest[]): boolean {
+  return Boolean(pause?.hold.ready) && !requests.some(request => request.signIn && request.pause === "stop")
+}
+
 /**
  * The requests once the session's account signed out. Queued messages wait;
  * the request whose turn just `ended` keeps its outcome, except that one the

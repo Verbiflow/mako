@@ -60,7 +60,7 @@ import { AccountUsageReadings } from "./account-usage-readings.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { bindingWindow, LIMIT_NEAR_PERCENT, limitOffer, spentUntil, windowsAt, type AccountLimitOffer, type HarnessLimit } from "../contracts/account-usage.js"
 import type { FallbackAccount } from "../contracts/fin-fallback.js"
-import { AccountSignIns, type VerifiedSignIn } from "./account-sign-ins.js"
+import { AccountSignIns, SignInRecoveryWriteError, type VerifiedSignIn } from "./account-sign-ins.js"
 
 /** Host-only, prepared once for an execution. Never serialize the environment. */
 export interface AccountLaunch {
@@ -332,9 +332,12 @@ export class HarnessAccounts {
   ): Promise<AccountLoginResult> {
     const { result, receipt } = await this.mutate(harness, async () => {
       const result = await this.finishVerifiedLogin(harness, target, options)
-      const verified = (options.confirmed || options.verify !== undefined || this.nativeLogin(harness).confirmAccountLogin !== undefined) &&
-        !(result.status === "renewed" && result.previousEmail !== undefined)
-      const receipt = verified && (result.status === "renewed" || result.status === "added") ? await this.signIns.keep(harness, result.name) : undefined
+      const verified = options.confirmed || options.verify !== undefined || this.nativeLogin(harness).confirmAccountLogin !== undefined
+      let receipt: VerifiedSignIn | undefined
+      if (verified && (result.status === "renewed" || result.status === "added")) {
+        try { receipt = await this.signIns.keep(harness, result.name) }
+        catch (error) { throw new SignInRecoveryWriteError({ error }) }
+      }
       return { result, receipt }
     })
     // The account mutation is released before a resumed session tries to launch on it.

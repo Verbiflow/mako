@@ -61,14 +61,14 @@ export function useSignInRecoveryNotice(): ComposerNotice | null {
   }, [id, at])
 
   if (!live || !pause || !id || at === undefined || !harness || !name) return null
-  const reading = entry?.reading ?? "checking"
-  const stillOut = entry?.stillOut === true
+  const reading = pause.hold.ready && entry?.reading !== "resuming" ? "ready" : entry?.reading ?? "checking"
+  const stillOut = !pause.hold.ready && entry?.stillOut === true
   const label = provider?.label ?? harnessLabel(harness)
   const who = account ? accountIdentity(account) : name === "default" ? "your terminal’s login" : name
   const keptByMako = account?.source === "mako" && provider?.nativeLogin === true
-  const automatic = keptByMako && pause.hold.verification !== undefined && !live.requests?.some(request => request.signIn && request.pause === "stop")
+  const automatic = keptByMako && (pause.hold.verification !== undefined || pause.hold.ready !== undefined) && !live.requests?.some(request => request.signIn && request.pause === "stop")
   const resume = (anyway: boolean) => void signInRecovery.resume(id, at, anyway)
-  const ready = reading === "ready"
+  const ready = reading === "ready" || pause.hold.ready !== undefined
   const switched = !automatic && ready && selected && selected.name !== name ? accountIdentity(selected) : undefined
   const detail = automatic
     ? [pause.cut?.outcome === "review" ? reviewWords(label) : "", ready ? "Held work resumes automatically as execution places become available." : "Sign in once in Settings. Mako then continues held turns and sends their queued messages automatically."].filter(Boolean).join(" ")
