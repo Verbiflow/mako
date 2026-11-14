@@ -126,7 +126,7 @@ try {
       assert.equal(writes,0)
       await owner.permission(id,next.id,{kind:"choice",optionId:null})
       unavailable=false
-      owner.stop();owner=new LiveConversations(deps)
+      await owner.stop();owner=new LiveConversations(deps)
       snapshot=(await owner.refreshedSnapshot(id))!
       assert.ok(snapshot.control!.questions!.find(q=>q.id===next.id)?.dismissed,"Native reload preserves dismissal")
       assert.equal(latestPendingQuestion(snapshot.control!,snapshot.requests)?.native.itemId,"older")
@@ -134,7 +134,7 @@ try {
       snapshot = (await owner.refreshedSnapshot(id))!
       assert.equal(latestPendingQuestion(snapshot.control!, snapshot.requests), undefined, "Native continuation retires imported historical prompts")
       evidence = evidence.map(({ retired: _retired, ...entry }) => entry)
-      owner.stop(); owner = new LiveConversations(deps)
+      await owner.stop(); owner = new LiveConversations(deps)
       snapshot = (await owner.refreshedSnapshot(id))!
       assert.equal(latestPendingQuestion(snapshot.control!, snapshot.requests), undefined, "Old evidence cannot reverse persisted retirement")
       evidence=[{question:{...newer,sessionId:"wrong"},answered:[]}]
@@ -148,7 +148,7 @@ try {
       release()
       await reading
       assert.equal(owner.snapshot(id)!.control!.questions!.length,3,"A source read from an older owner generation cannot publish")
-    } finally {owner.stop()}
+    } finally {await owner.stop()}
   }
   // A compressed rollout's stat counts its compressed bytes, its reads plain ones: it settles, and is decoded once while unchanged.
   const decodes=mock.method(zlib,"createZstdDecompress")

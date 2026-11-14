@@ -87,7 +87,7 @@ try {
   console.log("Automation watcher ownership: no idle subscription, one active subscription, dependency folders excluded, disable/remove cleanup, dropped events survived, stale callback fences and manual execution passed")
 } finally {
   automations.stop()
-  git.close()
+  await git.close()
   mock.timers.reset()
   await rm(root, { recursive: true, force: true })
 }

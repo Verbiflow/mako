@@ -92,11 +92,16 @@ const drivers = new Map<string, ProviderLiveDriver>([
   ["forks", driver("forks", { kind: "native", point: "run", via: "Injected driver fixture" })],
   ["transcripts", driver("transcripts", { kind: "transcript", via: "Injected driver fixture" })],
 ])
-const host = () => new LiveConversations({
+const owners = new Set<LiveConversations>()
+const host = () => {
+  const owner = new LiveConversations({
   appPath: root, root: join(root, "journals"), driver: (provider) => drivers.get(provider), emit: () => {},
   history: async () => null,
   resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
 })
+  owners.add(owner)
+  return owner
+}
 
 const drawn = (blocks: readonly Entry[]) => blocks.map((block) =>
   block.type === "user" ? `user: ${block.text}`
@@ -138,8 +143,9 @@ try {
   }
 
   // After a restart the conversation reconnects to its session; a notice it already shows isn't drawn twice.
-  owner.close(id)
+  await owner.close(id)
   await waitFor(() => owner.snapshot(id)?.session.connection !== "connected", "the conversation did not close")
+  await owner.stop()
   owner = host()
   said = ["paper", "todoist"]
   owner.submit(id, randomUUID(), "Which day does QA sign off?")
@@ -167,11 +173,12 @@ try {
 
   // The journal holds them: a host reading it back draws the same.
   const shown = drawn(owner.snapshot(id)!.blocks)
-  owner.close(id)
+  await owner.close(id)
   await waitFor(() => owner.snapshot(id)?.session.connection !== "connected", "the conversation did not close")
   assert.deepEqual(drawn(host().snapshot(id)!.blocks), shown, "the journal keeps what each opening drew")
 
   console.log("PASS: what a harness says while its session opens is drawn on a launch, a native and an imported fork, a reconnect and a switch, once, without the history it replays; a failed open draws none of it")
 } finally {
+  for (const owner of owners) await owner.stop()
   rmSync(root, { recursive: true, force: true })
 }

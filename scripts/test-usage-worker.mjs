@@ -101,6 +101,6 @@ try {
   console.log("PASS: usage worker preserves summaries and responsiveness, coalesces reads, recovers from failure and rejects cleanly on shutdown")
 } finally {
   await reader.close()
-  gitRunner.close()
+  await gitRunner.close()
   await rm(root, { recursive: true, force: true })
 }

@@ -917,6 +917,6 @@ try {
 
   console.log("PASS: a Thread comes back from the cloud with one owner throughout: packed, released, laid over this Mac's worktree and claimed here; a machine that can't pack cancels it and keeps the Thread; records that can't be taken put the worktree back and give it back; an unheard release is settled by the next host; conversations begun in the cloud come back with it, and one begun as it set off gives it back rather than be left behind; asked again under a new id, an open return goes on; this Mac's own failure after the release waits on this Mac, and says so; a worktree that can't be kept cancels before the release; a project gone is refused with nothing asked of the cloud, a moved one is chosen and the worktree joins it, a deleted worktree is made again; a return left released and unkept is given back by the next host; an edit made as the checkout came down is merged in, a follow the way back overtook lays nothing, a forged carry writes nothing this Mac never sent, a file that can't be written back is named while the rest come, every repository's copy goes when it stays, and two agents told at once are each recorded; and a Thread archived from here packs and ends in the cloud, is refused while it works, is archived anyway only when asked, is finished by the next host when unheard, and comes back from its archive to the Mac it came from, or stays archived")
 } finally {
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 }

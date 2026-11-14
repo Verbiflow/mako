@@ -251,7 +251,7 @@ try {
   await host.start("cursor", "/repo", { conversationId: second })
   await until(() => host.snapshot(second)?.session.status === "ready", "a new conversation beside a newer store")
   assert.equal(threads.journalPlacement(second), undefined, "its journal isn't registered")
-  host.stop()
+  await host.stop()
   await delay(10)
 
   // After a restart, a reply to the first conversation doesn't resume its session: it goes on from its transcript in a new one.
@@ -264,7 +264,7 @@ try {
   assert.equal(went?.state.kind, "accepted", JSON.stringify(went?.state))
   assert.equal(starts.length, before + 1, "in one new session")
   assert.throws(() => memory.hold("cursor", "agent-a", first), { message: "A newer Mako (0.163.0) updated how Mako keeps track of sessions; this one can show this session but can't resume it." }, "a resume that asks for the hold anyway is declined with the line")
-  restarted.stop()
+  await restarted.stop()
   stopFollowing()
   jobs.stop()
   threads.close()

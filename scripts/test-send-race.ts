@@ -155,6 +155,8 @@ function harness(owner: () => LiveConversations): ProviderLiveDriver {
 
 /* ---------------------------------------------------------- the host and its three ways in */
 
+let diagnosticRestart = "no-restart"
+const diagnosticNotices: unknown[] = []
 const journals = join(root, "journals")
 let owner!: LiveConversations
 const driver = harness(() => owner)
@@ -163,7 +165,7 @@ const openHost = () => new LiveConversations({
   appPath: root,
   driver: () => driver,
   history: async () => null,
-  emit: () => {},
+  emit: (event) => { if (event.type === "notice" && diagnosticNotices.length < 16) diagnosticNotices.push(event) },
   nativePath: (session) => (session.nativeId ? join(root, "native", `${session.nativeId}.jsonl`) : undefined),
   checkpoint: async () => "checkpoint",
   resumeVerdict: (binding) => assessProviderResume(binding, driver),
@@ -251,7 +253,7 @@ async function prompt(client: Client, conversation: string, message: Sent, loses
         message.steered = requestId
         return
       }
-      if (attempt > 400) throw new Error(`${client} never got ${message.text} in: ${words}`)
+      if (attempt > 400) throw new Error(`${client} never got ${message.text} in: ${words}; diagnostic=${JSON.stringify({ diagnosticRestart, diagnosticNotices })}`)
       // As `attemptSend`: whatever the error, a host that holds the request took it.
       const snapshot = HeldSchema.safeParse(await call(client, "mako:live-snapshot", [conversation]).catch(() => null)).data
       if (snapshot?.requests.some((request) => request.id === requestId)) return
@@ -322,10 +324,14 @@ async function until(what: string, check: () => boolean, ms = 10_000): Promise<v
 
 /** Restarts the host under the clients, as a quit and reopen does: in-flight calls fail, its journal is read again. */
 async function restart(): Promise<void> {
+  diagnosticRestart = "closing"
   served.close()
   await owner.stop()
+  diagnosticRestart = "opening"
   owner = openHost()
+  diagnosticRestart = "opened"
   served = await serveHostThroughGateway(await gateway.connectRuntime(), mac)
+  diagnosticRestart = "ready"
 }
 
 /** Cuts the Mac's link to the gateway for a few milliseconds: calls on their way are lost, and asked again. */
@@ -491,6 +497,40 @@ async function cases(): Promise<void> {
   await call(client, "mako:live-prompt", [conversation, queued[1], "queued 1", [], undefined])
   await delay(30)
   assert.equal(heard.length, 4)
+  // A replay can finish resolving its input after stop cleared the old owner's residents, while checkpoint handles
+  // are still draining. That is a reconnect, not a refusal that hands the words back under a new request ID.
+  {
+    const id = randomUUID(), requestId = randomUUID()
+    const message: Sent = { text: "a replay still resolving when the host stops", client: "desktop", ids: [] }
+    await owner.start("race", CWD, { conversationId: id })
+    await until("the replay fixture connects", () => owner.snapshot(id)?.session.connection === "connected")
+    holding = true
+    await prompt("desktop", id, message, false, requestId)
+    await until("the original message reaches its harness", () => heard.some(each => each.id === requestId))
+    const closingHost = owner
+    let ready!: () => void
+    const prepared = new Promise<void>(resolve => { ready = resolve })
+    const replay = closingHost.admitInOrder(id, prepared, () => closingHost.submit(id, requestId, message.text))
+    void replay.catch(() => {})
+    served.close()
+    const stopped = closingHost.stop()
+    ready()
+    try {
+      await assert.rejects(replay, error => error instanceof RuntimeDisconnectedError && error.unconfirmed,
+        "a late replay keeps its request ID while its original outcome is read from the next host")
+    } finally {
+      await stopped
+      holding = false
+      held.length = 0
+      owner = openHost()
+      served = await serveHostThroughGateway(await gateway.connectRuntime(), mac)
+    }
+    await prompt("desktop", id, message, false, requestId)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.deepEqual(message.ids, [requestId])
+    assert.equal(heard.filter(each => each.text === message.text || each.text.endsWith(`\n\n${message.text}`)).length, 1,
+      "a replay resolved across the stop boundary never sends the original message again")
+  }
   console.log("send race cases: a restart pauses the queue and Resume sends it once; one ID is a steer or a message, never both")
 }
 

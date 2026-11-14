@@ -780,6 +780,6 @@ try {
 
   console.log("PASS: a Thread moves to the cloud natively with one owner throughout: ahead, released only when quiet, arrived with what was sent after, claimed, resumed under its own id; busy, a failed arrival, a lost claim, an unheard answer and a stopped host each settle with one owner; a Thread at work is handed off by pausing its turn and continuing it, and what waited, in the cloud, or continuing it here when it can't go")
 } finally {
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 }

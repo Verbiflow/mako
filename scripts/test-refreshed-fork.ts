@@ -103,7 +103,8 @@ try {
     assert.deepEqual(forked(owner, { kind: "before-run", requestId: earlier! }), saved, "a rewind to before the first live prompt keeps only the saved history")
     assert.deepEqual(forked(owner, { kind: "run", requestId: later! }), [...saved, ...first, ...second], "a fork after the last answer is the store's whole history")
   } finally {
-    owner.close(id)
+    await owner.close(id)
+    await owner.stop()
   }
 
   const restarted = host()
@@ -111,7 +112,8 @@ try {
     assert.equal(restarted.snapshot(id)?.baseLiveStart ?? (await restarted.refreshedSnapshot(id))?.baseLiveStart, 2, "the journal keeps where the live turns begin")
     assert.deepEqual(forked(restarted, { kind: "run", requestId: source.requests[0]!.id }), [...saved, ...first], "a restarted host forks the earlier answer the same way")
   } finally {
-    restarted.close(id)
+    await restarted.close(id)
+    await restarted.stop()
   }
   console.log("Refreshed forks: an earlier live turn forks and rewinds from the store's history before the live turns, before and after a restart")
 } finally {
