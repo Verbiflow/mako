@@ -1,5 +1,4 @@
 import { useCallback, useSyncExternalStore } from "react"
-import { scrollReaderTo } from "@/lib/reader-scroll"
 
 /**
  * Whether an Apex's crew card is on screen. The card registers itself; the
@@ -47,5 +46,5 @@ export function scrollCrewNeedsIntoView() {
   if (!card) return
   const scroller = card.querySelector<HTMLElement>("[data-crew-scroller]")
   if (scroller) scroller.scrollTop = 0
-  scrollReaderTo(card, { block: "start" })
+  card.scrollIntoView({ block: "start" })
 }

@@ -48,7 +48,7 @@ export function crewEvidencePlugin() {
     enforce: "pre",
     transform(code, id) {
       if (!id.split("?")[0].replaceAll("\\", "/").endsWith("/src/state/crew-card-view.ts")) return null
-      if (createHash("sha256").update(code).digest("hex") !== "772292b1594aff8829fa3f7e3f2240761d8df89a243015d855f8cf2077b5c2f1")
+      if (createHash("sha256").update(code).digest("hex") !== "f914a82dc4816cd4153c55c8094915bcb6fb9a1d2cb525e63fa85f6885041192")
         throw new Error("Crew evidence requires exact 40b8 controller source")
       const marker = (stage, extra = "") =>
         `try { globalThis.dispatchEvent(new CustomEvent(${JSON.stringify(EVENT)}, { detail: { stage: ${JSON.stringify(stage)}${extra} } })) } catch { /* Evidence must not replace the original action. */ }`

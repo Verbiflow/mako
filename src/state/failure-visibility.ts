@@ -1,5 +1,4 @@
 import { createHook, createStore } from "@/state/store"
-import { scrollReaderTo } from "@/lib/reader-scroll"
 
 /**
  * Which failure rows are on screen, by `conversation:request`. A failure the
@@ -26,6 +25,6 @@ export function noteFailureVisible(key: string, visible: boolean): void {
 export function revealFailure(key: string): boolean {
   const row = document.querySelector(`[data-failure-key="${CSS.escape(key)}"]`)
   if (!row) return false
-  scrollReaderTo(row, { block: "center", behavior: "smooth" })
+  row.scrollIntoView({ block: "center", behavior: "smooth" })
   return true
 }

@@ -38,7 +38,6 @@ import { loadReleasedThreadTurn } from "@/state/thread-viewing"
 import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
 import { SCROLL_WRITE_EVENT, TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
-import { READER_SCROLL_EVENT } from "@/lib/reader-scroll"
 import { CompactPresentationContext } from "./compact-presentation"
 import { rowChecker } from "./row-check"
 import { wokeAfterRest } from "@/lib/woke-after-rest"
@@ -933,18 +932,10 @@ export function ConversationTimeline({
         )
       )
         return
-      // A resize can arrive before the scroll event for this frame. Preserve the movement not yet reported as well as
-      // the reader's place in the media. Not the reader's input alone: while an anchor holds, the scroller anchors
-      // nothing itself (`overflow-anchor: none`) and this file reports its own writes as it makes them (`owned`), so a
-      // change it hasn't heard of is a scroll, the reader's or one made for them, such as the crew card's "Fins need you"
-      // line bringing the card back. Counted as layout, the hold put the old point back over it, a frame before that
-      // scroll's event. Left out are what it can't tell apart: the virtualizer's own writes while windowed, and the
-      // browser's clamp at a newly shorter end.
-      const end = Math.max(0, node.scrollHeight - node.clientHeight)
-      const clamped = lastScrollTop.current > end && node.scrollTop === end
-      const unreported = !displaced && !clamped &&
-        (!windowed || userScrolling.current || scrollMotion.current || touching.current)
-      const movement = unreported ? node.scrollTop - lastScrollTop.current : 0
+      // A resize can arrive before the scroll event for this frame. Preserve
+      // the reader's unreported movement as well as their place in the media.
+      const movement = !displaced && (userScrolling.current || scrollMotion.current || touching.current)
+        ? node.scrollTop - lastScrollTop.current : 0
       const moved = movement === 0 ? snapshot : { ...snapshot,
         exchangeOffset: snapshot.exchangeOffset === undefined ? undefined : snapshot.exchangeOffset - movement,
         block: snapshot.block ? { ...snapshot.block, offset: snapshot.block.offset - movement } : undefined }
@@ -966,7 +957,7 @@ export function ConversationTimeline({
       correction.current = owner
       settleCorrection()
     },
-    [owned, endSeek, displaceCorrection, settleCorrection, windowed]
+    [owned, endSeek, displaceCorrection, settleCorrection]
   )
   useLayoutEffect(() => {
     const before = named.current
@@ -1104,28 +1095,6 @@ export function ConversationTimeline({
     node.addEventListener(TRANSCRIPT_END_EVENT, toEnd)
     return () => node.removeEventListener(TRANSCRIPT_END_EVENT, toEnd)
   }, [scrollToEnd])
-  // The app scrolling for the reader (`scrollReaderTo`) is their movement, as a wheel's is: the place they had goes, any
-  // target the virtualizer was reconciling toward goes, and what moves next is theirs until it settles, so a hold before
-  // its scroll event keeps it rather than putting the old place back. Windowed too, where nothing else says so.
-  useEffect(() => {
-    const node = viewport.current
-    if (!node) return
-    const readerScroll = () => {
-      endSeek(node)
-      bookmarkRestore.current = undefined
-      if (!awaitingEarlier.current) node.removeAttribute("data-preserve-scroll")
-      pendingJump.current = null
-      restoringReader.current = null
-      if (displaceCorrection(node)) settleCorrection()
-      else readingAnchor.current = captureAnchor(node, [], false)
-      if (!awaitingEarlier.current) restore.current = null
-      stalled.current = false
-      scrollMotion.current = true
-      settleInput()
-    }
-    node.addEventListener(READER_SCROLL_EVENT, readerScroll)
-    return () => node.removeEventListener(READER_SCROLL_EVENT, readerScroll)
-  }, [endSeek, displaceCorrection, settleCorrection, settleInput])
   useEffect(() => transcriptEnd?.away(showJump), [transcriptEnd, showJump])
   useEffect(() => {
     if (!transcriptEnd) return
