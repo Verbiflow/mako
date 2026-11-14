@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { createHash } from "node:crypto"
+import { githubRateLimitWords } from "../contracts/git-actions.js"
 
 /** A cheap repository list; checks belong to individual PRs whose heads a caller is actually using. */
 const LIST_FIELDS = "number,title,url,headRefName,headRefOid,state,isDraft,author,updatedAt,isCrossRepository"
@@ -46,6 +47,30 @@ interface Deps {
   now(): number
   /** Fixed labels and counters only: never arguments, query text, output, authentication or repository names. */
   trace?(event: "request" | "cached" | "limited", kind: string): void
+}
+
+/** A transport refusal carries the original deadline through cached reads and tool preflights. */
+export class GitHubRateLimitError extends Error {
+  readonly retryAt: number
+  constructor(retryAt: number) {
+    super(githubRateLimitWords(retryAt))
+    this.name = "GitHubRateLimitError"
+    this.retryAt = retryAt
+  }
+}
+
+/** Normalise only rate-limit facts; arbitrary gh output is never a user-facing error. */
+export function githubRateLimit(cause: unknown, now: number, backoffMs = 60_000): GitHubRateLimitError | undefined {
+  if (cause instanceof GitHubRateLimitError) return cause
+  const failure = z.object({ stderr: z.string().optional(), stdout: z.string().optional() }).safeParse(cause)
+  const stderr = failure.success ? failure.data.stderr ?? "" : ""
+  const stdout = failure.success ? failure.data.stdout ?? "" : ""
+  const headers = httpResponse(stdout).headers
+  if (!/secondary rate|rate limit|abuse detection|HTTP 429/i.test(stderr) && headers.get("retry-after") === undefined && headers.get("x-ratelimit-remaining") !== "0") return undefined
+  const retryAfter = headers.get("retry-after")
+  const retry = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter ?? "") - now
+  const reset = headers.get("x-ratelimit-remaining") === "0" ? Number(headers.get("x-ratelimit-reset")) * 1000 - now : 0
+  return new GitHubRateLimitError(now + Math.max(backoffMs, Number.isFinite(retry) ? retry : 0, Number.isFinite(reset) ? reset : 0))
 }
 
 /** The login's transport is serial even across repositories; a limit stops admission, including queued work. */
@@ -161,24 +186,19 @@ export class GitHubReads {
 
   private send(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
     const request = this.tail.catch(() => {}).then(async () => {
-      if (this.deps.now() < this.blockedUntil) throw new Error("GitHub is rate limited. Mako is waiting before asking again.")
+      if (this.deps.now() < this.blockedUntil) throw new GitHubRateLimitError(this.blockedUntil)
       this.deps.trace?.("request", args[0]!)
       try {
         const output = await this.deps.run(cwd, args, env)
         if (this.deps.now() > this.blockedUntil + 15 * 60_000) this.failures = 0
         return output
       } catch (cause) {
-        const failure = z.object({ stderr: z.string().optional(), stdout: z.string().optional() }).safeParse(cause)
-        const stderr = failure.success ? failure.data.stderr ?? "" : ""
-        const stdout = failure.success ? failure.data.stdout ?? "" : ""
-        const headers = httpResponse(stdout).headers
-        if (/secondary rate|rate limit|abuse detection|HTTP 429/i.test(stderr) || headers.get("retry-after") !== undefined || headers.get("x-ratelimit-remaining") === "0") {
-          const now = this.deps.now()
-          const retryAfter = headers.get("retry-after")
-          const retry = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter ?? "") - now
-          const reset = headers.get("x-ratelimit-remaining") === "0" ? Number(headers.get("x-ratelimit-reset")) * 1000 - now : 0
-          this.blockedUntil = now + Math.max(60_000 * 2 ** Math.min(this.failures++, 6), Number.isFinite(retry) ? retry : 0, Number.isFinite(reset) ? reset : 0)
+        const limited = githubRateLimit(cause, this.deps.now(), 60_000 * 2 ** Math.min(this.failures, 6))
+        if (limited) {
+          this.failures++
+          this.blockedUntil = Math.max(this.blockedUntil, limited.retryAt)
           this.deps.trace?.("limited", args[0]!)
+          throw limited
         }
         throw cause
       }

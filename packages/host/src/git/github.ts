@@ -2,7 +2,7 @@ import { hostCommand } from "../base/host-command.js"
 import { hostFetch, hostStopping, type HostStopping } from "../base/host-stopping.js"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { GitHubReads } from "./github-reads.js"
+import { GitHubReads, GitHubRateLimitError, githubRateLimit } from "./github-reads.js"
 import { hostLog } from "../base/host-log.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { resolveExecutable } from "../base/executable.js"
@@ -53,7 +53,7 @@ async function directGh(cwd: string, args: string[], env?: Readonly<Record<strin
 const readers = new WeakMap<HostStopping, GitHubReads>()
 function gh(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
   const host = hostStopping()
-  if (!host) return directGh(cwd, args, env)
+  if (!host) return directGh(cwd, args, env).catch(cause => { throw githubRateLimit(cause, Date.now()) ?? cause })
   host.signal.throwIfAborted()
   let reader = readers.get(host)
   if (!reader) {
@@ -99,7 +99,8 @@ async function ghJson<TResult>(
   try {
     const value: JsonValue = JSON.parse(await gh(cwd, args))
     return parse(value)
-  } catch {
+  } catch (cause) {
+    if (cause instanceof GitHubRateLimitError) throw cause
     return null
   }
 }
@@ -141,9 +142,8 @@ async function machineUser(): Promise<GitHubUser | undefined> {
 /**
  * Whether GitHub is usable here, and if not, exactly why.
  *
- * Three different "no"s that want three different answers from the UI —
- * install a tool, log in, or add a remote — so they are three different
- * fields rather than one boolean.
+ * Setup problems stay distinct from transient lookup failures: a rate limit
+ * retains the host's deadline instead of becoming a missing login or remote.
  */
 export async function githubStatus(cwd: string): Promise<GitHubStatus> {
   try {
@@ -155,27 +155,38 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
     return { installed: false, authenticated: false }
   }
 
-  const who = (await machineUser()) ?? (await ghJson(
-    cwd,
-    ["api", "user"],
-    parseGitHubUser
-  ))
-  const login = who?.login
-  if (!login) return { installed: true, authenticated: false }
+  let who: GitHubUser | null | undefined
+  try {
+    who = (await machineUser()) ?? (await ghJson(
+      cwd,
+      ["api", "user"],
+      parseGitHubUser
+    ))
+    const login = who?.login
+    if (!login) return { installed: true, authenticated: false }
 
-  const repo = await ghJson(
-    cwd,
-    ["repo", "view", "--json", "nameWithOwner,defaultBranchRef"],
-    parseGitHubRepository
-  )
+    const repo = await ghJson(
+      cwd,
+      ["repo", "view", "--json", "nameWithOwner,defaultBranchRef"],
+      parseGitHubRepository
+    )
 
-  return {
-    installed: true,
-    authenticated: true,
-    login,
-    userId: who?.id,
-    repo: repo?.nameWithOwner,
-    defaultBranch: repo?.defaultBranch,
+    return {
+      installed: true,
+      authenticated: true,
+      login,
+      userId: who?.id,
+      repo: repo?.nameWithOwner,
+      defaultBranch: repo?.defaultBranch,
+    }
+  } catch (cause) {
+    if (!(cause instanceof GitHubRateLimitError)) throw cause
+    return {
+      installed: true,
+      authenticated: Boolean(who?.login),
+      ...(who?.login && { login: who.login, userId: who.id }),
+      rateLimit: { retryAt: cause.retryAt },
+    }
   }
 }
 

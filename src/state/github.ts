@@ -46,7 +46,7 @@ async function readPull(root: string, branch?: string) {
   await github.ensureStatus(root)
   const status = githubStore.get()
   if (status.root !== root || status.statusRoot !== root) return
-  if (!status.status?.authenticated || !status.status.repo) {
+  if (status.status?.rateLimit || !status.status?.authenticated || !status.status.repo) {
     githubStore.set({ pull: null, loading: false, branch, root })
     return
   }
@@ -81,7 +81,8 @@ export const github = {
     const current = githubStore.get()
     if (
       current.status &&
-      (root === undefined || current.statusRoot === root)
+      (root === undefined || current.statusRoot === root) &&
+      (!current.status.rateLimit || current.status.rateLimit.retryAt > Date.now())
     )
       return
     if (statusLoad && (root === undefined || statusLoadRoot === root))
@@ -127,7 +128,7 @@ export const github = {
   async ensureUserAvatar() {
     if (!hasBridge()) return
     const { status, userAvatar } = githubStore.get()
-    if (userAvatar || !status?.authenticated) return
+    if (userAvatar || !status?.authenticated || status.rateLimit) return
     const avatar = await getMako().userAvatar().catch(() => undefined)
     if (avatar) githubStore.set({ userAvatar: avatar })
   },

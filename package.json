@@ -363,7 +363,7 @@
     "test:steer-notices": "tsx --tsconfig tsconfig.app.json scripts/test-steer-notices.ts",
     "test:composer-edges-ui": "node scripts/test-composer-edges-ui.mjs",
     "test:fin-decisions": "tsx scripts/test-fin-decisions.ts",
-    "test:fin-pull-waits": "tsx scripts/test-github-reads.ts && tsx scripts/test-github-reads-host.ts && tsx scripts/test-fin-pull-waits.ts && tsx scripts/test-fin-pull-wake-crash.ts",
+    "test:fin-pull-waits": "tsx scripts/test-github-reads.ts && tsx scripts/test-github-reads-host.ts && tsx scripts/test-github-status-limits.ts && tsx scripts/test-fin-pull-waits.ts && tsx scripts/test-fin-pull-wake-crash.ts",
     "test:fin-decision-ui": "node scripts/test-fin-decision-ui.mjs",
     "test:stage-panes-ui": "node scripts/test-stage-panes-ui.mjs",
     "test:needs-you-ui": "node scripts/test-needs-you-ui.mjs",

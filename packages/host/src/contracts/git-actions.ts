@@ -33,8 +33,17 @@ export function pullMergeReason(pull: Pick<PullRequest, "state" | "mergeable" | 
   return undefined
 }
 
+/** The host and window say the same safe reason, without gh's output or request details. */
+export function githubRateLimitWords(retryAt: number): string {
+  const deadline = new Date(retryAt)
+  return Number.isNaN(deadline.getTime())
+    ? "GitHub is rate limited. Mako is waiting before asking again."
+    : `GitHub is rate limited. Try again after ${deadline.toISOString()}.`
+}
+
 /** Why a pull request can't be opened from here, or null once GitHub is set up. */
 export function pullSetupReason(status: GitHubStatus): string | null {
+  if (status.rateLimit) return githubRateLimitWords(status.rateLimit.retryAt)
   if (!status.installed) return "Install the GitHub CLI to open a pull request."
   if (!status.authenticated) return "Sign in to GitHub with gh auth login to open a pull request."
   if (!status.repo) return "Add a GitHub remote to open a pull request."

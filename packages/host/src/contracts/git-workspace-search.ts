@@ -97,9 +97,8 @@ export interface WorkspaceFile {
 /* ------------------------------------------------------------------ */
 
 /**
- * Whether GitHub is usable, and if not, which of three different problems it
- * is — a missing tool, a missing login, or a folder that is not a GitHub repo.
- * They want three different answers from the UI, so they are three fields.
+ * GitHub setup and any transient lookup refusal. A rate limit does not establish
+ * that the login or repository is missing; callers say that reason first.
  */
 export interface GitHubStatus {
   installed: boolean
@@ -110,6 +109,8 @@ export interface GitHubStatus {
   /** `owner/name`, when this folder has a GitHub remote. */
   repo?: string
   defaultBranch?: string
+  /** A failed lookup is not evidence that the remote or sign-in is missing. Epoch milliseconds, shared with the host's cooldown. */
+  rateLimit?: { retryAt: number }
 }
 
 export interface CheckSummary {

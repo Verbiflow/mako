@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { IdentityRow } from "../src/components/identity/identity-row"
 import { IdentityMenu } from "../src/components/identity/identity-menu"
 import { cloudAccountStore } from "../src/state/cloud-account"
-import { githubStore } from "../src/state/github"
+import { github, githubStore } from "../src/state/github"
 import { CloudPersonSchema } from "@mako/host/contracts/cloud-account"
 import type { CloudAccount, CloudDevice, CloudPerson } from "../src/lib/types"
 
@@ -139,3 +139,37 @@ assert.match(footer(), /Connect GitHub/)
 assert.doesNotMatch(menu(), /Mako account|>Sign in</)
 
 console.log("identity ui: the account over GitHub, pictures standing in for each other, every first step")
+
+
+// A rate-limited account lookup is still checking, not a prompt to change the person's login.
+cloudAccountStore.set({ account: signedIn("connected") })
+githubStore.set({ status: { installed: true, authenticated: false, rateLimit: { retryAt: 1_000_100 } }, userAvatar: undefined })
+assert.doesNotMatch(text(), /Connect GitHub|gh auth login/)
+
+// The actual frontend cache waits until the shared deadline, then retries on demand without a polling timer.
+const originalClock = Date.now
+const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
+let clock = 1_000_000, statusReads = 0, avatarReads = 0
+Date.now = () => clock
+Object.defineProperty(globalThis, "window", { configurable: true, value: { mako: {
+  githubStatus: async () => { statusReads++; return statusReads === 1 ? { installed: true, authenticated: false, rateLimit: { retryAt: 1_000_100 } } : gh },
+  userAvatar: async () => { avatarReads++; return undefined },
+  pullRequest: async () => { throw new Error("A limited lookup must not ask for a PR") },
+} } })
+try {
+  githubStore.set({ status: undefined, statusRoot: undefined, root: undefined, userAvatar: undefined })
+  await github.ensureStatus("fixture")
+  assert.equal(statusReads, 1)
+  assert.equal(avatarReads, 0, "a limited lookup does not ask for an avatar")
+  await github.refresh("fixture", "fix")
+  assert.equal(statusReads, 1, "refresh during cooldown reuses the known refusal")
+  clock = 1_000_100
+  await github.ensureStatus("fixture")
+  assert.equal(statusReads, 2, "the next demand at the deadline rechecks GitHub")
+  assert.equal(githubStore.get().status?.rateLimit, undefined)
+} finally {
+  Date.now = originalClock
+  if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow)
+  else Reflect.deleteProperty(globalThis, "window")
+}
+console.log("GitHub limit UI: no sign-in prompt, no extra reads before deadline, demand refresh after deadline")
