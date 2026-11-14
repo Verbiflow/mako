@@ -192,6 +192,11 @@ interface RepositoryFacts {
   point: WorktreeStartPoint | null
 }
 
+interface RepositoryPoints {
+  heads: readonly string[]
+  branches: ReadonlyMap<string, string>
+}
+
 /** Answers kept by the commits they depend on: a few per worktree, for far more worktrees than a Mac holds. */
 const COMMIT_ANSWERS = 4096
 
@@ -878,12 +883,18 @@ export class ThreadWorktreeService {
       if (!known) facts.set(repoRoot, known = this.repositoryFacts(repoRoot, true))
       return known
     }
+    const points = new Map<string, Promise<RepositoryPoints>>()
+    const pointsOf = (repoRoot: string) => {
+      let known = points.get(repoRoot)
+      if (!known) points.set(repoRoot, known = factsOf(repoRoot).then(facts => this.repositoryPoints(repoRoot, this.summaryListed, facts)))
+      return known
+    }
     await mapLimited(due, 6, async (worktree) => {
       this.staleSummaries.delete(worktree.path)
       this.indexOnly.delete(worktree.path)
       this.statuses.delete(worktree.path)
       const index = await this.indexTime(worktree.path)
-      const summary = await this.summarize(worktree, this.lastPullsOf, await factsOf(worktree.repoRoot), false, true)
+      const summary = await this.summarize(worktree, this.lastPullsOf, await factsOf(worktree.repoRoot), await pointsOf(worktree.repoRoot), false, true)
       this.heldSummaries.set(worktree.path, { summary, at: Date.now(), index, refs: summaryRefs(worktree, await factsOf(worktree.repoRoot)) })
     })
     const listed = new Set(this.summaryListed.map((worktree) => worktree.path))
@@ -918,7 +929,7 @@ export class ThreadWorktreeService {
     const shared = new Map<string, { paths: string[]; roots: Set<string>; branches: Set<string> }>()
     for (const worktree of worktrees) {
       const own = () => [worktree.path]
-      wanted.set(worktree.path, { gitDir: () => worktreeGitDir(worktree.path), paths: own, index: false, markers: HEAD_MARKER, roots: [worktree.repoRoot] })
+      wanted.set(worktree.path, { gitDir: () => worktreeGitDir(worktree.path), paths: own, index: false, markers: HEAD_MARKER, roots: [] })
       wanted.set(`index\0${worktree.path}`, { gitDir: () => worktreeGitDir(worktree.path), paths: own, index: true, markers: INDEX_MARKER, roots: [] })
       const common = commonDirOf(worktree.repoRoot)
       let group = shared.get(common)
@@ -931,10 +942,13 @@ export class ThreadWorktreeService {
     }
     for (const [common, group] of shared) {
       const remotes = new Set(["origin", ...await readdir(join(common, "refs", "remotes")).catch(() => [])])
-      const markers = [...new Set([...REF_MARKERS, ...[...group.branches].flatMap(branch => [dirname(join("refs", "heads", branch)), ...[...remotes].map(remote => dirname(join("refs", "remotes", remote, branch)))])])]
-      // Rebuild when the actual checked-out branches or membership changes, not just when a repo is first seen.
-      const key = `repo\0${common}\0${[...markers, ...group.paths].sort().join("\0")}`
-      wanted.set(key, { gitDir: async () => common, paths: () => group.paths, index: false, markers, roots: [...group.roots] })
+      const local = [...new Set([join("refs", "heads"), ...[...group.branches].map(branch => dirname(join("refs", "heads", branch)))])]
+      const remote = [...new Set([...REF_MARKERS, ...[...remotes].flatMap(name => [join("refs", "remotes", name), ...[...group.branches].map(branch => dirname(join("refs", "remotes", name, branch)))])])]
+      // Local moves stale summaries, but only remote-ref changes invalidate GitHub's five-minute list.
+      for (const [kind, markers, roots] of [["local", local, []], ["remote", remote, [...group.roots]]] as const) {
+        const key = `${kind}\0${common}\0${[...markers, ...group.paths].sort().join("\0")}`
+        wanted.set(key, { gitDir: async () => common, paths: () => group.paths, index: false, markers, roots })
+      }
     }
     for (const [key, watch] of this.summaryWatches) if (!wanted.has(key)) {
       watch.close()
@@ -990,12 +1004,11 @@ export class ThreadWorktreeService {
     const now = Date.now()
     // Pull requests are read at most once a minute a repository (`pullsIn`); one that changed is the worktree's event too.
     const pulls = new Map<string, WorktreeBranchPull[] | null>()
+    const points = new Map<string, RepositoryPoints>()
     for (const repoRoot of new Set(worktrees.map((worktree) => worktree.repoRoot))) {
-      const tips = (await factsOf(repoRoot)).tips
-      const points = await Promise.all(worktrees.filter(worktree => worktree.repoRoot === repoRoot).map(async worktree => ({ head: await worktreeHead(worktree.path, tips), branch: await worktreeBranch(worktree.path) })))
-      const heads = points.flatMap(point => point.head ? [point.head] : [])
-      const branches = new Map(points.flatMap(point => point.branch && point.head ? [[point.branch, point.head] as const] : []))
-      pulls.set(repoRoot, await this.pullsIn(repoRoot, pullsOf, heads, branches))
+      const live = await this.repositoryPoints(repoRoot, worktrees, await factsOf(repoRoot))
+      points.set(repoRoot, live)
+      pulls.set(repoRoot, await this.pullsIn(repoRoot, pullsOf, live))
     }
     const current = async (worktree: ThreadWorktree) => {
       const held = this.heldSummaries.get(worktree.path)
@@ -1020,12 +1033,23 @@ export class ThreadWorktreeService {
       // as it was, which is all `statusOf`'s own wait looks at.
       if (this.staleSummaries.delete(worktree.path)) this.statuses.delete(worktree.path)
       const index = await this.indexTime(worktree.path)
-      const summary = await this.summarize(worktree, pullsOf, await factsOf(worktree.repoRoot), atWork(worktree), true)
+      const summary = await this.summarize(worktree, pullsOf, await factsOf(worktree.repoRoot), points.get(worktree.repoRoot)!, atWork(worktree), true)
       this.heldSummaries.set(worktree.path, { summary, at: now, index, refs: summaryRefs(worktree, await factsOf(worktree.repoRoot)) })
       return summary
     })
     this.sayIfChanged(summaries)
     return summaries
+  }
+
+  /** The same repository-wide input for full, stale and single-summary PR reads. */
+  private async repositoryPoints(repoRoot: string, worktrees: readonly ThreadWorktree[], facts: RepositoryFacts): Promise<RepositoryPoints> {
+    const points = await Promise.all(worktrees.filter(worktree => worktree.repoRoot === repoRoot).map(async worktree => ({
+      head: await worktreeHead(worktree.path, facts.tips), branch: await worktreeBranch(worktree.path),
+    })))
+    return {
+      heads: points.flatMap(point => point.head ? [point.head] : []),
+      branches: new Map(points.flatMap(point => point.branch && point.head ? [[point.branch, point.head] as const] : [])),
+    }
   }
 
   /** What every worktree of a repository shares: the branch its main checkout has out, every branch's commit, where new Threads start. */
@@ -1068,8 +1092,12 @@ export class ThreadWorktreeService {
 
   /** One worktree's summary, with where its branch started; undefined for a folder that isn't one of Mako's worktrees. */
   async summary(path: string, pullsOf?: PullsOf): Promise<(WorktreeSummary & { startedFrom: string | null }) | undefined> {
-    const worktree = (await this.list()).worktrees.find((entry) => entry.path === path)
-    return worktree && { ...await this.summarize(worktree, pullsOf, await this.repositoryFacts(worktree.repoRoot), true), startedFrom: worktree.start?.from ?? null }
+    const { worktrees } = await this.list()
+    const worktree = worktrees.find(entry => entry.path === path)
+    if (!worktree) return undefined
+    const facts = await this.repositoryFacts(worktree.repoRoot)
+    const points = await this.repositoryPoints(worktree.repoRoot, worktrees, facts)
+    return { ...await this.summarize(worktree, pullsOf, facts, points, true), startedFrom: worktree.start?.from ?? null }
   }
 
   /** Where a worktree's new branch started (`origin/main`); null on a branch that existed already, or a folder that isn't one of Mako's worktrees. */
@@ -1102,7 +1130,7 @@ export class ThreadWorktreeService {
 
   private readonly pullsVisible: () => boolean
 
-  private pullsIn(repoRoot: string, pullsOf: PullsOf | undefined, liveHeads: readonly string[] = [], liveBranches: ReadonlyMap<string, string> = new Map()) {
+  private pullsIn(repoRoot: string, pullsOf: PullsOf | undefined, { heads: liveHeads, branches: liveBranches }: RepositoryPoints) {
     // Local file and Thread events still update summaries with no window; GitHub waits for a viewer.
     if (!this.pullsVisible()) return Promise.resolve(this.pullsRead.get(repoRoot) ?? null)
     const now = Date.now()
@@ -1119,16 +1147,15 @@ export class ThreadWorktreeService {
     return pulls
   }
 
-  private async summarize(worktree: ThreadWorktree, pullsOf: PullsOf | undefined, facts: RepositoryFacts, busy: boolean, idle = false): Promise<WorktreeSummary> {
+  private async summarize(worktree: ThreadWorktree, pullsOf: PullsOf | undefined, facts: RepositoryFacts, points: RepositoryPoints, busy: boolean, idle = false): Promise<WorktreeSummary> {
     const { into, point } = facts
     const tip = facts.tips.get(worktree.branch) ?? ""
     const from = into ? facts.tips.get(into) : worktree.base
     const currentHead = await worktreeHead(worktree.path, facts.tips)
-    const currentBranch = await worktreeBranch(worktree.path)
     const [status, landing, pulls, head] = await Promise.all([
       this.statusOf(worktree.path, busy, idle),
       this.landing(worktree, facts, idle),
-      this.pullsIn(worktree.repoRoot, pullsOf, currentHead ? [currentHead] : [], new Map(currentHead && currentBranch ? [[currentBranch, currentHead]] : [])),
+      this.pullsIn(worktree.repoRoot, pullsOf, points),
       currentHead,
     ])
     const count = (cwd: string, range: string) => (idle ? this.git.idleOutput(cwd, ["rev-list", "--count", range]) : this.git.readOutput(cwd, ["rev-list", "--count", range])).then(Number)

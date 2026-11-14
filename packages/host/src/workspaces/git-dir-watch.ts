@@ -11,7 +11,7 @@ const MARKERS = ["index", join("logs", "HEAD")]
  */
 export const HEAD_MARKER = ["HEAD", join("logs", "HEAD")]
 /** Shared ref changes, including a push/fetch that leaves the worktree HEAD alone. */
-export const REF_MARKERS = ["packed-refs", "FETCH_HEAD", join("refs", "heads"), join("refs", "remotes")]
+export const REF_MARKERS = ["packed-refs", "FETCH_HEAD", join("refs", "remotes")]
 /** What moves when what's staged does, and on any `git status` that refreshes the index's stat cache. */
 export const INDEX_MARKER = ["index"]
 
@@ -64,7 +64,7 @@ export function watchOutsideGitDir(folder: string, changed: () => void): GitDirW
 export function watchGitMarkers(gitDir: string, changed: () => void, markers: readonly string[] = MARKERS): GitDirWatch {
   let closed = false
   const watchers = new Map<string, FSWatcher>()
-  const arm = (path: string) => {
+  const arm = (path: string, previous?: string) => {
     watchers.get(path)?.close()
     watchers.delete(path)
     if (closed) return
@@ -77,10 +77,10 @@ export function watchGitMarkers(gitDir: string, changed: () => void, markers: re
       const child = watched === path ? undefined : relative(watched, path).split(sep)[0]
       const watcher = watch(watched, { persistent: false }, (_event, filename) => {
         if (watchers.get(path) !== watcher || child && filename && filename.toString() !== child) return
-        const moved = stamp(path) !== seen
-        if (!moved && watched === path) return
-        arm(path)
-        if (moved) changed()
+        const next = stamp(path)
+        if (next === seen && watched === path) return
+        arm(path, next)
+        if (next !== seen) changed()
       })
       watcher.on("error", () => {
         if (watchers.get(path) !== watcher) return
@@ -88,6 +88,8 @@ export function watchGitMarkers(gitDir: string, changed: () => void, markers: re
         watchers.delete(path)
       })
       watchers.set(path, watcher)
+      // A first push can create the missing target after the callback's stamp, before rearming it.
+      if (previous !== undefined && seen !== previous) changed()
     } catch {
       // Not there yet (a checkout with no commits has no reflog) or no handles
       // left: the tree watch and explicit refreshes still cover it.
