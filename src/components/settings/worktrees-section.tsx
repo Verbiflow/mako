@@ -221,7 +221,7 @@ function RetentionSettings() {
     <h3 className="text-ui font-medium">Finished Thread worktrees</h3>
     <p className="mt-0.5 pb-3 text-label text-muted-foreground">Preview only by default. Finished Threads can release their installed packages immediately when nothing has the folder open, regardless of Git changes. Checkout retirement waits seven quiet days and requires a clean current HEAD kept on a fetched remote, with no ignored private files. Shared or explicitly kept folders stay. Enabled removal checks hourly and on events, at most once every ten minutes. No GitHub API lookups.</p>
     {report ? <ListCard>
-      <SettingRow title="Automatic retirement" description="Packages go first and can be installed again. Checkout removal keeps committed branches. Choosing removal enables it on the next pass.">
+      <SettingRow title="Automatic retirement" description="Removed packages return on the next app start or check. Agents running commands directly may need to reinstall. Checkout removal keeps committed branches. Choosing removal enables it on the next pass.">
         <select aria-label="Automatic retirement" value={report.settings.mode} disabled={busy} onChange={(event) => {
           const mode = event.target.value
           if (mode === "preview" || mode === "packages" || mode === "checkout") void save({ ...report.settings, mode })
@@ -240,7 +240,7 @@ function RetentionSettings() {
       {report.checkouts.map((row) => <SettingRow key={row.path} title={row.branch} description={row.skip ?? `${row.packageSkip ?? `${plural(row.packages.length, "install folder")} can be reclaimed.`} ${row.checkoutSkip ?? "The checkout is eligible for retirement."} No files were removed by this preview.`}>
         <Toggle label={`Keep ${row.branch}`} on={report.settings.kept.includes(row.path)} onChange={() => void save({ ...report.settings, kept: report.settings.kept.includes(row.path) ? report.settings.kept.filter((path) => path !== row.path) : [...report.settings.kept, row.path] })} />
       </SettingRow>)}
-      <p className="text-label text-faint">Repository fetches in this preview: {report.repositoryFetches}. GitHub API lookups: 0.</p>
+      <p className="text-label text-faint">Checkout eligibility is as of the last fetch. Preview never fetches or prunes remote refs. GitHub API lookups: 0.</p>
       <Action tone="outline" size="xs" disabled={busy} onClick={() => void read()}>Preview again</Action>
     </ListCard> : null}
     {error ? <p className="pt-2 text-label text-removed">{error}</p> : null}

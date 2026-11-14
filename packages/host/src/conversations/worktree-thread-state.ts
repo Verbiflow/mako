@@ -11,6 +11,8 @@ interface Deps {
   memory?: Pick<SessionMemory, "routeForConversation" | "runtimeLaunch" | "hostDataRoots"> | null
   /** Current host state takes precedence over historical records. */
   busy?(conversation: string): boolean
+  /** A continued cloud/device conversation is not finished on this computer. */
+  elsewhere?(conversation: string): boolean
   fin?(thread: ThreadId): number | undefined
 }
 
@@ -27,7 +29,7 @@ export class WorktreeThreadState {
       if (!record) return undefined
       const edge = store.edges().of(thread)
       const conversations = store.threadConversations([thread]).get(thread) ?? []
-      if (conversations.flat().some(id => this.deps.busy?.(id))) return undefined
+      if (conversations.flat().some(id => this.deps.busy?.(id) || this.deps.elsewhere?.(id))) return undefined
       const ends: number[] = []
       for (const session of conversations) {
         const id = session.at(-1)
