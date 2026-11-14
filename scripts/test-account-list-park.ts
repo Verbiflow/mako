@@ -7,10 +7,9 @@ import { AccountList, accountListStore } from "../src/web-client/account-list"
 import { Gateway } from "../src/web-client/gateway"
 
 /**
- * A browser's list while its page is hidden (`AccountList.park`): the account's stream is let go and nothing is applied,
- * and shown again it's followed after the last number the list applied, the account replaying what happened meanwhile
- * in order and once each, with no read of the whole list. A gap on the replay, or a stream that failed, reads it whole
- * as before.
+ * A browser's list while its page is hidden (`AccountList.park`): the account's stream is let go and nothing arrives or
+ * is applied. Shown again, the list is read and followed after that read's number, as any follow starts, so what
+ * happened meanwhile is in the list once and nothing after it is missed.
  */
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
@@ -23,17 +22,15 @@ const row = (n: number, state: ListedSession["state"] = "idle", minute = 0): Lis
 
 /**
  * The account as a browser meets it: a numbered log every event is kept in, a read of the list at the log's number, and
- * a stream that replays the log after the number it's asked from, then each event as it's kept. `trimmedTo` drops the
- * log's start, as a log kept bounded would, so a follow from before it is said `lost`.
+ * a stream that replays the log after the number it's asked from, then each event as it's kept.
  */
 function account() {
   const log: Array<{ seq: number; event: AccountEvent }> = []
   const listed = new Map<string, ListedSession>()
   const subscribes: number[] = []
   const counts = { reads: 0, subscribes, delivered: 0 }
-  let trimmedTo = 0
   let open: { inbox: Inbox<EventFrame>; after: number } | undefined
-  const frame = (seq: number, event: AccountEvent | { type: "lost" }) => {
+  const frame = (seq: number, event: AccountEvent) => {
     // SAFETY: an event frame as the list reads one: its number and its payload, nothing else of the envelope.
     return { seq, event: Payload.of(event) } as EventFrame
   }
@@ -57,8 +54,7 @@ function account() {
     counts.subscribes.push(after)
     const inbox = new Inbox<EventFrame>()
     open = { inbox, after }
-    if (after < trimmedTo) inbox.push(frame(trimmedTo + 1, { type: "lost" }))
-    else for (const kept of log) if (kept.seq > after) {
+    for (const kept of log) if (kept.seq > after) {
       counts.delivered += 1
       inbox.push(frame(kept.seq, kept.event))
     }
@@ -73,6 +69,7 @@ function account() {
       const seq = (log.at(-1)?.seq ?? 0) + 1
       log.push({ seq, event })
       if (event.type === "sessions-listed") for (const each of event.sessions) listed.set(each.session, each)
+      if (event.type === "sessions-unlisted") for (const each of event.sessions) listed.delete(each)
       deliver(seq, event)
       return seq
     },
@@ -80,10 +77,6 @@ function account() {
     resend(seq: number) {
       const kept = log.find((each) => each.seq === seq)
       if (kept && open && !open.inbox.closed) open.inbox.push(frame(kept.seq, kept.event))
-    },
-    /** The log keeps nothing up to `seq` from now. */
-    trim(seq: number) {
-      trimmedTo = seq
     },
     /** The stream's socket dropped under the browser, as a network does. */
     drop() {
@@ -123,7 +116,7 @@ function browser() {
   }
 }
 
-test("a hidden page follows nothing, and shown again replays what it missed without reading the list", async () => {
+test("a hidden page follows nothing, and shown again reads the list and follows from it", async () => {
   const { cloud, list, close } = browser()
   try {
     cloud.keep({ type: "sessions-listed", sessions: [row(1), row(2)] })
@@ -146,12 +139,15 @@ test("a hidden page follows nothing, and shown again replays what it missed with
     assert.equal(accountListStore.get().phase, "live", "parking isn't a failure")
 
     assert.equal(list.unpark(), true)
-    await until("the missed changes replayed", () => shown().size === 2 && shown().get(uuid(1)) === "idle" && shown().get(uuid(3)) === "working")
-    assert.equal(cloud.counts.reads, 1, "shown again, the list isn't read whole")
-    assert.deepEqual(cloud.counts.subscribes, [1, 2], "followed again after the last number applied")
-    assert.equal(cloud.counts.delivered - deliveredBefore, 3, "each missed event once")
-    assert.deepEqual([...shown().keys()].sort(), cloud.rows().filter((each) => each.session !== uuid(2)).map((each) => each.session).sort(), "the list is the account's")
-    assert.equal(list.unpark(), false, "shown twice, it replays once")
+    await until("the list as it stands", () => shown().size === 2 && shown().get(uuid(1)) === "idle" && shown().get(uuid(3)) === "working")
+    assert.equal(cloud.counts.reads, 2, "shown again, the list is read")
+    await until("followed again", () => cloud.following())
+    assert.deepEqual(cloud.counts.subscribes, [1, 5], "followed after the read's number")
+    assert.equal(cloud.counts.delivered, deliveredBefore, "nothing the read already holds is sent again")
+    assert.deepEqual([...shown().keys()].sort(), cloud.rows().map((each) => each.session).sort(), "the list is the account's")
+    cloud.keep({ type: "sessions-listed", sessions: [row(3, "idle", 4)] })
+    await until("a change after the show", () => shown().get(uuid(3)) === "idle")
+    assert.equal(list.unpark(), false, "shown twice, it reads once")
   } finally {
     close()
   }
@@ -169,7 +165,8 @@ test("hidden in the middle of a change, nothing of it is missed or applied twice
     for (let n = 2; n <= 6; n += 1) cloud.keep({ type: "sessions-listed", sessions: [row(n, "working", n)] })
     cloud.keep({ type: "sessions-listed", sessions: [row(1, "idle", 7)] })
     list.unpark()
-    await until("the burst replayed", () => shown().size === 6 && shown().get(uuid(1)) === "idle")
+    await until("the burst in the list", () => shown().size === 6 && shown().get(uuid(1)) === "idle")
+    await until("followed again", () => cloud.following())
     // A number sent again (a frame in flight at the park, resent) is passed over: Session 1 stays as it is now, not as
     // that older frame says.
     cloud.resend(first)
@@ -177,7 +174,7 @@ test("hidden in the middle of a change, nothing of it is missed or applied twice
     await until("the last change", () => shown().get(uuid(6)) === "idle")
     assert.equal(shown().get(uuid(1)), "idle", "an old frame sent again isn't applied")
     assert.equal(accountListStore.get().seq, seq)
-    assert.equal(cloud.counts.reads, 1)
+    assert.equal(cloud.counts.reads, 2)
   } finally {
     close()
   }
@@ -192,24 +189,7 @@ test("hidden and shown before the stream's end is heard, it's still a park, not 
     list.unpark()
     cloud.keep({ type: "sessions-listed", sessions: [row(1, "working", 1)] })
     await until("followed again and the change applied", () => shown().get(uuid(1)) === "working")
-    assert.equal(cloud.counts.reads, 1, "no read of the whole list")
     assert.equal(accountListStore.get().failure, undefined, "nothing said failed")
-  } finally {
-    close()
-  }
-})
-
-test("a replay the account can't give (its log moved on) reads the list whole", async () => {
-  const { cloud, list, close } = browser()
-  try {
-    list.start()
-    await until("followed", () => cloud.following())
-    list.park()
-    cloud.keep({ type: "sessions-listed", sessions: [row(1, "working", 1)] })
-    cloud.keep({ type: "sessions-listed", sessions: [row(2, "working", 2)] })
-    cloud.trim(2)
-    list.unpark()
-    await until("the list read whole", () => cloud.counts.reads === 2 && shown().size === 2)
   } finally {
     close()
   }
@@ -239,8 +219,8 @@ test("hidden before its first read lands, the list follows from that read once s
     assert.equal(cloud.following(), false, "hidden, not followed")
     cloud.keep({ type: "sessions-listed", sessions: [row(1, "working", 1)] })
     list.unpark()
-    await until("followed and replayed", () => shown().get(uuid(1)) === "working")
-    assert.equal(cloud.counts.reads, 1)
+    await until("read again and followed", () => shown().get(uuid(1)) === "working")
+    assert.equal(cloud.counts.reads, 2, "the read from before the show isn't followed: the list is read again")
   } finally {
     close()
   }

@@ -101,8 +101,8 @@ const SAVE_MS = 5_000
  * Follows the account's list for this browser: `GET /v1/sessions`, then the account's stream after its number, held by
  * the same `AccountSessions` a Mac's host holds, so a browser and a Mac can't list the account differently. Followed
  * again from a fresh read whenever the stream ends; a wake (the page shown again, the network back) cuts the wait
- * short. While the page is hidden the stream is let go (`park`), and shown again it's followed from the number the list
- * stopped at, the account replaying what it missed. Nothing here wakes a machine or a Mac.
+ * short. While the page is hidden the stream is let go (`park`): nothing is followed or applied until it's shown again,
+ * when the list is read and followed as at any start. Nothing here wakes a machine or a Mac.
  */
 export class AccountList {
   readonly #gateway: Gateway
@@ -117,8 +117,6 @@ export class AccountList {
   /** The subscription `park` closed: its end is ours, not a failure, even once shown again. */
   #letGo: Subscription | undefined
   #unpark: (() => void) | undefined
-  /** The last number of the account's stream this list followed to, while it holds every event up to it. */
-  #followed: number | undefined
   #saveTimer: ReturnType<typeof setTimeout> | undefined
   /** Whether this visit kept the list once already. */
   #saved = false
@@ -145,8 +143,7 @@ export class AccountList {
   }
 
   /**
-   * The page is hidden: the account's stream is let go, so nothing arrives or is applied while nobody sees the list. The
-   * account keeps every event numbered, so `unpark` takes up exactly where the list stopped.
+   * The page is hidden: the account's stream is let go, so nothing arrives or is applied while nobody sees the list.
    */
   park(): void {
     if (this.#parked || this.#stopped) return
@@ -155,10 +152,7 @@ export class AccountList {
     this.#subscription?.close()
   }
 
-  /**
-   * Shown again: the stream is followed again after the last number the list applied, and the account replays what
-   * happened meanwhile, in order and once each, instead of the whole list being read again. Whether it was parked.
-   */
+  /** Shown again: the list is read and followed again, as any follow starts. Whether it was parked. */
   unpark(): boolean {
     if (!this.#parked) return false
     this.#parked = false
@@ -233,47 +227,38 @@ export class AccountList {
   async #run(): Promise<void> {
     let failures = 0
     while (!this.#stopped) {
+      // Hidden: nothing is followed until the page is shown again.
       if (this.#parked) {
         await new Promise<void>((resolve) => (this.#unpark = resolve))
         continue
       }
       try {
-        // Back from a park, the stream is followed again from where the list stopped: the account replays the events
-        // since, and nothing is read whole. Otherwise (a first read, a gap, a failure) the list is read, then followed.
-        let after = this.#followed
-        if (after === undefined) {
-          // The devices are asked beside the list on its first read, not after it: the list paints once both are here,
-          // a round trip sooner on a phone's network.
-          const devices = this.#devicesAsked ? undefined : this.refreshDevices().catch((error) => this.#failed({ error }))
-          const listings = SessionListingsSchema.parse(await this.#gateway.rest("GET", "/v1/sessions"))
-          this.#list.listed(listings)
-          if (devices) await devices
-          else if (this.#unnamedDevice()) await this.refreshDevices().catch((error) => this.#failed({ error }))
-          this.#publish("live")
-          after = listings.seq
-          this.#followed = after
-          // Hidden while it was read: followed from here once shown.
-          if (this.#parked) continue
-        }
+        // The devices are asked beside the list on its first read, not after it: the list paints once both are here, a
+        // round trip sooner on a phone's network.
+        const devices = this.#devicesAsked ? undefined : this.refreshDevices().catch((error) => this.#failed({ error }))
+        const listings = SessionListingsSchema.parse(await this.#gateway.rest("GET", "/v1/sessions"))
+        this.#list.listed(listings)
+        if (devices) await devices
+        else if (this.#unnamedDevice()) await this.refreshDevices().catch((error) => this.#failed({ error }))
+        this.#publish("live")
         failures = 0
-        const subscription = this.#gateway.session.subscribe({ stream: accountStream(this.#accountId), after })
+        // Hidden while it was read: read again once shown.
+        if (this.#parked) continue
+        const subscription = this.#gateway.session.subscribe({ stream: accountStream(this.#accountId), after: listings.seq })
         this.#subscription = subscription
         // The stream is numbered with no gaps: one skipped, or said lost, means the list may be wrong, and it's read
         // whole again at once.
+        let last = listings.seq
         for (;;) {
           const frame = await subscription.next()
-          const last = this.#followed ?? after
           if (frame.seq <= last) continue
           const skipped = frame.seq > last + 1
           const decoded = frame.event.decode()
           const lost = LostSchema.safeParse(decoded).success
           if (skipped || lost) webSync.listGap({ after: last, seq: frame.seq, why: skipped ? "skipped" : "lost" })
+          last = frame.seq
           webSync.listHeard(frame.seq)
-          if (skipped || lost) {
-            this.#followed = undefined
-            break
-          }
-          this.#followed = frame.seq
+          if (skipped || lost) break
           const parsed = AccountEventSchema.safeParse(decoded)
           // A device joining or leaving the account: its name, and whether it's a Mac, are read again at once, so a Mac
           // signing in for the first time shows up as it does.
@@ -298,7 +283,7 @@ export class AccountList {
         continue
       } catch (error) {
         if (this.#stopped) return
-        // Let go by `park`: not a failure, and the list still holds everything up to `#followed`.
+        // Let go by `park`: not a failure; the list is read again once shown.
         if (this.#parked || (this.#letGo && this.#letGo === this.#subscription)) {
           this.#letGo = undefined
           continue
@@ -308,8 +293,6 @@ export class AccountList {
           return
         }
         this.#failed({ error })
-        // A stream that failed may have lost frames in flight: the next follow reads the list whole.
-        this.#followed = undefined
         if (accountListStore.get().phase === "live") accountListStore.set({ phase: "reconnecting" })
       }
       await this.#pause(followAgainInMs(failures++))
