@@ -6,7 +6,9 @@ import { headlessNodeExecutable } from "@mako/host/base/headless-node"
  * The host's tests, under each runtime the host runs in: this Node, as on a
  * cloud machine, and Electron's Helper in Node mode, which is how
  * `hostCommand` starts it on a Mac. `--runtime node` or `--runtime electron`
- * runs one.
+ * runs one. `MAKO_TEST_HOST_SCRIPTS` runs only the scripts it names and
+ * `MAKO_TEST_HOST_EXCEPT` all but them (comma-separated), so CI runs the one
+ * that reads the Mac's Keychain on a Mac and the rest on Linux (`ci-gate.mjs`).
  */
 const TESTS = [
   "scripts/test-host-environment.ts",
@@ -53,11 +55,17 @@ const asked = process.argv.includes("--runtime") ? process.argv[process.argv.ind
 if (asked !== undefined && !isRuntime(asked)) throw new Error(`--runtime is node or electron, not ${asked}`)
 const chosen: readonly Runtime[] = isRuntime(asked) ? [asked] : RUNTIMES
 
+const listed = (variable: string) => process.env[variable]?.split(",").map((each) => each.trim()).filter(Boolean)
+const only = listed("MAKO_TEST_HOST_SCRIPTS"), except = listed("MAKO_TEST_HOST_EXCEPT")
+const unknown = [...only ?? [], ...except ?? []].filter((each) => !TESTS.includes(each))
+if (unknown.length) throw new Error(`No host test ${unknown.join(", ")}`)
+const picked = TESTS.filter((test) => (!only || only.includes(test)) && !except?.includes(test))
+
 for (const name of chosen) {
   const runtime = launch[name]
   const started = performance.now()
   console.log(`\n== host tests under ${name === "node" ? `Node ${process.versions.node}` : "Electron's Helper in Node mode"}`)
-  for (const test of TESTS) {
+  for (const test of picked) {
     const run = spawnSync(runtime.executable, ["--import", "tsx", test], {
       stdio: "inherit",
       env: { ...process.env, ...runtime.env },
@@ -67,5 +75,5 @@ for (const name of chosen) {
       process.exit(1)
     }
   }
-  console.log(`== ${TESTS.length} host tests passed under ${name} in ${Math.round((performance.now() - started) / 1000)}s`)
+  console.log(`== ${picked.length} host tests passed under ${name} in ${Math.round((performance.now() - started) / 1000)}s`)
 }

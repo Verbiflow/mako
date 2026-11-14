@@ -10,7 +10,7 @@ import { holdDue, holdOf } from "@mako/host/contracts/request-hold"
 import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
 import { FROM_AGENTS } from "@mako/host/contracts/children"
 import { readFinReports } from "@mako/host/contracts/fin-reports"
-import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
+import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Script } from "./lib/agents-world.ts"
 
 /**
  * Reports that arrive while an Apex can't run wait as one digest and go once, in the first turn after it can
@@ -135,7 +135,7 @@ try {
     assert.equal(holdForRetry([{ ...digest, digest: { notices: [], heard: true as const } }], "rate-limited", LIMIT, Date.now()), undefined, "one a model answered has nothing to keep")
   }
 
-  for (const harness of HARNESSES) {
+  for (const harness of TESTED_HARNESSES) {
     const names = ["fin-a", "fin-b", "fin-c"]
 
     // Refused unsent: the first report knocks once, the rest join it, and nothing more is tried.

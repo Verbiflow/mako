@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { STRANDED_AFTER_MS } from "@mako/host/contracts/turn-continuation"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
-import { AgentsWorld, HARNESSES, type Script, type WorldAccount } from "./lib/agents-world.ts"
+import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Script, type WorldAccount } from "./lib/agents-world.ts"
 
 /**
  * A Fin's turn that stops early is either cut or at a limit, on each of the six harnesses (`npm run test:fin-fallback`).
@@ -131,7 +131,7 @@ const elsewhere = (run: Run, harness: string) => run.world.prompts.filter((promp
 const moved = (run: Run) => run.world.store.edges().of(run.child)?.tuned?.rerouted?.to
 
 try {
-  for (const harness of HARNESSES) {
+  for (const harness of TESTED_HARNESSES) {
     // A cut that wasn't a limit is its Apex's to hear, and nothing moves.
     {
       const run = await fin(`${harness}-cut`, harness)

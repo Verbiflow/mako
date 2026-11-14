@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AgentsWorld, HARNESSES } from "./lib/agents-world.ts"
+import { AgentsWorld, TESTED_HARNESSES } from "./lib/agents-world.ts"
 
 /**
  * A turn a usage limit cut gives up its place while it waits, and takes one again to go on, as anything else does
@@ -99,7 +99,7 @@ async function run(root: string, harness: string, stops: boolean): Promise<void>
 
 const root = mkdtempSync(join(tmpdir(), "mako-limit-wake-"))
 try {
-  for (const harness of HARNESSES) {
+  for (const harness of TESTED_HARNESSES) {
     await run(join(root, harness), harness, false)
     await run(join(root, `${harness}-stopped`), harness, true)
   }
