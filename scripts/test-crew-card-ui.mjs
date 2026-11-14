@@ -177,6 +177,14 @@ async function checkPage({ window, page, shots, base }) {
     evaluate(
       `(() => { const probe = ${evidence} ? window.__crewEvidence : undefined; probe?.begin(); try { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true } finally { probe?.post() } })()`
     )
+  // The line brings the card back with a scroll whose event comes a frame later. A transcript still streaming changes in
+  // that frame, and the timeline holding its reader's place then put the old place back over the scroll, the card out
+  // of view again and the line left standing: one run in a dozen on the runner. The click changes the transcript in the
+  // same task, so every run meets that frame.
+  const clickAway = (evidence = false) =>
+    evaluate(
+      `(() => { const probe = ${evidence} ? window.__crewEvidence : undefined; probe?.begin(); try { const node = document.querySelector('[data-crew-away]'); if (!node) return false; node.click(); const turn = document.querySelector('[data-transcript-viewport] [data-exchange]'); turn?.append(document.createElement('span')); return Boolean(turn) } finally { probe?.post() } })()`
+    )
   // The card virtualizes past its own height, so a row off screen isn't in the DOM yet: scroll its own scroller
   // top to bottom, a screenful at a time, collecting every row once, in the order it comes into view (the order
   // it's drawn in, since the virtualizer never renders two rows out of their list's order).
@@ -358,7 +366,7 @@ async function checkPage({ window, page, shots, base }) {
     "[...document.querySelectorAll('[data-sonner-toast]')].forEach((toast) => toast.remove()); true"
   )
   await both("away")
-  assert.equal(await click("[data-crew-away]", true), true, "the crew-away click target exists at dispatch")
+  assert.equal(await clickAway(true), true, "the crew-away click target exists at dispatch, beside a turn that changes")
   await until(
     "!document.querySelector('[data-crew-away]')",
     "the line leaves once Needs you is back in view"
@@ -620,6 +628,38 @@ async function checkPage({ window, page, shots, base }) {
     "exactly one Fin's row re-renders for its own step, not the whole card"
   )
 
+  // A long Apex, its transcript windowed (past 40 turns): the line brings the card back there too, with the transcript
+  // changing in the same frame. Windowed, the transcript can't tell a scroll it didn't make from its own virtualizer's,
+  // so the line announces its scroll as the reader's (`scrollReaderTo`); unannounced, the hold put the top back.
+  await window.loadURL(`${base}?mock&app=apex&turns=60`)
+  await until(
+    "[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))",
+    "the long Apex's row"
+  )
+  await evaluate(
+    "[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true"
+  )
+  await until("Boolean(document.querySelector('[data-composer]'))", "the long Apex's composer")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-crew]'))", "the long Apex's crew card")
+  await settle()
+  assert.equal(
+    await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"),
+    true,
+    "the long Apex's transcript is windowed"
+  )
+  // A screen or so up, as a reader leaving the card is: the turns they're on stay mounted in the window, and those are
+  // what holding their place reads.
+  await evaluate("(() => { const node = document.querySelector('[data-transcript-viewport]'); node.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, bubbles: true })); node.scrollTop -= 900; return true })()")
+  await until("Boolean(document.querySelector('[data-crew-away]'))", "the long Apex's line while its card is scrolled away")
+  assert.equal(await clickAway(), true, "the long Apex's line, beside a turn that changes")
+  await until("!document.querySelector('[data-crew-away]')", "the long Apex's line leaves once Needs you is back in view")
+  const longCard = await evaluate(
+    "(() => { const card = document.querySelector('[data-crew]').getBoundingClientRect(); const view = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { top: Math.round(card.top), bottom: Math.round(card.bottom), viewTop: Math.round(view.top), viewBottom: Math.round(view.bottom) } })()"
+  )
+  console.log("LONG", JSON.stringify(longCard))
+  assert.ok(longCard.top < longCard.viewBottom && longCard.bottom > longCard.viewTop, `the long Apex's card is back in view: ${JSON.stringify(longCard)}`)
+
   // The phone: the same card, compact, answers in reach of a thumb.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
@@ -711,7 +751,7 @@ async function checkPage({ window, page, shots, base }) {
     "the phone's dock still doesn't draw the ask itself"
   )
   await both("phone-away")
-  await click("[data-crew-away]")
+  await clickAway()
   await until(
     "!document.querySelector('[data-crew-away]')",
     "the phone's line leaves once the card is back"

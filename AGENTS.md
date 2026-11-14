@@ -89,7 +89,7 @@ checkpoints, moves between checkouts, automations and the harnesses'
 artifact previews. It reads the live conversations through
 `WorkspaceConversations`; composition makes what its tabs share
 (`TabServices`). The package declares
-every package it imports (`scripts/check-host-dependencies.mjs`). The package reaches its own files
+every package it imports (`scripts/check-package-dependencies.mjs`, which holds every package to it). The package reaches its own files
 by relative path. `scripts/check-host-boundaries.mjs`, in `npm run lint`,
 holds all of it, type imports included.
 
