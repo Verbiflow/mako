@@ -82,17 +82,21 @@ try {
       const placed = store.registerJournal({ conversationId: id, createdAt: 1, harness: "codex", bindings: [] }, { kind: "service", name: "migration" })
       const state = new WorktreeThreadState({ store, dataRoot })
       assert.ok(state.finished(placed.thread) !== undefined, "an ended top-level Thread qualifies without a crew or Fin edge")
+      assert.ok(state.quietSince(placed.thread) !== undefined, "a settled local journal can age out registered scratch")
       const active = new WorktreeThreadState({ store, dataRoot, busy: () => true })
       assert.equal(active.finished(placed.thread), undefined, "current activity wins over a closed journal")
+      assert.equal(active.quietSince(placed.thread), undefined)
       let elsewhere = true
       const continued = new WorktreeThreadState({ store, dataRoot, elsewhere: () => elsewhere })
       assert.equal(continued.finished(placed.thread), undefined, "a closed local journal is not finished while CloudConversations.has routes it elsewhere")
+      assert.equal(continued.quietSince(placed.thread), undefined)
       elsewhere = false
       assert.ok(continued.finished(placed.thread) !== undefined, "local completion can qualify after the continued routing has been removed")
       const previous = snapshot
       snapshot = { ...snapshot, revision: snapshot.revision + 1, session: { ...snapshot.session, status: "closed" } }
       journal.commit({ ...snapshot, requests: [{ id: "queued", text: "fixture", createdAt: 1, status: "queued", attachments: [] }] }, previous)
       assert.equal(state.finished(placed.thread), undefined, "queued work keeps an otherwise closed Thread")
+      assert.equal(state.quietSince(placed.thread), undefined, "queued work blocks idle scratch cleanup")
       assert.equal(state.finished(other), undefined, "missing records never become finished")
     } finally { journal.close() }
   } finally { store.close() }

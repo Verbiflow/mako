@@ -22,12 +22,11 @@ export class WorktreeThreadState {
 
   constructor(deps: Deps) { this.deps = deps }
 
-  finished(thread: ThreadId): number | undefined {
+  private quiet(thread: ThreadId): number | null | undefined {
     try {
       const { store } = this.deps
       const record = store.thread(thread)
       if (!record) return undefined
-      const edge = store.edges().of(thread)
       const conversations = store.threadConversations([thread]).get(thread) ?? []
       if (conversations.flat().some(id => this.deps.busy?.(id) || this.deps.elsewhere?.(id))) return undefined
       const ends: number[] = []
@@ -44,6 +43,23 @@ export class WorktreeThreadState {
         if (!state?.finished) return undefined
         ends.push(state.at)
       }
+      return ends.length ? Math.max(...ends, store.reportsOf(thread).at(-1)?.at ?? 0) : null
+    } catch { return undefined }
+  }
+
+  /** A known, settled local Thread can age out even when its Fin has not reported ended. */
+  quietSince(thread: ThreadId): number | undefined {
+    const edge = this.deps.store.edges().of(thread)
+    if (edge && (this.deps.store.queuedSpawns().some(queued => queued.op === edge.op) || edge.run?.stopping?.unconfirmed || edge.placed?.working)) return undefined
+    return this.quiet(thread) ?? undefined
+  }
+
+  finished(thread: ThreadId): number | undefined {
+    try {
+      const quiet = this.quiet(thread)
+      if (quiet === undefined) return undefined
+      const ends = quiet === null ? [] : [quiet]
+      const store = this.deps.store, edge = store.edges().of(thread)
       // Pending records on another profile must not be hidden by this host's in-memory Fin reading.
       if (edge && this.deps.fin) {
         const at = this.deps.fin(thread)

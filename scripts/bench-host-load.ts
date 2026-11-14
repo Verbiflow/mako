@@ -1,7 +1,6 @@
 import { execFileSync, fork, spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
 import { z } from "zod"
@@ -11,7 +10,7 @@ import { HOST_NODE_OPTIONS } from "@mako/host/base/process-warnings"
 import { heldBy, slices, timeIn } from "./lib/cpu-slices.ts"
 import { readResident, unmeasured, type ResidentMemory } from "./lib/host-load-memory.ts"
 import { claudeSessionPath, makeWorld, TODAY, type WorldScale } from "./lib/host-load-world.ts"
-import { removeScratch } from "./lib/scratch-processes.mjs"
+import { ownedScratch } from "./lib/owned-scratch.mjs"
 import { scriptedModel } from "./scripted-model.ts"
 import { fakeCloud, type AccountReports } from "./lib/sync-bench-cloud.ts"
 
@@ -108,10 +107,36 @@ const READ_TIMES = 10
 if (values["tool-heavy"] && (!values.send || Number(values.fins) > 0))
   throw new Error("--tool-heavy requires --send and no --fins")
 
-const root = realpathSync(values.root ? (mkdirSync(values.root, { recursive: true }), values.root) : mkdtempSync(join(tmpdir(), "mako-host-load-")))
-say(`world: ${root}`)
+const scratch = ownedScratch("mako-host-load-", { root: values.root, keep: values.keep })
+const root = scratch.path
+const children: ChildProcess[] = []
+let host: ChildProcess | undefined
+let releaseWorld = () => {}
+let closeModel: () => Promise<void> = async () => {}
+let closeCloud: () => Promise<void> = async () => {}
+let finishing: Promise<never> | undefined
+const finish = (code: number): Promise<never> => {
+  finishing ??= Promise.resolve().then(async () => {
+    let failed = false
+    const attempt = async (stage: string, work: () => void | boolean | Promise<void>) => {
+      try { await work() } catch { failed = true; say(`bench:host-load cleanup failed at ${stage}; scratch is kept if its guards cannot prove it unused`) }
+    }
+    if (host) await attempt("host stop", () => host?.kill("SIGKILL"))
+    for (const child of children) await attempt("child stop", () => child.kill("SIGKILL"))
+    await attempt("world release", releaseWorld)
+    await attempt("model close", closeModel)
+    await attempt("cloud close", closeCloud)
+    await attempt("scratch removal", () => scratch.dispose())
+    process.exit(code || (failed ? 1 : 0))
+  })
+  return finishing
+}
+
+try {
 const began = performance.now()
 const world = await makeWorld(root, scale)
+releaseWorld = world.release
+say(`world: ${root}`)
 say(`world made in ${Math.round(performance.now() - began)} ms: ${world.checkouts.length} checkouts, ${world.checkouts.reduce((sum, checkout) => sum + checkout.repositories.length, 0)} worktrees`)
 if (values["home-from"]) {
   for (const store of [".claude/projects", ".codex/sessions", ".cursor/projects", ".cursor/chats"]) {
@@ -123,16 +148,6 @@ if (values["home-from"]) {
   }
 }
 
-const children: ChildProcess[] = []
-let host: ChildProcess | undefined
-const finish = async (code: number) => {
-  for (const child of children) child.kill("SIGKILL")
-  world.release()
-  await model?.close()
-  await cloud?.close()
-  if (!values.keep) await removeScratch(root).catch((error: Error) => say(`scratch left: ${error.message}`))
-  process.exit(code)
-}
 
 /** With `--send`: when the stand-in model first heard each `BENCH-S<n>` message, by its tag. */
 const heardAt = new Map<string, number>()
@@ -147,6 +162,7 @@ const finCount = Number(values.fins)
 // Sessions (frames, rows, bytes), so the account's message rate is measured beside the loop.
 const cloud = values.account ? await fakeCloud() : undefined
 if (cloud) {
+  closeCloud = () => cloud.close()
   await cloud.account()
   mkdirSync(join(world.dataRoot, "cloud"), { recursive: true, mode: 0o700 })
   // Signed in for the account only: no harness sign-ins shared, no login item installed.
@@ -174,13 +190,13 @@ const model = values.send || finCount > 0 ? await scriptedModel({
   },
 }) : undefined
 if (model) {
+  closeModel = () => model.close()
   // A sealed Codex in the scratch home, answered by the stand-in: a real send's way through the host, no account.
   mkdirSync(join(world.home, ".codex"), { recursive: true })
   writeFileSync(join(world.home, ".codex", "config.toml"), `openai_base_url = "${model.url}/v1"\nchatgpt_base_url = "${model.url}/backend-api"\n\n[features]\nplugins = false\n`)
   writeFileSync(join(world.home, ".codex", "auth.json"), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "mako-host-load" }), { mode: 0o600 })
 }
 
-try {
   const { directory, socket } = runtimeLocation(world.dataRoot)
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(MAKO_|CLAUDE_|CODEX_HOME|CURSOR_)/.test(name)))
@@ -506,7 +522,6 @@ try {
   await finish(failures.length && !values["report-only"] ? 1 : 0)
 } catch (error) {
   say(`bench:host-load failed: ${error instanceof Error ? error.stack : String(error)}`)
-  host?.kill("SIGKILL")
   await finish(1)
 }
 
