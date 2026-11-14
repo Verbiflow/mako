@@ -30,14 +30,14 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const args = process.argv.slice(2)
   const portAt = args.indexOf("--port")
   const port = portAt === -1 ? 0 : Number(args.splice(portAt, 2)[1])
   const root = testScratch("mako-account-devices-ui-")
   const evidence = args[0] ? resolve(args[0]) : process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "account-devices") : root
   await mkdir(evidence, { recursive: true })
-  const server = await createServer({
+  const server = await uiVite({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],

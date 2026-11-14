@@ -24,7 +24,8 @@ import { Admission } from "./base/admission.js"
 import { readPower } from "./base/power.js"
 import { SessionIdSchema, ThreadIdSchema, type ThreadId } from "./contracts/thread-identity.js"
 import { threadArchiveKey, type ArchiveAnswer, type ArchiveCommand, type CloudArchiveOutcome } from "./contracts/thread-lifecycle.js"
-import type { ArchivedThread } from "@mako/protocol/thread-listing"
+import type { ArchivedThread, ReportedSession } from "@mako/protocol/thread-listing"
+import type { LiveSummary } from "./contracts/live-conversations.js"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
 import { HeapWatch, readHeap } from "./base/heap-watch.js"
@@ -189,6 +190,8 @@ const trace = (stage: string) => {
 /** Parts of the core built further down `openCore`; reached before then only through `?.`, by a caller that came early. */
 interface LateParts {
   conversations?: Conversations
+  /** This Mac's Sessions' uploads look again now: changed rows went to the account (`SessionPublisher.rowsSent`). */
+  uploadsLook?: () => void
   /** What this Mac can serve another place and its room, said to borrowing's brokers (`Advertiser`). */
   advertiser?: Advertiser
   /** The session leases this Mac serves another place's Threads (`Lending`). */
@@ -538,7 +541,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     session: (conversation) => {
       const live = late.conversations?.live
       const session = live?.session(conversation)
-      return session && { cwd: session.cwd, harness: session.harness, record: live?.snapshot(conversation)?.threadPath ?? undefined }
+      return session && { cwd: session.cwd, harness: session.harness, record: (live?.held(conversation) ?? live?.snapshot(conversation))?.threadPath ?? undefined }
     },
   }).then((attribution) => {
     if (shell.closing()) void attribution.close()
@@ -553,6 +556,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     web()?.terminal({ type: "wake" })
     late.cloud?.wake()
     late.cloudConversations?.wake()
+    late.awayNotes?.back("wake")
   })
   const telemetry = await declareTelemetryMethods(methods, {
     environment,
@@ -606,16 +610,22 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   }
   // The account's rows of this Mac's Sessions: every one, or (`only`) those of a few conversations whose batches came, with
   // no native row, which no batch moves.
-  const reportedRows = (only?: ReadonlySet<string>) => {
+  const reportedRows = (only?: ReadonlySet<string>, nativeAt?: ReadonlySet<string>): { rows: ReportedSession[]; sessions: Set<string> } | undefined => {
     const live = late.conversations?.live
     const store = threads.store
     // Until the catalog's first discovery is in, its rows would say this Mac has no sessions but Mako's own.
     if (!live || !store || !catalog.ready()) return undefined
     const activity = catalog.activity()
     const made = store.worktrees()
+    const window = () => (windowRows ??= catalog.recent(windowStart(Date.now())))
+    // A few native sessions, by path: their rows, as the native row or the conversation here that opens one, and nothing
+    // else. One gone from the sync window can't be told from one this host never listed: the whole list is worked out.
+    const natives = nativeAt && window().filter((ref) => nativeAt.has(ref.path))
+    if (nativeAt && natives!.length < nativeAt.size) return undefined
+    const opening = (summary: LiveSummary) => Boolean(nativeAt && ((summary.threadPath && nativeAt.has(summary.threadPath)) || summary.nativePaths?.some((path) => nativeAt.has(path))))
     const make = () => ownedSessions({
-      summaries: () => live.summaries(only),
-      native: () => only ? [] : (windowRows ??= catalog.recent(windowStart(Date.now()))),
+      summaries: () => nativeAt ? live.summaries().filter(opening) : live.summaries(only),
+      native: () => natives ?? (only ? [] : window()),
       activity: (path) => activity[path],
       work: () => application.lifecycle.snapshot().work,
       waitingOn: (id) => live.waitingOn(id),
@@ -642,11 +652,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       now: Date.now,
     })
     // The folders a whole making asks for are the ones read again (`listing`); a few rows' making leaves them as they are.
-    return only ? make() : repositories.listing(make)
+    const rows = only || nativeAt ? make() : repositories.listing(make)
+    if (!rows) return undefined
+    const sessions = new Set(rows.map((row) => row.session))
+    for (const ref of natives ?? []) if (ref.sessionId) sessions.add(ref.sessionId)
+    return { rows, sessions }
   }
   const sessions = new SessionPublisher({
-    rows: () => reportedRows(),
-    rowsOf: (conversations) => reportedRows(conversations),
+    rows: () => reportedRows()?.rows,
+    rowsOf: (conversations) => reportedRows(conversations)?.rows,
+    // A native session's write or catalog row reworks its own rows, never the whole list.
+    rowsOfNative: (paths) => reportedRows(undefined, paths),
     // What a list shows of one conversation, read as each of its batches comes, by the rule its row is made with: a
     // batch that moved it is reported at once. It reads only what memory holds.
     shown: (id) => {
@@ -670,6 +686,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     reportNow: config.machineAgentFd === undefined ? () => late.cloud?.reportSessions?.() : () => shell.reportMachineSessions?.(),
     // A Mac's runtime link, silent while it sends what another device watches, is asked whether it's alive.
     sent: config.machineAgentFd === undefined ? () => late.cloud?.liveSent?.() : undefined,
+    // Its Sessions' uploads follow the list: they look again once changed rows went.
+    rowsSent: () => late.uploadsLook?.(),
     work: shell.work,
   })
   catalog.subscribe((event) => {
@@ -683,17 +701,23 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       }
       // Whether this Mac keeps that session may have changed: the account's rows for it are looked at again, those alone.
       late.cloudConversations?.nativeChanged([event.ref])
+      // Its row in the account's list too.
+      sessions.nativeChanged(event.ref.path)
     } else if (event.type === "threads" || event.type === "thread-removed") {
       windowRows = undefined
       windowPaths = undefined
       late.cloudConversations?.nativeChanged()
       // A catalog row of an archived cloud Thread's Session (one this Mac had before it moved) shows archived too.
       late.archivedKeys?.()
+      sessions.changed()
     }
-    else if (event.type !== "thread-activity") return
-    sessions.changed()
+    // A session written or gone quiet: its own row, as `activity` says it.
+    else if (event.type === "thread-activity") sessions.nativeChanged(event.path)
   })
   late.sessions = sessions
+  // A Thread's worktree added, moved home or forgotten: its rows say the project and worktree they're in, and every row
+  // of a Thread there may change, so the list is worked out again. Rare: a start, an abandon, a move.
+  threads.store?.onWorktrees(() => sessions.changed())
   // How this Mac's sync goes, for Diagnostics: what it follows of other devices' work, the account's list, and what it
   // sends of its own watched conversations.
   const syncReadings = new SyncRecorder()
@@ -727,6 +751,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // another device reads one with this Mac off, and as its harness wrote it, so it continues anywhere. A cloud machine
   // keeps its Thread's records instead; a fixture desk sends nothing.
   let uploads: SessionUploads | undefined
+  // The work its looks run as, on a change and on the slow reconcile alike.
+  const UPLOADS_WORK = "keep this Mac's Sessions in the account"
+  // The reconcile: what changes without an event (the catalog's progress, the power, a link given late).
+  const UPLOADS_RECONCILE_MS = 60_000
+  // The first retry of a look that left something undone; each after waits twice as long, up to the reconcile.
+  const UPLOADS_RETRY_MS = 5_000
   if (!fixtureDesk && config.machineAgentFd === undefined) {
     uploads = new SessionUploads({
       rows: () => sessions.listed(),
@@ -751,7 +781,42 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       statusChanged: () => void late.turnOn?.changed(),
     })
     const ticking = uploads
-    shell.jobs.every("keep this Mac's Sessions in the account", 5_000, () => ticking.tick())
+    // As the account's list changes (`rowsSent`), never two at once, and a look after one that ran meanwhile; a slow
+    // reconcile for what changes without an event (the catalog's progress, the power, a link given late).
+    let looking: Promise<void> | undefined
+    let again = false
+    // A look that left something undone goes again on its own, 5 s after, doubling to the reconcile's minute.
+    let retryMs = UPLOADS_RETRY_MS
+    let retry: ReturnType<typeof setTimeout> | undefined
+    // A retry armed as the host stops never runs.
+    shell.stopping.signal.addEventListener("abort", () => {
+      if (retry) clearTimeout(retry)
+      retry = undefined
+    }, { once: true })
+    const look = (): Promise<void> => {
+      if (looking) {
+        again = true
+        return looking
+      }
+      if (retry) clearTimeout(retry)
+      retry = undefined
+      looking = shell.work.run(UPLOADS_WORK, () => ticking.tick())
+        .catch((error: Error) => hostWarn("sync", "this device's Sessions couldn't be looked at", { error: error.message }))
+        .finally(() => {
+          looking = undefined
+          if (again) {
+            again = false
+            void look()
+          } else if (ticking.needsRetry() && !shell.stopping.signal.aborted) {
+            retry = setTimeout(() => void look(), retryMs)
+            retry.unref()
+            retryMs = Math.min(retryMs * 2, UPLOADS_RECONCILE_MS)
+          } else if (!ticking.needsRetry()) retryMs = UPLOADS_RETRY_MS
+        })
+      return looking
+    }
+    late.uploadsLook = () => void look()
+    shell.jobs.every(UPLOADS_WORK, UPLOADS_RECONCILE_MS, look)
     catalog.onLinkDue((form) => {
       if (form === "copies" || form === "originals")
         void ticking.renew().catch((error: Error) => hostWarn("sync", "this device's links couldn't be renewed", { error: error.message }))
@@ -923,6 +988,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         ownerChecked: () => {
           late.conversations?.live.moves.ownerChecked()
           // Sessions a going-away named, which the account may have continued: whose they are is asked now, never given up on.
+          // The account's link checked again is this Mac back.
+          late.awayNotes?.back("link")
           void late.awayNotes?.ask()
           // Turns paused as this Mac went off, for a Thread still here, go on now (`CloudMoves.unpark`).
           void late.cloudMoves?.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
@@ -1072,6 +1139,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     // What a turn left in its worktree is read again for the rail, as its own event rather than a window's poll.
     turnEnded: (_id, cwd) => workspaces.worktrees?.turnEnded(cwd),
+    // Its row in the account's list says whether it works: said as its work moves, checkpoint and close included.
+    workMoved: (id) => late.sessions?.conversationMoved(id),
     movePending: (id) => {
       const answer = late.movers?.moves.answerFor(id)
       return answer === "asking" || answer === "allowed" || answer === "moving"
@@ -1192,12 +1261,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const attribution = late.attribution
     if (!thread || !acknowledged || !attribution) return
     const repositories = acknowledged.acknowledged.map((each) => ({ root: each.root, versions: each.versions ?? [] }))
-    // Only if the cloud has all of it: it went on from the first repository's very checkpoint, and the going-away note it
-    // came from (by its op, never a later note's) carried that and every other repository's with a change of the Thread's. A continue on a clone of the branch the
-    // device last pushed, or a repository the note left out or acknowledged since, doesn't have the Thread's changes
-    // there, and taking them out here would lose them: then all of it stays.
+    // Only if the cloud has all of it, by its word: its machine applied (`applied`) the first repository's very checkpoint
+    // and every other repository's with a change of the Thread's, and the going-away note it came from (by its op, never a
+    // later note's) carried each. A continue on a clone, a repository the note left out or acknowledged since, or an
+    // account that doesn't say what it applied: taking them out here could lose them, so all of it stays.
     const state = await late.cloud?.continueState?.(session, op).catch(() => undefined)
-    const why = cloudHasAll(acknowledged.acknowledged.map((each) => ({ root: each.root, sha256: each.checkpoint.sha256, changes: each.versions?.length ?? 0 })), acknowledged.noted, state?.start?.sha256)
+    const why = cloudHasAll(acknowledged.acknowledged.map((each) => ({ root: each.root, sha256: each.checkpoint.sha256, changes: each.versions?.length ?? 0 })), acknowledged.noted, state?.applied)
     const fromOurs = why === undefined
     const left = fromOurs
       ? await checkoutLeave.leave(thread, repositories[0]!.root, repositories, {
@@ -1206,7 +1275,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         mako: (write) => attribution.mako(write),
       })
       : { kind: "stayed" as const, paths: repositories.flatMap((each) => each.versions.map((version) => version.path)).sort() }
-    if (!fromOurs) hostLog("leaving", "a Thread the cloud took keeps its changes in the project folder: the cloud doesn't have all of them", { thread, op, why, start: state?.start?.sha256 ?? "none" })
+    if (!fromOurs) hostLog("leaving", "a Thread the cloud took keeps its changes in the project folder: the cloud doesn't have all of them", { thread, op, why, applied: state?.applied?.length ?? "none" })
     // Nothing of the Thread's sits in the project folder unannounced: its row says what stayed, and the commits the cloud took.
     const unpushed = acknowledged.acknowledged.reduce((sum, each) => sum + each.unpushed, 0)
     if (left.kind === "stayed" || unpushed) {
@@ -1283,6 +1352,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     })
     // Asked again while any waits and the account couldn't answer: on the account's next link too, through the owner check.
     shell.jobs.every("ask the account whose the Sessions held as this Mac went away are", 30_000, async () => {
+      // A going-away that didn't happen (this Mac still runs long after) is over: asking goes on.
+      late.awayNotes?.lapse()
       if (late.awayNotes?.any() && !cloudConversations?.ownerCheck(false)) await late.awayNotes.ask()
     })
   }
@@ -1444,6 +1515,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       others: async (thread) => (await late.readiness?.noteOthers(thread)) ?? [],
       project: async (thread) => late.readiness?.noteProject(thread),
       projectFrom: async (thread) => late.readiness?.noteProjectFrom(thread),
+      going: () => late.awayNotes?.going(),
+      answered: () => late.awayNotes?.answered(),
       noted: async (sent) => late.readiness?.noted(sent),
       refused: async (note, threads) => late.readiness?.refused(note, threads),
       quiet: async (note, record) => {
@@ -1726,7 +1799,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // The fixture desk writes no store and stands in for no one's disk.
   if (!fixtureDesk) storage.schedule(shell.jobs)
   declareStorageMethods(methods, storage)
-  declareFootprintMethods(methods, () => ({ watching: watchReadings.reading(), rescans: late.attribution?.rescans() ?? null }))
+  declareFootprintMethods(methods, () => ({ watching: watchReadings.reading(), rescans: late.attribution?.rescans() ?? null, attributionFailure: late.attribution?.failure() }))
   /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`), and a lost machine's restore. */
   const arrival: MoveArrivalDeps | undefined = config.machineAgentFd === undefined ? undefined : {
     git,
@@ -2087,18 +2160,22 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         jobs.stop()
         machineTracker?.saves.stop()
         unwatchSaves?.()
-        unfollowEffects?.()
-        unfollowBounds?.()
         const callsDrained = methods.close()
         const outsideDrained = shell.stopping.stop()
         void outsideDrained.catch(() => {})
-        await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
         wake.stop()
         repositories.stop()
         sleepHandOff?.stop()
         keepAwake?.stop()
         step = "waiting for the calls under way and the providers' drains"
-        await Promise.all([callsDrained, outsideDrained, telemetry.close(), usage.close()])
+        const drained = await Promise.allSettled([callsDrained, outsideDrained, telemetry.close(), usage.close()])
+        // Turn-end marks, effects and bounds still arrive while outside work and host calls drain.
+        unfollowEffects?.()
+        unfollowBounds?.()
+        step = "closing the record of changes"
+        await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
+        const failedDrains = drained.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+        if (failedDrains.length) throw new AggregateError(failedDrains, "Host calls or outside work did not drain cleanly", { cause: failedDrains[0] })
         // Deliver their stopping answers before the socket's generic reconnect farewell.
         await new Promise<void>((resolve) => setImmediate(resolve))
         shell.closeSocket()

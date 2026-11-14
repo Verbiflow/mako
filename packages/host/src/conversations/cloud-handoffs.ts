@@ -55,6 +55,10 @@ export type CloudHandOffsOptions = {
      * left out what its gateway doesn't take. The way back takes a Thread's changes out of the project folder only where
      * the note carried them. Without it, nothing is recorded, and nothing leaves.
      */
+    /** A going-away starts: the held Sessions' owner isn't asked until this Mac is back (`AwayNotes.going`). */
+    going?(): void
+    /** The going-away's note was answered, or won't be: from now the account's link checked again is this Mac back (`AwayNotes.answered`). */
+    answered?(): void
     noted?(sent: QuietNote): Promise<void>
     /** The account took none of these Threads of the note (it refused them, or took no notes): their record of it goes. */
     refused?(note: string, threads: readonly string[]): Promise<void>
@@ -176,6 +180,7 @@ export class CloudHandOffs {
     const unavailable = await this.#options.unavailable()
     const working = this.#options.working().filter(({ thread }) => !this.#options.moves.leaving(thread))
     if (unavailable || !working.length) return working.map(({ conversationId }) => ({ conversationId, outcome: { kind: "kept-here", reason: unavailable ?? "" } }))
+    goingAway.going?.()
     const handing: ThreadHandOff = { why, ...releaseBy !== undefined && { releaseBy } }
     const parked = await Promise.all(working.map(async (each) => {
       try {
@@ -190,70 +195,79 @@ export class CloudHandOffs {
     } catch (error) {
       hostWarn("handoff", "the Sessions paused as this Mac went away couldn't be held; a message queued meanwhile may run", { error: errorMessage({ error }) })
     }
-    const pausedMs = performance.now() - began
-    const sessions = parked.flatMap((each) => ("gone" in each ? each.gone.sessions.map((session) => session.session) : []))
-    const [, rows] = await Promise.all([
-      goingAway.flush(working, Math.min(Date.now() + FLUSH_MS, deadline)),
-      idleRows(goingAway, sessions, Math.min(Date.now() + IDLE_WAIT_MS, deadline)),
-    ])
-    const flushedMs = performance.now() - began - pausedMs
-    const threads: QuietThread[] = []
-    for (const each of parked) {
-      if (!("gone" in each) || !each.gone.parked.length) continue
-      // Only the Sessions the account lists as this Mac's: one it has no row of would have it refuse the whole Thread.
-      const listed = rows ? each.gone.sessions.filter((session) => rows.has(session.session)) : each.gone.sessions
-      if (!listed.length) continue
-      const checkpoint = await goingAway.checkpoint(each.gone.thread)
-      // The others only beside the first's: their arrival is laid over the first's, all or nothing.
-      const others = checkpoint ? ((await goingAway.others?.(each.gone.thread)) ?? []).slice(0, QUIET_OTHERS_MAX) : []
-      const project = checkpoint && (await goingAway.project?.(each.gone.thread))
-      const projectFrom = project && (await goingAway.projectFrom?.(each.gone.thread))
-      const parked = each.gone.parked.slice(0, PARKED_PER_THREAD_MAX).map(({ stopped, ...turn }) => ({ ...turn, ...stopped.length && { stopped } }))
-      threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint }, ...others.length && { others }, ...project && { project }, ...projectFrom && { projectFrom } })
-    }
-    const note: QuietNote = { note: handOff, reason: why, at: Date.now(), threads: threads.slice(0, QUIET_THREADS_MAX) }
-    let heard: NoteHeard
+    // Whatever happens after the Sessions were parked, the going-away settles (`answered`): a flush, a read or a note that
+    // throws would otherwise leave nothing to say this Mac is back, and the held Sessions waiting for a wake or a restart.
     try {
-      const record = goingAway.noted && ((sent: QuietNote) => goingAway.noted!(sent))
-      heard = await answeredBy(goingAway.quiet(note, record), deadline)
+      const pausedMs = performance.now() - began
+      const sessions = parked.flatMap((each) => ("gone" in each ? each.gone.sessions.map((session) => session.session) : []))
+      const [, rows] = await Promise.all([
+        goingAway.flush(working, Math.min(Date.now() + FLUSH_MS, deadline)),
+        idleRows(goingAway, sessions, Math.min(Date.now() + IDLE_WAIT_MS, deadline)),
+      ])
+      const flushedMs = performance.now() - began - pausedMs
+      const threads: QuietThread[] = []
+      for (const each of parked) {
+        if (!("gone" in each) || !each.gone.parked.length) continue
+        // Only the Sessions the account lists as this Mac's: one it has no row of would have it refuse the whole Thread.
+        const listed = rows ? each.gone.sessions.filter((session) => rows.has(session.session)) : each.gone.sessions
+        if (!listed.length) continue
+        const checkpoint = await goingAway.checkpoint(each.gone.thread)
+        // The others only beside the first's: their arrival is laid over the first's, all or nothing.
+        const others = checkpoint ? ((await goingAway.others?.(each.gone.thread)) ?? []).slice(0, QUIET_OTHERS_MAX) : []
+        const project = checkpoint && (await goingAway.project?.(each.gone.thread))
+        const projectFrom = project && (await goingAway.projectFrom?.(each.gone.thread))
+        const parked = each.gone.parked.slice(0, PARKED_PER_THREAD_MAX).map(({ stopped, ...turn }) => ({ ...turn, ...stopped.length && { stopped } }))
+        threads.push({ thread: each.gone.thread, sessions: listed, parked, ...checkpoint && { checkpoint }, ...others.length && { others }, ...project && { project }, ...projectFrom && { projectFrom } })
+      }
+      const note: QuietNote = { note: handOff, reason: why, at: Date.now(), threads: threads.slice(0, QUIET_THREADS_MAX) }
+      let heard: NoteHeard
+      try {
+        const record = goingAway.noted && ((sent: QuietNote) => goingAway.noted!(sent))
+        heard = await answeredBy(goingAway.quiet(note, record), deadline)
+      } catch (error) {
+        hostWarn("handoff", "the account didn't hear this Mac go away; its Threads wait here, paused", { why, error: errorMessage({ error }) })
+        heard = { kind: "unanswered" }
+      }
+      const results = parked.map((each): HandOffResult => {
+        if (!("gone" in each)) return { conversationId: each.conversationId, outcome: { kind: "kept-here", reason: each.error } }
+        const word = heard.kind === "answered" ? heard.answer.threads.find((known) => known.thread === each.gone.thread) : undefined
+        return { conversationId: each.conversationId, outcome: { kind: "kept-here", reason: goingAwayWords(heard, word) } }
+      })
+      // A note whose answer didn't come may have been taken all the same: its Sessions wait for the account's word as if it
+      // had, and an owner ask lets them go if it wasn't. Only a gateway that takes no notes (`unserved`) took none.
+      const taken = heard.kind === "answered" ? new Set(heard.answer.threads.filter((each) => each.accepted).map((each) => each.thread))
+        : heard.kind === "unanswered" ? new Set(note.threads.map((each) => each.thread)) : new Set<string>()
+      // Only the Threads the account took keep this note's record: nothing is continued from it for the rest.
+      const untaken = note.threads.filter((each) => !taken.has(each.thread)).map((each) => each.thread)
+      if (untaken.length)
+        await goingAway.refused?.(note.note, untaken).catch((error: Error) => hostWarn("handoff", "a refused note's record couldn't be dropped; no continue comes from it", { error: error.message }))
+      try {
+        await goingAway.accepted(note.note, note.threads.filter((each) => taken.has(each.thread)).flatMap((each) => each.sessions))
+      } catch (error) {
+        hostWarn("handoff", "the Sessions the account may continue couldn't be kept; they go on here when this Mac is back", { error: errorMessage({ error }) })
+      }
+      goingAway.goneQuiet?.(why === "sleep" ? "sleep" : "quit")
+      const accepted = taken.size
+      hostLog("handoff", "agents at work paused as this Mac went away", {
+        why,
+        threads: working.length,
+        noted: threads.length,
+        withCheckpoint: threads.filter((each) => each.checkpoint).length,
+        ...rows && { notIdle: sessions.filter((session) => rows.has(session) && rows.get(session) !== "idle").length },
+        accepted,
+        answer: heard.kind,
+        pausedMs: Math.round(pausedMs),
+        flushedMs: Math.round(flushedMs),
+        ms: Math.round(performance.now() - began),
+        ...parked.some((each) => "error" in each) && { stayed: parked.flatMap((each) => ("error" in each ? [`${each.conversationId}: ${each.error}`] : [])).join("; ") },
+      })
+      return results
     } catch (error) {
-      hostWarn("handoff", "the account didn't hear this Mac go away; its Threads wait here, paused", { why, error: errorMessage({ error }) })
-      heard = { kind: "unanswered" }
+      hostWarn("handoff", "going away stopped partway; it settles, and the held Sessions are asked about once this Mac is back or two minutes on", { why, error: errorMessage({ error }) })
+      throw error
+    } finally {
+      goingAway.answered?.()
     }
-    const results = parked.map((each): HandOffResult => {
-      if (!("gone" in each)) return { conversationId: each.conversationId, outcome: { kind: "kept-here", reason: each.error } }
-      const word = heard.kind === "answered" ? heard.answer.threads.find((known) => known.thread === each.gone.thread) : undefined
-      return { conversationId: each.conversationId, outcome: { kind: "kept-here", reason: goingAwayWords(heard, word) } }
-    })
-    // A note whose answer didn't come may have been taken all the same: its Sessions wait for the account's word as if it
-    // had, and an owner ask lets them go if it wasn't. Only a gateway that takes no notes (`unserved`) took none.
-    const taken = heard.kind === "answered" ? new Set(heard.answer.threads.filter((each) => each.accepted).map((each) => each.thread))
-      : heard.kind === "unanswered" ? new Set(note.threads.map((each) => each.thread)) : new Set<string>()
-    // Only the Threads the account took keep this note's record: nothing is continued from it for the rest.
-    const untaken = note.threads.filter((each) => !taken.has(each.thread)).map((each) => each.thread)
-    if (untaken.length)
-      await goingAway.refused?.(note.note, untaken).catch((error: Error) => hostWarn("handoff", "a refused note's record couldn't be dropped; no continue comes from it", { error: error.message }))
-    try {
-      await goingAway.accepted(note.note, note.threads.filter((each) => taken.has(each.thread)).flatMap((each) => each.sessions))
-    } catch (error) {
-      hostWarn("handoff", "the Sessions the account may continue couldn't be kept; they go on here when this Mac is back", { error: errorMessage({ error }) })
-    }
-    goingAway.goneQuiet?.(why === "sleep" ? "sleep" : "quit")
-    const accepted = taken.size
-    hostLog("handoff", "agents at work paused as this Mac went away", {
-      why,
-      threads: working.length,
-      noted: threads.length,
-      withCheckpoint: threads.filter((each) => each.checkpoint).length,
-      ...rows && { notIdle: sessions.filter((session) => rows.has(session) && rows.get(session) !== "idle").length },
-      accepted,
-      answer: heard.kind,
-      pausedMs: Math.round(pausedMs),
-      flushedMs: Math.round(flushedMs),
-      ms: Math.round(performance.now() - began),
-      ...parked.some((each) => "error" in each) && { stayed: parked.flatMap((each) => ("error" in each ? [`${each.conversationId}: ${each.error}`] : [])).join("; ") },
-    })
-    return results
   }
 
   /** The person's choice, and whether this Mac can act on it now. */
@@ -388,7 +402,7 @@ export type WorkingSnapshot = Pick<LiveSnapshot, "permissions" | "nativeAgents">
 
 /** What `workingThreads` reads of the live conversations and the Thread store. */
 export type WorkingSources = {
-  live: { listed(): ReadonlyArray<{ session: Pick<LiveSummary["session"], "id"> }>; loaded(id: string): boolean; snapshot(id: string): WorkingSnapshot | null }
+  live: { listed(): ReadonlyArray<{ session: Pick<LiveSummary["session"], "id"> }>; held(id: string): WorkingSnapshot | undefined }
   threads: { journalPlacement(conversationId: string): ThreadPlacement | undefined; execution(session: SessionId): Pick<SessionExecution, "state"> | undefined } | undefined
   /** Whether a conversation runs on a cloud machine already (`CloudConversations.has`). */
   cloud(conversationId: string): boolean
@@ -416,13 +430,13 @@ export function workingThreads(sources: WorkingSources): WorkingThread[] {
   const byThread = new Map<string, WorkingThread & { running: boolean }>()
   for (const summary of sources.live.listed()) {
     const id = summary.session.id
-    // One only on disk is at rest (memory keeps whatever works), and its snapshot would read it back in: every
-    // conversation this host has, each round.
-    if (sources.cloud(id) || !sources.live.loaded(id)) continue
+    if (sources.cloud(id)) continue
+    // A work check reads resident metadata only: snapshot() would flush its pending transcript batch to SQLite.
+    // One only on disk is at rest (memory keeps whatever works), and is never loaded for this check.
+    const snapshot = sources.live.held(id)
+    if (!snapshot) continue
     const placed = threads.journalPlacement(id)
     if (!placed || threads.execution(placed.session)?.state !== "here") continue
-    const snapshot = sources.live.snapshot(id)
-    if (!snapshot) continue
     const running = snapshot.session.status === "running" || snapshot.requests.some((request) => request.status === "dispatching")
     const working = sources.ownWork ? doingItself(snapshot, running) : running || snapshot.permissions.length > 0 || Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)
     if (!working) continue

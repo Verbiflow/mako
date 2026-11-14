@@ -2,7 +2,7 @@ import { grokHome } from "@mako/sessions"
 import { readFile, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
-import { processIdentityMatches } from "../../base/process-liveness.js"
+import { processIdentityMatches, START_READING_TOLERANCE_MS } from "../../base/process-liveness.js"
 import { probeOpenFiles } from "../open-files-probe.js"
 import type {
   ProviderActivitySession,
@@ -77,7 +77,7 @@ async function placedByMako(
     if (leader === undefined || !recorded) return undefined
     const same = await processIdentityMatches({
       pid: leader, startedAt: recorded.startedAt, signal,
-      exact: recorded.observed, toleranceMs: recorded.observed ? undefined : 1_500,
+      exact: recorded.observed, toleranceMs: recorded.observed ? undefined : START_READING_TOLERANCE_MS,
     }).catch(() => false)
     if (!same) return undefined
     if (recorded.session === target.nativeId)

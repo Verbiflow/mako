@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, statSync } from "node:fs"
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
@@ -32,7 +32,9 @@ const control = { stopped: () => false, yieldToPerson: async () => {} }
 const root = await mkdtemp(join(tmpdir(), "mako-attachment-sweep-"))
 /** How far past the real clock the sweep's clock runs: a test moves it a day on to see what's deleted. */
 let ahead = 0
-const now = () => Date.now() + ahead
+/** A moment the sweep's clock is held at, where a case needs it to be within a grace whatever the runner's pace. */
+let pinned
+const now = () => (pinned ?? Date.now()) + ahead
 const DAY = 24 * 60 * 60_000
 
 try {
@@ -212,7 +214,12 @@ try {
 
   // Idempotent: a pass with nothing changed reads nothing and moves nothing; one past its grace finds the same.
   {
+    // Held at the young file's write: on a slow runner the real clock could pass its grace before this pass, and the
+    // pass would rightly look again (#635, a loaded 2-vCPU runner).
+    const info = statSync(young.path)
+    pinned = Math.max(info.mtimeMs, info.ctimeMs, info.birthtimeMs)
     const quiet = await sweeper().pass(control, { sweep: true })
+    pinned = undefined
     assert.equal(quiet.ran, false, "nothing moved: the pass costs a stat of each source")
     await sleep(GRACE + 50)
     const again = await sweeper().pass(control, { sweep: true })

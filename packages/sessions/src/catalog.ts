@@ -2608,6 +2608,9 @@ export class SessionCatalog {
       return
     }
     this.cacheLoaded = true
+    // Its folder is made here, as the catalog starts, and never again: a save that made it would put back the folder of
+    // a reader whose data was deleted under it, as a host's data root is, and the reader then leaves on its own.
+    await mkdir(dirname(this.cachePath), { recursive: true }).catch(() => {})
     try {
       const raw = await readFile(this.cachePath, "utf8")
       const entries = parseCache(raw)
@@ -2631,7 +2634,6 @@ export class SessionCatalog {
   private async saveCache(): Promise<void> {
     if (!this.cachePath) return
     try {
-      await mkdir(dirname(this.cachePath), { recursive: true })
       const entries: Record<string, CacheEntry> = {}
       for (const [path, entry] of this.byPath) entries[path] = entry
       await writeFile(
@@ -2640,7 +2642,7 @@ export class SessionCatalog {
         "utf8"
       )
     } catch {
-      // A failed cache write costs the next start a re-peek, nothing more.
+      // A failed cache write costs the next start a re-peek, nothing more; one whose folder was deleted writes none.
     }
   }
 }

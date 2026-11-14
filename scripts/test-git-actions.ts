@@ -89,7 +89,7 @@ interface FakePull {
   state: "OPEN" | "MERGED" | "CLOSED"
   reviewDecision: string
   latestReviews: { state: string; author: { login: string } }[]
-  statusCheckRollup: { name: string; conclusion: string; detailsUrl?: string }[]
+  statusCheckRollup: { name: string; conclusion: string; detailsUrl?: string; workflowName?: string; startedAt?: string }[]
 }
 interface GitHubState {
   calls: string[]
@@ -248,6 +248,32 @@ try {
   // Re-run: each failed run on the pushed commit, named, since gh can't ask which.
   assert.equal(await rerunFailedChecks(gitRunner, project), 2)
   assert.deepEqual(github().reruns, ["1 --failed", "4 --failed"])
+
+  // Pushed twice: GitHub ran the head again and cancelled the older runs. Those were replaced, not failed: no check
+  // failing, no log, nothing to re-run. A cancelled run nothing replaced says cancelled, and holds the merge.
+  setGithub((db) => {
+    Object.assign(db.pulls[0]!, {
+      reviewDecision: "APPROVED",
+      statusCheckRollup: [
+        { workflowName: "CI", name: "test", conclusion: "CANCELLED", startedAt: "2026-11-13T10:00:00Z" },
+        { workflowName: "CI", name: "test", conclusion: "SUCCESS", startedAt: "2026-11-13T10:02:00Z" },
+        { workflowName: "Docs", name: "build", conclusion: "CANCELLED", startedAt: "2026-11-13T10:00:00Z" },
+      ],
+    })
+    db.runs = [
+      { databaseId: 12, headSha: pushed, conclusion: "success", workflowName: "CI", url: "https://ci/12", branch: "mako/feature" },
+      { databaseId: 11, headSha: pushed, conclusion: "cancelled", workflowName: "CI", url: "https://ci/11", branch: "mako/feature" },
+      { databaseId: 10, headSha: pushed, conclusion: "cancelled", workflowName: "Docs", url: "https://ci/10", branch: "mako/feature" },
+    ]
+    db.logs = { "10": "build\tBuild\t2026-11-13T10:00:01.000Z The operation was canceled.\n", "11": "test\tRun\t2026-11-13T10:00:01.000Z The operation was canceled.\n" }
+  })
+  const pushedTwice = await pullRequestReport(gitRunner, project, { logs: true })
+  assert.deepEqual(pushedTwice.pullRequest?.checks, [{ name: "test", state: "passed" }, { name: "build", state: "cancelled" }], "the run a newer run replaced isn't read; the lone cancelled one says cancelled")
+  assert.equal(pushedTwice.pullRequest?.merge, "Run the cancelled checks again first")
+  assert.deepEqual(pushedTwice.pullRequest?.failedLogs, [{ workflow: "Docs", url: "https://ci/10", log: "build\tBuild\tThe operation was canceled." }], "no log of the replaced run")
+  assert.equal(await rerunFailedChecks(gitRunner, project), 1)
+  assert.deepEqual(github().reruns.slice(2), ["10 --failed"], "only the cancelled run nothing replaced is run again")
+  setGithub((db) => Object.assign(db.pulls[0]!, { reviewDecision: "CHANGES_REQUESTED", statusCheckRollup: [{ name: "test", conclusion: "FAILURE" }] }))
 
   // Merge: the shared guard, then a method the repository allows.
   await assert.rejects(mergePullRequest(project), /^Error: #100 can't merge yet\. Fix failing checks first\.$/)

@@ -13,14 +13,29 @@ on:
 permissions:
   contents: read
 
+# A pull request's newer push cancels its older run. A push to main never cancels: each merge's run finishes, so main
+# always has a complete run to compare with.
 concurrency:
-  group: checks-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: checks-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # `npm run lint` and the typecheck, in three parts at once: ESLint alone took most of the job's three minutes, one
+  # after another with the repository's own rules and the typecheck.
   checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: eslint
+            run: npx eslint .
+          - part: rules
+            run: npm run -s lint:rules
+          - part: types
+            run: npm run test:ci-downloads && npm run typecheck
+    name: checks (${{ matrix.part }})
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -30,57 +45,73 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
-      - run: npm run test:ci-downloads
-      - run: npm run lint
+      - run: ${{ matrix.run }}
+
+  # A cold install on every push to main: the jobs above restore the installed tree by its key, which skips `npm ci`,
+  # so this is where a lockfile that no longer installs, or a package gone from the registry, still fails.
+  install-cold:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          cache: "false"
       - run: npm run typecheck
 
-  # The protocol's conformance suite, every host call over the socket and the gateway, the host as a cloud
-  # machine's runtime, linked by a stand-in for the machine's agent, and where this Mac sends a cloud conversation's
-  # calls as its Thread moves to the cloud and back, and the way back itself.
-  cloud-runtime:
+  # Which heavy jobs a pull request's files can affect (`scripts/ci-changes.mjs`). Every push to main runs them all, and
+  # so does a pull request whose file list can't be read.
+  changes:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ui: ${{ steps.detect.outputs.ui }}
+      updates: ${{ steps.detect.outputs.updates }}
+      performance: ${{ steps.detect.outputs.performance }}
+      hostLoad: ${{ steps.detect.outputs.hostLoad }}
+      syncBench: ${{ steps.detect.outputs.syncBench }}
+      steer: ${{ steps.detect.outputs.steer }}
+      codexSandbox: ${{ steps.detect.outputs.codexSandbox }}
+      fileSearch: ${{ steps.detect.outputs.fileSearch }}
+      macHost: ${{ steps.detect.outputs.macHost }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - uses: ./.github/actions/install-dependencies
-      - run: npm run build:control-runtime
-      # The host call schemas are generated from the handlers' types: one edited by hand drops what a type declares.
-      - run: node scripts/generate-host-inputs.mjs --check
-      - run: npm run test:protocol
-      # A window's connection banner follows its host's event stream, never one call's failure or slowness.
-      - run: npx tsx scripts/test-host-liveness.ts
-      # A cloud host's restart on Linux, whose lock can't name a stuck holder as macOS's can.
-      - run: npx tsx scripts/test-host-lifecycle.ts
-      - run: npm run test:loop-profile
-      - run: npm run test:machine-runtime
-      - run: npx tsx scripts/test-cloud-sign-ins.ts
-      # Every whole file a harness writes, through one publisher: a writer killed mid-write, writers in several
-      # processes, create-once, another program's folder, and the folder lock they share.
-      - run: npx tsx scripts/test-published-files.ts
-      # Every registered harness: a silent startup names its step, a torn append keeps the lines that finished,
-      # and two conversations are charged for their own process trees. The scripted sections run where the CLI is installed.
-      - run: npm run test:harness-conformance
-      # A machine with no browser joining with a code, its key file, and its runtime link's entitlements.
-      - run: npm run test:device-join
-      - run: npm run test:cloud-conversations
-      # A picture or page another host read (a cloud Thread's machine, another device, another host here) loads in this host's windows.
-      - run: npx tsx scripts/test-owned-files.ts
-      - run: npx tsx scripts/test-cloud-returns.ts
-      # Keeping a Mac awake while its agents work, against a stand-in for the native helper.
-      - run: npm run test:keep-awake
+          sparse-checkout: scripts/ci-changes.mjs
+          sparse-checkout-cone-mode: false
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          : > "$RUNNER_TEMP/changed"
+          if [ "$EVENT" = "pull_request" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed" || : > "$RUNNER_TEMP/changed"
+          fi
+          node scripts/ci-changes.mjs < "$RUNNER_TEMP/changed"
 
-  # The renderer's and the live state's own suites, in Node without a window: the transcript as live and saved
-  # draw it, the stage's thread identity, the live controls and notices, how a message is delivered and recovered,
-  # and model tuning. Suites that open an Electron window stay local.
-  renderer:
+  # The tests every pull request runs, on Linux, in 40 shards of about a minute and a half each (`scripts/ci-gate.mjs`, which
+  # lists them with what each checks and how long it takes): the protocol and the cloud runtime, the renderer's and the
+  # live state's own suites, orchestration, the decoders and spend, and the npm suites that need no window.
+  gate:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -90,63 +121,57 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
-        with:
-          electron: "false"
       - run: npm run build:control-runtime
-      # The web client as the hosted app vendors it: a desk component that only the desk's window can build fails here.
-      - run: npm run build -w @mako/web-client
-      - run: npm run test:transcript
-      - run: npm run test:transcript-events
-      - run: npm run test:stage
-      - run: npm run test:fin-words
-      # Setup's rows and words: each grant, lease, ask and reading in its part, said against its source.
-      - run: npm run test:setup
-      - run: npm run test:fin-row-time
-      - run: npm run test:steer-notices
-      - run: npm run test:fin-decisions
-      - run: npm run test:live-controls
-      - run: npm run test:prompt-delivery
-      - run: npm run test:live-prompt-delivery
-      # Mako's note goes whole once per process, then only what changed.
-      - run: npm run test:control-cadence
-      # A conversation's batches read alike in the whole and the compact live form, each window served the one it reads.
-      - run: npm run test:live-form
-      # Messages from the Mac, a phone and another Mac at once, with lost replies, cut links and restarts: each lands once.
-      - run: npm run test:send-race
-      - run: npm run test:durable-outbox
-      - run: npm run test:tuning
-      # Model connections: the store's keys stay in the secrets, a locked keychain, removal, and the OpenCode providers they become.
-      - run: npm run test:model-connections
-      # Accounts: usage, routing, roots and profiles, removal with running work, the keychain's reads, and the account,
-      # identity, switching and sign-in recovery views.
-      - run: npm run test:accounts
-      # Who is told what, and in which words: the attention centre's policy, and the kinds and wording every surface shares.
-      - run: npm run test:notifications
-      # What a local update builds from: its checkout against origin, fetched, and how Settings › Updates says it.
-      - run: npm run test:update-source
-      # The attribution journal and workspace snapshots: per-turn changes, undo, Git operations, and the guard that keeps
-      # every script's scratch repositories away from the one it was started in.
-      - run: npm run test:attribution
-      # Letting go of idle roots and counting a turn read the journal in slices, never holding the host's loop for either.
-      - run: npm run test:attribution-holds
-      - run: npm run test:workspace-snapshots
-      # A worktree's packages linked from the main checkout's: workspace packages resolve to the worktree's own code,
-      # and no install writes through the links into the main checkout.
-      - run: npx tsx scripts/test-package-links.ts
-      # fseventsd's health and its restart, against fakes: what's degraded, the samples, the evidence, recovery.
-      - run: npx tsx scripts/test-file-events-service.ts
-      # Settings › Simulators' setup line and the local simulator host, against Xcode's recorded words and fakes of its
-      # tools: the hub's gate, the screen stream, touches however the device is turned, and the agent tools' offer.
-      - run: npm run test:simulator-setup
-      # Another Mac's simulators and a cloud Thread's borrowed one, driven under a session lease over a fake gateway.
-      - run: npm run test:simulators-remote
-      - run: npm run test:simulator-host
+      # Electron's sandbox helper must be root's and setuid on Linux, which an npm install can't make it.
+      - run: sudo chown root:root node_modules/electron/dist/chrome-sandbox && sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+      # Ubuntu 24.04 lets no unprivileged process make a user namespace, which Chrome's own sandbox needs.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # A display for the suites that open Electron, and no XDG_CONFIG_HOME: the runner points it at its own home,
+      # which a scratch-home test rightly refuses to write outside.
+      - run: env -u XDG_CONFIG_HOME xvfb-run -a node scripts/ci-gate.mjs ${{ matrix.shard }} 40
+        env:
+          MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gate-${{ matrix.shard }}-evidence
+          path: ${{ runner.temp }}/test-evidence
+          if-no-files-found: ignore
+
+  # The gate's steps and parts that pass only on macOS (`ci-gate.mjs`'s `MAC_STEPS` and `MAC_PARTS`, each with its
+  # reason), about two minutes of them, on one Mac.
+  mac-host:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.macHost == 'true'
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+      - run: npm run build:control-runtime
+      - run: node scripts/ci-gate.mjs --mac 1 1
+        env:
+          MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mac-host-evidence
+          path: ${{ runner.temp }}/test-evidence
+          if-no-files-found: ignore
 
   # The Files view's index (`test-file-index.ts`): the tree a folder at a time, names found as they're typed, text
   # search stopping at a screenful, and a real repository kept current path by path. Then how fast it finds things
   # against the old way in the same run, on this checkout and 100,000 generated files (`bench-file-search.ts`): every
   # number goes to the job's summary, and it fails only on a gross regression, never on a fixed number of milliseconds.
   file-search:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.fileSearch == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -165,192 +190,6 @@ jobs:
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-kinds.ts
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/bench-file-search.ts --files 100000
 
-  # Orchestration with every harness a scripted model: an Apex's Fins started, held by the tree's budget, woken,
-  # answered and routed, each message queued, steered or interrupting as its sender chose, through the engine's three doors; across an update, where a Fin's launch cut before its brief
-  # still sends the brief once (`test:orch-update`); and with the host killed at thirteen points on all six harnesses
-  # (`test:orch-crash`), each run ending with every brief, report and message delivered once.
-  orchestration:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - uses: ./.github/actions/install-dependencies
-        with:
-          electron: "false"
-      - run: npm run build:control-runtime
-      - run: npm run test:start-interleavings
-      # A switch against the queue, generated: the rules of `docs/delivery-queue.md` after every step of seeded schedules.
-      - run: npm run test:switch-interleavings
-      - run: npm run test:followed-stop-crash
-      - run: npm run test:held-notice-crash
-      # The outage of 2026-11-05 on all six: a tree moving, one digest with nowhere to go, the person told once, a Stop holding.
-      - run: npm run test:limit-replay
-      - run: npm run test:held-digest
-      - run: npm run test:fin-fallback
-      # A prompt reaches its harness only once its journal holds it as sent; one it couldn't record goes once after a crash.
-      - run: npm run test:handoff
-      - run: npm run test:orch-comms
-
-  # Every harness's decoders against its recorded pairs (live and saved draw the same, or say why not), and the
-  # three readers of spend (live, saved, the store's scan) agreeing on each pair.
-  decoders-and-usage:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - uses: ./.github/actions/install-dependencies
-        with:
-          electron: "false"
-      - run: npm run build:control-runtime
-      # The harness definitions, their versions and the pages generated from them (adding-a-harness.md, the descriptors).
-      - run: npx tsx --tsconfig tsconfig.app.json scripts/test-harness-definitions.ts
-      # Each harness's concepts against its self-report fixture, Mako's reads against them, and harness-concepts.md.
-      - run: npx tsx scripts/test-harness-concepts.ts
-      # Startup watches: a quiet process fails its step, and a kept Cursor child's hello is a reported runtime.
-      - run: npm run test:provider-startup
-      # OpenCode reads a fork's history as its own startup step, begun before the first page comes back.
-      - run: npx tsx scripts/test-opencode-resume.ts
-      # Grok's and Devin's forks run each request under the watch, and a failed fork names the request it died in.
-      - run: npx tsx scripts/test-fork-watches.ts
-      # Devin's fork against its real CLI on recorded stores; skips on a runner without a signed-in Devin.
-      - run: npx tsx --tsconfig tsconfig.app.json scripts/test-devin-fork.ts
-      # Native routing's policy, each harness's control and Diagnostics' reading of them; then every
-      # eval:orch-tools case's first request for Claude and Codex, built and its grading checked, at $0.
-      - run: npm run test:native-routing
-      - run: npm run test:native-calls
-      # Mako's primer: its blocks, and that a note harness hears them again after anything that may have lost them.
-      - run: npm run test:primer
-      - run: npm run eval:orch-tools -- --dry-run
-      - run: npm run test:decoders
-      - run: npm run test:usage
-      # The native-store layer's own suite: every harness's readers, the record store, catalogs and followers.
-      - run: npm test -w @mako/sessions
-
-  # The orchestration tests take about 32 minutes, split into four jobs of about 10 so that a slow runner can't reach a
-  # limit: `orchestration` above, and this one's Fins: held by the tree's budget, woken, resumed and what each reads as.
-  # A job past 12 minutes is split again, not given a longer limit.
-  orchestration-engine:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - uses: ./.github/actions/install-dependencies
-        with:
-          electron: "false"
-      - run: npm run build:control-runtime
-      - run: npm run test:background-agents
-      - run: npm run test:build-slots
-      - run: npm run test:agents-migrate
-      # A Thread is one conversation: every Thread of several Sessions split into one per Session, losing nothing, idempotent,
-      # crash-safe, reversible, on a store of the person's scale (`docs/one-conversation.md`).
-      - run: npm run test:thread-split
-      - run: npm run test:agents-wake
-      # An Apex let go of while at rest still hears its Fins move, so a window coming back shows them as they are.
-      - run: npm run test:fins-reach-released-apex
-      # A Fin waiting on a pull request is woken once per outcome, never its Apex, across restarts; GitHub is a stub.
-      - run: npm run test:fin-pull-waits
-      - run: npm run test:fin-resume
-      - run: npm run test:git-helper
-      - run: npm run test:fin-reopen
-      - run: npm run test:roster-refresh
-      # A host starting reads each Fin's journal in slices as it resumes them, never all of them at once.
-      - run: npm run test:resume-holds
-        id: resume_holds
-      # Evidence only after that exact required step failed; its failure remains the job result.
-      - name: Diagnose failed resume hold (evidence only)
-        if: ${{ failure() && steps.resume_holds.outcome == 'failure' }}
-        timeout-minutes: 3
-        run: node --import tsx scripts/diagnose-resume-holds.mjs
-        env:
-          MAKO_RESUME_DIAGNOSTICS: "1"
-      # A Fin reads working only while a turn runs or a message is on its way: nothing waits behind a paused message.
-      - run: npm run test:fin-states
-
-  # What comes back: a crash, a recovery or a Fin moved, with its queue and its Apex's news kept through SIGKILL.
-  orchestration-recovery:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - uses: ./.github/actions/install-dependencies
-        with:
-          electron: "false"
-      - run: npm run build:control-runtime
-      - run: npm run test:fin-move
-      # One reading of why a queued message waits and one rule for what goes next; one timer for held times; the
-      # queue's order kept in the journal; a waiting message surviving SIGKILL (`test:request-holds`).
-      - run: npm run test:request-holds
-      # An Apex's Fins' news as entries in its own queue: coalesced, budgeted, paused and kept through SIGKILL.
-      - run: npm run test:wake-queue
-      - run: npm run test:orch-crash
-      - run: npm run test:orch-recovery
-
-  # Each message queued, steered or interrupting as its sender chose, through the engine's three doors, answered and
-  # routed, and what can't go for now going again by itself.
-  orchestration-messages:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - uses: ./.github/actions/install-dependencies
-        with:
-          electron: "false"
-      - run: npm run build:control-runtime
-      - run: npm run test:orch-answer
-      # A message its harness can't take for now (capacity, its service, the network, a stalled start, a session still
-      # open elsewhere, a turn failed partway) waits and goes again by itself; only what the person must fix fails.
-      - run: npm run test:delivery-retry
-      - run: npm run test:orch-front-door
-      # The person's rules for every Fin and Apex: kept, carried by every brief, said once and on change, nothing when empty.
-      - run: npm run test:person-rules
-      - run: npm run test:orch-deliver
-      # The person's steer lands within a second on each landing, on a cloud Thread too, and the case of 2026-11-03.
-      - run: npm run test:steer-landing
-      # A Thread at work keeps going without a click: a steer that stopped Claude's turn goes once its after-snapshot ends,
-      # and a turn continued after a move and a crash runs on its session's own model.
-      - run: npm run test:thread-stays-live
-      - run: npm run test:agents-doors
-      # An Apex of 57 Fins streams without its row's check of them holding the loop (2026-11-12's holds of 0.3-0.6 s a batch).
-      - run: npm run bench:person-ask
-      - run: npm run test:agents-cli
-      - run: npm run test:thread-move-tool
-      - run: npm run test:thread-act-tool
-      - run: npm run test:orch-update
-      # A Fin placed on another device: two hosts through the protocol's gateway, its start settled by its op, its
-      # notices kept until its Apex's device takes them (off, restarted, sent twice, from a stale owner), and its Apex's
-      # operations on it routed there.
-      - run: npm run test:fins-placed
-
   # Every harness's decode, live host, projection, recorder, merge and saved-open paths, measured beside the commit
   # this change goes onto, in turns on this runner (`perf-reference.ts`): HEAD^1 is a pull request's base in the merge
   # commit checked out, and main's previous commit on a push. A row more than 25% slower than that code at 95% (every
@@ -358,6 +197,8 @@ jobs:
   # budget until an update's `test:performance` meets it; one the rounds can't tell from the runner's noise is printed
   # as unsure and passes.
   performance:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.performance == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -389,6 +230,8 @@ jobs:
   # build's identity and source) and none it doesn't. A check that fails only the updater's way fails here, before
   # merge, rather than on someone's update. Each step's time goes to the job's summary.
   update-checks:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.updates == 'true'
     runs-on: macos-15
     timeout-minutes: 40
     steps:
@@ -421,8 +264,13 @@ jobs:
   # Then the highlight pool's workers end once no view holds them, an abandoned render's too (`test:highlight-pool-ui`).
   # On a Mac, where the tests' Electron runs.
   transcript-ui:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ui == 'true'
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 25
+    env:
+      MAKO_UI_VITE_URL: http://127.0.0.1:5310/
+      MAKO_UI_VITE_MANUAL_URL: http://127.0.0.1:5311/
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -433,15 +281,40 @@ jobs:
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
       - run: npm run build:control-runtime
+      # One Vite dev server for the job's checks and one for those that reload by hand (#662's `ui-vite-server.mjs`), at
+      # the addresses the job's env gives them, where each check started a server of its own and compiled every page it
+      # opened cold. A check needing anything else of a dev server still starts its own.
+      - run: |
+          nohup node scripts/ui-vite-server.mjs --port 5310 > "$RUNNER_TEMP/ui-vite.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/ui-vite.pids"
+          nohup node scripts/ui-vite-server.mjs --port 5311 --manual > "$RUNNER_TEMP/ui-vite-manual.log" 2>&1 &
+          echo $! >> "$RUNNER_TEMP/ui-vite.pids"
+          for wait in $(seq 1 60); do
+            grep -q "UI Vite server" "$RUNNER_TEMP/ui-vite.log" && grep -q "UI Vite server" "$RUNNER_TEMP/ui-vite-manual.log" && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/ui-vite.log" "$RUNNER_TEMP/ui-vite-manual.log"
+          exit 1
+      # The shard's first Electron start and page load, once and timed, before any suite pays for it.
+      - run: node scripts/ci-ui-warm.mjs
+      # Each check is bounded on its own, so one that hangs fails its step and leaves its log and evidence, where a
+      # job cut at its own limit ends cancelled with neither (#635, transcript-rows-ui).
       - run: npm run test:transcript-send-ui
+        timeout-minutes: 4
         env:
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:transcript-rows-ui
+        timeout-minutes: 9
         env:
           MAKO_SEND_SHOTS: ${{ runner.temp }}/transcript-send
       - run: npm run test:highlight-pool-ui
+        timeout-minutes: 4
       # A limit's one notice, in the Inbox, on the phone and in the laptop's browser, and a move on every list.
       - run: npm run test:limit-notice-ui
+        timeout-minutes: 4
+      # The job's Vite servers end with it, whatever the checks did.
+      - if: always()
+        run: if [ -f "$RUNNER_TEMP/ui-vite.pids" ]; then kill $(cat "$RUNNER_TEMP/ui-vite.pids") 2>/dev/null || true; fi
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -451,12 +324,17 @@ jobs:
   # Every npm test script no other job runs, on a Mac, where the tests' Electron runs (`ci-suites.mjs`): each suite runs
   # however the last went, so one run names all that fail, and none gets a second try.
   suites:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ui == 'true'
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3]
+    env:
+      MAKO_UI_VITE_URL: http://127.0.0.1:5310/
+      MAKO_UI_VITE_MANUAL_URL: http://127.0.0.1:5311/
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -468,10 +346,33 @@ jobs:
       - uses: ./.github/actions/install-dependencies
       # Recording needs ffmpeg and ffprobe, which the Mac runner doesn't have.
       - run: brew install ffmpeg
+        env:
+          # Homebrew's own update and cleanup, not ffmpeg, were most of this step (29 s to 105 s).
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
       - run: npm run build:control-runtime
+      # One Vite dev server for the job's checks and one for those that reload by hand (#662's `ui-vite-server.mjs`), at
+      # the addresses the job's env gives them, where each check started a server of its own and compiled every page it
+      # opened cold. A check needing anything else of a dev server still starts its own.
+      - run: |
+          nohup node scripts/ui-vite-server.mjs --port 5310 > "$RUNNER_TEMP/ui-vite.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/ui-vite.pids"
+          nohup node scripts/ui-vite-server.mjs --port 5311 --manual > "$RUNNER_TEMP/ui-vite-manual.log" 2>&1 &
+          echo $! >> "$RUNNER_TEMP/ui-vite.pids"
+          for wait in $(seq 1 60); do
+            grep -q "UI Vite server" "$RUNNER_TEMP/ui-vite.log" && grep -q "UI Vite server" "$RUNNER_TEMP/ui-vite-manual.log" && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/ui-vite.log" "$RUNNER_TEMP/ui-vite-manual.log"
+          exit 1
+      # The shard's first Electron start and page load, once and timed, before any suite pays for it.
+      - run: node scripts/ci-ui-warm.mjs
       - run: node scripts/ci-suites.mjs ${{ matrix.shard }} 3
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
+      # The job's Vite servers end with it, whatever the checks did.
+      - if: always()
+        run: if [ -f "$RUNNER_TEMP/ui-vite.pids" ]; then kill $(cat "$RUNNER_TEMP/ui-vite.pids") 2>/dev/null || true; fi
       # What a failed suite kept to say why (a host's logs when it didn't quit).
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -486,6 +387,8 @@ jobs:
   # batches a frame, bytes a token at the plan's cadence) fail at once; a time, read past the owner at the median,
   # fails only when a second run in this job has it over too. Every check goes to the job's summary.
   sync-bench:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.syncBench == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -510,6 +413,8 @@ jobs:
   # once it returns, through Mako's own host, on the real harnesses this runner has (Claude Code from its SDK, Codex
   # at the tested build), each against the probe's stand-in model (`probe-steer-semantics.ts --lands`).
   steer-latency:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.steer == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -536,6 +441,8 @@ jobs:
   # limits are calibrated by a yardstick process timed beside it on this runner; it fails only on a clear regression
   # (a loop held for seconds, or several times the yardstick's waits) and writes every number to the job's summary.
   host-load:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.hostLoad == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -557,6 +464,8 @@ jobs:
   # Codex's own sandbox on the setup the daily harness bump records Codex with, at the tested build: workspace-write
   # writes the workspace and nothing else, read-only writes nothing, and neither reaches the network.
   codex-sandbox:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.codexSandbox == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -573,3 +482,38 @@ jobs:
           version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
           npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" scripts/check-codex-sandbox.sh
+
+  # The one result to wait on: it passes when every job passed, or was skipped because the change can't reach it.
+  # The pull request gate: what a change must pass to merge, in a few minutes. Lint, the typecheck, the Linux gate's
+  # shards and, when the host is touched, its Mac-only parts. The heavy jobs (the UI suites, the updater, performance,
+  # load and latency benches) run on a pull request only when its paths reach them, and always on main after the merge,
+  # under `ci`: a failure there is fixed or reverted, never waited on by an unrelated pull request.
+  pr-gate:
+    # A pull request's verdict only: on main, `ci` is the one verdict, after the heavy jobs too.
+    if: always() && github.event_name == 'pull_request'
+    needs: [changes, checks, gate, mac-host]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          for result in $RESULTS; do
+            case "$result" in success|skipped) ;; *) exit 1 ;; esac
+          done
+
+  # Every job's verdict: on main, the whole of CI after a merge.
+  ci:
+    if: always()
+    needs: [changes, checks, install-cold, gate, mac-host, file-search, performance, update-checks, transcript-ui, suites, sync-bench, steer-latency, host-load, codex-sandbox]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          for result in $RESULTS; do
+            case "$result" in success|skipped) ;; *) exit 1 ;; esac
+          done

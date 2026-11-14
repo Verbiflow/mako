@@ -34,7 +34,9 @@
     "./borrow-conformance": "./dist/borrow-conformance.js",
     "./handoff-project": "./dist/handoff-project.js",
     "./handoff": "./dist/handoff.js",
-    "./source-project": "./dist/source-project.js"
+    "./source-project": "./dist/source-project.js",
+    "./attribution": "./dist/attribution.js",
+    "./ids": "./dist/ids.js"
   },
   "files": [
     "dist"

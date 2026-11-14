@@ -1,3 +1,6 @@
+import { LazyBoundary } from "@/components/ui/lazy-boundary"
+import { LazyFailed } from "@/components/ui/lazy-failed"
+import { PatientFallback } from "@/components/ui/patient-fallback"
 import { BinaryDiff } from "@/components/inspector/binary-diff"
 import {
   Fragment,
@@ -415,14 +418,16 @@ export function DocumentView({ document }: { document: ViewerDocument }) {
         ) : document.kind === "diff" && document.diff ? (
           <CenterDiff diff={document.diff} />
         ) : (document.kind === "file" || document.kind === "transcript") && document.file ? (
-          <Suspense fallback={<GitLoading kind="diff" label={`Opening ${document.title}`} />}>
-            <View
-              file={document.file}
-              line={document.line}
-              mode={document.renderMode}
-              commentPath={document.kind === "file" ? document.path : undefined}
-            />
-          </Suspense>
+          <LazyBoundary fallback={() => <LazyFailed what="The file" />}>
+            <Suspense fallback={<PatientFallback what="the file"><GitLoading kind="diff" label={`Opening ${document.title}`} /></PatientFallback>}>
+              <View
+                file={document.file}
+                line={document.line}
+                mode={document.renderMode}
+                commentPath={document.kind === "file" ? document.path : undefined}
+              />
+            </Suspense>
+          </LazyBoundary>
         ) : (
           <GitLoading kind="diff" label={`Reading ${document.path}`} />
         )}
@@ -527,9 +532,11 @@ const LazyDiff = lazy(async () => {
 
 function CenterDiff({ diff }: { diff: ViewerDiff }) {
   return (
-    <Suspense fallback={<GitLoading kind="diff" label="Loading diff" />}>
-      <LazyDiff diff={diff} />
-    </Suspense>
+    <LazyBoundary fallback={() => <LazyFailed what="The diff" />}>
+      <Suspense fallback={<PatientFallback what="the diff"><GitLoading kind="diff" label="Loading diff" /></PatientFallback>}>
+        <LazyDiff diff={diff} />
+      </Suspense>
+    </LazyBoundary>
   )
 }
 

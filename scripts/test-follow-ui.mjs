@@ -24,8 +24,8 @@ if (process.versions.electron) {
   })
 } else {
   const root = testScratch("mako-follow-ui-")
-  const { createServer } = await import("vite")
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
+  const { uiVite } = await import("./lib/ui-vite.mjs")
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-follow-ui", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0] }
@@ -94,16 +94,42 @@ async function check() {
     })
     return true
   })`)
+  /**
+   * The transcript holding still: the same height and offset for six frames, or 1.5 s if it never does. What a fixed
+   * pause stood in for, without waiting it out on a page that settled sooner, or reading one that settles later.
+   */
+  const settled = () => evaluate(`new Promise((done) => {
+    const node = ${VIEW}, started = performance.now()
+    let last = "", still = 0
+    const step = () => {
+      const now = node.scrollHeight + ":" + node.scrollTop
+      still = now === last ? still + 1 : 0
+      last = now
+      if (still >= 6 || performance.now() - started > 1500) done(true)
+      else requestAnimationFrame(step)
+    }
+    requestAnimationFrame(step)
+  })`)
   const reading = () => evaluate(`(() => { const node = ${VIEW}; return { away: Math.round(node.scrollHeight - node.scrollTop - node.clientHeight), rows: node.querySelectorAll('[data-exchange]').length, height: node.scrollHeight } })()`)
   // The way back a reader has: follow is on again, not just the offset.
   const toEnd = async () => {
     await evaluate(`import('/src/components/transcript/transcript-end.ts').then(({ TRANSCRIPT_END_EVENT }) => { ${VIEW}.dispatchEvent(new Event(TRANSCRIPT_END_EVENT, { bubbles: true })); return true })`)
-    await wait(220)
+    // At the end and still, or a second on: where it got to is each trial's to say ("NOT FOLLOWING FIRST").
+    for (const deadline = Date.now() + 1_000; Date.now() < deadline; await wait(20))
+      if (await evaluate(`(() => { const node = ${VIEW}; return node.scrollHeight - node.scrollTop - node.clientHeight <= 1 })()`)) break
+    await settled()
     await evaluate(`(() => { const probe = ${VIEW}; return probe.scrollTop })()`)
   }
+  /**
+   * A report, then whether the end followed it: once the transcript has grown by its turn and holds still, or a second on
+   * if it never grows. It only says how a trial began, so it never fails one.
+   */
   const follows = async () => {
+    const height = await evaluate(`${VIEW}.scrollHeight`)
     await evaluate("window.__report(); true")
-    await wait(250)
+    for (const deadline = Date.now() + 1_000; Date.now() < deadline; await wait(20))
+      if (await evaluate(`${VIEW}.scrollHeight !== ${height}`)) break
+    await settled()
     return (await reading()).away <= 96
   }
   const trial = async (name, before, during, { burst = true } = {}) => {
@@ -148,7 +174,7 @@ async function check() {
       }
       await until(`Boolean(${VIEW}) && Boolean(document.querySelector('[data-crew]'))`, "the Apex")
       await install()
-      await wait(500)
+      await settled()
       await toEnd()
     }
     await open()
