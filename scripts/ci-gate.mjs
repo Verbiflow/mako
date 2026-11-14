@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { appendFile } from "node:fs/promises"
+import { join } from "node:path"
 import { runSuite } from "./lib/run-suite.mjs"
 
 /**
@@ -260,10 +261,16 @@ const MAC_PARTS = [
 
 /** A step not yet measured. */
 const DEFAULT_SECONDS = 30
-/** Past this a step has hung. */
-const STEP_MS = 15 * 60_000
-/** So has one that says nothing for this long: `test:notifications` works quietly for over five minutes. */
-const QUIET_MS = 10 * 60_000
+/**
+ * Past this a part has hung, and is named, its processes listed and ended: well inside the job's 20 minutes, so a hang
+ * is a failure that says which part, never a job GitHub cancels with no log. The longest part runs 104 s.
+ * Main's run 43581631623 had gate (20) at 15 minutes a part: one hung, the job timed out at 20, and nothing said which.
+ */
+const STEP_MS = Number(process.env.CI_GATE_PART_MS ?? 4 * 60_000)
+/** So has one that says nothing for this long. */
+const QUIET_MS = 3 * 60_000
+/** A shard past this starts no new part, so its last part's limit still ends it before the job's 20 minutes. */
+const SHARD_MS = 12 * 60_000
 
 /** What a step needs on the runner beyond the job's own setup, by its npm script, installed once in a shard that picks it. */
 const NEEDS = {
@@ -509,9 +516,28 @@ function leave() {
 }
 
 const results = []
+const began = Date.now()
+/** What runs now, said as it starts, every minute while it runs, and into the evidence folder, which a cancelled job uploads too. */
+const now = new Map()
+const evidence = process.env.MAKO_TEST_EVIDENCE
+if (evidence) mkdirSync(evidence, { recursive: true })
+function progress(line) {
+  const stamped = `[gate ${Math.round((Date.now() - began) / 1000)} s] ${line}`
+  console.log(stamped)
+  if (evidence) appendFileSync(join(evidence, `gate-${mac ? "mac-" : ""}${shard}-progress.log`), `${stamped}\n`)
+}
+const heartbeat = setInterval(() => {
+  if (now.size) progress(`running: ${[...now].map(([command, at]) => `${command} (${Math.round((Date.now() - at) / 1000)} s)`).join("; ")}`)
+}, 60_000)
+heartbeat.unref()
 async function lane(steps) {
   for (const step of steps) {
     const { command, builds, script } = step
+    if (Date.now() - began > SHARD_MS) {
+      progress(`not started, the shard is past ${SHARD_MS / 60_000} minutes: ${command}`)
+      results.push({ command, code: null, seconds: 0 })
+      continue
+    }
     // A part's seconds are its builds' and its own, not a wait for the shard to itself (`ALONE`), which counted once made
     // test-git-helper read 116 s where it takes 37: `--learn` reads them, and the plan would size shards by the wait.
     let busy = 0
@@ -530,13 +556,17 @@ async function lane(steps) {
     await enter(ALONE.some((rule) => rule.test(command)))
     const waited = Math.round((Date.now() - waiting) / 1000)
     at = Date.now()
+    now.set(command, at)
+    progress(`started: ${command}`)
     try {
       if (code === 0) code = await runSuite("bash", ["-c", command], { limitMs: STEP_MS, quietMs: QUIET_MS, write })
     } finally {
+      now.delete(command)
       leave()
     }
-    const evidence = code !== 0 ? ON_FAILURE[script] : undefined
-    if (evidence) await runSuite("bash", ["-c", evidence], { limitMs: 3 * 60_000, quietMs: 3 * 60_000, write })
+    const diagnose = code !== 0 ? ON_FAILURE[script] : undefined
+    if (diagnose) await runSuite("bash", ["-c", diagnose], { limitMs: 3 * 60_000, quietMs: 3 * 60_000, write })
+    if (code === null) progress(`HUNG: ${command}; its processes are listed in its output below`)
     const seconds = Math.round((busy + Date.now() - at) / 1000)
     console.log(`::group::${command}\n${output}::endgroup::\n${code === 0 ? "passed" : "FAILED"}: ${command} in ${seconds} s${installed ? `\n(it waited ${installed} s for ${need} to install)` : ""}${waited ? `\n(it waited ${waited} s for its shard to itself)` : ""}`)
     results.push({ command, code, seconds })
@@ -545,6 +575,7 @@ async function lane(steps) {
 // The measuring parts first, alone, then the lanes side by side.
 await lane(first)
 await Promise.all(lanes.map(lane))
+clearInterval(heartbeat)
 
 const failed = results.filter(({ code }) => code !== 0)
 const lines = [

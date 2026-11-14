@@ -558,12 +558,13 @@ try {
   await owner.start("alpha", root, { conversationId: closingId })
   owner.transfer(closingId, command("slow", "Must never dispatch after close"))
   await until(() => slowStarted)
-  owner.close(closingId)
+  const closing = owner.close(closingId)
   const beforeRelease = sent.length
   releaseSlow = true
   await until(() =>
     closed.some((connection) => sessions.get(connection)?.harness === "slow")
   )
+  await closing
   assert.equal(sent.length, beforeRelease)
   const retirementId = randomUUID()
   await owner.start("alpha", root, { conversationId: retirementId })
@@ -611,7 +612,7 @@ try {
   finish(delegated, "The old child found the guard")
   await until(() => owner.snapshot(delegated)?.requests.every((candidate) => candidate.status === "completed") === true)
   const count = sent.length
-  owner.stop()
+  await owner.stop()
   const storedControl = (conversation: string) => {
     const db = new DatabaseSync(join(root, `${conversation}.sqlite`))
     try {
@@ -737,7 +738,7 @@ try {
   const secondBinding = owner.snapshot(exactId)!.control!.activeBindingId
   assert.notEqual(firstBinding, secondBinding)
   finish(secondBinding, "Second alpha complete")
-  owner.stop()
+  await owner.stop()
   owner = createOwner()
   const historicalRequest = randomUUID()
   owner.continueBinding(exactId, firstBinding, historicalRequest, "Continue the first alpha", [], { model: "new-model" })
@@ -748,7 +749,7 @@ try {
   owner.continueBinding(exactId, firstBinding, historicalRequest, "Continue the first alpha", [], { model: "new-model" })
   assert.throws(() => owner.continueBinding(exactId, secondBinding, historicalRequest, "Continue the first alpha", [], { model: "new-model" }), /different content/)
   finish(firstBinding, "Historical continuation complete")
-  owner.stop()
+  await owner.stop()
   owner = createOwner()
   const coldRequest = randomUUID()
   owner.continueBinding(exactId, firstBinding, coldRequest, "Cold current binding")
@@ -762,8 +763,8 @@ try {
   )
 } finally {
   await mcpClient?.close()
-  mcp?.close()
-  owner.stop()
+  await mcp?.close()
+  await owner.stop()
   observerMemory.close()
   memory.close()
   rmSync(root, { recursive: true, force: true })

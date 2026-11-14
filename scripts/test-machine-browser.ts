@@ -63,8 +63,18 @@ const relaunched = await launches()
 assert.equal(relaunched.length, 2, "the next connect starts it again")
 assert.notEqual(relaunched[1]!.pid, first!.pid)
 
+// Its DevTools gone while its process lingers, as a killed Chromium's socket closes before its exit is heard: the next
+// connect isn't handed the port nobody listens on (ECONNREFUSED), it starts Chromium again and ends the old one.
+process.kill(relaunched[1]!.pid, "SIGUSR1")
+await until(() => browser.status()[0]!.connection.status === "disconnected", "the connection notices DevTools went")
+await browser.connect(MACHINE_BROWSER_ID)
+const replaced = await launches()
+assert.equal(replaced.length, 3, "a connect to an endpoint nobody takes starts Chromium again")
+assert.equal(browser.status()[0]!.connection.status, "connected")
+await until(() => !alive(relaunched[1]!.pid), "the Chromium whose DevTools went is ended")
+
 machine.close()
-await until(() => !alive(relaunched[1]!.pid), "closing stops Chromium")
+await until(() => !alive(replaced[2]!.pid), "closing stops Chromium")
 await assert.rejects(machine.definition.endpoint(), /shutting down/)
 browser.close()
 
@@ -72,7 +82,7 @@ process.env.FAKE_CHROMIUM_MODE = "fail"
 const failing = new MachineBrowser({ executable, profile: join(root, "failing") })
 await assert.rejects(failing.definition.endpoint(), /can't start its sandbox: this machine refuses to create user namespaces/)
 await assert.rejects(failing.definition.endpoint(), /refuses to create user namespaces/)
-assert.equal((await launches()).length, 4, "a failed start isn't remembered: the next connect tries again")
+assert.equal((await launches()).length, 5, "a failed start isn't remembered: the next connect tries again")
 failing.close()
 delete process.env.FAKE_CHROMIUM_MODE
 
@@ -83,5 +93,5 @@ unsandboxed.close()
 
 await rm(root, { recursive: true, force: true })
 console.log(
-  "Machine browser: nothing runs until a connect, one launch for concurrent connects, stale port file ignored, relaunch after exit, a refused sandbox explained and retried, preferred by default, closing stops it passed"
+  "Machine browser: nothing runs until a connect, one launch for concurrent connects, stale port file ignored, relaunch after exit, a refused endpoint started again, a refused sandbox explained and retried, preferred by default, closing stops it passed"
 )

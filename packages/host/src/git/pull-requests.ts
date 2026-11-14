@@ -7,6 +7,7 @@ import {
   editPull,
   failedRunLog,
   failedRuns,
+  forgetGitHubReads,
   githubStatus,
   listRemoteBranches,
   mergeMethods,
@@ -195,6 +196,7 @@ async function push(git: Git, cwd: string, branch: string, acting: Acting, repos
  * is `draft.base`, else the shared rule.
  */
 export async function openPullRequest(git: Git, cwd: string, draft: PullRequestDraft, startedFrom?: string | null, personOf?: PersonOf): Promise<PullRequestOpened> {
+  forgetGitHubReads()
   const status = await ready(cwd)
   const branch = await branchOf(git, cwd)
   if (!branch) throw new Error("This checkout isn't on a branch. Check one out or create one first.")
@@ -206,6 +208,7 @@ export async function openPullRequest(git: Git, cwd: string, draft: PullRequestD
   if (existing) {
     const pushed = remote ? (await count(git, cwd, `${remote}..HEAD`)) ?? 0 : 0
     await push(git, cwd, branch, acting, status.repo)
+    forgetGitHubReads()
     const edit = { title: draft.title?.trim() || undefined, body: draft.body === undefined ? undefined : draft.body.trim() }
     const edited = edit.title !== undefined || edit.body !== undefined
     if (edited) await writing(editPull(cwd, existing.number, edit, acting?.env))
@@ -229,6 +232,7 @@ export async function openPullRequest(git: Git, cwd: string, draft: PullRequestD
  * allows. On a cloud machine it goes as the person while they open pull requests as themselves, as opening does.
  */
 export async function mergePullRequest(cwd: string, method?: MergeMethod, personOf?: PersonOf, asApp = false): Promise<{ pull: PullRequest; method: MergeMethod; author?: PullRequestAuthor }> {
+  forgetGitHubReads()
   const status = await ready(cwd)
   const acting = await actingAs(personOf, asApp, status.repo)
   const pull = await openPull(cwd)
@@ -250,6 +254,7 @@ async function pushedCommit(git: Git, cwd: string, branch: string): Promise<stri
 
 /** Re-run the failed jobs of every GitHub Actions run that failed on the branch's pushed commit; how many runs. */
 export async function rerunFailedChecks(git: Git, cwd: string): Promise<number> {
+  forgetGitHubReads()
   const branch = await branchOf(git, cwd)
   if (!branch) throw new Error("This checkout isn't on a branch.")
   const runs = await failedRuns(cwd, branch, await pushedCommit(git, cwd, branch))

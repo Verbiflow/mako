@@ -80,6 +80,7 @@ export class WebClient {
         // less likely to end the page to free memory and bring it back black.
         hidden: () => {
           client.list.save()
+          client.list.park()
           client.#loaded?.releaseHidden()
         },
         returned: (kind, away) => client.#returned(kind, away),
@@ -111,11 +112,14 @@ export class WebClient {
   /**
    * Back in front. Every socket is asked whether it's alive, and one that stays silent for three seconds (or was already
    * quiet past its heartbeat, as a frozen page's is) is ended and opened again, while the list's next follow starts
-   * now rather than after its backoff. Away ten seconds or more, what's shown is stale: the list and the open
-   * conversation are read again over HTTP at once, which answers even while a dead socket is being replaced.
+   * now rather than after its backoff. The list, which followed nothing while hidden, is followed again. Away ten seconds
+   * or more, what's shown is stale: the list and the open conversation are read again over HTTP at once, which answers
+   * even while a dead socket is being replaced.
    */
   #returned(kind: ReturnKind, away: number): void {
     this.gateway.wake()
+    // The list let its stream go while hidden; shown again it's read and followed again.
+    this.list.unpark()
     this.list.wake()
     this.#loaded?.wake()
     if (kind === "long") {

@@ -120,8 +120,8 @@ function cadenceHost(options: { idleMs?: number } = {}) {
       await waitFor(() => owner.snapshot(id)?.session.status === "failed", `"${text}" was never refused`)
     },
     observe: (event: Parameters<LiveConversations["observe"]>[0]) => owner.observe(event),
-    cleanup: () => {
-      owner.stop()
+    cleanup: async () => {
+      await owner.stop()
       rmSync(root, { recursive: true, force: true })
     },
   }
@@ -174,7 +174,7 @@ async function throughTheConversation() {
     host.standing.media = undefined
     assert.equal(await host.send("Without media"), noted([REPLACED_LINE, CONTROL, host.standing.environment!], "Without media"), "a line that stops applying sends the rest whole")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -189,7 +189,7 @@ async function afterARelaunch() {
     assert.equal(await host.send("Resumed"), noted(full, "Resumed"), "a session resumed in a new process hears the whole note")
     assert.equal(host.starts(), starts + 1, "the harness was started again")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 

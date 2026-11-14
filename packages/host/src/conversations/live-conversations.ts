@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import { statSync } from "node:fs"
 import { join } from "node:path"
 import { Admission } from "../base/admission.js"
+import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { disconnectedContext } from "../base/execution-context.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -221,7 +222,7 @@ export class LiveConversations {
         // A switch that waited behind another when the last host ended goes on, as it was asked to.
         if (this.transfers.pending(resident)?.behind) queueMicrotask(() => this.dispatch.drain(resident))
       },
-      compact: (path) => { void this.reclaims.reclaim(path) },
+      compact: (path) => this.reclaims.reclaim(path),
       paged: (id) => this.dependencies.historyPaged?.(id),
       released: (id) => {
         // Let go of: its work is read again, from memory, when it's next loaded.
@@ -396,8 +397,9 @@ export class LiveConversations {
   }
 
   /** Once every compaction of a journal this host closed has ended. */
-  journalsCompacted(): Promise<void> {
-    return this.reclaims.settled()
+  async journalsCompacted(): Promise<void> {
+    await this.records.releasesSettled()
+    await this.reclaims.settled()
   }
 
   /** The host's sweep, now; `pauseMs` between journals. */
@@ -856,6 +858,9 @@ export class LiveConversations {
     actor?: Actor,
     marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants" | "notification"> = {}
   ): LiveRequest {
+    // Settings may finish resolving after stop cleared the residents. A replay's earlier admission may be durable;
+    // callers must read its receipt from the next host under the same ID, not treat this as a definitive refusal.
+    if (this.records.stopping()) throw new RuntimeDisconnectedError(true, id)
     this.admission.assert()
     const resident = this.records.require(id)
     if (resident.rewinding)
@@ -1960,6 +1965,7 @@ export class LiveConversations {
     return this.closing.close(id)
   }
 
+  /** Starts shutdown now; await completion before removing the root or handing it to another host. */
   stop(): Promise<void> {
     clearTimeout(this.settleTimer)
     this.wakesStopped = true
