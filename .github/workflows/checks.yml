@@ -133,7 +133,8 @@ jobs:
       - run: env -u XDG_CONFIG_HOME xvfb-run -a node scripts/ci-gate.mjs ${{ matrix.shard }} 45
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
-      - if: failure()
+      # A cancelled job (one past its timeout) too: its progress log names the part that was running.
+      - if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gate-${{ matrix.shard }}-evidence
@@ -167,7 +168,8 @@ jobs:
       - run: node scripts/ci-gate.mjs --mac ${{ matrix.shard }} 2
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
-      - if: failure()
+      # A cancelled job (one past its timeout) too: its progress log names the part that was running.
+      - if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mac-host-${{ matrix.shard }}-evidence
