@@ -1,3 +1,4 @@
+import type { ProviderFailureEvidence } from "@mako/host/contracts/provider-failure-evidence"
 import { randomUUID } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -40,6 +41,17 @@ class WithoutRoomWatch extends HostJobs {
 
 /** The six harnesses, as an Apex or a child runs on them here: each a scripted driver, two of them steering at the next step as Claude's and OpenCode's do. */
 export const HARNESSES = ["claude", "codex", "cursor", "grok", "opencode", "devin"] as const
+/**
+ * The harnesses a test's per-harness cases run on: all six, or those `MAKO_TEST_HARNESSES` names (comma-separated), so
+ * CI can spread one test's harnesses over several shards. A test still pairs harnesses from all six.
+ */
+export const TESTED_HARNESSES: readonly (typeof HARNESSES)[number][] = (() => {
+  const named = process.env.MAKO_TEST_HARNESSES?.split(",").map((each) => each.trim()).filter(Boolean)
+  if (!named?.length) return HARNESSES
+  const unknown = named.filter((each) => !HARNESSES.some((harness) => harness === each))
+  if (unknown.length) throw new Error(`MAKO_TEST_HARNESSES names no harness ${unknown.join(", ")}; there are ${HARNESSES.join(", ")}`)
+  return HARNESSES.filter((harness) => named.includes(harness))
+})()
 const STEERS_AT_STEP = new Set<string>(["claude", "opencode"])
 /** An approval's answers, as ACP harnesses offer them. */
 export const APPROVAL_OPTIONS: LivePermissionRequest["options"] = [
@@ -68,6 +80,7 @@ export interface ScriptedTurn {
 export interface ScriptedEnd {
   limit?: UsageLimit
   fail?: string
+  failureEvidence?: ProviderFailureEvidence
 }
 
 /** What a scripted model does with a turn: its reply, once whatever it calls has answered. `hold` keeps the turn running until it resolves. */
@@ -146,6 +159,8 @@ export interface WorldOptions {
   starting?: (conversation: string, harness: string) => Promise<void> | void
   /** Hears each prompt and steer as its harness takes it, before its turn goes on: what a killed host's harnesses took stays known. */
   heard?: (heard: Heard) => void
+  /** Hears each conversation's work move (`LiveConversations.noteWork`), as the account's row of it is told. */
+  workMoved?: (conversation: string) => void
   /** What a new conversation of each harness starts on, as its profile says (Mako's pick). */
   defaults?: Partial<Record<string, SessionSettings>>
   /** Each harness's catalog, as its profile lists it; a harness without one has none read. */
@@ -271,6 +286,8 @@ export class AgentsWorld {
   constructor(options: WorldOptions) {
     this.root = options.root
     this.options = options
+    // A world opened on a store a host left (a test's next process after a kill) is a host after another, as `restart` is.
+    this.restartedSinceSettle = existsSync(join(options.root, "threads.sqlite"))
     mkdirSync(join(options.root, "journals"), { recursive: true })
     this.open()
   }
@@ -287,6 +304,7 @@ export class AgentsWorld {
     const live = new LiveConversations({
       ...(this.options.stopping && { stopping: this.options.stopping }),
       ...(this.options.ownerCheck && { ownerCheck: this.options.ownerCheck }),
+      workMoved: (conversation) => this.options.workMoved?.(conversation),
       appPath: this.root,
       root: join(this.root, "journals"),
       driver: (provider) => drivers.get(provider),
@@ -439,6 +457,7 @@ export class AgentsWorld {
   }
 
   async restart(): Promise<void> {
+    this.restartedSinceSettle = true
     await this.close()
     this.open()
     await this.resumed
@@ -446,6 +465,7 @@ export class AgentsWorld {
 
   /** A new host after one that ended without closing its conversations (a crash, a kill): they reopen as they were left. */
   async crashed(): Promise<void> {
+    this.restartedSinceSettle = true
     this.holds.clear()
     this.running.clear()
     await this.live.stop()
@@ -474,7 +494,10 @@ export class AgentsWorld {
   /** The person sends `text` to a conversation. */
   say(conversation: string, text: string): string {
     const request = randomUUID()
-    this.live.submit(conversation, request, text, [])
+    // Pending for `settle` until the host has taken it: a turn it starts is counted from then.
+    const sending = Promise.resolve(this.live.submit(conversation, request, text, [])).catch(() => {})
+    this.sending.add(sending)
+    void sending.finally(() => this.sending.delete(sending))
     return request
   }
 
@@ -511,6 +534,11 @@ export class AgentsWorld {
   }
 
   /** Holds a conversation's current turn until `release`: a script awaits this to stay running. */
+  /** Whether a restart or crash came since the last settle, which then waits out what the new host's timers start. */
+  private restartedSinceSettle = false
+  /** The person's messages `say` sent that the host hasn't taken yet. */
+  private readonly sending = new Set<Promise<unknown>>()
+
   hold(conversation: string): Promise<void> {
     return new Promise((resolve) => this.holds.set(conversation, () => {
       this.holds.delete(conversation)
@@ -518,15 +546,23 @@ export class AgentsWorld {
     }))
   }
 
-  /** Every turn has ended and, unless `wakes` is "ignore", no wake is pending, for `quietMs` in a row. */
-  async settle(quietMs = 2_600, timeoutMs = 20_000, wakes: "wait" | "ignore" = "wait"): Promise<void> {
+  /**
+   * Every turn has ended and, unless `wakes` is "ignore", no wake is pending, for `quietMs` in a row. A digest held for
+   * its window counts as pending until it's sent, so after work the world counts, the quiet only has to outlast the
+   * result window (`RESULT_COALESCE_MS`): 300 ms. Where it can't count what comes next it waits 2.6 s, past the digest
+   * window: with `wakes` "ignore", and the first settle after a restart, whose resume and re-notices run on the
+   * engine's own timers. At 2.6 s every settle, settling was most of each case's time in the suites built on this world.
+   */
+  async settle(quietMs?: number, timeoutMs = 20_000, wakes: "wait" | "ignore" = "wait"): Promise<void> {
+    quietMs ??= wakes === "ignore" || this.restartedSinceSettle ? 2_600 : 300
+    this.restartedSinceSettle = false
     const deadline = Date.now() + timeoutMs
     let quietSince = Date.now()
     let seen = this.prompts.length
     while (Date.now() - quietSince < quietMs) {
       if (Date.now() > deadline) throw new Error(`Still busy after ${timeoutMs} ms: ${this.running.size} turns, ${this.agents.wakes.pending()} wakes`)
       await new Promise((resolve) => setTimeout(resolve, 20))
-      const busy = this.running.size > 0 || (wakes === "wait" && this.agents.wakes.pending() > 0) || this.live.lifecycleWork().length > 0
+      const busy = this.running.size > 0 || this.sending.size > 0 || (wakes === "wait" && this.agents.wakes.pending() > 0) || this.live.lifecycleWork().length > 0
       if (busy || this.prompts.length !== seen) {
         seen = this.prompts.length
         quietSince = Date.now()
@@ -614,7 +650,7 @@ export class AgentsWorld {
           emit({ type: "live-update", id: binding, update: { kind: "text", text: reply } })
           if (end.limit) emit({ type: "live-update", id: binding, update: { kind: "event", label: "Rate limited", detail: "Reached your usage limit", tone: "warning", limit: end.limit } })
           const ended = { ...(this.live.snapshot(id)?.session ?? session), id: binding }
-          emit({ type: "live-session", session: end.fail ? { ...ended, status: "failed", lastStop: "failed", error: end.fail } : { ...ended, status: "ready" } })
+          emit({ type: "live-session", session: end.fail ? { ...ended, status: "failed", lastStop: "failed", error: end.fail, failureEvidence: end.failureEvidence } : { ...ended, status: "ready", failureEvidence: undefined } })
         })()
         this.running.add(turn)
         void turn.finally(() => this.running.delete(turn))

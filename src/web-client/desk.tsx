@@ -37,6 +37,9 @@ import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { AgentsLayer } from "./agents-layer"
+import { deskComposerChunk } from "./chunks"
+import { ScreenFailed, ScreenLoading } from "./code-unavailable"
+import { LazyBoundary } from "@/components/ui/lazy-boundary"
 import { SetupLayer } from "./setup-layer"
 import { closeSetup, setupOpenStore } from "./setup-open"
 import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
@@ -107,6 +110,8 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   // The Thread on screen's `+`, which its pane answers with its own Add a Session.
   const addSession = useRef<(() => boolean) | null>(null)
   useEffect(() => followListing(), [])
+  // The desktop's composer, which a Thread here draws under its transcript: read now, before one opens.
+  useEffect(() => void deskComposerChunk.read().catch(() => undefined), [])
   // A browser has no file manager to show a path in and no folder chooser: the desk's pieces don't offer either.
   useEffect(() => store.set({ machine: { fileManager: null, chooseFolder: false } }), [])
   const latest = useRef({ open, newThread, list })
@@ -179,9 +184,11 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           ) : under.kind === "thread" ? (
             <DeskThread key={under.thread} threadId={under.thread} sessionId={under.session} addSessionRef={addSession} onArchived={back} onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })} />
           ) : under.kind === "settings" || under.kind === "setup" ? (
-            <Suspense fallback={null}>
-              <DeskSettings route={under} open={open} />
-            </Suspense>
+            <LazyBoundary fallback={() => <ScreenFailed what="Settings" className="bg-shell" />}>
+              <Suspense fallback={<ScreenLoading what="Settings" className="bg-shell" />}>
+                <DeskSettings route={under} open={open} />
+              </Suspense>
+            </LazyBoundary>
           ) : (
             <DeskEmpty onNew={() => newThread()} />
           )}

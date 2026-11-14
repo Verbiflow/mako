@@ -12,7 +12,7 @@ import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentWakes, FROM_AGENTS, RESULT_COALESCE_MS, WAKE_COALESCE_MS, WAKES_PER_MINUTE, type AgentWakesDeps, type ParentReady } from "@mako/host/conversations/agent-wakes"
 import { carriedDigest } from "@mako/host/contracts/delivery-retry"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
-import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
+import { AgentsWorld, TESTED_HARNESSES, type Script } from "./lib/agents-world.ts"
 
 /**
  * An Apex's Fins' news is a producer into the Apex's own queue (`npm run
@@ -267,7 +267,7 @@ try {
     console.log(`${harness}: SIGKILL at every write gap of a digest recovered to each report delivered once`)
   }
 
-  for (const harness of HARNESSES) {
+  for (const harness of TESTED_HARNESSES) {
     // The minute's budget is the queue's, as it sends: seven digests waiting for a busy Apex go six now, the seventh a minute after the first.
     {
       const world = new AgentsWorld({ root: join(root, `${harness}-budget`), script: (turn) => (turn.text.includes("Hold.") ? turn.world.hold(turn.conversation).then(() => "Held.") : "ok") })

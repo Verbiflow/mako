@@ -69,7 +69,10 @@ try {
   earlier.track(wrapper, { kind: "acp:test", owner: "conv-wrapper" })
   earlier.track(finished, { kind: "acp:test", owner: "conv-2" })
   await new Promise<void>((resolve) => finished.once("exit", () => resolve()))
-  const deadline = Date.now() + 10_000
+  // As long as the host's observations may take (`ProviderChildren.observe`): looks after 0, 250, 1,000 and 5,000 ms,
+  // each allowed 4.5 s, so 24.25 s at most. 10 s held only while the OS answered at once, which a loaded runner
+  // didn't (#635).
+  const deadline = Date.now() + 25_000
   const wrappedExecutable = await realpath("/bin/sleep")
   while (true) {
     const records = JSON.parse(await readFile(earlier.path, "utf8")).children
@@ -303,6 +306,18 @@ try {
   owned.push(late)
   stopping.track(late, { kind: "discovery", owner: "late" })
   await new Promise<void>((resolve) => late.once("exit", () => resolve()))
+
+  // The OS reads a start in whole seconds, up to 2 s before the spawn the host recorded (Linux truncates both the
+  // boot time and the process's ticks): the child is still the one it spawned, and its identity is taken.
+  const floored = new ProviderChildren(join(dir, "floored"), process.pid, async () => ({ startedAt: Date.now() - 1_950, executable: "/bin/floored" }))
+  const reading = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
+  owned.push(reading)
+  floored.track(reading, { kind: "acp:test", owner: "conv-floored" })
+  const flooredBy = Date.now() + 3_000
+  while (!JSON.parse(await readFile(floored.path, "utf8")).children.some((entry: { owner: string; executableIdentity?: string }) => entry.owner === "conv-floored" && entry.executableIdentity === "/bin/floored")) {
+    assert.ok(Date.now() < flooredBy, "a start read to the whole second, before the recorded spawn, still takes the child's identity")
+    await settle()
+  }
 } finally {
   await Promise.all(
     owned.map(

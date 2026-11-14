@@ -1,6 +1,8 @@
 import type { SessionSettings } from "@mako/sessions/settings"
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
+import { workingThreads } from "@mako/host/conversations/cloud-handoffs"
+import { ThreadIdSchema, SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { AgentAskGate } from "@mako/host/conversations/agent-ask-gate"
 import { mock } from "node:test"
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs"
@@ -144,6 +146,38 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
       owner.stop()
       rmSync(root, { recursive: true, force: true })
     },
+  }
+}
+
+/** Repeated work checks must not turn a streaming batch into one journal transaction per check. */
+async function workChecksLeaveBatchingAlone() {
+  const f = fixture()
+  const starting = f.owner.start("test-provider", f.root, { conversationId: f.id })
+  f.started.resolve(f.state)
+  await starting
+  await f.owner.opened(f.id)
+  f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+  f.owner.snapshot(f.id)
+  const thread = ThreadIdSchema.parse(randomUUID())
+  const session = SessionIdSchema.parse(randomUUID())
+  const commit = mock.method(LiveJournal.prototype, "commit")
+  try {
+    for (let n = 0; n < 64; n++) {
+      f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", id: `work-check-${n}`, text: "streamed " } })
+      const working = workingThreads({
+        live: f.owner,
+        threads: { journalPlacement: () => ({ thread, session }), execution: () => ({ state: "here" }) },
+        cloud: () => false,
+      })
+      assert.deepEqual(working.map(each => each.conversationId), [f.id], "current resident work remains visible")
+    }
+    assert.equal(commit.mock.callCount(), 0, "work checks leave the pending batch for its existing flush boundary")
+    const drawn = f.owner.snapshot(f.id)
+    assert.equal(drawn?.blocks.filter(block => block.type === "text").map(block => block.text).join(""), "streamed ".repeat(64), "the explicit snapshot exposes every pending update")
+    assert.equal(commit.mock.callCount(), 1, "the same64 updates commit as one batch")
+  } finally {
+    commit.mock.restore()
+    f.cleanup()
   }
 }
 
@@ -2921,6 +2955,7 @@ async function approvalOfAGoneProcess() {
   }
 }
 
+await workChecksLeaveBatchingAlone()
 await refusedStartup()
 await settledVerdicts()
 await autoContinuedTurn()

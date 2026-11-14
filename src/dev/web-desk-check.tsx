@@ -1,5 +1,5 @@
 // Explicit isolated fixture for the web app's desk form; never imported by the application entry point.
-import { useState } from "react"
+import { lazy, Suspense, useState } from "react"
 import { createRoot } from "react-dom/client"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
@@ -14,7 +14,7 @@ import { setSetupSource } from "@/state/setup"
 import { openSetup } from "@/web-client/setup-open"
 import { accountListStore } from "@/web-client/account-list"
 import { WebClient, WebClientContext } from "@/web-client/client"
-import Desk from "@/web-client/desk"
+import { WebApp } from "@/web-client/app"
 import type { WebRoute } from "@/web-client/route"
 import { webSetup } from "@/web-client/setup-source"
 import { applyTheme } from "@/web-client/theme"
@@ -167,7 +167,7 @@ function opened(session: WebSession): LiveSnapshot {
 const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   account: { id: "account-check", name: "You", email: "you@example.com", image: null, entitlements: [] },
   deviceId: "browser-check",
-  options: { origin: location.origin, base: "/", build: "fixture" },
+  options: { origin: location.origin, base: search.get("webapp") !== null ? "/scripts/web-desk.html/" : "/", build: "fixture" },
   gateway: { wake: () => undefined, connection: async () => ({ cloud: location.origin }), rest: async (_method: string, path: string) => ((search.get("setup") || search.get("side") === "setup") && path.startsWith("/v1/borrow/") ? { grants: [], leases: [], events: [], asks: [] } : Promise.reject(new Error("The fixture has no gateway"))) },
   list: { refreshDevices: async () => undefined },
   push: { seen: async () => undefined, standing: async () => ({ standing: "unsupported", quietHours: null, timeZone: "UTC" }) },
@@ -209,17 +209,35 @@ function initialRoute(): WebRoute {
   return { kind: "list" }
 }
 
+/**
+ * The desk, read as the app reads it: a module of its own, so `?webapp` keeps the app's own chunks (the desk, a Thread, New)
+ * apart from the page's first code, as `test-lazy-pieces-ui.mjs` needs to hold and fail them.
+ */
+const Desk = lazy(() => import("@/web-client/desk"))
+
 /** The desk at its route, as the app holds it. */
 export function WebDeskPage() {
   const [route, setRoute] = useState<WebRoute>(initialRoute)
-  return <Desk route={route} navigate={(next) => setRoute(next)} back={() => setRoute({ kind: "list" })} onStarted={() => undefined} />
+  return (
+    <Suspense fallback={null}>
+      <Desk route={route} navigate={(next) => setRoute(next)} back={() => setRoute({ kind: "list" })} onStarted={() => undefined} />
+    </Suspense>
+  )
 }
 
+// `?webapp` mounts the web app itself (`WebApp`) on the same stand-in client (`app=` names the scene, as before), in whatever form the page's input and width
+// ask for, with its screens read as code of their own: what `test-lazy-pieces-ui.mjs` holds and fails.
 createRoot(document.getElementById("root")!).render(
-  <WebClientContext value={client}>
-    <div className="web-app flex w-full overflow-hidden bg-shell text-foreground" data-form="desk">
-      <WebDeskPage />
-    </div>
-    <Toaster />
-  </WebClientContext>
+  search.get("webapp") !== null ? (
+    <WebClientContext value={client}>
+      <WebApp />
+    </WebClientContext>
+  ) : (
+    <WebClientContext value={client}>
+      <div className="web-app flex w-full overflow-hidden bg-shell text-foreground" data-form="desk">
+        <WebDeskPage />
+      </div>
+      <Toaster />
+    </WebClientContext>
+  )
 )

@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react"
 import { z } from "zod"
 import { createHook, createStore } from "@/state/store"
+import { noteReadStarted, whenSlow } from "@/lib/code-patience"
 
 /*
  * Which Changes screen is open, if any: one Session's turn, or every turn of
@@ -71,22 +72,48 @@ export function leftReview(): void {
 export interface ReviewCode<T> {
   read(): Promise<void>
   useCode(): T | undefined
+  /** Its last read failed and none has been asked since: Changes says so (`CodeUnavailable`). */
+  useFailed(): boolean
+  /** Its read is still under way past its patience: Changes says "Still loading…". */
+  useSlow(): boolean
 }
 
 function lazyCode<T>(load: () => Promise<T>): ReviewCode<T> {
-  const codeStore = createStore<{ code: T | undefined; reading: Promise<void> | undefined }>({ code: undefined, reading: undefined })
+  const codeStore = createStore<{ code: T | undefined; reading: Promise<void> | undefined; failed: boolean; slow: boolean }>({ code: undefined, reading: undefined, failed: false, slow: false })
   return {
     read() {
       const { reading } = codeStore.get()
       if (reading) return reading
-      const read = load().then((code) => codeStore.set({ code }))
-      // Not here (offline before the service worker kept it): asked again next time.
-      read.catch(() => codeStore.set({ reading: undefined }))
+      noteReadStarted()
+      // As every chunk's read (`chunk`): slow past its patience (failed if offline), and drawn whenever it lands.
+      const read = load().then((code) => codeStore.set({ code, failed: false, slow: false }))
+      // Only the read in hand speaks: one given up for a failure (below) says nothing more, though it still lands.
+      const current = () => codeStore.get().code === undefined && codeStore.get().reading === read
+      const stopWatching = whenSlow(read, (offline) => {
+        if (!current()) return
+        // Offline, it's a failure and given up: the next read (Retry, or back online) starts a new load, and this one's
+        // watch ends with it.
+        if (offline) {
+          codeStore.set({ failed: true, slow: false, reading: undefined })
+          stopWatching()
+        } else codeStore.set({ failed: false, slow: true })
+      })
+      // Not here (offline before the service worker kept it): asked again next time. `failed` stands until a read
+      // succeeds, so Changes keeps saying so while it tries again.
+      read.catch(() => {
+        if (current()) codeStore.set({ reading: undefined, failed: true, slow: false })
+      })
       codeStore.set({ reading: read })
       return read
     },
     useCode() {
       return useSyncExternalStore(codeStore.subscribe, () => codeStore.get().code)
+    },
+    useFailed() {
+      return useSyncExternalStore(codeStore.subscribe, () => codeStore.get().failed)
+    },
+    useSlow() {
+      return useSyncExternalStore(codeStore.subscribe, () => codeStore.get().slow)
     },
   }
 }

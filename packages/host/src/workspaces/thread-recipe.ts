@@ -16,6 +16,7 @@ import { RECIPE_REASON_MAX, RecipeProofSchema, RecipeProofStepSchema, RecipeVers
 export const RECIPE_PATH = join(".mako", "recipe.json")
 
 const RECIPE_MAX_BYTES = 64 * 1024
+const MissingFileSchema = z.object({ code: z.literal("ENOENT") })
 /** Changing any of these in the agent's shell would break the agent itself. */
 const SHELL_OWNED = new Set(["PATH", "HOME", "SHELL", "USER", "LOGNAME", "TMPDIR", "PWD"])
 const PLACEHOLDER = /\{([a-z][a-z0-9 +]*)\}/g
@@ -390,7 +391,7 @@ async function readJson(path: string): Promise<JsonRead> {
   try {
     text = await readFile(path, "utf8")
   } catch (error) {
-    if (z.object({ code: z.literal("ENOENT") }).safeParse(error).success) return { kind: "absent" }
+    if (MissingFileSchema.safeParse(error).success) return { kind: "absent" }
     throw error
   }
   if (Buffer.byteLength(text) > RECIPE_MAX_BYTES) return { kind: "invalid", message: `larger than ${RECIPE_MAX_BYTES / 1024} KB` }

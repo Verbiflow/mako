@@ -165,10 +165,14 @@ async function cloneTrees(pairs: Array<[string, string]>, background: boolean): 
     const codes: unknown = JSON.parse(stdout.trim())
     return pairs.map((_, index) => Array.isArray(codes) && codes[index] === 0)
   }
+  // A clone that can't be made leaves nothing, as `clonefile` doesn't: `cp --reflink=always` makes the folder, then
+  // fails on its first file where the volume can't share blocks (ext4), and a copy into what it left was refused.
   const results: boolean[] = []
   for (const [from, to] of pairs) {
     const [command, args] = background ? belowAgents("cp", ["-a", "--reflink=always", from, to]) : ["cp", ["-a", "--reflink=always", from, to]]
-    results.push(await execute(command, args).then(() => true, () => false))
+    const cloned = await execute(command, args).then(() => true, () => false)
+    if (!cloned) await rm(to, { recursive: true, force: true })
+    results.push(cloned)
   }
   return results
 }

@@ -9,7 +9,7 @@ import {
   type PathMap,
   type ThreadFileHistory,
   type ThreadHistoryPart,
-} from "@mako/protocol"
+} from "@mako/protocol/attribution"
 import type { JournalStore, StoredActivity, StoredRoot } from "./journal-store.js"
 import { within } from "./paths.js"
 

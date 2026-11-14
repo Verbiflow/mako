@@ -26,9 +26,9 @@ if (process.versions.electron) {
   })
 } else {
   const root = testScratch("mako-transcript-rows-")
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const port = Number(process.env.MAKO_UI_TEST_PORT ?? process.env.MAKO_THREAD_PORT ?? 0)
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: port !== 0, hmr: false, watch: { ignored: ["**"] } } })
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: port !== 0, hmr: false, watch: { ignored: ["**"] } } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-transcript-rows", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0], MAKO_RELEASED_TURN_ONLY: process.argv.includes("--released-turn-only") ? "1" : "" }
@@ -123,7 +123,9 @@ const TURNS = `Promise.all([import('/src/state/live-recovery.ts'), import('/src/
     send({ requestChanges: [{ ...request, status: 'completed' }] })
     return 'wake-' + m
   }
-  window.__turn = async () => {
+  // A turn as the host streams one, a batch a frame or more apart; one not \`paced\` comes all at once.
+  window.__turn = async (paced = true) => {
+    const pause = paced ? sleep : () => Promise.resolve()
     n += 1
     const id = crypto.randomUUID(), m = n
     const words = '[mako · from your Fins, not the person]\\n1 finished:\\n  • "fin-' + m + '" done: the work is in.'
@@ -131,19 +133,19 @@ const TURNS = `Promise.all([import('/src/state/live-recovery.ts'), import('/src/
     const text = words + '\\n\\n<mako-reports>\\n' + JSON.stringify({ version: 1, reports: [card] }) + '\\n</mako-reports>'
     const request = { id, createdAt: Date.now(), text, attachments: [], status: 'dispatching', digest: { sentAt: Date.now(), notices: [] } }
     send({ requestChanges: [request] })
-    await sleep(40)
+    await pause(40)
     send({ updates: [{ kind: 'user', id: 'wake-' + m, text, requestId: id }] })
-    await sleep(60)
+    await pause(60)
     send({ updates: [{ kind: 'tool', id: 'tool-' + m, title: 'mcp__mako__agents_send', name: 'mcp__mako__agents_send', status: 'running', input: '{"to":"land-2","text":"Next."}', at: Date.now() }] })
-    await sleep(60)
+    await pause(60)
     send({ updates: [{ kind: 'tool-update', id: 'tool-' + m, status: 'completed', output: '{}', endedAt: Date.now() }] })
-    await sleep(60)
+    await pause(60)
     for (let piece = 0; piece < 5; piece += 1) {
       send({ updates: [{ kind: 'text', id: 'answer-' + m, text: 'It changes nothing else in the plan, so the rest stands as it was, and the queue goes on. '.repeat(3) }] })
-      await sleep(50)
+      await pause(50)
     }
     send({ requestChanges: [{ ...request, status: 'completed' }] })
-    await sleep(120)
+    await pause(120)
     return true
   }
   return true
@@ -567,6 +569,14 @@ async function check() {
     }
     console.log(`${form}: corrections logged: ${corrected.length}; the last: ${corrected.at(-1)}`)
   }
+  /**
+   * The fixture's twelve turns cross into a window some 22 turns later. All but the last few come at once, before
+   * anything watches the crossing: streamed at a turn's pace, they took 13 s of each crossing case. If they ever cross
+   * on their own, "starts short of a window" fails rather than the crossing going unwatched.
+   */
+  const turnsShortOfCrossing = async () => {
+    for (let turn = 0; turn < 18; turn += 1) await evaluate("window.__turn(false)")
+  }
   // The crossing into a window, at every width, under a reader who's up and one at the end, with turns streaming: each
   // frame paints turns where the frame before had them. Read after the frame's paint, so nothing that lands a frame late
   // passes for having been there.
@@ -585,6 +595,7 @@ async function check() {
       if (open) await until(open, `${form}: its list`)
       await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", `${form}: the Apex's turns`)
       await evaluate(TURNS)
+      await turnsShortOfCrossing()
       await wait(600)
       assert.equal(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"), false, `${form}: starts short of a window, or nothing crosses`)
       const at = await evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + 80 } })()")
@@ -644,7 +655,9 @@ async function check() {
     })
     await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", "the Apex's turns")
     await evaluate(TURNS)
+    await turnsShortOfCrossing()
     await wait(600)
+    assert.equal(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"), false, "a narrow window: starts short of a window, or nothing crosses")
     const box = await evaluate("(() => { const b = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: b.left, y: b.top, width: b.width, height: b.height } })()")
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: box.x + box.width / 2, y: box.y + 80, deltaX: 0, deltaY: -up })
     await wait(500)
@@ -766,6 +779,58 @@ async function check() {
     assert.ok(crossing, `${form}: the crossing came during the gesture`)
     assert.deepEqual(moved.slice(0, 3), [], `${form}: what's read goes with the gesture across the crossing, in frames of any length`)
     assert.ok(Math.abs(crossing.step) <= fastest * crossing.ms + 2, `${form}: at the crossing, what's read moved ${crossing.step} px in ${crossing.ms} ms, past the gesture's ${Math.round(fastest * 1000)} px/s`)
+  }
+
+  // Only a crossing waits for the reader's input: a Thread opened while a finger still moves another draws nothing
+  // unwindowed first, and one rewound below the window as it waits stops waiting rather than rendering on and on.
+  const gesturing = async (at) => {
+    let going = true
+    const mover = (async () => {
+      for (let step = 0; going; step += 1) {
+        // One slow drag of over a second at a time: the finger stays down while the turns arrive.
+        await page.debugger.sendCommand("Input.synthesizeScrollGesture", { x: at.x, y: at.y + 200, yDistance: step % 2 ? -1200 : 1200, gestureSourceType: "touch", speed: 800, preventFling: true }).catch(() => undefined)
+      }
+    })()
+    await wait(300)
+    return async () => { going = false; await mover }
+  }
+  const phoneFixture = async (turns) => {
+    await window.loadURL("about:blank")
+    await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+    await window.loadURL(`${base}/scripts/transcript-scroll-browser.html?turns=${turns}`).catch((error) => {
+      if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
+    })
+    await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", `${turns} turns: the fixture`)
+    await wait(900)
+    return evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + 80 } })()")
+  }
+  {
+    guard.at("a long Thread opened under a moving finger")
+    const stop = await gesturing(await phoneFixture(20))
+    await evaluate("window.probe.open('opened', 90)")
+    await until("window.__commits.some((commit) => commit.identity === 'opened')", "the opened Thread commits")
+    await stop()
+    const first = await evaluate("window.__commits.find((commit) => commit.identity === 'opened')")
+    console.log(`a long Thread opened under a moving finger: its first commit ${first.virtualized ? "windowed" : "unwindowed"}, ${first.rows} turns mounted`)
+    assert.ok(first.virtualized && first.rows < 90, `a long Thread opened under a moving finger windows on its first commit: ${JSON.stringify(first)}`)
+  }
+  {
+    guard.at("a crossing waiting on a finger, rewound below the window")
+    const at = await phoneFixture(20)
+    assert.equal(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"), false, "20 turns start short of a window")
+    const stop = await gesturing(at)
+    // Each streamed turn holds 11 items: 8 of them take 20 turns' 80 or so past the window's 120.
+    for (let turn = 0; turn < 8; turn += 1) await evaluate("(async () => { window.probe.startTurn(); await new Promise(requestAnimationFrame); window.probe.finishTurn(); await new Promise(requestAnimationFrame); return true })()")
+    const waiting = !(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"))
+    await evaluate("window.probe.rewind(20)")
+    await stop()
+    await wait(2600)
+    const settled = await evaluate("window.__commits.length")
+    await wait(2000)
+    const later = (await evaluate("window.__commits.length")) - settled
+    console.log(`a crossing waiting on a finger, rewound below the window: waited ${waiting}, ${later} commits in the 2 s after it settled`)
+    assert.ok(waiting, "the crossing waited for the finger")
+    assert.equal(later, 0, "a crossing rewound below the window as it waits stops waiting, and renders nothing more")
   }
 
   console.log("Transcript rows: held apart in every frame on the desk, in a laptop's browser and on a phone, with and without the observer")

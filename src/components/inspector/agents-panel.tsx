@@ -1,6 +1,6 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { memo, useCallback, useMemo, useRef, useState } from "react"
-import { ChevronDownIcon, EyeIcon, GitBranchIcon, HourglassIcon, SquareIcon, WorkflowIcon } from "lucide-react"
+import { ChevronDownIcon, GitBranchIcon, HourglassIcon, SquareIcon } from "lucide-react"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { conversationWork, type AcpState, type LiveAcpConversation } from "@/state/acp-state"
 import { toggleAgentsPanel } from "@/state/window-routes"
@@ -15,7 +15,6 @@ import { ApexFinsSection } from "@/components/inspector/apex-fins-section"
 import { apexConversation, openFinInApex, threadChildren, threadRollup, useApexView } from "@/state/apex-fins"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { harnessLabel } from "@/components/rail/harness-meta"
-import { ToolGlyph } from "@/components/transcript/tool-views"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { Elapsed } from "@/components/inspector/elapsed"
@@ -28,6 +27,9 @@ import type { NativeAgent, NativeAgentRoster } from "@/lib/types"
 import { finTuningLine } from "@mako/host/contracts/fin-tuning"
 import { SignpostIcon } from "lucide-react"
 import { FinMovedLine } from "./fin-moved-line"
+import { WorkGlyph } from "./work-glyph"
+
+export { WorkGlyph }
 
 const labels = {
   working: "Running",
@@ -84,26 +86,6 @@ function activity(agent: NativeAgent): string | undefined {
       return agent.state.reason
     case "canceled":
       return undefined
-  }
-}
-
-/**
- * The kind's glyph, the one the transcript's tool rows and event lines use
- * for it. An agent's is the mark of the harness that runs it (`provider`),
- * as its row in the transcript shows it; the agent glyph only when none is known.
- */
-export function WorkGlyph({ work, provider, className }: { work: NativeWork | undefined; provider?: string; className?: string }) {
-  switch (work ?? "agent") {
-    case "command":
-      return <ToolGlyph kind="shell" className={className} />
-    case "monitor":
-      return <EyeIcon className={className} />
-    case "workflow":
-      return <WorkflowIcon className={className} />
-    case "task":
-      return <HourglassIcon className={className} />
-    case "agent":
-      return provider ? <HarnessIcon harness={provider} className={className} /> : <ToolGlyph kind="agent" className={className} />
   }
 }
 

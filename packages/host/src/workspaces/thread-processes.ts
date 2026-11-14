@@ -34,6 +34,7 @@ const SHARED_TABLE_MS = 1_000
 const KEPT_ENTRY_MS = 30_000
 /** Apps an overview reads before it lets the loop go. */
 const OVERVIEW_SLICE = 8
+const PermissionErrorSchema = z.object({ code: z.literal("EPERM") })
 /** Between tries of a readiness command: closely while a start is usually done, then less often for one that never comes up. */
 const readyWait = (elapsedMs: number) => (elapsedMs < 30_000 ? 500 : elapsedMs < 300_000 ? 2_000 : 10_000)
 /** One try of a readiness command that hangs is stopped after this. */
@@ -1412,7 +1413,8 @@ function processExists(pid: number): boolean {
     process.kill(pid, 0)
     return true
   } catch (error) {
-    return z.object({ code: z.literal("EPERM") }).safeParse(error).success
+    // Ended runs take this path on every look; don't construct and compile a schema for each failed signal check.
+    return PermissionErrorSchema.safeParse(error).success
   }
 }
 

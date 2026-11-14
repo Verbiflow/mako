@@ -1,17 +1,16 @@
+import type { CataloguedSession } from "./writer-paths.js"
+export { harnessStores, harnessScratch, sessionFolders, sessionIds, outsideFolders, rootId, type CataloguedSession } from "./writer-paths.js"
 import { locate, type Git } from "@mako/git"
 import type { ContentRef, ExactBounds, MakoWrite, MakoWriting, PathMap, ThreadFileHistory } from "@mako/protocol"
 import type { ChildSource } from "@mako/sessions"
 import type { ToolEffects } from "@mako/sessions/tool-effects"
-import { createHash, randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs"
+import { randomUUID } from "node:crypto"
+import { realpathSync } from "node:fs"
 import { homedir, hostname, tmpdir } from "node:os"
-import { join, resolve, sep } from "node:path"
-import { DatabaseSync } from "node:sqlite"
-import { acquireHostLock } from "../base/host-lock.js"
+import { join, sep } from "node:path"
 import type { HostJobs } from "../base/host-jobs.js"
 import { onMac } from "../base/platform.js"
 import type { MethodTable } from "../base/methods.js"
-import { vacuumIfSparse } from "./journal-vacuum.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { workspaceWrites, type WorkspaceWrite } from "../base/workspace-writes.js"
 import type { LiveBatch } from "../contracts/live-conversations.js"
@@ -21,25 +20,25 @@ import { HISTORY_SCRATCH } from "../contracts/watcher-child.js"
 import type { ChangeUsage, LostVersion, ThreadChangeSummary } from "../contracts/thread-changes.js"
 import type { TurnChangedFile, TurnChanges } from "../contracts/turn-changes.js"
 import { JournalReader } from "./journal-reader.js"
+import { AttributionWriter } from "./writer-client.js"
+import { WriterPathsSchema, WriterCollectionSchema } from "./writer-protocol.js"
 import { JournalStore, type MoveRecord } from "./journal-store.js"
-import { PlacedSessionSchema, SharedJournal, sharedJournalFolder, type JournalWrites, type OwnedJournal, type SharingStatus } from "./shared-journal.js"
+import { PlacedSessionSchema, SharedJournal, sharedJournalFolder, type SharingStatus } from "./shared-journal.js"
 import type { ChosenFile, FileReferenceSource, FileResolution, FileSpelling, FileSpellings, MovedPaths } from "../contracts/file-references.js"
 import { spellingPath } from "../files/index.js"
 import { MAX_SPELLINGS, ThreadFiles, type ReferenceSource } from "./thread-files.js"
-import { carryHistory, threadHistory, type CarryResult } from "./thread-history.js"
+import { threadHistory, type CarryResult } from "./thread-history.js"
 import { projectRepositories } from "../git/index.js"
-import { Backfill, type BackfillResult } from "./backfill.js"
-import { ChildCalls } from "./child-calls.js"
+import type { BackfillResult } from "./backfill.js"
 import { LiveActivity, reportedEffect } from "./live-activity.js"
 import { within } from "./paths.js"
-import { gitRepository, nodeFileSystem, watcherEvents, type SystemHistory, type TreeWatcher } from "./ports.js"
+import type { SystemHistory, TreeWatcher } from "./ports.js"
 import { changes, countTurnInSlices, hunks, partition, restorable, shares, storedView, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
-import { lostVersions, restoreVersion } from "./recovery.js"
 import { threadTrees, type ThreadTree } from "./thread-tree.js"
 import { runningIn, turnOnlyPair, turnWriters, undoPlan, type ShownPair, type UndoPlan } from "./turn-lines.js"
 import type { TurnUndoScope, WriterRun } from "../contracts/turn-review.js"
 import type { RescanFootprint } from "../contracts/mako-footprint.js"
-import { LaptopTracker, SETTLE_MS } from "./tracker.js"
+import { SETTLE_MS } from "./tracker.js"
 import { TRAIL_MS } from "./evidence.js"
 
 export { JournalStore } from "./journal-store.js"
@@ -151,8 +150,14 @@ export function changeUsage(store: JournalStore, since: number): ChangeUsage {
 
 /** What windows ask the journal: a Thread's changes made, every Thread's, versions lost from disk, and putting one back. */
 export function declareAttributionMethods(methods: MethodTable, attribution: () => Attribution | undefined): void {
-  methods.handle("mako:thread-changes", (thread: string): ThreadChangeSummary | null => attribution()?.threadChanges(thread) ?? null)
-  methods.handle("mako:change-usage", (): ChangeUsage | null => attribution()?.changeUsage() ?? null)
+  // These reads come from opening the window's changes/usage view, not background journal polling.
+  const forWindowView = () => {
+    const journal = attribution()
+    journal?.retryFromPerson()
+    return journal
+  }
+  methods.handle("mako:thread-changes", (thread: string): ThreadChangeSummary | null => forWindowView()?.threadChanges(thread) ?? null)
+  methods.handle("mako:change-usage", (): ChangeUsage | null => forWindowView()?.changeUsage() ?? null)
   // Null while the journal isn't open: the window links as it did before, unchecked.
   methods.handle("mako:resolve-file-references", async (source: FileReferenceSource, spellings: FileSpellings): Promise<FileResolution[] | null> =>
     (await attribution()?.resolveFiles(source, spellings)) ?? null)
@@ -212,6 +217,8 @@ export interface ReportedBounds {
 
 /** Who changed what in every checkout Threads work in: the journal, what feeds it, and what it answers. */
 export interface Attribution {
+  /** A person opened a view of the journal; bounded independently of background reads and writes. */
+  retryFromPerson(): void
   /** A batch the live conversations sent: turns, tool calls and background work starting and ending. */
   live(batch: LiveBatch): void
   /** A finished call's reported effects, from the live engine. */
@@ -301,110 +308,11 @@ export interface Attribution {
   lost(target: { thread: string } | { path: string }): Promise<LostVersion[]>
   /** Write a kept version back, keeping what the file holds now as a version too. The person asked, so it's theirs. */
   restore(root: string, entry: number): Promise<{ path: string }>
+  failure(): string | undefined
   status(): AttributionStatus & { sharing: SharingStatus }
   /** The rescans for lost events this host's tracker made lately; null where another host owns the journal. */
   rescans(): RescanFootprint | null
   close(): Promise<void>
-}
-
-/**
- * The folders the harnesses keep their sessions in, from where their
- * sessions are: the folder under the home folder each store file sits in
- * (`~/.<harness>`), so a new harness's store is known without a list.
- */
-export function harnessStores(sessionFiles: readonly string[], home = homedir()): string[] {
-  const folders = new Set<string>()
-  for (const path of sessionFiles) {
-    if (!within(home, path)) continue
-    const [first, second, third] = path.slice(home.length + 1).split("/")
-    if (!first || !second) continue
-    // Under Library, the application's own folder (`Library/Application Support/<app>`).
-    if (first === "Library" && second && third) folders.add(join(home, first, second, third))
-    else if (first.startsWith(".")) folders.add(join(home, first))
-  }
-  return [...folders].sort()
-}
-
-/**
- * What harnesses keep outside the stores `harnessStores` finds from session
- * paths: Claude Code's settings beside `~/.claude`, and its temporary folder
- * for this user, where every session's command output goes.
- */
-export function harnessScratch(home: string): string[] {
-  const uid = process.getuid?.()
-  return [join(home, ".claude.json"), ...(uid === undefined ? [] : [`/private/tmp/claude-${uid}`])]
-}
-
-/** What `sessionFolders` and backfill read of a catalogued session. */
-export interface CataloguedSession {
-  harness: string
-  nativeId: string
-  path: string
-  cwd?: string
-  currentCwd?: string
-  worktrees?: readonly { path: string }[]
-  updatedAt?: string
-  threadId?: string
-  sessionId?: string
-}
-
-/** A session that stopped moving this long before a turn began may still be running a long command. */
-const OTHERS_SLACK_MS = 5 * 60_000
-
-/**
- * The folders of every session on this Mac that moved since `since`, or
- * that another app reports running now, except `thread`'s own: where their
- * churn during a turn comes from. Read from the catalog, which already
- * lists every harness's sessions.
- */
-export function sessionFolders(sessions: readonly CataloguedSession[], running: Readonly<Record<string, { status: string }>>, thread: string, since: number): { folder: string; why: string }[] {
-  const out = new Map<string, string>()
-  for (const session of sessions) {
-    if (thread && session.threadId === thread) continue
-    const moved = session.updatedAt ? Date.parse(session.updatedAt) : Number.NaN
-    const active = running[session.path]?.status === "active"
-    if (!active && !(moved >= since - OTHERS_SLACK_MS)) continue
-    const why = `${session.harness} session ${session.nativeId.slice(0, 8)}${active ? ", running" : ""}`
-    for (const folder of [session.cwd, session.currentCwd, ...(session.worktrees ?? []).map((worktree) => worktree.path)])
-      if (folder && !out.has(folder)) out.set(folder, why)
-  }
-  return [...out].map(([folder, why]) => ({ folder, why }))
-}
-
-/**
- * The folders of sessions another app is working in now (another Mako on
- * this device, a harness in a terminal), with whose they are. The home
- * folder and the root hold everything, so they name nothing.
- */
-export function outsideFolders(sessions: readonly CataloguedSession[], running: Readonly<Record<string, { status: string }>>, home = homedir()): { folder: string; why: string }[] {
-  const active = new Set(Object.entries(running).flatMap(([path, activity]) => (activity.status === "active" ? [path] : [])))
-  if (!active.size) return []
-  const out = new Map<string, string>()
-  for (const session of sessions) {
-    if (!active.has(session.path)) continue
-    for (const folder of [session.cwd, session.currentCwd, ...(session.worktrees ?? []).map((worktree) => worktree.path)])
-      if (folder && folder !== home && folder !== sep && !out.has(folder)) out.set(folder, `${session.harness} session ${session.nativeId.slice(0, 8)}, outside this Mako`)
-  }
-  return [...out].map(([folder, why]) => ({ folder, why }))
-}
-
-/** How long the folders of agents outside this host are reused: a burst of changes asks once. */
-const OUTSIDERS_FRESH_MS = 2_000
-
-/**
- * Every catalogued session's native id but `thread`'s own, lowercase, with
- * whose it is: tools that keep something per session (a memory index, a
- * sync's anchors) file it under the session's id.
- */
-export function sessionIds(sessions: readonly CataloguedSession[], thread: string): Map<string, string> {
-  const ids = new Map<string, string>()
-  for (const session of sessions) if (!(thread && session.threadId === thread)) ids.set(session.nativeId.toLowerCase(), `${session.harness} session ${session.nativeId.slice(0, 8)}`)
-  return ids
-}
-
-/** A root's id: stable for its path, so a restarted host resumes the same root. */
-export function rootId(path: string): string {
-  return `r-${createHash("sha256").update(path).digest("hex").slice(0, 16)}`
 }
 
 /** The machine's temporary folders, as the watcher reports their paths: the user's `$TMPDIR` and the shared one. */
@@ -428,108 +336,10 @@ function outermost(folders: readonly string[]): string[] {
 /** A turn re-asks the owner to track its checkout at most this often: the owner may have let it go as idle. */
 const RETRACK_MS = 10 * 60_000
 
-/** A journal's file and its write-ahead log, newest change first. */
-function lastWritten(path: string): number {
-  let newest = 0
-  for (const file of [path, `${path}-wal`]) {
-    try {
-      newest = Math.max(newest, statSync(file).mtimeMs)
-    } catch {
-      // Not there.
-    }
-  }
-  return newest
-}
-
-/**
- * Start the device's shared journal from the newest journal this device
- * already keeps: another format's shared one, or a host's own from before
- * sharing. Copied as one consistent snapshot, so a Mako still writing its
- * own goes on undisturbed; the tracker then catches up from the history.
- * The copy takes a new journal id: an older Mako may go on appending to the
- * original, and two histories under one id would mislead any peer that asks
- * by number. It's renamed into place whole, so a crash leaves no half copy.
- */
-function adoptJournal(folder: string, candidates: readonly string[]): void {
-  const target = join(folder, "journal.sqlite")
-  if (existsSync(target)) return
-  const newest = candidates.filter((path) => path !== target && existsSync(path)).sort((a, b) => lastWritten(b) - lastWritten(a))[0]
-  if (!newest) return
-  const began = Date.now()
-  const copying = `${target}.copying`
-  try {
-    mkdirSync(folder, { recursive: true })
-    rmSync(copying, { force: true })
-    const source = new DatabaseSync(newest, { readOnly: true })
-    try {
-      source.exec(`VACUUM INTO '${copying.replaceAll("'", "''")}'`)
-    } finally {
-      source.close()
-    }
-    const copy = new DatabaseSync(copying)
-    try {
-      copy.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('journal', ?)").run(randomUUID())
-    } finally {
-      copy.close()
-    }
-    renameSync(copying, target)
-    hostLog("attribution", "the device's record of changes started from an existing one", { from: newest, ms: Date.now() - began })
-  } catch (error) {
-    rmSync(copying, { force: true })
-    hostWarn("attribution", "an existing record of changes couldn't be copied; starting a new one", { from: newest, error: error instanceof Error ? error.message : String(error) })
-  }
-}
-
-/** Journals in other formats' folders, each with its folder. */
-function otherFormats(userRoot: string, folder: string): { folder: string; journal: string }[] {
-  const parent = join(userRoot, "attribution")
-  try {
-    return readdirSync(parent, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && /^[0-9a-f]{16}$/.test(entry.name) && join(parent, entry.name) !== folder)
-      .map((entry) => ({ folder: join(parent, entry.name), journal: join(parent, entry.name, "journal.sqlite") }))
-  } catch {
-    return []
-  }
-}
-
-/**
- * Remove journals nothing has written for longer than retention: other
- * formats' shared ones nobody owns, and this host's own from before sharing.
- * A Mako still using one writes it, so it's never this old.
- */
-async function sweepOldJournals(userRoot: string, folder: string, dataRoot: string, before: number): Promise<string[]> {
-  const removed: string[] = []
-  for (const other of otherFormats(userRoot, folder)) {
-    if (lastWritten(other.journal) > before) continue
-    const lock = await acquireHostLock(other.folder, { purpose: "owner" }).catch(() => undefined)
-    if (lock?.kind !== "held") continue
-    try {
-      rmSync(other.folder, { recursive: true, force: true })
-      removed.push(other.folder)
-    } finally {
-      await lock.release()
-    }
-  }
-  const own = join(dataRoot, "attribution", "journal.sqlite")
-  if (own !== join(folder, "journal.sqlite") && existsSync(own) && lastWritten(own) <= before) {
-    for (const file of [own, `${own}-wal`, `${own}-shm`]) rmSync(file, { force: true })
-    removed.push(own)
-  }
-  return removed
-}
-
-/** The tracker this host runs when it owns the journal or keeps its own. */
-interface Local {
-  tracker: LaptopTracker
-  readBack(folder?: string, budgetMs?: number): Promise<BackfillResult | undefined>
-}
-
 /** The shared journal once it's open; what it calls while it opens reads it through this. */
 interface Sharing {
   journal?: SharedJournal
 }
-
-const liveView = (tracker: LaptopTracker): JournalView => ({ store: tracker.store, roots: () => tracker.rootStates().values(), author: (seq) => tracker.authorOf(seq) })
 
 export async function openAttribution(deps: AttributionDeps): Promise<Attribution> {
   const home = homedir()
@@ -539,21 +349,24 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
   const folder = sharedJournalFolder(deps.userRoot)
   const journalFile = join(folder, "journal.sqlite")
   const sharing: Sharing = {}
-  let local: Local | undefined
+  let activeFile = journalFile
+  const writer = new AttributionWriter(deps, {
+    dataRoot: deps.dataRoot, userRoot: deps.userRoot, defaultDataRoot: deps.defaultDataRoot, label: deps.label, hostPid: process.pid,
+    home, temporary, own, history: Boolean(deps.history), children: Boolean(deps.children), catalogued: Boolean(deps.catalogued), running: Boolean(deps.running),
+  }, { applied: () => sharing.journal?.applied() ?? Promise.resolve() })
   /** The journal another host owns, read from the file, and its view as of the last commit read. */
   let reader: { store: JournalStore; version: number; view?: JournalView } | undefined
 
   // This device's sessions as the journal reads them: the catalog, with the Threads followers run their sessions in.
   const catalogued = (): readonly CataloguedSession[] => {
     const own = deps.catalogued?.() ?? []
-    const placed = new Map((sharing.journal?.followers() ?? []).flatMap((follower) => [...follower.placed]))
+    const placed = new Map((writer.snapshot()?.followers ?? []).flatMap((follower) => [...follower.placed]))
     if (!placed.size) return own
     return own.map((session) => {
       const thread = session.threadId ? undefined : placed.get(session.path)
       return thread ? { ...session, threadId: thread.thread, sessionId: thread.session } : session
     })
   }
-  const running = () => deps.running?.() ?? {}
   const files = new ThreadFiles({ git: deps.git, home })
   /** A message's Thread and folders: a live conversation's from the live engine, a record's from the catalog. */
   const referenceSource = (source: FileReferenceSource): ReferenceSource => {
@@ -565,129 +378,10 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     const current = [session?.currentCwd ?? session?.cwd, ...(session?.worktrees ?? []).map((worktree) => worktree.path)].filter((folder) => folder !== undefined)
     return { thread: session?.threadId, cwd: session?.cwd, current, asOf: source.asOf }
   }
-  let outsiders: { at: number; folders: readonly { folder: string; why: string }[] } | undefined
-  /** An agent no host of this journal runs, working where `path` is: a follower's own are heard, so they're never outsiders. */
-  const outsider = (path: string, root: string) => {
-    const now = Date.now()
-    if (!outsiders || now - outsiders.at > OUTSIDERS_FRESH_MS) {
-      const followed = new Set((sharing.journal?.followers() ?? []).flatMap((follower) => [...follower.live.keys()]))
-      outsiders = { at: now, folders: outsideFolders(catalogued().filter((session) => !followed.has(session.path)), running()) }
-    }
-    return outsiders.folders.find(({ folder: working }) => within(working, path) || within(root, working))?.why
-  }
-
-  const openLocal = async (storage: string): Promise<OwnedJournal> => {
-    // Only calls into the tracker once a Session's turn marks it, after the tracker opens.
-    const children = deps.children && new ChildCalls({
-      records: deps.children,
-      reported: (call) => tracker.reported(call),
-      reconcile: (calls) => tracker.reconcile(calls),
-      hold: () => tracker.hold(),
-      unsure: () => tracker.unsure(),
-      now: () => Date.now(),
-      log: (message, facts) => hostWarn("attribution", message, facts),
-    })
-    const tracker = await LaptopTracker.open(
-      {
-        fs: nodeFileSystem(),
-        events: watcherEvents(deps.watch, deps.history, () => own),
-        clock: { now: () => Date.now() },
-        storage,
-        device: hostname(),
-      },
-      {
-        repository: async (root) => ((await locate(deps.git, root).catch(() => null))?.root === root ? gitRepository(deps.git, root, deps.watchGitDir) : null),
-        retentionMs: RETENTION_DAYS * DAY_MS,
-        budgetBytes: 2 * 1024 ** 3,
-        footprint: {
-          home,
-          roots: [home, ...temporary],
-          live: temporary,
-          stores: () => [...deps.stores(), ...harnessScratch(home), ...own, ...(sharing.journal?.followers() ?? []).map((follower) => follower.host.dataRoot)],
-          others: (thread, since) => sessionFolders(catalogued(), running(), thread, since),
-          sessions: (thread) => sessionIds(catalogued(), thread),
-        },
-        uncertain: (sessions) => children?.uncertain(sessions),
-        outsider: deps.running && outsider,
-        log: (message, facts) => hostLog("attribution", message, facts),
-        deliveryLagMs: deps.deliveryLagMs,
-      },
-    )
-    const backfill = deps.children && deps.catalogued && new Backfill({
-      sessions: catalogued,
-      records: deps.children,
-      unsure: () => tracker.unsureFiles(),
-      reconcile: (calls) => tracker.reconcile(calls),
-      now: () => Date.now(),
-      log: (message, facts) => hostLog("attribution", message, facts),
-    })
-    const readBack = async (where?: string, budgetMs?: number) => backfill?.run(where, budgetMs).catch((error: Error) => {
-      hostWarn("attribution", "records could not be read back", { error: error.message })
-      return undefined
-    })
-    /** Track a root; one tracked anew holds what was there before, which the sessions that worked there may have written. */
-    const trackRoot = async (root: string) => {
-      const known = tracker.rootStates().size
-      await tracker.track({ id: rootId(root), path: root, kind: "workspace" })
-      if (tracker.rootStates().size > known) void readBack(root)
-    }
-    const writing = new Map<string, { end(at?: number): void }>()
-    const writes: JournalWrites = {
-      activity(mark) {
-        tracker.activity(mark)
-        children?.marked(mark)
-      },
-      reported: (call) => tracker.reported(call),
-      makoStart: (id, write, at) => {
-        writing.set(id, tracker.mako(write, at))
-      },
-      makoEnd: (id, at) => {
-        writing.get(id)?.end(at)
-        writing.delete(id)
-      },
-      makoWrote: (write, startedAt, endedAt) => tracker.makoWrote(write, startedAt, endedAt),
-      moved: (move) => tracker.store.saveMove(move),
-      chose: (choice) => tracker.store.saveChoice(choice),
-      counted: (summary, session) => tracker.store.saveTurnChanges(summary, session),
-      async carry(history, map) {
-        const result = carryHistory(tracker.store, history, map, Date.now())
-        hostLog("attribution", "carried a Thread's file history in", { thread: result.thread, taken: result.taken.length, left: result.left.length, choices: result.choices })
-        return result
-      },
-      // This host's own sessions are in its catalog; a follower's come through `followers()`.
-      sessions: () => undefined,
-      track: trackRoot,
-      settled: (options) => tracker.settled(options),
-      readBack: async (where, budgetMs) => {
-        await tracker.settled()
-        return readBack(where, budgetMs)
-      },
-      lost: (target) => lostVersions(tracker, liveView(tracker), target),
-      async restore(root, entry) {
-        const restored = await restoreVersion(tracker, root, entry)
-        hostLog("attribution", "restored a version", { path: restored.path, entry })
-        return restored
-      },
-    }
-    local = { tracker, readBack }
-    // The file stays readable until the tracker has it, so a view never goes missing while the owner changes.
-    reader?.store.close()
-    reader = undefined
-    return {
-      writes,
-      async close() {
-        children?.close()
-        if (local?.tracker === tracker) local = undefined
-        await tracker.close()
-      },
-    }
-  }
-
   /** The worker `partitionOffLoop` reads on, for the journal file it was made for. */
   let offLoop: { path: string; reader: JournalReader } | undefined
 
   const view = (): JournalView => {
-    if (local) return liveView(local.tracker)
     if (!reader) throw new Error("Mako's record of changes isn't open yet. Try again in a moment.")
     const version = reader.store.dataVersion()
     if (!reader.view || version !== reader.version) {
@@ -697,29 +391,28 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     return reader.view
   }
 
-  sharing.journal = await SharedJournal.open({
+  try {
+    sharing.journal = await SharedJournal.open({
     folder,
     host: { pid: process.pid, dataRoot: deps.dataRoot, label: deps.label },
-    own: async () => {
-      adoptJournal(folder, [
-        ...otherFormats(deps.userRoot, folder).map((other) => other.journal),
-        join(deps.dataRoot, "attribution", "journal.sqlite"),
-        // The installed app's own, only for a host of this user's: an isolated one (its user root is its data root) never reads the person's.
-        ...(deps.defaultDataRoot && resolve(deps.userRoot) !== resolve(deps.dataRoot) ? [join(deps.defaultDataRoot, "attribution", "journal.sqlite")] : []),
-      ])
-      // Compacted before it opens here, on a worker, while nothing else writes it: only when free pages are many.
-      const vacuumed = await vacuumIfSparse(journalFile)
-      if (!vacuumed.ok) hostWarn("attribution", "the record of changes could not be compacted; it keeps its free pages", { error: vacuumed.error, ms: vacuumed.ms })
-      else if (vacuumed.vacuumed) hostLog("attribution", "the record of changes compacted", { before: vacuumed.bytes, after: vacuumed.after, ms: vacuumed.ms })
-      return openLocal(folder)
+    startOwner: async (privateReason) => {
+      const state = await writer.ensure(privateReason)
+      activeFile = state.path
+      return state.address
     },
+    own: async () => { throw new Error("A host never opens the attribution writing owner on its own thread.") },
     follow: () => {
       reader?.store.close()
-      reader = { store: JournalStore.open(journalFile, { device: hostname(), readOnly: true }), version: -1 }
+      reader = { store: JournalStore.open(activeFile, { device: hostname(), readOnly: true }), version: -1 }
     },
-    alone: () => openLocal(join(deps.dataRoot, "attribution", "private")),
+    alone: async () => { throw new Error("A private attribution writer runs off-thread too.") },
     log: (message, facts) => hostLog("attribution", message, facts),
-  })
+    })
+  } catch (error) {
+    const [cleanup] = await Promise.allSettled([writer.close()])
+    if (cleanup.status === "rejected") throw new AggregateError([error, cleanup.reason], "Attribution could not open or close its writer", { cause: error })
+    throw error
+  }
   const journal = sharing.journal
 
   // A follower tells the owner which of the device's sessions are its Threads', so their work is read as theirs.
@@ -792,17 +485,15 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
   })
   // Sessions imported since, moved since, or lines that turned unsure: a pass opens only those.
   deps.jobs.every("read back unsure lines", 10 * 60_000, async () => {
-    await local?.readBack()
+    await writer.command({ kind: "read-back" })
   }, { firstAfterMs: 60_000 })
   deps.jobs.every("tell the owner this Mako's sessions", 10 * 60_000, tellSessions, { firstAfterMs: 10 * 60_000 })
   // On a worker with a connection of its own: on the host's thread it held the loop 2.4 to 3.9 s an hour.
   deps.jobs.every("collect attribution content", 60 * 60_000, async () => {
-    const tracker = local?.tracker
-    if (!tracker) return
-    const collected = await tracker.collectOffThread().catch((error: Error) => {
+    const collected = WriterCollectionSchema.parse(await writer.command({ kind: "collect" }).catch((error: Error) => {
       hostWarn("attribution", "kept content could not be collected; trying again next hour", { error: error.message })
       return undefined
-    })
+    }))
     if (collected?.dropped) hostLog("attribution", "content collected", { ...collected })
   })
   /**
@@ -810,30 +501,20 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
    * division or a tree read of it asks, so what changed there while it slept is read before the next answer. The
    * answer under way reads what the journal holds now.
    */
-  const wakeFor = (checkout: string): Promise<void>[] => {
-    const tracker = local?.tracker
-    if (!tracker) return []
-    const waking: Promise<void>[] = []
-    for (const { root } of tracker.rootStates().values()) {
-      if (!(within(checkout, root.path) || within(root.path, checkout)) || !tracker.asleep(root.path)) continue
-      waking.push(journal.writes.track(root.path).catch((error: Error) => {
-        hostWarn("attribution", "a checkout could not be tracked", { root: root.path, error: error.message })
-      }))
-    }
-    return waking
-  }
+  const wakeFor = (checkout: string): Promise<void>[] => [writer.command({ kind: "wake", checkout }).then(() => undefined).catch((error: Error) => {
+    hostWarn("attribution", "a checkout could not be woken", { checkout, error: error.message })
+  })]
   // Roots nobody changed or worked around for hours let go of their stat caches; a turn there wakes them.
   deps.jobs.every("let quiet attribution roots sleep", 60 * 60_000, async () => {
-    for (const root of (await local?.tracker.sleepIdle()) ?? []) asked.delete(root)
+    for (const root of WriterPathsSchema.parse(await writer.command({ kind: "sleep" }) ?? [])) asked.delete(root)
   }, { firstAfterMs: 15 * 60_000 })
   deps.jobs.every("let go of idle attribution roots", 6 * 60 * 60_000, async () => {
     // A repository let go is tracked again on the next turn there.
-    for (const root of (await local?.tracker.letGoIdle()) ?? []) asked.delete(root)
+    for (const root of WriterPathsSchema.parse(await writer.command({ kind: "let-go" }) ?? [])) asked.delete(root)
   }, { firstAfterMs: 10 * 60_000 })
   deps.jobs.every("remove journals nothing writes", 24 * 60 * 60_000, async () => {
-    if (journal.role().kind !== "owner") return
-    const removed = await sweepOldJournals(deps.userRoot, folder, deps.dataRoot, Date.now() - RETENTION_DAYS * DAY_MS)
-    if (removed.length) hostLog("attribution", "removed journals nothing wrote for two weeks", { removed: removed.join(", ") })
+    const removed = WriterPathsSchema.parse(await writer.command({ kind: "sweep" }) ?? [])
+    if (removed?.length) hostLog("attribution", "removed journals nothing wrote for two weeks", { removed: removed.join(", ") })
   }, { firstAfterMs: 30 * 60_000 })
   return {
     live: (batch) => activity.observe(batch),
@@ -868,7 +549,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     },
     partitionOffLoop: (checkout, thread) => {
       wakeFor(checkout)
-      const path = local ? local.tracker.store.path : journalFile
+      const path = activeFile
       if (offLoop?.path !== path) {
         offLoop?.reader.close()
         offLoop = { path, reader: new JournalReader(path) }
@@ -903,7 +584,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       return threadTotals(current.store.turnChangesOf(thread), changes(current, thread))
     },
     countTurn: async (thread, turn, state) => {
-      if (!local && !reader) return undefined
+      if (!reader) return undefined
       return countTurnInSlices(view(), thread, turn, state)
     },
     settledThrough: (at) => !view().store.unsettledThrough(at + TRAIL_MS),
@@ -925,18 +606,24 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     moved: (move) => journal.writes.moved({ ...move, at: Date.now() }),
     lost: (target) => journal.writes.lost(target),
     restore: (root, entry) => journal.writes.restore(root, entry),
+    retryFromPerson: () => journal.retryFromPerson(),
+    failure: () => journal.status().failure,
     status: () => ({
-      ...attributionStatus(local ? storedView(local.tracker.store) : view(), { recent: local?.tracker.recent(), live: Boolean(local) }),
-      sharing: journal.status(),
+      ...attributionStatus(view(), { recent: writer.snapshot()?.recent, live: writer.snapshot()?.role.kind === "owner" || writer.snapshot()?.role.kind === "private" }),
+      sharing: { ...(journal.role().kind === "failed" ? journal.status() : writer.snapshot()?.sharing ?? journal.status()), unsent: journal.status().unsent },
     }),
-    rescans: () => local?.tracker.rescanReading() ?? null,
+    rescans: () => { void writer.command({ kind: "snapshot" }).catch(() => {}); return writer.snapshot()?.rescans ?? null },
     async close() {
       unwatch()
       offLoop?.reader.close()
       offLoop = undefined
-      await journal.close()
+      const acknowledged = await Promise.allSettled([journal.applied()])
+      const closed = await Promise.allSettled([journal.close()])
+      const stopped = await Promise.allSettled([writer.close()])
       reader?.store.close()
       reader = undefined
+      const failed = [...acknowledged, ...closed, ...stopped].flatMap(result => result.status === "rejected" ? [result.reason] : [])
+      if (failed.length) throw new AggregateError(failed, "Attribution did not close cleanly", { cause: failed[0] })
     },
   }
 }
@@ -947,4 +634,4 @@ export function journalPath(userRoot: string): string {
 }
 
 export { within }
-export { SHARED_FORMAT, SharedJournal, sharedJournalFolder, type JournalRole, type JournalWrites, type OwnedJournal, type SharingStatus } from "./shared-journal.js"
+export { SHARED_FORMAT, SharedJournal, sharedJournalFolder, type JournalRole, type SharingStatus } from "./shared-journal.js"
