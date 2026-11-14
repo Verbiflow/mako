@@ -1,4 +1,9 @@
 import assert from "node:assert/strict"
+import { createElement } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
+import { acpStore, type LiveAcpConversation } from "../src/state/acp-state.ts"
+import { TranscriptSourceContext } from "../src/components/transcript/source-context.ts"
+import { TurnChanges as TurnChangesLine } from "../src/components/transcript/turn-changes.tsx"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -17,6 +22,28 @@ import { requestedTurn, type TurnReviewRequest } from "../src/state/review-scope
 assert.equal(turnChangeWords(1), "Changed a file")
 assert.equal(turnChangeWords(4), "Changed 4 files")
 assert.equal(turnChangeWords(1200), "Changed 1,200 files")
+
+// A missing baseline remains visible even when there is no changed-file count to draw.
+{
+  const before = acpStore.get()
+  const request: LiveRequest = {
+    id: "coverage-turn", text: "write a file", attachments: [], status: "completed",
+    snapshots: { before: { kind: "unavailable", reason: "Tracking timed out" }, coverage: { kind: "incomplete", reason: "Tracking timed out" } },
+  }
+  const conversation: LiveAcpConversation = {
+    kind: "live", key: "coverage-conversation", draftKey: "coverage-conversation", harness: "codex", cwd: "/repo",
+    session: { id: "coverage-conversation", harness: "codex", cwd: "/repo", status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] },
+    requests: [request], permission: null, sending: false, canceling: false, blocks: [], queued: [], hiddenUserPrompt: null, createdAt: 0, updatedAt: 0,
+  }
+  const render = () => renderToStaticMarkup(createElement(TranscriptSourceContext.Provider, { value: { liveId: conversation.key } }, createElement(TurnChangesLine, { requestId: request.id })))
+  try {
+    acpStore.set({ conversations: { [conversation.key]: conversation } })
+    assert.match(render(), /Some file changes may be missing/)
+    assert.match(render(), /data-turn-coverage="incomplete"/)
+    acpStore.set({ conversations: { [conversation.key]: { ...conversation, requests: [{ ...request, snapshots: undefined }] } } })
+    assert.equal(render(), "", "an older uncounted turn has no false incomplete marker")
+  } finally { acpStore.set(before) }
+}
 
 // Counts sum over the files that report one; a binary file adds to the files only.
 assert.deepEqual(

@@ -552,10 +552,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     late.conversations?.live.journalOpened()
     return attribution
   }, (error: Error) => {
-    hostWarn("attribution", "the journal could not open; Git turns cannot start untracked", { error: error.message })
+    hostWarn("attribution", "the journal could not open; turns will report incomplete coverage", { error: error.message })
     throw error
   })
-  // Startup may finish before any turn asks; that turn still receives the failure rather than starting untracked.
+  // Startup may finish before any turn asks; that turn still records the failure in its coverage.
   void attributionReady?.catch(() => {})
   const wake = watchWake(shell.jobs, (source) => {
     hostLog("host", "woke", { source })

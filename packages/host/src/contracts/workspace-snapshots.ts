@@ -15,6 +15,11 @@ export const WorkspaceSnapshotSchema = z.object({
 })
 export type WorkspaceSnapshot = z.infer<typeof WorkspaceSnapshotSchema>
 export const RunSnapshotsSchema = z.object({
+  /** Whether tracking and the baseline cover this turn. A missed deadline stays incomplete even after late work ends. */
+  coverage: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("complete") }),
+    z.object({ kind: z.literal("incomplete"), reason: z.string() }),
+  ]).optional(),
   before: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("ready"), snapshot: WorkspaceSnapshotSchema }),
     z.object({ kind: z.literal("unavailable"), reason: z.string() }),

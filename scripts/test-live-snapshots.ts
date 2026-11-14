@@ -111,8 +111,8 @@ const dependencies = {
   emit: () => {},
 }
 let owner = new LiveConversations(dependencies)
-async function until(predicate: () => boolean) {
-  const deadline = Date.now() + 15_000
+async function until(predicate: () => boolean, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs
   while (!predicate()) {
     assert.ok(Date.now() < deadline, "timed out waiting for run/checkpoint")
     await new Promise((resolve) => setTimeout(resolve, 5))
@@ -285,7 +285,37 @@ try {
     "PASS: cancellation during baseline capture never dispatches the prompt"
   )
 
-  // A tracked checkout cannot spend its first tool before tracking and a saved content baseline.
+  // Even tracking that never answers cannot hold a send beyond the shared preparation deadline.
+  {
+    owner.stop()
+    let release = () => {}, captures = 0
+    const tracking = new Promise<void>(resolve => { release = resolve })
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 25, prepareTurn: async () => {
+      await tracking
+      return "tracked" as const
+    } })
+    const timedId = randomUUID(), timedRequest = randomUUID()
+    await owner.start("test", cwd, { conversationId: timedId })
+    const original = snapshots.beginRun.bind(snapshots)
+    const beginRun = mock.method(snapshots, "beginRun", (...args: Parameters<typeof original>) => { captures++; return original(...args) })
+    const before = sent.length
+    try {
+      owner.submit(timedId, timedRequest, "send despite unavailable tracking")
+      await until(() => sent.length === before + 1, 500)
+      assert.equal(owner.snapshot(timedId)?.requests[0].snapshots?.coverage?.kind, "incomplete")
+      const reopened = new LiveJournal(dependencies.root, timedId)
+      try { assert.equal(reopened.read()?.requests[0].snapshots?.coverage?.kind, "incomplete", "coverage survives the conversation journal") }
+      finally { reopened.close() }
+      release()
+      await new Promise(resolve => setTimeout(resolve, 40))
+      assert.equal(captures, 0, "a late tracking acknowledgement cannot start a false before capture")
+      assert.equal(sent.length, before + 1, "a late acknowledgement cannot send twice")
+      finish(timedId, "coverage is incomplete")
+    } finally { release(); beginRun.mock.restore() }
+    console.log("PASS: an unending tracking wait has bounded dispatch and persistent incomplete coverage")
+  }
+
+  // Tracking precedes the content read, but a frozen baseline does not hold a send while it finishes saving.
   {
     owner.stop()
     const directBefore = directGit.length
@@ -293,7 +323,7 @@ try {
     const tracking = new Promise<void>(resolve => { tracked = resolve })
     const saving = new Promise<void>(resolve => { save = resolve })
     let enteredTracking = false, enteredCapture = false
-    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 20, prepareTurn: async () => {
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 500, prepareTurn: async () => {
       enteredTracking = true
       await tracking
       return "tracked" as const
@@ -303,28 +333,27 @@ try {
     const original = snapshots.beginRun.bind(snapshots)
     const beginRun = mock.method(snapshots, "beginRun", async (id: string, folder: string, frozen?: () => void) => {
       enteredCapture = true
-      // Even a frozen callback is insufficient when saving the baseline later fails.
+      const snapshot = await original(id, folder)
       frozen?.()
       await saving
-      return original(id, folder)
+      return snapshot
     })
     const before = sent.length
     try {
       owner.submit(trackedId, trackedRequest, "first tool in a new checkout")
-      await new Promise(resolve => setTimeout(resolve, 80))
-      assert.equal(enteredTracking, true, "dispatch asks for confirmed tracking")
+      await until(() => enteredTracking)
+      await new Promise(resolve => setTimeout(resolve, 20))
       assert.equal(enteredCapture, false, "the baseline follows the tracking acknowledgement")
-      assert.equal(sent.length, before, "tracking holds provider dispatch")
-      tracked()
-      await until(() => enteredCapture)
-      await new Promise(resolve => setTimeout(resolve, 80))
-      assert.equal(sent.length, before, "neither a frozen callback nor the old deadline bypasses a saved baseline")
+      assert.equal(sent.length, before, "tracking holds dispatch within its budget")
       writeFileSync(file, "already dirty before dispatch")
-      save()
+      tracked()
       await until(() => sent.length === before + 1)
-      const baseline = owner.snapshot(trackedId)?.requests[0].snapshots?.before
-      assert.equal(baseline?.kind, "ready")
+      assert.equal(owner.snapshot(trackedId)?.requests[0].snapshots, undefined, "a frozen checkpoint sends before its save returns")
       writeFileSync(file, "first tool changed it")
+      save()
+      await until(() => owner.snapshot(trackedId)?.requests[0].snapshots?.before.kind === "ready")
+      const baseline = owner.snapshot(trackedId)?.requests[0].snapshots?.before
+      assert.equal(owner.snapshot(trackedId)?.requests[0].snapshots?.coverage?.kind, "complete")
       finish(trackedId, "tracked answer")
       await until(() => owner.snapshot(trackedId)?.requests[0].snapshots?.after?.kind === "ready")
       assert.equal(directGit.length - directBefore, 0, "turn preparation and capture spawn Git through the helper")
@@ -342,7 +371,7 @@ try {
       save()
       beginRun.mock.restore()
     }
-    console.log("PASS: confirmed tracking and a saved content baseline precede the first tool")
+    console.log("PASS: tracking precedes the baseline read, and frozen content releases dispatch before saving")
   }
 
   for (const failure of ["tracking", "baseline", "missing-baseline"] as const) {
@@ -357,12 +386,14 @@ try {
     const before: number = sent.length
     try {
       owner.submit(failedId, failedRequest, "cannot start without coverage")
-      await until(() => owner.snapshot(failedId)?.requests[0].status === "failed")
-      assert.equal(sent.length, before, `${failure} failure never dispatches`)
-      assert.match(owner.snapshot(failedId)?.requests[0].error ?? "", failure === "missing-baseline" ? /baseline service is unavailable/ : new RegExp(`${failure}.*failed`))
+      await until(() => sent.length === before + 1)
+      const coverage = owner.snapshot(failedId)?.requests[0].snapshots?.coverage
+      assert.ok(coverage?.kind === "incomplete")
+      assert.match(coverage.reason, failure === "missing-baseline" ? /baseline service is unavailable/ : new RegExp(`${failure}.*failed`))
+      finish(failedId, "incomplete coverage")
     } finally { beginRun?.mock.restore() }
   }
-  console.log("PASS: tracking and baseline failures never dispatch a tracked turn")
+  console.log("PASS: tracking and baseline failures send with explicit incomplete coverage")
 
   {
     owner.stop()
@@ -415,7 +446,7 @@ try {
   // A checkpoint held past the deadline: the turn goes without it, says so, and takes it when it lands.
   {
     owner.stop()
-    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200 })
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200, prepareTurn: async () => "tracked" as const })
     const lateId = randomUUID(), lateRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: lateId })
     await until(() => owner.snapshot(lateId)?.session.status === "ready")
@@ -431,11 +462,13 @@ try {
       owner.submit(lateId, lateRequest, "late checkpoint")
       await until(() => sent.length === before + 1)
       assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.before.kind, "unavailable", "the turn went without its checkpoint, and says so")
+      assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.coverage?.kind, "incomplete")
       release()
       // Held after the turn went, it may hold the turn's own edits: it never becomes the turn's `before`.
       const reasonOf = () => { const before = owner.snapshot(lateId)?.requests[0].snapshots?.before; return before?.kind === "unavailable" ? before.reason : "" }
       await until(() => /after the turn went/.test(reasonOf()))
       assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.before.kind, "unavailable", "a late checkpoint is never the turn's before")
+      assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.coverage?.kind, "incomplete", "late capture cannot clear incomplete coverage")
       finish(lateId, "late answer")
       await until(() => owner.snapshot(lateId)?.requests[0].snapshots?.after?.kind === "ready")
       await assert.rejects(owner.previewRewind(lateId, lateRequest, "before"), /no workspace checkpoint at that point: The checkpoint held the workspace .* after the turn went/, "a rewind to before it refuses, and says why")

@@ -431,7 +431,7 @@ try {
     const answered = times.map(([, ms]) => ms).filter((ms): ms is number => ms !== null).sort((a, b) => a - b)
     const at = (share: number) => answered[Math.min(answered.length - 1, Math.floor(share * answered.length))] ?? null
     const over = times.filter(([, ms]) => ms === null || ms > budget).length
-    return { n: times.length, failed: times.length - answered.length, p50: at(0.5), p99: at(0.99), p999: at(0.999), max: answered.at(-1) ?? null, overBudget: over, overShare: times.length ? over / times.length : 1 }
+    return { n: times.length, failed: times.length - answered.length, p50: at(0.5), p95: at(0.95), p99: at(0.99), p999: at(0.999), max: answered.at(-1) ?? null, overBudget: over, overShare: times.length ? over / times.length : 1 }
   }
   // One profile per thread: the main thread's is numbered 0 (`CPU.<date>.<time>.<pid>.0.<n>.cpuprofile`).
   const profile = profileDir && readdirSync(profileDir).filter((name) => /\.\d+\.0\.\d+\.cpuprofile$/.test(name)).map((name) => join(profileDir, name)).sort().at(-1)
@@ -451,7 +451,7 @@ try {
   const report = {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
     ...values["tool-heavy"] && { toolWorkload: { callsPerTurn: TOOL_CALLS, requestedTurns: TOOL_TURNS, steps: Object.fromEntries(toolSteps), completed: [...completedTools] } },
-    ...answers, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
+    ...answers, ...model && { sendSamples: sends }, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
     nodeArgs, ...idle && { idle }, ...reportsFrom && reportsTo && { account: accountRate(reportsFrom, reportsTo, (probedTo - probedFrom) / 60_000) }, ...snapshotsTaken.length && { snapshots: snapshotsTaken }, ...rss && { rss }, ...gc && { gc },
     ...profile && {
       profile,
