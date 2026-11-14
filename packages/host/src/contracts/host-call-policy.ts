@@ -85,6 +85,7 @@ const reads = [
   "mako:worktree-ahead",
   "mako:worktree-inventory",
   "mako:worktree-retention",
+  "mako:snapshot-budget",
   "mako:thread-scratch",
   /** Measures Mako's folders with `du`; writes nothing. */
   "mako:storage",
@@ -240,6 +241,7 @@ const replays = [
   /** Replaces the same retirement settings; never removes a checkout in this call. */
   "mako:worktree-retention-set",
   /** Replaces the same scratch settings; preview does not remove anything. */
+  "mako:snapshot-budget-set",
   "mako:thread-scratch-set",
   /** Snoozes fseventsd's notice until the day ends: a repeat sets the same snooze. */
   "mako:file-events-dismiss",

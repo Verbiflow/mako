@@ -1,3 +1,4 @@
+import type { SnapshotSettlement } from "../contracts/snapshot-budget.js"
 import { ProviderFailureEvidenceSchema } from "../contracts/provider-failure-evidence.js"
 import { LiveInputQuestionSchema } from "../contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts/approval-response.js"
@@ -20,7 +21,7 @@ import {
   PromptAttachmentSchema,
   RequestRetrySchema,
 } from "../contracts/conversation-control.js"
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
@@ -1597,4 +1598,44 @@ export function journalIds(root: string): string[] {
     const id = z.string().uuid().safeParse(name.slice(0, -7))
     return id.success ? [id.data] : []
   })
+}
+
+/** Only request status/checkpoint metadata, never transcript content or request text. */
+export function storedSnapshotSettlement(root: string, elsewhere: (id: string) => boolean = () => false): SnapshotSettlement {
+  return atOnce(snapshotSettlementSteps(root, elsewhere))
+}
+export function readSnapshotSettlement(root: string, elsewhere: (id: string) => boolean = () => false): Promise<SnapshotSettlement> {
+  return inSlices(snapshotSettlementSteps(root, elsewhere))
+}
+function* snapshotSettlementSteps(root: string, elsewhere: (id: string) => boolean): Steps<SnapshotSettlement> {
+  const result: SnapshotSettlement = { valid: true, settledIds: [], blockedScopes: [] }
+  try {
+    if (!existsSync(root)) return result
+    for (const name of readdirSync(root)) {
+      if (!name.endsWith(".sqlite")) continue
+      const id = name.slice(0, -7)
+      const db = new DatabaseSync(join(root, name), { readOnly: true })
+      try {
+        const metadata = metadataRow(db)
+        if (!metadata) throw new Error("Conversation metadata is unavailable.")
+        const summary = journalSummary(metadata)
+        let busy = elsewhere(id) || !["ready", "failed", "closed"].includes(summary.session.status)
+        const ids: string[] = []
+        for (const row of db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.snapshots') AS snapshots FROM requests").iterate()) {
+          yield
+          const projected = z.object({ status: z.string(), snapshots: z.string().nullable() }).parse(row)
+          const settled = ["completed", "failed", "interrupted", "canceled"].includes(projected.status)
+          if (!settled) busy = true
+          if (!projected.snapshots || !settled) continue
+          const snapshots = RunSnapshotsSchema.parse(JSON.parse(projected.snapshots))
+          if (snapshots.before.kind === "ready") ids.push(snapshots.before.snapshot.id)
+          if (snapshots.after?.kind === "ready") ids.push(snapshots.after.snapshot.id)
+        }
+        if (busy) result.blockedScopes.push(realpathSync(summary.session.cwd))
+        else result.settledIds.push(...ids)
+      } finally { db.close() }
+      yield
+    }
+  } catch { result.valid = false }
+  return result
 }

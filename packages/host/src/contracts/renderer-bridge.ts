@@ -1,3 +1,4 @@
+import type { SnapshotBudgetReport, SnapshotBudgetSettings } from "./snapshot-budget.js"
 import type { ThreadScratchReport, ThreadScratchSettings } from "./thread-scratch.js"
 import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
 import type { AgentAskAnswer } from "./agent-asks.js"
@@ -203,6 +204,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     worktreeRemoval: (path: string) => invokeTrustedHost<WorktreeRemoval>("mako:worktree-removal", path),
     skipWorktree: (conversationId: string) => invokeTrustedHost<void>("mako:worktree-skip", conversationId),
     worktreeAhead: (path: string) => invokeTrustedHost<number | null>("mako:worktree-ahead", path),
+    snapshotBudget: () => invokeTrustedHost<SnapshotBudgetReport>("mako:snapshot-budget"),
+    setSnapshotBudget: (settings: SnapshotBudgetSettings) => invokeTrustedHost<SnapshotBudgetReport>("mako:snapshot-budget-set", settings),
     threadScratch: () => invokeTrustedHost<ThreadScratchReport>("mako:thread-scratch"),
     setThreadScratch: (settings: ThreadScratchSettings) => invokeTrustedHost<ThreadScratchReport>("mako:thread-scratch-set", settings),
     worktreeRetention: () => invokeTrustedHost<WorktreeRetentionReport>("mako:worktree-retention"),

@@ -1,3 +1,6 @@
+import { SnapshotBudgetSettingsSchema } from "../contracts/snapshot-budget.js"
+import type { SnapshotBudget } from "../workspaces/index.js"
+import { readSnapshotSettlement } from "./live-journal.js"
 import { noteCarried } from "@mako/sessions/record-carried"
 import type { Foreground } from "../base/foreground.js"
 import type { NativeRoutingReading } from "../contracts/native-routing.js"
@@ -111,6 +114,7 @@ export { ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, regis
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
+  snapshotBudget?: SnapshotBudget
   live: LiveConversations
   scratchQuietSince(thread: import("../contracts/thread-identity.js").ThreadId): number | undefined
   finishedThreadAt(thread: import("../contracts/thread-identity.js").ThreadId): number | undefined
@@ -231,6 +235,12 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   })
   const assessResume = resumingUnder(memory ?? undefined, restoring)
   let agents: Agents | undefined
+  const workspaceSnapshots = new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots"))
+  workspaceSnapshots.followHistory(workspaces.fileHistory)
+  workspaceSnapshots.followSettlement(() => readSnapshotSettlement(join(dataRoot, "conversations"), id => deps.elsewhere?.(id) ?? false))
+  deps.jobs.every("settled rewind snapshot budget", 60 * 60_000, async () => {
+    if ((await workspaceSnapshots.budget.settings()).mode === "evict") await workspaceSnapshots.budget.run()
+  })
   const live = new LiveConversations({
     agents: () => agents,
     heldModels: (harness) => harnesses.profiles.held(harness)?.models,
@@ -246,12 +256,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     ...(deps.start && { start: deps.start }),
     threads: threads.store ?? undefined,
     mcpSnapshot: deps.mcpSnapshot,
-    workspaceSnapshots: (() => {
-      const snapshots = new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots"))
-      // A turn whose workspace nothing changed in since the last checkpoint goes to its agent on that checkpoint.
-      snapshots.followHistory(workspaces.fileHistory)
-      return snapshots
-    })(),
+    workspaceSnapshots,
     rewindWriters: deps.rewindWriters,
     checkpoint: (path, provider) => {
       const sourceProvider = provider ?? catalog.ref(path)?.harness
@@ -266,6 +271,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     resumeVerdict: assessResume,
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
     settled: (id) => {
+      workspaceSnapshots.budget.changed()
       deps.settled(id)
       agents?.moved(id)
     },
@@ -456,6 +462,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     busy: (id) => live.atWork(id) || Boolean(live.held(id)?.requests.some(request => request.status === "queued" || request.status === "held" || request.status === "dispatching")),
   }) : undefined
   return {
+    snapshotBudget: workspaceSnapshots.budget,
     live,
     finishedThreadAt: (thread) => retirementThreads?.finished(thread),
     scratchQuietSince: (thread) => retirementThreads?.quietSince(thread),
@@ -536,6 +543,16 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     if (!movers.worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")
     return movers.worktreeMoves
   }
+  methods.handle("mako:snapshot-budget", () => {
+    if (!conversations.snapshotBudget) throw new Error("Rewind storage is unavailable on this host.")
+    return conversations.snapshotBudget.preview()
+  })
+  methods.handle("mako:snapshot-budget-set", async (value: import("../contracts/snapshot-budget.js").SnapshotBudgetSettings) => {
+    if (!conversations.snapshotBudget) throw new Error("Rewind storage is unavailable on this host.")
+    await conversations.snapshotBudget.configure(SnapshotBudgetSettingsSchema.parse(value))
+    conversations.snapshotBudget.changed()
+    return conversations.snapshotBudget.preview()
+  })
   declareAgentMethods(methods, () => conversations.agents)
   methods.handle("mako:thread-continuation-resolve", (path: string) => continuation.resolve(path))
   methods.handle("mako:conversation-settings", () => live.conversationSettings())
