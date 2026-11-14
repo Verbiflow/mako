@@ -113,7 +113,7 @@ export function installGitIpc(methods: MethodTable, context: GitIpcContext): voi
   )
   methods.handle("mako:git-push", (input: GitPushInput) => withHost((host) => {
     if (host.gitWorkspace !== input.cwd) throw new Error("The project changed before pushing. Select the intended project and try again.")
-    return host.gitPush(input.branch).finally(forgetGitHubReads)
+    return host.gitPush(input.branch).finally(() => forgetGitHubReads(input.cwd))
   }))
   methods.handle("mako:git-remote", (input: GitRemoteInput) => withHost(async (host) => {
     if (host.gitWorkspace !== input.cwd) throw new Error("Select this repository before continuing.")

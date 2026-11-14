@@ -37,13 +37,13 @@ export function pullMergeReason(pull: Pick<PullRequest, "state" | "mergeable" | 
 export function githubRateLimitWords(retryAt: number): string {
   const deadline = new Date(retryAt)
   return Number.isNaN(deadline.getTime())
-    ? "GitHub is rate limited. Mako is waiting before asking again."
-    : `GitHub is rate limited. Try again after ${deadline.toISOString()}.`
+    ? "GitHub is rate limiting this login. Mako is waiting before asking again."
+    : `GitHub is rate limiting this login until ${deadline.toISOString().slice(11, 23)} UTC on ${deadline.toISOString().slice(0, 10)}.`
 }
 
 /** Why a pull request can't be opened from here, or null once GitHub is set up. */
 export function pullSetupReason(status: GitHubStatus): string | null {
-  if (status.rateLimit) return githubRateLimitWords(status.rateLimit.retryAt)
+  if (status.limited) return githubRateLimitWords(status.limited.until)
   if (!status.installed) return "Install the GitHub CLI to open a pull request."
   if (!status.authenticated) return "Sign in to GitHub with gh auth login to open a pull request."
   if (!status.repo) return "Add a GitHub remote to open a pull request."

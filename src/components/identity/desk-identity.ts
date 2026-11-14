@@ -40,7 +40,7 @@ export function useDeskIdentity(): DeskIdentity {
   const login = status?.authenticated ? status.login : undefined
   if (cloud?.status === "signed-in") {
     const { account } = cloud
-    const github: AccountGitHub = !status || status.rateLimit && !login
+    const github: AccountGitHub = !status || status.limited && !login
       ? { kind: "checking" }
       : !login
         ? { kind: "missing", installed: status.installed }

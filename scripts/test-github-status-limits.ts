@@ -42,14 +42,17 @@ try {
     const result = await host.run(() => client.callTool({ name, arguments: name === "pull_request_open" ? { title: "Fixture", body: "Fixture" } : {} }))
     const text = JSON.stringify(result)
     console.log(JSON.stringify({ name, result: text }))
-    assert.match(text, /GitHub is rate limited/)
-    assert.match(text, /Try again after \d{4}-\d\d-\d\dT/)
+    assert.match(text, /GitHub is rate limiting this login/)
+    assert.match(text, /until \d\d:\d\d:/)
     assert.doesNotMatch(text, /Add a GitHub remote|gh auth login|DO-NOT-SHOW-FIXTURE-DETAIL/)
-    const retry = Date.parse(/Try again after ([\d-]+T[\d:.]+Z)/.exec(text)![1]!)
+    const stamp = /until ([\d:.]+) UTC on ([\d-]+)/.exec(text)!
+    const retry = Date.parse(`${stamp[2]}T${stamp[1]}Z`)
     assert.ok(retry >= before, "retry deadline is a future bound, not a fresh duration guessed by the tool")
     return retry
   }
   const deadline = await limited("pull_request_status")
+  const limitedState = await host.run(() => githubStatus(repo))
+  assert.equal(limitedState.limited?.until, deadline, "the failed lookup is explicitly limited, not a plain missing-repository answer")
   const prior = (await readFile(calls, "utf8")).split("\n").filter(line => !line.startsWith("--version")).length
   assert.equal(await limited("pull_request_open"), deadline, "open preserves the same cooldown even after forgetting its preflight")
   assert.equal((await readFile(calls, "utf8")).split("\n").filter(line => !line.startsWith("--version")).length, prior, "cooldown starts no remote command")
@@ -59,8 +62,8 @@ try {
   const other = new HostStopping()
   try {
     const before = Date.now(), status = await other.run(() => githubStatus(repo)), after = Date.now()
-    assert.ok(status.rateLimit)
-    assert.ok(status.rateLimit.retryAt >= before + 180_000 && status.rateLimit.retryAt <= after + 180_000)
+    assert.ok(status.limited)
+    assert.ok(status.limited.until >= before + 180_000 && status.limited.until <= after + 180_000)
   } finally { await other.stop() }
   // A later PR lookup may hit the limit even though account/repository setup already succeeded.
   await writeFile(state, "pull")
@@ -68,13 +71,13 @@ try {
   try {
     const result = await pullHost.run(() => client.callTool({ name: "pull_request_status", arguments: {} }))
     assert.equal(result.isError, true)
-    assert.match(JSON.stringify(result), /GitHub is rate limited.*Try again after/)
+    assert.match(JSON.stringify(result), /GitHub is rate limiting this login until/)
     assert.doesNotMatch(JSON.stringify(result), /Add a GitHub remote|gh auth login|DO-NOT-SHOW-FIXTURE-DETAIL/)
   } finally { await pullHost.stop() }
   await writeFile(state, "user")
   // Standalone consumers without a host still retain a safe minimum retry time.
   const standalone = await githubStatus(repo)
-  assert.ok(standalone.rateLimit)
+  assert.ok(standalone.limited)
   assert.match(pullSetupReason({ installed: false, authenticated: false })!, /Install the GitHub CLI/)
   assert.match(pullSetupReason({ installed: true, authenticated: false })!, /gh auth login/)
   assert.match(pullSetupReason({ installed: true, authenticated: true })!, /Add a GitHub remote/)

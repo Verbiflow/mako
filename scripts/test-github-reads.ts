@@ -51,7 +51,7 @@ await Promise.allSettled([reader.run("/one", ["api", "repos/fixture/one"]), read
 assert.equal(calls.length - beforeLimit, 1)
 fail = undefined
 now += 179_999
-await assert.rejects(reader.run("/three", ["api", "repos/fixture/three"]), /rate limited/)
+await assert.rejects(reader.run("/three", ["api", "repos/fixture/three"]), /rate limiting/)
 assert.equal(calls.length - beforeLimit, 1, "no immediate retry or cross-repository escape")
 now += 60_001
 await reader.run("/four", ["api", "repos/fixture/four"])
@@ -132,3 +132,26 @@ cadence.forget()
 await cadence.run("/cadence", list)
 assert.equal(listReads, 3)
 console.log("GitHub list: no rollups, five-minute freshness, explicit event invalidation passed")
+
+// A ref event forgets canonical readings across checkout aliases, while unrelated and explicitly foreign repos stay cached.
+const scopedQueries: string[] = []
+const scoped = new GitHubReads({ now: () => 0, common: async cwd => cwd.startsWith("/one") ? "/shared/one" : "/shared/two", branch: async () => "fix", run: async (cwd, args) => {
+  if (args[0] === "repo") return JSON.stringify({ nameWithOwner: args[2]?.includes("/") ? args[2] : `fixture/${cwd.startsWith("/one") ? "one" : "two"}`, url: "https://github.com/fixture/project" })
+  const name = args.find(arg => arg.startsWith("name="))!.slice(5)
+  scopedQueries.push(name)
+  const number = Number(args.find(arg => arg.startsWith("number="))?.slice(7))
+  return "HTTP/2.0 200 OK\n\n" + JSON.stringify({ data: { repository: number ? { pullRequest: { number, headRefName: "fix", state: "OPEN" } } : { pullRequests: { nodes: [] } } } })
+} })
+await scoped.run("/one/main", list)
+await scoped.run("/two/main", list)
+const foreign = ["pr", "view", "7", "--repo", "fixture/foreign", "--json", "state"]
+await scoped.run("/one/main", foreign)
+const beforeScope = scopedQueries.length
+await scoped.forgetRepository("/one/alias")
+await scoped.run("/two/main", list)
+await scoped.run("/one/main", foreign)
+assert.equal(scopedQueries.length, beforeScope, "neither another repo nor a foreign wait is invalidated by this checkout")
+await scoped.run("/one/other-alias", list)
+assert.equal(scopedQueries.length, beforeScope + 1)
+assert.equal(scopedQueries.at(-1), "one")
+console.log("GitHub ref invalidation: canonical aliases share eviction; other repositories and foreign waits retain their readings")

@@ -143,7 +143,7 @@ console.log("identity ui: the account over GitHub, pictures standing in for each
 
 // A rate-limited account lookup is still checking, not a prompt to change the person's login.
 cloudAccountStore.set({ account: signedIn("connected") })
-githubStore.set({ status: { installed: true, authenticated: false, rateLimit: { retryAt: 1_000_100 } }, userAvatar: undefined })
+githubStore.set({ status: { installed: true, authenticated: false, limited: { until: 1_000_100 } }, userAvatar: undefined })
 assert.doesNotMatch(text(), /Connect GitHub|gh auth login/)
 
 // The actual frontend cache waits until the shared deadline, then retries on demand without a polling timer.
@@ -152,7 +152,7 @@ const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
 let clock = 1_000_000, statusReads = 0, avatarReads = 0
 Date.now = () => clock
 Object.defineProperty(globalThis, "window", { configurable: true, value: { mako: {
-  githubStatus: async () => { statusReads++; return statusReads === 1 ? { installed: true, authenticated: false, rateLimit: { retryAt: 1_000_100 } } : gh },
+  githubStatus: async () => { statusReads++; return statusReads === 1 ? { installed: true, authenticated: false, limited: { until: 1_000_100 } } : gh },
   userAvatar: async () => { avatarReads++; return undefined },
   pullRequest: async () => { throw new Error("A limited lookup must not ask for a PR") },
 } } })
@@ -166,7 +166,7 @@ try {
   clock = 1_000_100
   await github.ensureStatus("fixture")
   assert.equal(statusReads, 2, "the next demand at the deadline rechecks GitHub")
-  assert.equal(githubStore.get().status?.rateLimit, undefined)
+  assert.equal(githubStore.get().status?.limited, undefined)
 } finally {
   Date.now = originalClock
   if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow)

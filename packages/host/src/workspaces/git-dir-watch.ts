@@ -1,6 +1,6 @@
 import { statSync, watch, type FSWatcher } from "node:fs"
 import { realpath } from "node:fs/promises"
-import { join, sep } from "node:path"
+import { dirname, join, relative, sep } from "node:path"
 import { locateGitDir } from "../base/checkout-location.js"
 
 /** What moves on every commit, add, reset or checkout, and nothing else does. */
@@ -9,7 +9,9 @@ const MARKERS = ["index", join("logs", "HEAD")]
  * What moves only when a checkout's HEAD does: a commit, checkout, reset, merge or rebase. The index also moves when
  * any `git status` refreshes its stat cache, as a Changes panel's does on every edit.
  */
-export const HEAD_MARKER = [join("logs", "HEAD")]
+export const HEAD_MARKER = ["HEAD", join("logs", "HEAD")]
+/** Shared ref changes, including a push/fetch that leaves the worktree HEAD alone. */
+export const REF_MARKERS = ["packed-refs", "FETCH_HEAD", join("refs", "heads"), join("refs", "remotes")]
 /** What moves when what's staged does, and on any `git status` that refreshes the index's stat cache. */
 export const INDEX_MARKER = ["index"]
 
@@ -68,10 +70,17 @@ export function watchGitMarkers(gitDir: string, changed: () => void, markers: re
     if (closed) return
     try {
       const seen = stamp(path)
-      const watcher = watch(path, { persistent: false }, () => {
-        if (watchers.get(path) !== watcher || stamp(path) === seen) return
+      // A first push creates its remote ref (and sometimes its parent directories). Follow the nearest
+      // existing parent until that exact marker exists; unrelated index/lock events cannot invalidate PRs.
+      let watched = path
+      while (!stamp(watched) && watched !== gitDir) watched = dirname(watched)
+      const child = watched === path ? undefined : relative(watched, path).split(sep)[0]
+      const watcher = watch(watched, { persistent: false }, (_event, filename) => {
+        if (watchers.get(path) !== watcher || child && filename && filename.toString() !== child) return
+        const moved = stamp(path) !== seen
+        if (!moved && watched === path) return
         arm(path)
-        changed()
+        if (moved) changed()
       })
       watcher.on("error", () => {
         if (watchers.get(path) !== watcher) return

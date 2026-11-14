@@ -13,7 +13,7 @@ const PULL_SELECTION = `number title body state isDraft url headRefName headRefO
  } } } } } }`
 const PULL_LIST_QUERY = `query($owner:String!,$name:String!) { repository(owner:$owner,name:$name) { pullRequests(first:60,states:[OPEN,CLOSED,MERGED],orderBy:{field:CREATED_AT,direction:DESC}) { nodes { number title url headRefName headRefOid state isDraft updatedAt isCrossRepository author { login } } } } }`
 const PULL_QUERY = `query($owner:String!,$name:String!,$number:Int!) { repository(owner:$owner,name:$name) { pullRequest(number:$number) { ${PULL_SELECTION} } } }`
-const CHECK_QUERY = `query($owner:String!,$name:String!,$number:Int!) { repository(owner:$owner,name:$name) { pullRequest(number:$number) { number headRefName state headRefOid
+const CHECK_QUERY = `query($owner:String!,$name:String!,$number:Int!) { repository(owner:$owner,name:$name) { pullRequest(number:$number) { number title url isDraft headRefName state headRefOid
  commits(last:1) { nodes { commit { statusCheckRollup { contexts(first:100) { pageInfo { hasNextPage } nodes {
  __typename ... on StatusContext { context state targetUrl }
  ... on CheckRun { name status conclusion detailsUrl startedAt completedAt checkSuite { workflowRun { workflow { name } } } }
@@ -34,6 +34,8 @@ function graphPull(output: string): string {
     statusCheckRollup: (pull.commits?.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? []).map(check => ({ ...check, workflowName: check.checkSuite?.workflowRun?.workflow?.name })),
   })
 }
+const RepositoryIdentity = z.object({ nameWithOwner: z.string().regex(/^[^/]+\/[^/]+$/), url: z.string().url() })
+type RepositoryIdentity = z.infer<typeof RepositoryIdentity>
 const REPO_FIELDS = "url,nameWithOwner,defaultBranchRef,squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed"
 const FRESH_MS = 60_000
 const MAX_READS = 512
@@ -77,6 +79,7 @@ export function githubRateLimit(cause: unknown, now: number, backoffMs = 60_000)
 export class GitHubReads {
   private readonly entries = new Map<string, Entry>()
   private readonly scopes = new Map<string, Promise<string>>()
+  private readonly repositories = new Map<string, Set<string>>()
   private tail: Promise<unknown> = Promise.resolve()
   private blockedUntil = 0
   private failures = 0
@@ -85,20 +88,22 @@ export class GitHubReads {
 
   constructor(deps: Deps) { this.deps = deps }
 
-  async run(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
+  async run(cwd: string, args: string[], env?: Readonly<Record<string, string>>, expectedHead?: string): Promise<string> {
     // An App's override never shares the person's readings. Hashes stay in memory, never in logs.
     const auth = createHash("sha256").update(JSON.stringify([process.env.GH_HOST, process.env.GH_REPO, process.env.GH_CONFIG_DIR, process.env.HOME, process.env.GH_TOKEN, process.env.GITHUB_TOKEN, process.env.GH_ENTERPRISE_TOKEN, process.env.GITHUB_ENTERPRISE_TOKEN, env])).digest("hex")
     const explicit = args.indexOf("--repo")
-    const scope = explicit >= 0 ? args[explicit + 1]! : await this.scope(cwd)
+    const common = await this.scope(cwd)
+    const scope = explicit >= 0 ? args[explicit + 1]! : common
     const prefix = `${auth}:${scope}:`
     const fields = args.indexOf("--json")
     if (args[0] === "pr" && ["view", "list"].includes(args[1]!) && fields >= 0 && !args.includes("--search")) {
       // One repository snapshot feeds all the usual lists and views. A PR outside the bounded list gets its own read.
-      const repository = z.object({ nameWithOwner: z.string().regex(/^[^/]+\/[^/]+$/), url: z.string().url() }).parse(JSON.parse(await this.read(`${prefix}repo`, cwd, ["repo", "view", ...(explicit >= 0 ? [scope] : []), "--json", REPO_FIELDS], env, 5 * FRESH_MS)))
+      const repository = RepositoryIdentity.parse(JSON.parse(await this.read(`${prefix}repo`, cwd, ["repo", "view", ...(explicit >= 0 ? [scope] : []), "--json", REPO_FIELDS], env, 5 * FRESH_MS)))
       const repo = repository.nameWithOwner.toLowerCase()
       const hostname = new URL(repository.url).hostname
       if (!repo) throw new Error("GitHub did not name this repository")
       const [owner, name] = repo.split("/")
+      if (explicit < 0) this.rememberRepository(common, auth, repository)
       const list = await this.read(`${auth}:${hostname}/${repo}:pulls`, cwd, ["api", "graphql", "--hostname", hostname, "-f", `query=${PULL_LIST_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`], env, 5 * FRESH_MS)
       const response = z.object({ errors: z.never().optional(), data: z.object({ repository: z.object({ pullRequests: z.object({ nodes: z.array(z.looseObject({ number: z.number(), headRefName: z.string(), state: z.string(), isCrossRepository: z.boolean().optional() })) }) }) }) }).parse(JSON.parse(list))
       const pulls = response.data.repository.pullRequests.nodes
@@ -114,11 +119,15 @@ export class GitHubReads {
         const candidates = pulls.filter(pull => pull.headRefName === selected && pull.state === "OPEN" && !pull.isCrossRepository)
         const number = /^\d+$/.test(selected) ? Number(selected) : candidates.length === 1 ? candidates[0]!.number : undefined
         if (number !== undefined) {
-          const checksOnly = args[fields + 1]!.split(",").every(field => ["headRefOid", "statusCheckRollup"].includes(field))
+          const checksOnly = args[fields + 1]!.split(",").every(field => ["number", "title", "url", "isDraft", "headRefName", "headRefOid", "state", "statusCheckRollup"].includes(field))
           const key = `${auth}:${hostname}/${repo}:pull:${number}`
           const full = this.entries.get(key)
-          if (checksOnly && full && full.until > this.deps.now()) return graphPull(await full.value)
-          return graphPull(await this.read(`${key}${checksOnly ? ":checks" : ""}`, cwd, ["api", "graphql", "--hostname", hostname, "-f", `query=${checksOnly ? CHECK_QUERY : PULL_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`], env))
+          if (checksOnly && full && full.until > this.deps.now()) {
+            const value = graphPull(await full.value)
+            const head = z.object({ headRefOid: z.string() }).safeParse(JSON.parse(value))
+            if (!expectedHead || head.success && head.data.headRefOid === expectedHead) return value
+          }
+          return graphPull(await this.read(`${key}${checksOnly ? `:checks:${expectedHead ?? "remote"}` : ""}`, cwd, ["api", "graphql", "--hostname", hostname, "-f", `query=${checksOnly ? CHECK_QUERY : PULL_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`], env))
         }
         // Ambiguous fork/branch selection keeps gh's own upstream resolution, never a same-name guess.
         return this.read(`${auth}:${hostname}/${repo}:branch:${selected}`, cwd, args, env)
@@ -126,7 +135,10 @@ export class GitHubReads {
     }
     const graphRead = args[0] === "api" && args[1] === "graphql" && args.some(arg => /^query=\s*query[\s({]/.test(arg))
     const read = graphRead || (args[0] === "repo" && args[1] === "view") || (args[0] === "pr" && args[1] === "list") || (args[0] === "run" && ["view", "list"].includes(args[1]!)) || args[0] === "api" && !args.includes("--method") && !args.includes("-X") && !args.includes("-f") && !args.includes("-F")
-    if (args[0] === "repo" && args[1] === "view" && args[2] === "--json") return this.read(`${prefix}repo`, cwd, ["repo", "view", "--json", REPO_FIELDS], env, 5 * FRESH_MS)
+    if (args[0] === "repo" && args[1] === "view" && args[2] === "--json") return this.read(`${prefix}repo`, cwd, ["repo", "view", "--json", REPO_FIELDS], env, 5 * FRESH_MS).then(output => {
+      this.rememberRepository(common, auth, RepositoryIdentity.parse(JSON.parse(output)))
+      return output
+    })
     if (read) return this.read(`${args[0] === "api" && !args[1]?.includes("{") ? `${auth}:api:` : prefix}${JSON.stringify(args)}`, cwd, args, env)
     // No mutation is cached, joined or retried. A write might have succeeded despite a lost response, so forget reads even then.
     try { return await this.send(cwd, args, env) }
@@ -135,6 +147,24 @@ export class GitHubReads {
 
   /** Explicit writes re-read their preflight and invalidate the pushed head; backoff is never reset. */
   forget(): void { this.entries.clear() }
+
+  private rememberRepository(common: string, auth: string, repository: RepositoryIdentity): void {
+    let identities = this.repositories.get(common)
+    if (!identities) {
+      if (this.repositories.size >= MAX_READS) { this.repositories.clear(); this.entries.clear() }
+      this.repositories.set(common, identities = new Set())
+    }
+    identities.add(`${auth}:${new URL(repository.url).hostname}/${repository.nameWithOwner.toLowerCase()}:`)
+  }
+
+  /** A local ref event forgets this repository across all aliases, never another repo or the login's cooldown. */
+  async forgetRepository(cwd: string): Promise<void> {
+    const common = await this.scope(cwd)
+    const identities = this.repositories.get(common)
+    if (!identities) return
+    const prefixes = [...identities]
+    for (const key of this.entries.keys()) if (prefixes.some(prefix => key.startsWith(prefix))) this.entries.delete(key)
+  }
 
   private scope(cwd: string): Promise<string> {
     let found = this.scopes.get(cwd)

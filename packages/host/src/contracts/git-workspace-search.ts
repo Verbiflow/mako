@@ -110,7 +110,7 @@ export interface GitHubStatus {
   repo?: string
   defaultBranch?: string
   /** A failed lookup is not evidence that the remote or sign-in is missing. Epoch milliseconds, shared with the host's cooldown. */
-  rateLimit?: { retryAt: number }
+  limited?: { until: number }
 }
 
 export interface CheckSummary {

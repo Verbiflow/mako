@@ -12,7 +12,7 @@ import type { PullRequestListing } from "../contracts/pull-request-search.js"
 import type { PullReading } from "../contracts/pull-waits.js"
 import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "../contracts/git-actions.js"
-import type { Git } from "@mako/git"
+import { commonDirOf, type Git } from "@mako/git"
 
 const run = hostCommand
 
@@ -51,7 +51,7 @@ async function directGh(cwd: string, args: string[], env?: Readonly<Record<strin
 
 // Entries belong to the host that owns the key, not to the process; stopping a host releases its reader.
 const readers = new WeakMap<HostStopping, GitHubReads>()
-function gh(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
+function gh(cwd: string, args: string[], env?: Readonly<Record<string, string>>, expectedHead?: string): Promise<string> {
   const host = hostStopping()
   if (!host) return directGh(cwd, args, env).catch(cause => { throw githubRateLimit(cause, Date.now()) ?? cause })
   host.signal.throwIfAborted()
@@ -59,20 +59,23 @@ function gh(cwd: string, args: string[], env?: Readonly<Record<string, string>>)
   if (!reader) {
     reader = new GitHubReads({
       run: directGh,
-      common: async cwd => (await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, timeout: TIMEOUT })).stdout.trim(),
+      common: async cwd => commonDirOf(cwd),
       branch: async cwd => (await run("git", ["symbolic-ref", "--short", "HEAD"], { cwd, timeout: TIMEOUT })).stdout.trim(),
       now: Date.now,
       trace: (event, kind) => { if (event !== "cached") hostLog("github", event, { kind }) },
     })
     readers.set(host, reader)
   }
-  return reader.run(cwd, args, env)
+  return reader.run(cwd, args, env, expectedHead)
 }
 
 /** A write needs a fresh preflight; forgetting readings cannot bypass the login's rate-limit gate. */
-export function forgetGitHubReads(): void {
+export async function forgetGitHubReads(cwd?: string): Promise<void> {
   const host = hostStopping()
-  if (host) readers.get(host)?.forget()
+  if (!host) return
+  const reader = readers.get(host)
+  if (cwd) await reader?.forgetRepository(cwd)
+  else reader?.forget()
 }
 
 type GitHubParser<TResult> = (value: JsonValue) => TResult | null
@@ -94,10 +97,11 @@ interface ProcessFailure {
 async function ghJson<TResult>(
   cwd: string,
   args: string[],
-  parse: GitHubParser<TResult>
+  parse: GitHubParser<TResult>,
+  expectedHead?: string,
 ): Promise<TResult | null> {
   try {
-    const value: JsonValue = JSON.parse(await gh(cwd, args))
+    const value: JsonValue = JSON.parse(await gh(cwd, args, undefined, expectedHead))
     return parse(value)
   } catch (cause) {
     if (cause instanceof GitHubRateLimitError) throw cause
@@ -185,7 +189,7 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
       installed: true,
       authenticated: Boolean(who?.login),
       ...(who?.login && { login: who.login, userId: who.id }),
-      rateLimit: { retryAt: cause.retryAt },
+      limited: { until: cause.retryAt },
     }
   }
 }
@@ -614,7 +618,7 @@ export async function listPullHeads(cwd: string): Promise<WorktreePull[] | null>
 }
 
 /** Recent pull requests in any state, newest first, with the head commit and one word for their checks. Null when `gh` can't answer here. */
-export async function listBranchPulls(cwd: string, liveHeads: readonly string[] = []): Promise<WorktreeBranchPull[] | null> {
+export async function listBranchPulls(cwd: string, liveHeads: readonly string[] = [], liveBranches: ReadonlyMap<string, string> = new Map()): Promise<WorktreeBranchPull[] | null> {
   const listed = await ghJson(
     cwd,
     ["pr", "list", "--state", "all", "--limit", "60", "--json", "number,title,url,headRefName,headRefOid,state,isDraft"],
@@ -654,16 +658,19 @@ export async function listBranchPulls(cwd: string, liveHeads: readonly string[] 
   if (!listed) return null
   const live = new Set(liveHeads)
   return Promise.all(listed.map(async pull => {
-    if (!live.has(pull.head)) return pull
-    const reading = await ghJson(cwd, ["pr", "view", String(pull.number), "--json", "headRefOid,statusCheckRollup"], value => {
+    const expected = liveBranches.get(pull.branch)
+    const staleBranch = expected && expected !== pull.head && (pull.state === "open" || pull.state === "draft")
+    if (!live.has(pull.head) && !staleBranch) return pull
+    const reading = await ghJson(cwd, ["pr", "view", String(pull.number), "--json", "number,title,url,headRefName,headRefOid,state,isDraft,statusCheckRollup"], value => {
       if (!isJsonObject(value)) return null
       const head = stringValue(value.headRefOid)
       const checks = withoutSuperseded(parseJsonArray(value.statusCheckRollup, parseRawCheck) ?? []).map(toCheck)
-      return { head, checks }
-    })
-    if (!reading || reading.head !== pull.head) return { ...pull, checks: null }
+      const number = numberValue(value.number), branch = stringValue(value.headRefName), state = stringValue(value.state)
+      return { head, checks, number, branch, state, draft: booleanValue(value.isDraft) }
+    }, expected ?? pull.head)
+    if (!reading || reading.number !== pull.number || reading.branch !== pull.branch || reading.head !== (expected ?? pull.head)) return { ...pull, checks: null }
     const checks = reading.checks
-    return { ...pull, checks: checks.length === 0 ? null : checks.some(check => check.state === "failed" || check.state === "cancelled") ? "failed" as const : checks.some(check => check.state === "running") ? "running" as const : "passed" as const }
+    return { ...pull, head: reading.head, state: reading.state === "MERGED" ? "merged" as const : reading.state === "CLOSED" ? "closed" as const : reading.draft ? "draft" as const : "open" as const, checks: checks.length === 0 ? null : checks.some(check => check.state === "failed" || check.state === "cancelled") ? "failed" as const : checks.some(check => check.state === "running") ? "running" as const : "passed" as const }
   }))
 }
 

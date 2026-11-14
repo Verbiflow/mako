@@ -1043,10 +1043,12 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     const said = pushed.length
     now += 6_000
     const quickReads = reads
+    const beforeIndexPulls = pullReads
     writeFileSync(join(made.path, "new.txt"), "new\n")
     git(made.path, "add", "new.txt")
     await new Promise((resolve) => setTimeout(resolve, 2_500))
     assert.equal(reads, quickReads, "within half a minute of its last read, an index moved alone waits")
+    assert.equal(pullReads, beforeIndexPulls, "an index-only event does not forget GitHub lists")
     // Past the gap, the host's own pass (the job a listening window keeps running) says it, nobody asking.
     now += 31_000
     await watched.summaries()

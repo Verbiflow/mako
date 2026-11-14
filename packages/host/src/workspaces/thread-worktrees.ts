@@ -12,7 +12,7 @@ import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { previewDiffs, projectRepositories } from "../git/index.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
-import { GitError, numstatEntries, untrackedLines, type Git } from "@mako/git"
+import { commonDirOf, GitError, numstatEntries, untrackedLines, type Git } from "@mako/git"
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, type AdjustHooks, type MoveLedger, type MovePlan } from "./worktree-move.js"
@@ -20,7 +20,7 @@ import type { MoveHaste, MoveOutcome, MoveShares } from "../contracts/workspace-
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { githubRepositoryUrl } from "../contracts/cloud-threads.js"
 import { fillWorktree, ProjectMissingError, reattachWorktree, workingCheckout } from "./worktree-reattach.js"
-import { HEAD_MARKER, INDEX_MARKER, watchGitMarkers, type GitDirWatch } from "./git-dir-watch.js"
+import { HEAD_MARKER, REF_MARKERS, INDEX_MARKER, watchGitMarkers, type GitDirWatch } from "./git-dir-watch.js"
 
 /** Git's own markers for work under way, which a removal would throw away. */
 const UNDER_WAY: readonly (readonly [string, string])[] = [
@@ -135,7 +135,7 @@ export interface WorktreeWanted {
   base?: string
 }
 /** A repository's recent pull requests, newest first; null when GitHub can't answer. */
-type PullsOf = (repoRoot: string, liveHeads?: readonly string[]) => Promise<WorktreeBranchPull[] | null>
+type PullsOf = (repoRoot: string, liveHeads?: readonly string[], liveBranches?: ReadonlyMap<string, string>) => Promise<WorktreeBranchPull[] | null>
 
 export interface PreparedWorktree {
   /** Where the conversation runs: the worktree, or the same subfolder in it the Thread was started from. */
@@ -211,6 +211,18 @@ async function worktreeHead(path: string, tips: ReadonlyMap<string, string>): Pr
   } catch {
     return undefined
   }
+}
+
+/** The actual checked-out branch, which may differ from the branch recorded when this worktree was made. */
+async function worktreeBranch(path: string): Promise<string | undefined> {
+  const gitDir = await worktreeGitDir(path)
+  const head = gitDir && await readFile(join(gitDir, "HEAD"), "utf8").catch(() => "")
+  return head?.trim().startsWith("ref: refs/heads/") ? head.trim().slice("ref: refs/heads/".length) : undefined
+}
+
+/** Ref facts a held summary depends on, checked even before the file watcher delivers its event. */
+function summaryRefs(worktree: ThreadWorktree, facts: RepositoryFacts): string {
+  return JSON.stringify([facts.into, facts.tips.get(facts.into), facts.tips.get(worktree.branch), facts.point?.commit])
 }
 
 /** A linked worktree's folder in its repository, from the `gitdir:` line of its `.git` file. */
@@ -349,7 +361,7 @@ export class ThreadWorktreeService {
   private readonly untold = new Map<string, string[]>()
   private readonly summaryPasses = new SharedPasses<WorktreeSummary[]>()
   /** Each worktree's summary as last read, by path, with when and its index's modification time then (`readSummaries`). */
-  private readonly heldSummaries = new Map<string, { summary: WorktreeSummary; at: number; index: number }>()
+  private readonly heldSummaries = new Map<string, { summary: WorktreeSummary; at: number; index: number; refs: string }>()
   /** Worktrees an event says changed since their summary was read, and whether all it said is that the index moved. */
   private readonly staleSummaries = new Set<string>()
   private readonly indexOnly = new Set<string>()
@@ -403,6 +415,7 @@ export class ThreadWorktreeService {
     ledger: () => MoveLedger | undefined = () => undefined,
     workingFolders: () => Promise<string[]> = async () => [],
     pullsVisible: () => boolean = () => true,
+    pullsChanged: (repoRoot: string) => Promise<void> = async () => {},
   ) {
     this.git = git
     this.root = root
@@ -414,6 +427,7 @@ export class ThreadWorktreeService {
     this.borrowing = setup?.borrowing ?? CheckoutBorrowing.inMemory(git)
     this.conversations = conversations
     this.ledger = ledger
+    this.pullsChanged = pullsChanged
     this.pullsVisible = pullsVisible
     this.workingFolders = workingFolders
     this.starts = new WorktreeStarts(git)
@@ -870,7 +884,7 @@ export class ThreadWorktreeService {
       this.statuses.delete(worktree.path)
       const index = await this.indexTime(worktree.path)
       const summary = await this.summarize(worktree, this.lastPullsOf, await factsOf(worktree.repoRoot), false, true)
-      this.heldSummaries.set(worktree.path, { summary, at: Date.now(), index })
+      this.heldSummaries.set(worktree.path, { summary, at: Date.now(), index, refs: summaryRefs(worktree, await factsOf(worktree.repoRoot)) })
     })
     const listed = new Set(this.summaryListed.map((worktree) => worktree.path))
     const waiting = later.filter((path) => listed.has(path))
@@ -900,24 +914,40 @@ export class ThreadWorktreeService {
 
   /** Watches each listed worktree's Git directory and each repository's, and lets go of the rest. */
   private async watchSummaries(worktrees: readonly ThreadWorktree[]): Promise<void> {
-    const wanted = new Map<string, { gitDir: () => Promise<string | undefined>; paths: () => string[]; index: boolean }>()
+    const wanted = new Map<string, { gitDir: () => Promise<string | undefined>; paths: () => string[]; index: boolean; markers: readonly string[]; roots: readonly string[] }>()
+    const shared = new Map<string, { paths: string[]; roots: Set<string>; branches: Set<string> }>()
     for (const worktree of worktrees) {
       const own = () => [worktree.path]
-      wanted.set(worktree.path, { gitDir: () => worktreeGitDir(worktree.path), paths: own, index: false })
-      // What's staged moves without HEAD (a terminal's `git add`): heard, at most every `SUMMARY_INDEX_GAP_MS`.
-      wanted.set(`index\0${worktree.path}`, { gitDir: () => worktreeGitDir(worktree.path), paths: own, index: true })
-      // A commit or a fetch in the repository moves where every worktree of it stands against its branch.
-      wanted.set(`repo\0${worktree.repoRoot}`, { gitDir: async () => join(worktree.repoRoot, ".git"), paths: () => worktrees.filter((each) => each.repoRoot === worktree.repoRoot).map((each) => each.path), index: false })
+      wanted.set(worktree.path, { gitDir: () => worktreeGitDir(worktree.path), paths: own, index: false, markers: HEAD_MARKER, roots: [worktree.repoRoot] })
+      wanted.set(`index\0${worktree.path}`, { gitDir: () => worktreeGitDir(worktree.path), paths: own, index: true, markers: INDEX_MARKER, roots: [] })
+      const common = commonDirOf(worktree.repoRoot)
+      let group = shared.get(common)
+      if (!group) shared.set(common, group = { paths: [], roots: new Set(), branches: new Set() })
+      group.paths.push(worktree.path)
+      group.roots.add(worktree.repoRoot)
+      group.branches.add(worktree.branch)
+      const current = await worktreeBranch(worktree.path)
+      if (current) group.branches.add(current)
+    }
+    for (const [common, group] of shared) {
+      const remotes = new Set(["origin", ...await readdir(join(common, "refs", "remotes")).catch(() => [])])
+      const markers = [...new Set([...REF_MARKERS, ...[...group.branches].flatMap(branch => [dirname(join("refs", "heads", branch)), ...[...remotes].map(remote => dirname(join("refs", "remotes", remote, branch)))])])]
+      // Rebuild when the actual checked-out branches or membership changes, not just when a repo is first seen.
+      const key = `repo\0${common}\0${[...markers, ...group.paths].sort().join("\0")}`
+      wanted.set(key, { gitDir: async () => common, paths: () => group.paths, index: false, markers, roots: [...group.roots] })
     }
     for (const [key, watch] of this.summaryWatches) if (!wanted.has(key)) {
       watch.close()
       this.summaryWatches.delete(key)
     }
-    for (const [key, { gitDir: locate, paths, index }] of wanted) {
+    for (const [key, { gitDir: locate, paths, index, markers, roots }] of wanted) {
       if (this.summaryWatches.has(key)) continue
       const gitDir = await locate()
       if (!gitDir || this.summaryWatches.has(key)) continue
-      this.summaryWatches.set(key, watchGitMarkers(gitDir, () => this.summaryStale(paths(), SUMMARY_SETTLE_MS, index), index ? INDEX_MARKER : HEAD_MARKER))
+      this.summaryWatches.set(key, watchGitMarkers(gitDir, () => {
+        for (const repoRoot of roots) this.invalidatePulls(repoRoot)
+        this.summaryStale(paths(), SUMMARY_SETTLE_MS, index)
+      }, markers))
     }
   }
 
@@ -962,12 +992,15 @@ export class ThreadWorktreeService {
     const pulls = new Map<string, WorktreeBranchPull[] | null>()
     for (const repoRoot of new Set(worktrees.map((worktree) => worktree.repoRoot))) {
       const tips = (await factsOf(repoRoot)).tips
-      const heads = await Promise.all(worktrees.filter(worktree => worktree.repoRoot === repoRoot).map(worktree => worktreeHead(worktree.path, tips)))
-      pulls.set(repoRoot, await this.pullsIn(repoRoot, pullsOf, heads.filter((head): head is string => head !== undefined)))
+      const points = await Promise.all(worktrees.filter(worktree => worktree.repoRoot === repoRoot).map(async worktree => ({ head: await worktreeHead(worktree.path, tips), branch: await worktreeBranch(worktree.path) })))
+      const heads = points.flatMap(point => point.head ? [point.head] : [])
+      const branches = new Map(points.flatMap(point => point.branch && point.head ? [[point.branch, point.head] as const] : []))
+      pulls.set(repoRoot, await this.pullsIn(repoRoot, pullsOf, heads, branches))
     }
     const current = async (worktree: ThreadWorktree) => {
       const held = this.heldSummaries.get(worktree.path)
       if (!held || this.staleSummaries.has(worktree.path) || now - held.at > SUMMARY_BACKSTOP_MS) return undefined
+      if (held.refs !== summaryRefs(worktree, await factsOf(worktree.repoRoot))) return undefined
       // Asked, it answers what's staged: a stat of its index, as `statusOf` waits.
       if ((await this.indexTime(worktree.path)) !== held.index) return undefined
       // A conversation at work there edits what its index can't show: read as often as a status answers (`statusOf`).
@@ -988,7 +1021,7 @@ export class ThreadWorktreeService {
       if (this.staleSummaries.delete(worktree.path)) this.statuses.delete(worktree.path)
       const index = await this.indexTime(worktree.path)
       const summary = await this.summarize(worktree, pullsOf, await factsOf(worktree.repoRoot), atWork(worktree), true)
-      this.heldSummaries.set(worktree.path, { summary, at: now, index })
+      this.heldSummaries.set(worktree.path, { summary, at: now, index, refs: summaryRefs(worktree, await factsOf(worktree.repoRoot)) })
       return summary
     })
     this.sayIfChanged(summaries)
@@ -1054,18 +1087,31 @@ export class ThreadWorktreeService {
     return (this.pullsRead.get(repoRoot) ?? []).filter((pull) => pull.branch === branch)
   }
 
+  private readonly pullsChanged: (repoRoot: string) => Promise<void>
+  private readonly pullInvalidations = new Map<string, Promise<void>>()
+
+  private invalidatePulls(repoRoot: string): void {
+    this.branchPulls.delete(repoRoot)
+    if (this.pullInvalidations.has(repoRoot)) return
+    const pending = Promise.resolve().then(() => this.pullsChanged(repoRoot)).finally(() => {
+      if (this.pullInvalidations.get(repoRoot) === pending) this.pullInvalidations.delete(repoRoot)
+    })
+    this.pullInvalidations.set(repoRoot, pending)
+    void pending.catch(() => hostWarn("git", "PR cache invalidation failed"))
+  }
+
   private readonly pullsVisible: () => boolean
 
-  private pullsIn(repoRoot: string, pullsOf: PullsOf | undefined, liveHeads: readonly string[] = []) {
+  private pullsIn(repoRoot: string, pullsOf: PullsOf | undefined, liveHeads: readonly string[] = [], liveBranches: ReadonlyMap<string, string> = new Map()) {
     // Local file and Thread events still update summaries with no window; GitHub waits for a viewer.
     if (!this.pullsVisible()) return Promise.resolve(this.pullsRead.get(repoRoot) ?? null)
     const now = Date.now()
     const cached = this.branchPulls.get(repoRoot)
     if (cached && now - cached.at < BRANCH_PULLS_EVERY_MS) return cached.pulls
-    const pulls = (pullsOf?.(repoRoot, liveHeads) ?? Promise.resolve(null)).catch(() => null)
+    const pulls = Promise.resolve(this.pullInvalidations.get(repoRoot)).then(() => pullsOf?.(repoRoot, liveHeads, liveBranches) ?? null).catch(() => null)
     this.branchPulls.set(repoRoot, { at: now, pulls })
     void pulls.then((read) => {
-      if (read) this.pullsRead.set(repoRoot, read)
+      if (read && this.branchPulls.get(repoRoot)?.pulls === pulls) this.pullsRead.set(repoRoot, read)
     })
     return pulls
   }
@@ -1075,10 +1121,11 @@ export class ThreadWorktreeService {
     const tip = facts.tips.get(worktree.branch) ?? ""
     const from = into ? facts.tips.get(into) : worktree.base
     const currentHead = await worktreeHead(worktree.path, facts.tips)
+    const currentBranch = await worktreeBranch(worktree.path)
     const [status, landing, pulls, head] = await Promise.all([
       this.statusOf(worktree.path, busy, idle),
       this.landing(worktree, facts, idle),
-      this.pullsIn(worktree.repoRoot, pullsOf, currentHead ? [currentHead] : []),
+      this.pullsIn(worktree.repoRoot, pullsOf, currentHead ? [currentHead] : [], new Map(currentHead && currentBranch ? [[currentBranch, currentHead]] : [])),
       currentHead,
     ])
     const count = (cwd: string, range: string) => (idle ? this.git.idleOutput(cwd, ["rev-list", "--count", range]) : this.git.readOutput(cwd, ["rev-list", "--count", range])).then(Number)
