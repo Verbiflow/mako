@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "nod
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { createRequire } from "node:module"
-import { createPackage, extractFile } from "@electron/asar"
+import { extractFile } from "@electron/asar"
+import { packArchive } from "./lib/pack-archive.mjs"
 import { assertCursorSdkPatched, CURSOR_SDK_PATCHES, patchCursorSdk } from "./patch-cursor-sdk.mjs"
 
 const installed = join(dirname(createRequire(import.meta.url).resolve("@cursor/sdk")), "../..")
@@ -33,14 +34,14 @@ try {
   patchCursorSdk(sdk, shipped)
   assert.deepEqual(CURSOR_SDK_PATCHES.map(({ target }) => read(target)), first, "repeated builds leave patched bytes unchanged")
   const archive = join(root, "app.asar")
-  await createPackage(join(root, "app"), archive)
+  await packArchive(join(root, "app"), archive)
   assertCursorSdkPatched((target) => extractFile(archive, `node_modules/@cursor/sdk/${target}`).toString("utf8"))
   const { target, replacements } = CURSOR_SDK_PATCHES[0]
   const [original, patched] = replacements[1]
   writeFileSync(join(sdk, target), read(target).replace(patched, () => original))
   assert.throws(() => assertCursorSdkPatched(read), /lacks Mako's complete/, "the marker alone cannot hide a partial patch")
   const incompleteArchive = join(root, "incomplete.asar")
-  await createPackage(join(root, "app"), incompleteArchive)
+  await packArchive(join(root, "app"), incompleteArchive)
   assert.throws(() => assertCursorSdkPatched((file) => extractFile(incompleteArchive, `node_modules/@cursor/sdk/${file}`).toString("utf8")), /lacks Mako's complete/, "the package gate checks the archive, not development dependencies")
   // An incomplete patch, or one an older Mako left (what the updater's copy of a person's modules holds): patched
   // again from the shipped bytes, never over the old patch.

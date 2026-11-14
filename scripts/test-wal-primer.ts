@@ -44,11 +44,11 @@ try {
   // Stopped, as the host stopping stops it: nothing is primed.
   const other = join(root, `${randomUUID()}.sqlite`)
   journal(other).close()
-  primer.stop()
+  await primer.stop()
   assert.equal(await primer.prime(other), false, "a stopped primer primes nothing")
   assert.equal(existsSync(`${other}-wal`), false, "and writes nothing")
   console.log("WAL primer: a cleanly closed journal's WAL header written off the thread, its data and version kept; a WAL with frames and a stopped primer left alone")
 } finally {
-  primer.stop()
+  await primer.stop()
   rmSync(root, { recursive: true, force: true })
 }

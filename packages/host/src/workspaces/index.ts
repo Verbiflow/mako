@@ -28,7 +28,7 @@ export { RecipeAccounts } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { beginTrace, TraceRefresh } from "./app-probe.js"
-import { childHistory, childProcessReader, type DaemonRestarts, type ProcessReader } from "./watch-backend.js"
+import { childHistory, childProcessReader, type DaemonRestarts, type ProcessReader, type WatchBackend } from "./watch-backend.js"
 import type { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
@@ -47,7 +47,7 @@ import { declareMoveMethods } from "./move-methods.js"
 import { declarePlanBuildMethods } from "./plan-build-methods.js"
 import { declareCheckoutHeadMethods } from "./checkout-head-methods.js"
 import { declareThreadAppMethods } from "./app-methods.js"
-import { listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "../git/index.js"
+import { forgetGitHubReads, listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "../git/index.js"
 import type { MakoTools } from "../tools/index.js"
 import type { WorkspaceConversations } from "./conversations.js"
 import type { AgentHost } from "./agent-host.js"
@@ -111,7 +111,7 @@ export interface Workspaces {
   appOwner(app: AppKey): { id: string; title: string } | undefined
   /** What changed on disk while apps ran, for their probes; FSEvents keeps that history, so macOS only. */
   fileHistory: ReturnType<typeof childHistory>
-  close(): void
+  close(): Promise<void>
 }
 
 export interface WorkspacesDeps {
@@ -142,6 +142,8 @@ export interface WorkspacesDeps {
   ledger?: () => MoveLedger | undefined
   /** What the file system's history reads cost, for Diagnostics. */
   watchReadings?: WatchReadings
+  /** Every native and tree watch shares this host-owned child. */
+  watch: WatchBackend
   /** When fseventsd started over, so a read of history across it is reported lost. */
   daemonRestarts?: DaemonRestarts
   /** The host's probe child (`childProcessReader`), which reads the apps' processes too; one of its own without it. */
@@ -224,7 +226,10 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
           recipe: (checkout) => projectRecipe(git, checkout, recipes),
           env: (values) => ({ ...commandEnvironment(), ...values }),
         }),
-      } : undefined, deps.conversations, deps.ledger, deps.workingFolders)
+      } : undefined, deps.conversations, deps.ledger, deps.workingFolders, () => deps.subscribed?.on ?? true, async repoRoot => {
+        await forgetGitHubReads(repoRoot)
+        emit({ type: "github-changed" })
+      }, deps.watch)
     : null
   // Windows hear the summaries as they change, rather than each asking every half minute. What no event of its own
   // says (a pull request on GitHub, an edit outside a turn) a pass of the host's says, each worktree read only once
@@ -250,9 +255,9 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     whoseApp,
     appOwner,
     fileHistory,
-    close: () => {
+    close: async () => {
       checkoutHeads.close()
-      worktrees?.closeSummaries()
+      await worktrees?.closeSummaries()
     },
   }
 }
@@ -389,6 +394,7 @@ interface SamplerSlot {
 
 /** An agent's tool changed a branch or its pull request, or a worktree went: windows read both again at once. */
 function worktreesChanged(worktrees: Workspaces["worktrees"], emit: (event: HostEvent) => void): void {
+  forgetGitHubReads()
   worktrees?.forgetPulls()
   emit({ type: "worktrees-changed" })
   emit({ type: "github-changed" })

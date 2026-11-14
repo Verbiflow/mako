@@ -4,7 +4,7 @@ import { z } from "zod"
 import { decompress } from "./content.js"
 import { JournalReadSchema } from "./journal-reader.js"
 import { JournalStore } from "./journal-store.js"
-import { partition, storedView } from "./queries.js"
+import { countTurnInSlices, partition, storedView } from "./queries.js"
 
 /*
  * Reads of the record of changes too big for the host's thread, on a connection of their own (`JournalReader`).
@@ -15,6 +15,8 @@ const BlobRow = z.object({ data: z.instanceof(Uint8Array) })
 
 let db: DatabaseSync | undefined
 let store: JournalStore | undefined
+let countView: ReturnType<typeof storedView> | undefined
+let countVersion = -1
 const open = () => {
   if (db?.isOpen) return db
   db = new DatabaseSync(path, { readOnly: true })
@@ -22,11 +24,23 @@ const open = () => {
   return db
 }
 
-parentPort?.on("message", (message) => {
+parentPort?.on("message", async (message) => {
   const request = JournalReadSchema.safeParse(message)
   if (!request.success) return
   const { id } = request.data
   try {
+    if (request.data.kind === "count-turn") {
+      store ??= JournalStore.open(path, { device: "", readOnly: true })
+      // The host's former view reused its author cache until another connection committed. Keep that policy here.
+      const version = store.dataVersion()
+      if (!countView || countVersion !== version) {
+        countView = storedView(store)
+        countVersion = version
+      }
+      const count = await countTurnInSlices(countView, request.data.thread, request.data.turn, request.data.state)
+      parentPort?.postMessage({ id, ok: true, count: count ?? null })
+      return
+    }
     if (request.data.kind === "partition") {
       // A view of what's committed now: the files' states and their writers, read on this thread.
       store ??= JournalStore.open(path, { device: "", readOnly: true })

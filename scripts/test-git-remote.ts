@@ -103,4 +103,4 @@ try {
   assert.equal(result.status.behind, 0)
   assert.equal(git(local, "show", "stash@{0}:shared.txt"), "keep my edits")
   console.log("Git remote workflow passed: fetch, pull, rejected push, divergence, merge, conflicts, abort, resolution, continue, push, and dirty-edit preservation")
-} finally { gitRunner.close(); await rm(root, { recursive: true, force: true }) }
+} finally { await gitRunner.close(); await rm(root, { recursive: true, force: true }) }
