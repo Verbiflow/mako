@@ -441,13 +441,23 @@ if (!Number.isInteger(shard) || !Number.isInteger(count) || shard < 1 || shard >
   process.exit(2)
 }
 
-const lanes = lanesOf(count).slice((shard - 1) * LANES, shard * LANES).map((lane) => lane.steps)
+/** What a part needs installed first (`NEEDS`), unless `NEEDS_NOTHING` says it needs nothing. */
+const needOf = ({ script, command }) => (NEEDS[script] && !NEEDS_NOTHING.some((rule) => rule.test(command)) ? NEEDS[script] : undefined)
+// A part that needs an install goes last in its lane, so the lane's other parts run while it installs.
+const lanes = lanesOf(count).slice((shard - 1) * LANES, shard * LANES).map((lane) => lane.steps.toSorted((a, b) => Number(Boolean(needOf(a))) - Number(Boolean(needOf(b)))))
 const picked = lanes.flat()
-for (const need of new Set(picked.flatMap(({ script, command }) => (NEEDS[script] && !NEEDS_NOTHING.some((rule) => rule.test(command)) ? [NEEDS[script]] : [])))) {
-  console.log(`::group::install ${need}`)
-  await runSuite("bash", ["-c", INSTALL[need]], { limitMs: 5 * 60_000, quietMs: 5 * 60_000 })
-  console.log("::endgroup::")
-}
+/**
+ * Each install starts at once, beside the parts, and only a part that needs it waits for it: awaited first, apt's
+ * ffmpeg (17 to 45 s) held every test of the 20 shards that picked a recording part, and decided pr-gate's time
+ * (run 43564312836: 8 of the 9 slowest shards installed it; shard 31's 145 s held 45 s of it).
+ */
+const installing = new Map([...new Set(picked.map(needOf).filter(Boolean))].map((need) => [need, (async () => {
+  let output = ""
+  const began = Date.now()
+  const code = await runSuite("bash", ["-c", INSTALL[need]], { limitMs: 5 * 60_000, quietMs: 5 * 60_000, write: (text) => { output += text } })
+  console.log(`::group::install ${need}\n${output}::endgroup::\n${code === 0 ? "installed" : "INSTALL FAILED"}: ${need} in ${Math.round((Date.now() - began) / 1000)} s`)
+  return code
+})()]))
 
 // Parts run their scripts' tools as npm would, from the repository's own bin.
 process.env.PATH = `${new URL("../node_modules/.bin", import.meta.url).pathname}:${process.env.PATH}`
@@ -483,7 +493,8 @@ function leave() {
 
 const results = []
 async function lane(steps) {
-  for (const { command, builds, script } of steps) {
+  for (const step of steps) {
+    const { command, builds, script } = step
     // A part's seconds are its builds' and its own, not a wait for the shard to itself (`ALONE`), which counted once made
     // test-git-helper read 116 s where it takes 37: `--learn` reads them, and the plan would size shards by the wait.
     let busy = 0
@@ -493,6 +504,11 @@ async function lane(steps) {
     let output = ""
     const write = (text) => { output += text }
     busy += Date.now() - at
+    // What it waits for an install isn't its own time either.
+    const need = needOf(step)
+    const installWait = Date.now()
+    if (code === 0 && need && (code = await installing.get(need)) !== 0) write(`${need} didn't install; see "install ${need}" above\n`)
+    const installed = Math.round((Date.now() - installWait) / 1000)
     const waiting = Date.now()
     await enter(ALONE.some((rule) => rule.test(command)))
     const waited = Math.round((Date.now() - waiting) / 1000)
@@ -505,7 +521,7 @@ async function lane(steps) {
     const evidence = code !== 0 ? ON_FAILURE[script] : undefined
     if (evidence) await runSuite("bash", ["-c", evidence], { limitMs: 3 * 60_000, quietMs: 3 * 60_000, write })
     const seconds = Math.round((busy + Date.now() - at) / 1000)
-    console.log(`::group::${command}\n${output}::endgroup::\n${code === 0 ? "passed" : "FAILED"}: ${command} in ${seconds} s${waited ? `\n(it waited ${waited} s for its shard to itself)` : ""}`)
+    console.log(`::group::${command}\n${output}::endgroup::\n${code === 0 ? "passed" : "FAILED"}: ${command} in ${seconds} s${installed ? `\n(it waited ${installed} s for ${need} to install)` : ""}${waited ? `\n(it waited ${waited} s for its shard to itself)` : ""}`)
     results.push({ command, code, seconds })
   }
 }
