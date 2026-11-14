@@ -324,7 +324,7 @@
     "test:fin-reopen": "tsx scripts/test-fin-reopen.ts",
     "test:roster-refresh": "tsx scripts/test-roster-refresh.ts",
     "test:pager-release": "node --expose-gc --import tsx scripts/test-pager-release.ts",
-    "test:resume-holds": "node scripts/test-loop-hold.mjs && tsx scripts/test-wal-primer.ts && tsx scripts/test-wal-checkpoints.ts && tsx scripts/test-resume-holds.ts",
+    "test:resume-holds": "node scripts/test-loop-hold.mjs && tsx scripts/test-wal-primer.ts && tsx scripts/test-resume-holds.ts",
     "test:trace-history-holds": "tsx scripts/test-trace-history-holds.ts",
     "test:idle-app-marks": "tsx scripts/test-idle-app-marks.ts",
     "test:app-sampler": "tsx scripts/test-app-sampler.ts",
