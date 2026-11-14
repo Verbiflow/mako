@@ -1,10 +1,11 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { execFileSync } from "node:child_process"
+import { execFile, execFileSync } from "node:child_process"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { promisify } from "node:util"
 import { Git } from "@mako/git"
 import { HostStopping } from "@mako/host/base/host-stopping"
 import { listBranchPulls, forgetGitHubReads } from "@mako/host/git/github"
@@ -46,13 +47,19 @@ try {
   service.followSummaries(() => {})
   await host.run(() => service.summaries(listBranchPulls))
   const before = invalidations
-  command(made.path, "push", "-q", "origin", `HEAD:refs/heads/${made.branch}`)
+  await promisify(execFile)("git", ["push", "-q", "origin", `HEAD:refs/heads/${made.branch}`], { cwd: made.path })
   for (const deadline = performance.now() + 15_000; invalidations === before; await new Promise(resolve => setTimeout(resolve, 25))) {
     if (performance.now() > deadline) throw new Error("A push-only ref event never invalidated the repository")
   }
   await host.run(() => listBranchPulls(made.path, [head], new Map([[made.branch, head]])))
   assert.ok(await queryCount() > 1, "the shell push invalidates the reader's canonical list before its five-minute TTL")
-  console.log("GitHub refs: stale-head per-number fallback and actual first shell-push watch invalidation passed")
+  // An existing ref may be rewritten in place: its contents, not just its parent directory, must be watched.
+  const afterFirst = invalidations
+  await writeFile(join(repo, ".git", "refs", "remotes", "origin", made.branch), `${oldHead}\n`)
+  for (const deadline = performance.now() + 15_000; invalidations === afterFirst; await new Promise(resolve => setTimeout(resolve, 25))) {
+    if (performance.now() > deadline) throw new Error("An existing remote ref rewrite never invalidated the repository")
+  }
+  console.log("GitHub refs: stale-head per-number fallback and actual first shell push and in-place remote-ref invalidation passed")
 } finally {
   if (previous === undefined) delete process.env.GH_PATH; else process.env.GH_PATH = previous
   service.closeSummaries(); await service.settled(); store.close(); await Promise.allSettled([host.stop(), git.close()]); await rm(root, { recursive: true, force: true })

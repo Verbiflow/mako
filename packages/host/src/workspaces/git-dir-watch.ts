@@ -1,4 +1,4 @@
-import { statSync, watch, type FSWatcher } from "node:fs"
+import { readdirSync, statSync, watch, type FSWatcher } from "node:fs"
 import { realpath } from "node:fs/promises"
 import { dirname, join, relative, sep } from "node:path"
 import { locateGitDir } from "../base/checkout-location.js"
@@ -107,7 +107,13 @@ export function watchGitMarkers(gitDir: string, changed: () => void, markers: re
 function stamp(path: string): string {
   try {
     const stats = statSync(path)
-    return `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`
+    const own = `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`
+    // Ref contents can change without their directory changing. Compare direct entries too, while ignoring
+    // read-only access times and temporary Git locks; nested branches have their own directory marker.
+    return stats.isDirectory() ? `${own}:${readdirSync(path).filter(name => !name.endsWith(".lock")).sort().map(name => {
+      const entry = statSync(join(path, name))
+      return `${name}:${entry.ino}:${entry.size}:${entry.mtimeMs}:${entry.ctimeMs}`
+    }).join("|")}` : own
   } catch {
     return ""
   }
