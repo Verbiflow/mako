@@ -584,7 +584,7 @@ export interface ChildThread {
   working?: boolean
   /** The last thing its transcript shows it doing (`lastStep`). */
   step?: string
-  /** Its turn ended on work of its own Fins or its move, which it waits for: at work, but holding no room its Fins need. */
+  /** Its work waits for its own Fins, a move or a provider reset: pending, but holding no execution room. */
   awaiting?: string
   /** When its work now began: its turn's start, or with `awaiting`, when that turn ended. Absent when nothing says. */
   workSince?: number
