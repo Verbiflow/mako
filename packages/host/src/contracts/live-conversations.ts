@@ -251,10 +251,17 @@ export interface TurnContinuation {
 /**
  * The sign-out a session's work is paused on. It belongs to the session, so
  * every request it holds carries the same marker, and it persists with them.
- * `credential` is a one-way digest of the account's credentials when the
- * sign-out was seen; a different digest later means someone signed in.
+ * `credential` is the legacy source-equality hint for deliberate Resume.
+ * Automatic recovery requires a later provider-verified login sequence,
+ * independently of the execution principal a normal token renewal retains.
  */
 export interface SignInHold {
+  /** This sign-out generation; an older asynchronous recovery cannot release a newer one. */
+  id?: string
+  /** The provider's verified login sequence when it failed, including before a first launch named its account. Absent is legacy/unmanaged. */
+  verification?: number
+  /** A verified login already admitted recovery; the queue still waits for execution room. Never an admission credential. */
+  ready?: string
   harness: string
   account: string
   credential: string
@@ -264,7 +271,7 @@ export interface SignInHold {
 /** Whether a paused session can resume: the account was signed in again, or another one chosen. */
 export type SignInReadiness = "signed-out" | "ready"
 
-/** What Resume did: `resumed` also answers a pause that had already ended. */
+/** What Resume did: `resumed` includes verified automatic recovery waiting for execution room, and an already-ended pause. */
 export type SignInResume = "resumed" | "signed-out"
 
 /** What keeps a session on its old account while a message waits to switch it. */
@@ -440,6 +447,8 @@ export interface LiveRequest {
 }
 
 export interface LiveSummary {
+  /** A sign-out holds work here, including an accepted cut with no queued messages. No transcript read needed. */
+  hasSignInHold?: boolean
   /** Saved session questions keep their conversation controls available after process exit. */
   hasSessionQuestions?: boolean
   /** Every native session file the conversation's bindings read, loaded or not. */

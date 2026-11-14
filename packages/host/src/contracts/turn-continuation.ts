@@ -235,7 +235,8 @@ export function strandedTurn(requests: readonly LiveRequest[]): LiveRequest | un
   // A Stop is someone's choice, and a steer's cut has its message next.
   if (!ran || (ran.status !== "interrupted" && ran.status !== "uncertain") || !interruption || interruption.reason === "stopped" || interruption.reason === "steered" || interruption.autoContinue) return undefined
   if (requests.some((request) => request.continues?.requestId === ran.id)) return undefined
-  // What waits on a sign-in (`signIn`) waits on someone signing in, which nobody watching a Fin will do.
+  // The account's sign-in card owns recovery; an Apex cannot sign in by answering Continue/Stop.
+  if (ran.signIn) return undefined
   if (requests.some((request) => request.status === "queued" || (request.status === "held" && !request.signIn) || request.status === "dispatching")) return undefined
   return ran
 }

@@ -8,6 +8,7 @@ import { acpStore, type LiveAcpConversation } from "../src/state/acp-state"
 import { syncThreadStatus } from "../src/state/acp-live"
 import { selectAcpPresence } from "../src/state/acp-presence"
 import { notificationsStore } from "../src/state/notifications"
+import { signInRecoveryKey, signInRecoveryStore } from "../src/state/sign-in-recovery"
 import { threadsStore } from "../src/state/thread-store"
 import { fixtureDeclarations } from "../src/dev/harness-fixtures"
 import { promptDelivery, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
@@ -111,6 +112,16 @@ assert.match(kept, /Claude Code signed out of work@example\.com/)
 assert.match(kept, />Sign in again</, "an account Mako keeps signs in again from the notice")
 assert.doesNotMatch(kept, /claude auth login/)
 
+const automatic = held.map(request => request.signIn ? { ...request, signIn: { ...work, verification: 0 } } : request)
+assert.match(render(automatic), /Sign in once in Settings.*automatically/)
+signInRecoveryStore.set({ entries: { [signInRecoveryKey("conversation", hold.at)]: { reading: "ready" } } })
+assert.match(render(automatic), />Resuming…</)
+assert.doesNotMatch(render(automatic), /now runs as/, "automatic recovery retains the held account rather than adopting another selected account")
+assert.doesNotMatch(render(automatic), />Resume</)
+assert.match(render(automatic.map(request => ({ ...request, pause: "stop" }))), />Resume</, "an explicit Stop keeps deliberate recovery")
+signInRecoveryStore.set({ entries: {} })
+assert.match(render([{ ...unknown, signIn: { ...work, verification: 0 } }]), /can’t tell whether your last message reached.*review/, "automatic sign-in never hides ambiguous native delivery")
+
 const review = render([unknown, { id: "w1", text: "a", attachments: [], status: "held", signIn: hold }, { id: "w2", text: "b", attachments: [], status: "held", signIn: hold }])
 assert.match(review, /can’t tell whether your last message reached Claude Code, so it stays below for you to review\. 2 messages wait to send\./)
 
@@ -129,6 +140,43 @@ const outcomes = notificationsStore.get().items.filter((item) => item.subject.id
 assert.deepEqual(outcomes.map((item) => [item.kind, item.body]), [["needs-you", "Claude Code signed out. Sign in again, then Resume."]], "announced once, as needing you, never as failed")
 assert.deepEqual(threadsStore.get().attention["/sessions/paused.jsonl"], { kind: "needs-permission", since: hold.at, detail: "Claude Code signed out. Sign in again, then Resume." })
 assert.equal(selectAcpPresence(acpStore.get()).find((presence) => presence.key === "paused")?.status, "needs-permission", "an unbound session's row needs input too")
+
+const cohortOne = { ...signedOut, key: "cohort-one", threadPath: undefined, session: { ...session, id: "cohort-one" }, requests: automatic }
+const cohortTwo = { ...cohortOne, key: "cohort-two", session: { ...session, id: "cohort-two" } }
+syncThreadStatus(cohortOne, "running")
+syncThreadStatus(cohortTwo, "running")
+syncThreadStatus(cohortTwo, "failed")
+const cohortNotices = () => notificationsStore.get().items.filter(item => item.subject.id.startsWith("live:cohort-"))
+assert.equal(cohortNotices().length, 1, "the same account asks once across multiple held Fins and repeated updates")
+assert.match(cohortNotices()[0]!.body, /Sign in once in Settings.*automatically/)
+notificationsStore.set({ items: notificationsStore.get().items.map(item => item.subject.id.startsWith("live:cohort-") ? { ...item, seen: false } : item) })
+syncThreadStatus({ ...cohortOne, session: { ...cohortOne.session, status: "ready" }, requests: [] }, "failed")
+assert.equal(cohortNotices().length, 1, "one resumed Fin cannot retire its account siblings' outstanding sign-in notice")
+assert.deepEqual(cohortNotices()[0]!.subject.target, { kind: "live", key: "cohort-two" }, "the shared notice points to a member that still needs sign-in")
+syncThreadStatus({ ...cohortTwo, session: { ...cohortTwo.session, status: "ready" }, requests: [] }, "failed")
+assert.equal(cohortNotices().length, 0, "the cohort retires once no member waits")
+const outage = (id: string) => ({ ...cohortOne, requests: automatic.map(request => request.signIn ? { ...request, signIn: { ...request.signIn, id } } : request) })
+syncThreadStatus(outage("second-outage"), "running")
+notificationsStore.set({ items: notificationsStore.get().items.map(item => item.subject.id.startsWith("live:cohort-") ? { ...item, seen: true } : item) })
+syncThreadStatus({ ...cohortOne, session: { ...cohortOne.session, status: "ready" }, requests: [] }, "failed")
+syncThreadStatus(outage("third-outage"), "running")
+assert.equal(cohortNotices().length, 2, "a later sign-out is announced even after the prior notice was read and no verified receipt changed")
+
+const recoveredRequests = automatic.map(request => request.signIn ? { ...request, signIn: { ...request.signIn, ready: "00000000-0000-4000-8000-000000000001" } } : request)
+const recovered = { ...signedOut, key: "verified-room", threadPath: "/sessions/verified-room", session: { ...signedOut.session, id: "verified-room" }, requests: recoveredRequests }
+acpStore.set({ activeKey: undefined, conversations: { [recovered.key]: recovered } })
+syncThreadStatus(recovered, "failed")
+assert.equal(selectAcpPresence(acpStore.get()).find(item => item.key === recovered.key)?.status, "running", "verified recovery awaiting execution room no longer needs sign-in")
+assert.equal(threadsStore.get().attention[recovered.threadPath], undefined)
+assert.equal(notificationsStore.get().items.some(item => item.subject.id === `thread:${recovered.threadPath}` && (item.kind === "needs-you" || item.kind === "failed")), false)
+assert.match(render(recoveredRequests), /Held work resumes automatically as execution places become available/)
+assert.doesNotMatch(render(recoveredRequests), />Sign in again</)
+const stoppedRecovery = { ...recovered, requests: recoveredRequests.map(request => ({ ...request, pause: "stop" as const })) }
+acpStore.set({ activeKey: undefined, conversations: { [recovered.key]: stoppedRecovery } })
+syncThreadStatus(stoppedRecovery, "failed")
+assert.equal(selectAcpPresence(acpStore.get()).find(item => item.key === recovered.key)?.status, "ready", "a Stop after verification is paused work, not a new sign-in ask")
+assert.equal(notificationsStore.get().items.some(item => item.subject.id === `thread:${recovered.threadPath}` && (item.kind === "needs-you" || item.kind === "failed")), false)
+assert.match(render(stoppedRecovery.requests), />Resume</)
 
 // Removing an account whose key Cursor still accepts says so, with when it lapses.
 const removal = removalNotice("Cursor", { reason: "Cursor couldn't be reached (fetch failed)", expiresAt: "2026-11-03T12:00:00.000Z", manageUrl: "https://cursor.com/dashboard?tab=integrations" })

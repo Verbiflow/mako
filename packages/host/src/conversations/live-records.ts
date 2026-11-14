@@ -814,6 +814,7 @@ function residentSummary(snapshot: LiveSnapshot): LiveSummary {
   const wakes = sooner(wakeAt(snapshot.requests), transferDue(snapshot.control))
   const promptedAt = personPromptedAt(snapshot.requests, snapshot.control?.actions)
   return {
+    hasSignInHold: snapshot.requests.some(request => request.signIn && request.status !== "canceled"),
     hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
     nativePaths: snapshot.control?.bindings.flatMap((binding) =>
       binding.path ? [binding.path] : []
