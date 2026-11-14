@@ -23,6 +23,7 @@ import { SharedJournal, sharedJournalFolder, writerRetryDelay } from "@mako/host
 
 const scratch = () => realpathSync(mkdtempSync(join(tmpdir(), "maw-")))
 const git = new Git()
+const realTimeout = setTimeout
 
 function dependencies(root: string, watch: TreeWatcher = () => ({ ready: Promise.resolve(), close() {} })): AttributionDeps {
   return { dataRoot: join(root, "data"), userRoot: join(root, "user"), label: "writer-test", git, watch, jobs: new HostJobs(), stores: () => [], placement: () => undefined, session: () => undefined }
@@ -298,10 +299,17 @@ test("Git byte views transfer only their span and keep the original reader buffe
 
 
 for (const fault of ["throws", "never-starts", "invalid-ready", "never-answers"] as const) {
-  test(`the writing owner recovers from a worker that ${fault}, keeping its outbox`, { timeout: 20_000 }, async () => {
+  test(`the writing owner recovers from a worker that ${fault}, keeping its outbox`, { timeout: 20_000 }, async context => {
     const root = scratch()
     const deps = dependencies(root)
     const marker = join(root, "first-start")
+    const timing = { startMs: 2_000, askMs: 300, probeMs: 300 }
+    context.mock.timers.enable({ apis: ["setTimeout"] })
+    let entered!: () => void
+    const faultEntered = new Promise<void>(resolve => { entered = resolve })
+    const unlog = followHostLog(line => {
+      if (line.scope === "writer-test-fault" && line.fields?.marker === marker) entered()
+    })
     const entry = join(root, "fail-once.ts")
     const main = fileURLToPath(new URL("../packages/host/src/attribution/writer-main.ts", import.meta.url))
     writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module" }))
@@ -311,32 +319,73 @@ for (const fault of ["throws", "never-starts", "invalid-ready", "never-answers"]
       const first = !existsSync(${JSON.stringify(marker)});
       if (first) writeFileSync(${JSON.stringify(marker)}, "attempted");
       if (first && ${JSON.stringify(fault)} === "throws") throw new Error("test startup failure");
-      if (first && ${JSON.stringify(fault)} === "never-starts") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      const blocked = () => {
+        parentPort.postMessage({ type: "log", line: { level: "info", scope: "writer-test-fault", message: "entered", fields: { marker: ${JSON.stringify(marker)} } } });
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      };
+      if (first && ${JSON.stringify(fault)} === "never-starts") blocked();
       if (first && ${JSON.stringify(fault)} === "invalid-ready") {
         parentPort.on("message", () => { parentPort.postMessage({ type: "ready", snapshot: {} }); });
       } else {
         const send = parentPort.postMessage.bind(parentPort);
         parentPort.postMessage = (message, ...args) => {
           send(message, ...args);
-          if (first && ${JSON.stringify(fault)} === "never-answers" && message.type === "ready") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+          if (first && ${JSON.stringify(fault)} === "never-answers" && message.type === "ready") blocked();
         };
         await import(${JSON.stringify(main)});
       }
     `)
-    const writer = new AttributionWriter(deps, settings(deps), { entry, timing: { startMs: 2_000, askMs: 300, probeMs: 300 } })
+    const writer = new AttributionWriter(deps, settings(deps), { entry, timing })
     let client: SharedJournal | undefined
     let attempts = 0
+    let unfollow = () => {}
+    let unfailed = () => {}
     try {
-      client = await SharedJournal.open({
+      const opening = SharedJournal.open({
         folder: sharedJournalFolder(deps.userRoot), host: { pid: process.pid, dataRoot: deps.dataRoot, label: deps.label },
         timing: { retryMs: 40, maxRetryMs: 100, unansweredMs: 100 },
         startOwner: async reason => { attempts++; return (await writer.ensure(reason)).address },
         own: async () => { throw new Error("no main-thread writer") }, alone: async () => { throw new Error("no main-thread private writer") }, follow() {}, log() {},
       })
+      // Advance only the injected fault's deadline. The healthy replacement runs on real worker/IPC events,
+      // never against a 300 ms wall-clock budget on a busy CI shard.
+      if (fault === "never-starts") {
+        await faultEntered
+        context.mock.timers.tick(timing.startMs)
+      } else if (fault === "never-answers") {
+        await faultEntered // ready was sent before this: its startup timer is already cleared.
+        let opened = false
+        void opening.then(() => { opened = true }, () => { opened = true })
+        while (!opened) {
+          context.mock.timers.tick(100) // the first, deliberately unresponsive journal handshake
+          await new Promise(resolve => realTimeout(resolve, 10))
+        }
+      }
+      client = await opening
       assert.equal(client.role().kind, "failed", "startup and handshake failures are visible while recovery continues")
-      assert.ok(client.status().failure)
+      const expected = {
+        throws: /test startup failure/,
+        "never-starts": /took too long to open/,
+        "invalid-ready": /invalid startup state/,
+        "never-answers": /writing owner did not answer/,
+      }
+      assert.match(client.status().failure ?? "", expected[fault])
       client.writes.activity({ kind: "turn", edge: "start", id: "recovering-turn", session: "session", thread: "recovering-thread", at: Date.now() })
       assert.equal(client.status().unsent, 1)
+      const recovered = new Promise<void>(resolve => {
+        unfollow = client!.onRole(role => { if (role.kind === "follower") resolve() })
+      })
+      const failedProbe = new Promise<void>(resolve => {
+        unfailed = client!.onRole(role => { if (role.kind === "failed") resolve() })
+      })
+      context.mock.timers.tick(40) // first retry
+      if (fault === "never-answers") {
+        await new Promise(resolve => setImmediate(resolve)) // ensure() has armed the failed generation's probe.
+        context.mock.timers.tick(timing.probeMs)
+        await failedProbe
+        context.mock.timers.tick(80) // retry after retiring the unresponsive generation
+      }
+      await recovered
       await client.applied()
       assert.equal(client.role().kind, "follower")
       assert.equal(client.status().unsent, 0, "the bounded close drain joins recovery and its commit ACK")
@@ -345,9 +394,17 @@ for (const fault of ["throws", "never-starts", "invalid-ready", "never-answers"]
       const store = JournalStore.open(writer.snapshot()!.path, { device: "reader", readOnly: true })
       try { assert.equal(store.activityOfThread("recovering-thread").length, 1) } finally { store.close() }
     } finally {
-      await client?.close()
-      await writer.close()
-      rmSync(root, { recursive: true, force: true })
+      unfollow()
+      unfailed()
+      unlog()
+      try { await client?.close() }
+      finally {
+        try { await writer.close() }
+        finally {
+          context.mock.timers.reset()
+          rmSync(root, { recursive: true, force: true })
+        }
+      }
     }
   })
 }
