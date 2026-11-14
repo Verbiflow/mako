@@ -99,8 +99,8 @@ function reviewHost(review: ReviewCapability, options: { hold?: true } = {}) {
     settled: () => (owner.snapshot(id)?.requests ?? []).every((request) => request.status === "completed"),
     finish: () => owner.observe({ type: "live-session", session: state("ready") }),
     start: () => owner.start("test-provider", root, { conversationId: id }),
-    cleanup: () => {
-      owner.stop()
+    cleanup: async () => {
+      await owner.stop()
       rmSync(root, { recursive: true, force: true })
     },
   }
@@ -123,7 +123,7 @@ async function aCommandGoesAsWritten() {
     await waitFor(() => host.sent.length === 2, "the next message never went")
     assert.equal(host.sent[1], noted("Fix the first one"), "Mako's note rides on the next message")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -139,7 +139,7 @@ async function aCallStartsTheReview() {
     assert.equal(review?.displayText, "/review commit 1a2b3c4")
     assert.equal(review?.nativeDelivery?.evidence.kind, "accepted", "the call reports delivery the way a prompt does")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -158,7 +158,7 @@ async function makosPromptOnAHarnessWithout() {
     assert.equal(review?.displayText, "/review uncommitted changes")
     assert.equal(review?.verbatim, undefined)
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -175,7 +175,7 @@ async function aReviewQueuesBehindTheTurn() {
     await waitFor(() => host.sent.length === 2 && host.settled(), "the queued review never ran")
     assert.equal(host.sent[1], "/review")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 

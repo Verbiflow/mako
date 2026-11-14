@@ -143,7 +143,7 @@ assert.equal((await otherHost.run(() => hostCommand(process.execPath, ["-e", 'pr
 await otherHost.stop()
 const git = new Git({ signal: commands.signal })
 await assert.rejects(git.run({ cwd: process.cwd(), args: ["--version"] }), HostStoppingError)
-git.close()
+await git.close()
 console.log("commands are reaped before drain, new Git commands are refused, and another host remains independent")
 
 // Streaming, callback and IPC starts use the same scope, preserving their Node child handles.

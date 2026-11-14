@@ -73,6 +73,6 @@ try {
   assert.equal(await readFile(join(machine, "a.txt"), "utf8"), `${edited}\n`, "the checkpoint carries an edit made in the second the index was written")
   console.log("PASS: a copy of a Git index keeps its time, so an edit made in the second the index was written, at the same size, is seen: by a move's checkpoint, and by every capture that copies the index")
 } finally {
-  git.close()
+  await git.close()
   await rm(root, { recursive: true, force: true })
 }

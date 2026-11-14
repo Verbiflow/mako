@@ -88,11 +88,16 @@ const driver: ProviderLiveDriver = {
   permission: async () => {}, cancel: async () => {}, close: async () => {}, setMode: async () => {},
 }
 const saved = { ref: { harness: "bench", nativeId: "native-saved", path: join(root, "native-saved") }, entries: [{ type: "user" as const, text: "Saved" }], start: 0, total: 1, hasEarlier: false }
-const host = () => new LiveConversations({
+const owners = new Set<LiveConversations>()
+const host = () => {
+  const owner = new LiveConversations({
   appPath: root, root: join(root, "journals"), driver: () => driver, emit: () => {},
   history: async () => saved,
   resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
 })
+  owners.add(owner)
+  return owner
+}
 const waitFor = async (check: () => boolean, message: string) => {
   for (let i = 0; i < 4000 && !check(); i++) await delay(2)
   assert.ok(check(), message)
@@ -120,17 +125,19 @@ try {
     await waitFor(() => owner.snapshot(fork)?.requests[0]?.status === "completed", "the fork's turn did not finish")
     row("fork's first turn", count, kept(owner, fork))
 
-    owner.close(fork)
+    await owner.close(fork)
     await waitFor(() => owner.snapshot(fork)?.session.connection !== "connected", "the fork did not close")
+    await owner.stop()
     owner = host()
     owner.submit(fork, randomUUID(), "Once more")
     await waitFor(() => owner.snapshot(fork)?.requests.at(-1)?.status === "completed", "the reconnected turn did not finish")
     row("reconnect", count, kept(owner, fork))
-    owner.close(fork)
-    owner.close(resumed)
+    await owner.close(fork)
+    await owner.close(resumed)
   }
   console.log(`What the host spends on a session's opening, by the way it opens (${BATCH} updates a batch, ${NOTICES.length} setup notices amid them)`)
   for (const line of rows) console.log(line)
 } finally {
+  for (const owner of owners) await owner.stop()
   rmSync(root, { recursive: true, force: true })
 }
