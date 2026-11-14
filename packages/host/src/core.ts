@@ -1091,6 +1091,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     notice: (message) => emit({ type: "notice", level: "error", message }),
   })
   const opened = await openConversations({
+    elsewhere: (id) => late.cloudConversations?.has(id) ?? false,
     ...(owner.start && { start: owner.start }),
     stopping: () => shell.closing(),
     streams,

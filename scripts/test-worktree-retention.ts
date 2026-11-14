@@ -56,7 +56,21 @@ try {
     assert.match((await service.retirementRepository(record, refresh)).blocked ?? "", /committed/)
     await rm(join(checkout, "dirty.ts"))
     await git.output(project, ["push", "-q", "origin", "--delete", "finished"])
-    assert.equal((await service.retirementRepository(record, refresh)).remote, false, "a pruned ref cannot authorize checkout removal")
+    await git.output(project, ["update-ref", "refs/remotes/origin/finished", tip])
+    const cachedRefs = await git.output(project, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes/"])
+    const fetchHead = await readFile(join(project, ".git", "FETCH_HEAD"), "utf8")
+    const readOnly = new WorktreeRetention({
+      file: join(root, "readonly-settings.json"), root, worktrees: () => [record], finished: () => 1,
+      using: async () => [], openFiles: async () => [],
+      repository: (row, fetch) => service.retirementRepository(row, fetch),
+      fetch: async () => { throw new Error("Preview must not fetch") },
+      remove: async () => { throw new Error("Preview must not remove") }, packagesRemoved: async () => {},
+    })
+    assert.equal((await readOnly.preview()).repositoryFetches, 0)
+    assert.equal(await git.output(project, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes/"]), cachedRefs, "preview does not prune even a stale remote ref")
+    assert.equal(await readFile(join(project, ".git", "FETCH_HEAD"), "utf8"), fetchHead, "preview leaves fetch metadata untouched")
+    readOnly.close()
+    assert.equal((await service.retirementRepository(record, refresh)).remote, false, "a real refresh prunes the stale ref before removal")
     await assert.rejects(service.retirementRepository(record, async () => { throw new Error("fetch unavailable") }), /fetch unavailable/)
 
     // Actual global Thread records and read-only journals, including a top-level Thread with no Fin edge.
@@ -70,6 +84,11 @@ try {
       assert.ok(state.finished(placed.thread) !== undefined, "an ended top-level Thread qualifies without a crew or Fin edge")
       const active = new WorktreeThreadState({ store, dataRoot, busy: () => true })
       assert.equal(active.finished(placed.thread), undefined, "current activity wins over a closed journal")
+      let elsewhere = true
+      const continued = new WorktreeThreadState({ store, dataRoot, elsewhere: () => elsewhere })
+      assert.equal(continued.finished(placed.thread), undefined, "a closed local journal is not finished while CloudConversations.has routes it elsewhere")
+      elsewhere = false
+      assert.ok(continued.finished(placed.thread) !== undefined, "local completion can qualify after the continued routing has been removed")
       const previous = snapshot
       snapshot = { ...snapshot, revision: snapshot.revision + 1, session: { ...snapshot.session, status: "closed" } }
       journal.commit({ ...snapshot, requests: [{ id: "queued", text: "fixture", createdAt: 1, status: "queued", attachments: [] }] }, previous)
@@ -161,9 +180,11 @@ try {
   await utimes(join(path, "source.ts"), old, old)
   const eligible = await retention.preview()
   assert.equal(eligible.checkouts[0]!.checkoutSkip, null)
-  assert.equal(eligible.repositoryFetches, 1, "all repository proof reads share one fetch")
+  assert.equal(eligible.repositoryFetches, 0, "Settings preview never fetches or prunes, even when it evaluates remote reachability")
+  const beforeAutomaticFetch = fetches
   await run()
   assert.deepEqual(removed, [path])
+  assert.equal(fetches - beforeAutomaticFetch, 1, "the automatic checkout pass still refreshes each repository only once")
 
   // Rechecks preserve ownership and physical install identity without gating packages on Git changes.
   await mkdir(join(path, "node_modules"))
