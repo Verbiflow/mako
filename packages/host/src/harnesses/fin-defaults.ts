@@ -29,14 +29,14 @@ const StoredSchema = z
       .default({ rules: [] }),
     limit: FinLimitSchema.optional().catch(undefined),
     ceiling: FinCeilingSchema.optional().catch(undefined),
-    /** Moving across accounts/harnesses requires the person's explicit choice. */
-    moveOnLimit: z.boolean().optional().catch(undefined),
+    /** Kept only once the person turned "When an account runs out, continue on the next one" off. */
+    moveOnLimit: z.literal(false).optional().catch(undefined),
   })
   .catchall(Unread)
 const ROLES = z.enum(["forFins", "forApexes"]) satisfies z.ZodType<RoleRules>
 
 /** What the file holds: `other` and `policyOther` are the fields beside and in the policy this build doesn't read, so a save here never drops them. */
-type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings>; policy: FinPolicy; limit?: number; ceiling?: number; moveOnLimit?: boolean; other: JsonObject; policyOther: JsonObject }
+type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings>; policy: FinPolicy; limit?: number; ceiling?: number; moveOnLimit?: false; other: JsonObject; policyOther: JsonObject }
 
 function kept(entries: Readonly<Record<string, SessionSettings | undefined>>): Record<string, SessionSettings> {
   return Object.fromEntries(Object.entries(entries).filter((entry): entry is [string, SessionSettings] => entry[1] !== undefined))
@@ -67,7 +67,7 @@ export class FinDefaultsStore {
 
   reading(): FinChoicesReading {
     const { chosen, used, policy, limit, ceiling, moveOnLimit } = this.#read()
-    return { chosen: { ...chosen }, used: { ...used }, policy, ...(limit !== undefined && { limit }), ceiling: ceiling ?? FIN_CEILING, moveOnLimit: moveOnLimit ?? false }
+    return { chosen: { ...chosen }, used: { ...used }, policy, ...(limit !== undefined && { limit }), ceiling: ceiling ?? FIN_CEILING, moveOnLimit: moveOnLimit ?? true }
   }
 
   /** The person's own number of Fins at once on this device, or with null, its capacity (Auto). */
@@ -82,7 +82,7 @@ export class FinDefaultsStore {
   chooseMoveOnLimit(on: boolean): FinChoicesReading {
     z.boolean().parse(on)
     const { moveOnLimit, ...stored } = this.#read()
-    if (moveOnLimit !== on) this.#write({ ...stored, moveOnLimit: on })
+    if ((moveOnLimit ?? true) !== on) this.#write(on ? stored : { ...stored, moveOnLimit: false })
     return this.reading()
   }
 
@@ -163,7 +163,7 @@ export class FinDefaultsStore {
         policy: withoutEmpty({ rules: rules.filter((rule) => rule !== undefined), otherwise, forFins, forApexes }),
         ...(limit !== undefined && { limit }),
         ...(ceiling !== undefined && { ceiling }),
-        ...(moveOnLimit !== undefined && { moveOnLimit }),
+        ...(moveOnLimit === false && { moveOnLimit }),
         other,
         policyOther,
       }
@@ -177,7 +177,7 @@ export class FinDefaultsStore {
   #write(next: Stored): void {
     this.#stored = next
     const { chosen, used, policy, limit, ceiling, moveOnLimit, other, policyOther } = next
-    publishFileSync(this.#file, `${JSON.stringify({ ...other, version: 1, chosen, used, policy: { ...policyOther, ...policy }, ...(limit !== undefined && { limit }), ...(ceiling !== undefined && { ceiling }), ...(moveOnLimit !== undefined && { moveOnLimit }) })}\n`)
+    publishFileSync(this.#file, `${JSON.stringify({ ...other, version: 1, chosen, used, policy: { ...policyOther, ...policy }, ...(limit !== undefined && { limit }), ...(ceiling !== undefined && { ceiling }), ...(moveOnLimit === false && { moveOnLimit }) })}\n`)
     this.#readAt = statSync(this.#file).mtimeMs
   }
 }

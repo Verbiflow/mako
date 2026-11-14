@@ -4,7 +4,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { resetWords } from "@mako/host/contracts/account-usage"
 import { fallbackOrder, modelFamily, movedLine, stepKey, type FallbackInput } from "@mako/host/contracts/fin-fallback"
-import { childGroup } from "@mako/host/contracts/children"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { AgentCaller } from "@mako/host/contracts/agents"
@@ -132,7 +131,7 @@ async function run(name: string, options: Partial<WorldOptions> & { fin: FinScri
     if (turn.text.includes(FROM_AGENTS)) wakes.push(turn.text)
     return "ok"
   }
-  const world = new AgentsWorld({ root: join(root, name), script, now: clock, moveOnLimit: () => true, catalogs: CATALOGS, order: ["claude", "cursor", "codex", "grok", "opencode", "devin"], ladders: { cursor: [{ id: "full", name: "Full", access: "full" }] }, ...options })
+  const world = new AgentsWorld({ root: join(root, name), script, now: clock, catalogs: CATALOGS, order: ["claude", "cursor", "codex", "grok", "opencode", "devin"], ladders: { cursor: [{ id: "full", name: "Full", access: "full" }] }, ...options })
   const apex = await world.apex(options.apexOn ?? "claude", "auto")
   const started = await world.agents.start(apex.caller, { brief: { objective: "Label the snippets" }, name: "labels", clientKey: "labels", cwd: world.root, ...options.start })
   if ("refused" in started) {
@@ -819,7 +818,7 @@ try {
   console.log("a Stop while a hand-off prepares the next harness: retired, nothing handed off or sent")
 
   // A restart in the middle of a logical turn: the places it ran on are the store's, so it never goes back to one, and
-  // with every step at its limit or run on it stops out of accounts rather than loop.
+  // with every step at its limit or run on it waits for reset rather than loop or stop.
   {
     const held = accounts()
     let finConversation = ""
@@ -849,19 +848,22 @@ try {
     await until("the move to work", () => r.world.launches.some((launch) => launch.conversation === finConversation && launch.account === "work"))
     await until("its turn on work", () => r.finTurns().length === 2)
     await r.world.restart()
-    await until("it to stop out of accounts", () => { const state = r.world.agents.roster(r.apex.conversation)[0]?.child?.state; return state?.kind === "ended" && state.outcome === "stopped" }, 30_000)
+    await until("its exhausted fallback to retain the reset", () => r.finTurns().length === 3 && r.world.live.snapshot(finConversation)?.requests.some(request => request.status === "held" && request.retry?.until === RESET) === true)
+    await r.world.settle(40, 20_000, "ignore")
     const accountsRun = r.world.launches.filter((launch) => launch.conversation === finConversation).map((launch) => launch.account)
     assert.equal(accountsRun.lastIndexOf("personal"), 0, `never back to personal: ${accountsRun.join(", ")}`)
-    const line = r.world.agents.roster(r.apex.conversation)[0]!.child!.moved!
-    assert.match(line, /^Out of accounts until .+: work and personal$/, line)
-    assert.equal(edgeOf(r).closedReason, line, "its stop says why in the same words")
-    const stopped = r.world.agents.roster(r.apex.conversation)[0]!.child!.state!
-    assert.equal(childGroup(stopped), "failed", "its work isn't finished, so it never reads as done")
+    assert.equal(edgeOf(r).closedAt, undefined, "an exhausted fallback does not Stop its reset recovery")
+    assert.equal(r.world.agents.roster(r.apex.conversation)[0]!.child!.state?.kind, "working", "the logical turn stays pending")
+    delete held.claude[1]!.spentUntil
+    r.world.live.wakeDue(RESET + 60_000)
+    await until("it to finish automatically after reset", () => { const state = r.world.agents.roster(r.apex.conversation)[0]?.child?.state; return state?.kind === "ended" && state.outcome === "done" })
+    assert.equal(r.finTurns().length, 4, "one continuation after reset")
+    assert.equal(r.world.launches.filter(launch => launch.conversation === finConversation && launch.account === "personal").length, 1, "reset does not revisit a previous account")
     await r.world.close()
   }
-  console.log("a restart mid-turn: never back to an account the turn ran on, and out of accounts it stops saying so")
+  console.log("a restart mid-turn: never back to an account the turn ran on, and exhausted fallback resumes in place after reset")
 
-  // Without opt-in, existing start admission remains; an established turn waits in place until reset.
+  // Switch off: existing start admission remains; an established turn waits in place until reset.
   {
     const held = accounts()
     held.claude[0]!.spentUntil = RESET

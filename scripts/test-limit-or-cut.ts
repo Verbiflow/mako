@@ -57,7 +57,7 @@ async function fin(name: string, harness: string, first?: (spent: WorldAccount, 
     first(spent, (fail) => turn.world.endWith(turn.conversation, { limit: { resetsAt: RESET }, fail }))
     return ""
   }
-  const world = new AgentsWorld({ root: join(root, name), script, accounts, moveOnLimit: () => true, selected: Object.fromEntries(HARNESSES.map((each) => [each, "default"])), catalogs: CATALOGS, order: [...HARNESSES], refusePrompt: (_conversation, on) => (on === harness ? refusing.words : undefined) })
+  const world = new AgentsWorld({ root: join(root, name), script, accounts, selected: Object.fromEntries(HARNESSES.map((each) => [each, "default"])), catalogs: CATALOGS, order: [...HARNESSES], refusePrompt: (_conversation, on) => (on === harness ? refusing.words : undefined) })
   const apex = await world.apex(harness, "auto")
   const started = await world.agents.start(apex.caller, { brief: { objective: "Label the snippets" }, harness, name: "labels", clientKey: "labels", cwd: world.root })
   assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
@@ -91,7 +91,6 @@ async function outOfAccountsLate(name: string, harness: string): Promise<void> {
   const world = new AgentsWorld({
     root: join(root, name),
     script,
-    moveOnLimit: () => true,
     accounts: { [harness]: held },
     selected: { [harness]: "personal" },
     catalogs: { [harness]: CATALOGS[harness]! },

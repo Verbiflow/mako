@@ -390,7 +390,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
         }))
       },
       accountContinuation: (harness) => host.liveDrivers.get(harness)?.accountContinuation,
-      moveOnLimit: () => deps.finDefaults?.reading().moveOnLimit ?? false,
+      moveOnLimit: () => deps.finDefaults?.reading().moveOnLimit ?? true,
       harnessOrder: async () => {
         const saved = await deps.invoke("mako:harness-order-saved", [])
         return harnessOrder(z.array(z.string()).catch([]).parse(decodeRuntimeValue(saved)), host.profiles.list().map((loader) => loader.provider))

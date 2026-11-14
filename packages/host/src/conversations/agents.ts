@@ -706,7 +706,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.generation = Math.max(1, Math.floor(this.now()))
     const accounts = deps.accounts
     this.moves = accounts && new FinMoves({
-      on: () => deps.moveOnLimit?.() ?? false,
+      on: () => deps.moveOnLimit?.() ?? true,
       accounts,
       ...(deps.connections && { connections: deps.connections }),
       continuation: (harness) => deps.accountContinuation?.(harness),
@@ -3736,9 +3736,17 @@ export class Agents implements AgentOperations, ConversationChildren {
         // An Apex with nowhere to go stays and says so: what waits for it waits, and goes when something can run.
         if (!edge && wait) this.noteMove(mover, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) })
         if (!edge || !wait) return
-        // Every step the person has is at its limit or was run on: the Fin stops saying so, rather than loop.
-        if (!order.spent.length && visited.length === 0) return
         if (stoppedSince() || !this.stillDecided(conversation, thread, wait.id, wait.id)) return
+        if (wait.retry?.cause === "rate-limited") {
+          // No available fallback does not cancel the queue's already-owned reset recovery.
+          moved = store.finishFinMove(thread, this.generation, "retired")
+          this.awaiting.delete(edge.child)
+          this.childMoved(edge, false)
+          hostLog("agents", "a Fin's fallback steps are exhausted; its usage-limit wait stays pending", { op: edge.op, harness })
+          return
+        }
+        // Without a timed retry, existing exhausted-turn reporting still applies.
+        if (!order.spent.length && visited.length === 0) return
         const line = outOfAccountsLine({ harness, ...(from && { account: from.label }) }, order.spent, label, until, now)
         store.rerouteEdge(edge.child, { ...(store.edges().of(edge.child)?.tuned?.rerouted ?? { from: harness }), line })
         moved = store.finishFinMove(edge.child, this.generation, { visited: [placeKey(place)] })

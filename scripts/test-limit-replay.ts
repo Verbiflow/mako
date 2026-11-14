@@ -151,16 +151,24 @@ async function nowhereToGo(harness: string): Promise<void> {
     state.out = true
     world.release(fins.working!)
     world.release(fins.queued!)
-    await until(`${harness}: the Fins out of accounts`, () => NAMES.slice(0, 2).every((name) => world.agents.roster(apex.conversation).find((agent) => agent.title === name || agent.child?.name === name)?.child?.state?.kind === "ended"))
-    await until(`${harness}: their reports held as one`, () => rows(world, apex.conversation).filter((request) => request.status === "held" && request.digest).length === 1 && NAMES.slice(0, 2).every((name) => rows(world, apex.conversation).some((request) => request.digest && request.text.includes(`"${name}"`))))
+    await until(`${harness}: the Fins retain their usage waits`, () => NAMES.slice(0, 2).every((name) => rows(world, fins[name]!).some(request => request.status === "held" && request.retry?.until === reset)))
+    await world.settle(30, 20_000, "ignore")
+    for (const name of ["working", "queued"]) {
+      assert.equal(world.agents.roster(apex.conversation).find(agent => agent.child?.name === name)?.child?.state?.kind, "working", `${harness}: ${name} is pending, not stopped`)
+      assert.equal(reached(world, apex.conversation, name), 0, `${harness}: ${name} has no premature terminal report`)
+    }
     assert.equal(world.live.session(apex.conversation)?.harness, harness, `${harness}: the Apex has nowhere to go, and stays`)
     assert.ok(state.knocks.filter((conversation) => conversation === apex.conversation).length <= 1, `${harness}: no failing try per report: ${state.knocks.length}`)
-    await until(`${harness}: the person told`, () => world.agents.personAsk(apex.conversation) !== undefined)
-    assert.match(world.agents.personAsk(apex.conversation)!.line, /ran out until .*2 Fins have nowhere to go\. .*waiting for/, `${harness}: and what it means`)
+    assert.equal(world.agents.personAsk(apex.conversation), undefined, `${harness}: reset recovery needs no question`)
     state.out = false
     accounts[harness]![0]!.spentUntil = undefined
     passed = reset - clock() + 60_000
     world.live.wakeDue(Date.now() + 60 * 60_000)
+    // Reset first releases the Fins. Their new reports then gather under a separate saved deadline.
+    const gathered = () => rows(world, apex.conversation).find(request => request.status === "held" && NAMES.slice(0, 2).every(name => request.digest?.notices.some(notice => notice.fin?.name === name)))
+    await until(`${harness}: both completed results gathered`, () => gathered() !== undefined)
+    assert.ok(gathered()!.wake, `${harness}: the new digest owns its gathering time`)
+    world.live.wakeDue(gathered()!.wake!.at + 1)
     await until(`${harness}: the first turn after`, () => heardBy(world, apex.conversation).some((prompt) => prompt.text.includes(FROM_AGENTS) && prompt.harness === harness))
     await world.settle(40, 20_000, "ignore")
     for (const name of ["working", "queued"]) assert.equal(reached(world, apex.conversation, name), 1, `${harness}: ${name} was heard once`)
@@ -187,7 +195,7 @@ async function digestFirst(harness: string): Promise<void> {
     if (turn.text.includes("You're fin:")) return turn.world.hold(turn.conversation).then(() => "Report: all labelled.")
     return "Done."
   }
-  const world = new AgentsWorld({ root: join(root, `${harness}-digest`), script, accounts, moveOnLimit: () => true, selected: {}, catalogs: CATALOGS, order: [harness, elsewhere, next] })
+  const world = new AgentsWorld({ root: join(root, `${harness}-digest`), script, accounts, selected: {}, catalogs: CATALOGS, order: [harness, elsewhere, next] })
   try {
     const apex = await world.apex(harness, "full")
     world.say(apex.conversation, "Start the Fins.")
