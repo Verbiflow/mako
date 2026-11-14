@@ -1,5 +1,5 @@
-import { childBackend } from "@mako/host/workspaces/watch-backend"
 import "./lib/scratch-git.mjs"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
 import { Git } from "@mako/git"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import assert from "node:assert/strict"
