@@ -522,7 +522,7 @@ export interface LiveAccess {
   accountSwitchWait(resident: Resident): AccountSwitchWait | undefined
   /** A turn ended: Mako continues it after a dropped connection, or when its next attempt is due after a failure that clears by itself. */
   scheduleAutoContinue(resident: Resident, settled: string): void
-  declineAutoContinue(resident: Resident, keepServiceRetry?: boolean): void
+  declineAutoContinue(resident: Resident, keepProviderWait?: boolean): void
   /** A turn ended; Mako's goal loop decides whether the agent keeps going. */
   goalSettled(resident: Resident, settled: string): void
   /** A turn ended: a child's end is its parent's to hear, and a parent's end delivers what waited for it. */

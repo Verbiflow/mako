@@ -104,9 +104,12 @@ export const STEPS = [
   [33, "npm run test:resume-holds"],
   [36, "npm run test:fin-states"],
   // What comes back: a crash, a recovery or a Fin moved, with its queue kept through SIGKILL.
-  [50, "MAKO_TEST_HARNESSES=claude,codex npm run test:fin-move"],
-  [50, "MAKO_TEST_HARNESSES=cursor,grok npm run test:fin-move"],
-  [50, "MAKO_TEST_HARNESSES=opencode,devin npm run test:fin-move"],
+  [40, "MAKO_TEST_HARNESSES=claude npm run test:fin-move"],
+  [40, "MAKO_TEST_HARNESSES=codex npm run test:fin-move"],
+  [40, "MAKO_TEST_HARNESSES=cursor npm run test:fin-move"],
+  [40, "MAKO_TEST_HARNESSES=grok npm run test:fin-move"],
+  [40, "MAKO_TEST_HARNESSES=opencode npm run test:fin-move"],
+  [40, "MAKO_TEST_HARNESSES=devin npm run test:fin-move"],
   [20, "npm run test:request-holds"],
   [67, "MAKO_TEST_HARNESSES=claude,codex npm run test:wake-queue"],
   [67, "MAKO_TEST_HARNESSES=cursor,grok npm run test:wake-queue"],
@@ -269,6 +272,11 @@ const NEEDS = {
   "test:control-packages": "ffmpeg",
   "test:control-recording-continuous": "ffmpeg",
 }
+/**
+ * Parts of a script `NEEDS` names that don't need it themselves, so a shard that picks only them installs nothing:
+ * test:mcp's parts on the Mac read MCP configurations and computer use, and record nothing (ffmpeg took 31 s there).
+ */
+const NEEDS_NOTHING = [/scripts\/test-mcp\.ts\b/, /scripts\/test-computer-tools\.ts\b/]
 const INSTALL = {
   // Recording reads ffmpeg and ffprobe on PATH; the runner's image has neither.
   ffmpeg: process.platform === "darwin" ? "command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg" : "command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg)",
@@ -360,10 +368,25 @@ function workspaceParts(seconds, command, name) {
 }
 
 /** Every step's parts, each part once: a part two chains share runs in the first. */
+/**
+ * Parts run as several, each with an environment its test reads (`CASES`, `MAKO_TEST_HARNESSES`), so one long test
+ * spreads over shards: test-watch-backend's four cases took 6, 14, 58 and 29 s, one part of 108 to 138 s.
+ */
+const SPLITS = {
+  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=sharedChildAndCrash,lateCanary"],
+}
+
+/** `unit` as the parts `SPLITS` makes of it; a test that doesn't read the variable runs once, as it is. */
+function split(unit) {
+  const ways = SPLITS[unit.command]
+  if (!ways) return [unit]
+  return ways.map((env) => ({ ...unit, command: `${scoped(`${env} `, unit.command)}${unit.command}`, seconds: Math.round(unit.seconds / ways.length) }))
+}
+
 export function units(steps, mac = false) {
   const seen = new Set()
   const own = (unit) => MAC_PARTS.some((rule) => rule.test(unit.command)) === mac
-  const linux = STEPS.flatMap((step) => parts(step))
+  const linux = STEPS.flatMap((step) => parts(step)).flatMap(split)
   return (mac ? [...MAC_STEPS.flatMap((step) => parts(step)), ...linux.filter(own)] : linux.filter(own)).filter((unit) => !seen.has(unit.command) && seen.add(unit.command))
     .map((unit) => (MEASURED[unit.command] === undefined ? unit : { ...unit, seconds: MEASURED[unit.command] }))
 }
@@ -420,7 +443,7 @@ if (!Number.isInteger(shard) || !Number.isInteger(count) || shard < 1 || shard >
 
 const lanes = lanesOf(count).slice((shard - 1) * LANES, shard * LANES).map((lane) => lane.steps)
 const picked = lanes.flat()
-for (const need of new Set(picked.flatMap(({ script }) => (NEEDS[script] ? [NEEDS[script]] : [])))) {
+for (const need of new Set(picked.flatMap(({ script, command }) => (NEEDS[script] && !NEEDS_NOTHING.some((rule) => rule.test(command)) ? [NEEDS[script]] : [])))) {
   console.log(`::group::install ${need}`)
   await runSuite("bash", ["-c", INSTALL[need]], { limitMs: 5 * 60_000, quietMs: 5 * 60_000 })
   console.log("::endgroup::")
@@ -461,12 +484,19 @@ function leave() {
 const results = []
 async function lane(steps) {
   for (const { command, builds, script } of steps) {
-    const began = Date.now()
+    // A part's seconds are its builds' and its own, not a wait for the shard to itself (`ALONE`), which counted once made
+    // test-git-helper read 116 s where it takes 37: `--learn` reads them, and the plan would size shards by the wait.
+    let busy = 0
+    let at = Date.now()
     let code = 0
     for (const each of builds) if ((code = await build(each)) !== 0) break
     let output = ""
     const write = (text) => { output += text }
+    busy += Date.now() - at
+    const waiting = Date.now()
     await enter(ALONE.some((rule) => rule.test(command)))
+    const waited = Math.round((Date.now() - waiting) / 1000)
+    at = Date.now()
     try {
       if (code === 0) code = await runSuite("bash", ["-c", command], { limitMs: STEP_MS, quietMs: QUIET_MS, write })
     } finally {
@@ -474,8 +504,8 @@ async function lane(steps) {
     }
     const evidence = code !== 0 ? ON_FAILURE[script] : undefined
     if (evidence) await runSuite("bash", ["-c", evidence], { limitMs: 3 * 60_000, quietMs: 3 * 60_000, write })
-    const seconds = Math.round((Date.now() - began) / 1000)
-    console.log(`::group::${command}\n${output}::endgroup::\n${code === 0 ? "passed" : "FAILED"}: ${command} in ${seconds} s`)
+    const seconds = Math.round((busy + Date.now() - at) / 1000)
+    console.log(`::group::${command}\n${output}::endgroup::\n${code === 0 ? "passed" : "FAILED"}: ${command} in ${seconds} s${waited ? `\n(it waited ${waited} s for its shard to itself)` : ""}`)
     results.push({ command, code, seconds })
   }
 }
