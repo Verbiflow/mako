@@ -18,6 +18,7 @@ import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, type AdjustHooks, type MoveLedger, type MovePlan } from "./worktree-move.js"
 import type { MoveHaste, MoveOutcome, MoveShares } from "../contracts/workspace-moves.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { mapLimit } from "../base/map-limit.js"
 import { githubRepositoryUrl } from "../contracts/cloud-threads.js"
 import { fillWorktree, ProjectMissingError, reattachWorktree, workingCheckout } from "./worktree-reattach.js"
 import { HEAD_MARKER, INDEX_MARKER, watchGitMarkers, type GitDirWatch } from "./git-dir-watch.js"
@@ -256,18 +257,6 @@ class SharedPasses<T> {
     this.running = pass
     return pass
   }
-}
-
-/** `map` with at most `limit` running at once, results in order. */
-async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = []
-  // One iterator shared by every worker: each takes the next value as it frees up.
-  const queue = values.entries()
-  const worker = async () => {
-    for (const [index, value] of queue) results[index] = await map(value)
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, worker))
-  return results
 }
 
 /**
@@ -730,7 +719,7 @@ export class ThreadWorktreeService {
       if (!names) skipped.set(repoRoot, names = (this.setup?.recipe(repoRoot) ?? Promise.resolve(undefined)).then(outputNames, () => []))
       return names
     }
-    const detailed = await mapLimited([...worktrees, ...loose.values()], 4, async (worktree): Promise<WorktreeDetail> => {
+    const detailed = await mapLimit([...worktrees, ...loose.values()], 4, async (worktree): Promise<WorktreeDetail> => {
       const [status, landing, users, bytes] = await Promise.all([
         this.git.output(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => null),
         this.landing(worktree),
@@ -741,7 +730,7 @@ export class ThreadWorktreeService {
       return { ...worktree, changes: status ? status.split("\n").length : 0, held, landing, users, bytes }
     })
     const spares = await this.spares.recorded()
-    const spareBytes = await mapLimited(spares, 4, async (spare) => ownBytes(spare.path, await outputsOf(spare.repoRoot)))
+    const spareBytes = await mapLimit(spares, 4, async (spare) => ownBytes(spare.path, await outputsOf(spare.repoRoot)))
     const known = spareBytes.filter((bytes) => bytes !== null)
     return { worktrees: detailed, spares: { count: spares.length, bytes: known.length ? known.reduce((sum, bytes) => sum + bytes, 0) : null } }
   }
@@ -862,7 +851,7 @@ export class ThreadWorktreeService {
       if (!known) facts.set(repoRoot, known = this.repositoryFacts(repoRoot, true))
       return known
     }
-    await mapLimited(due, 6, async (worktree) => {
+    await mapLimit(due, 6, async (worktree) => {
       this.staleSummaries.delete(worktree.path)
       this.indexOnly.delete(worktree.path)
       this.statuses.delete(worktree.path)
@@ -974,7 +963,7 @@ export class ThreadWorktreeService {
       return JSON.stringify(pull ?? null) === JSON.stringify(held.summary.pull ?? null) ? held.summary : undefined
     }
     // Nobody waits on a pass as it's made (windows ask for it): its reads go behind every other (`Git.idleOutput`).
-    const summaries = await mapLimited(worktrees, 6, async (worktree) => {
+    const summaries = await mapLimit(worktrees, 6, async (worktree) => {
       const held = await current(worktree)
       if (held) return held
       // An event while it's read marks it again. One it heard reads its status afresh: a turn's edits leave the index
@@ -1803,14 +1792,14 @@ export class ThreadWorktreeService {
     }
     onStep?.("checkout")
     const { branch } = receipt
-    await mapLimited(membersOf(receipt), 4, async (member) => {
+    await mapLimit(membersOf(receipt), 4, async (member) => {
       if (!(await this.git.succeeds(member.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])))
         await this.git.output(member.repoRoot, ["branch", "--no-track", branch, member.base])
     })
     const spare = existsSync(receipt.path) ? undefined : await this.fromSpare(receipt)
     await mkdir(receipt.path, { recursive: true, mode: 0o700 })
     await writeFile(join(receipt.path, PROJECT_CHECKOUT_FILE), `${JSON.stringify({ project: source })}\n`, { mode: 0o600 })
-    await mapLimited(membersOf(receipt), 4, async (member) => {
+    await mapLimit(membersOf(receipt), 4, async (member) => {
       if (existsSync(join(member.path, ".git"))) {
         // A start cut short while placing a spare: its repository may still have the worktree where the spare was, and kept.
         if (!spare) {
