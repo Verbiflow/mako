@@ -74,8 +74,8 @@ try {
       assert.deepEqual(conversation(await harness.provider(laptopHome).read(arrived.file.path)), original, `${harness.name}: the same conversation`)
       console.log(`  ${harness.name.padEnd(8)} up ${line(up)}   down ${line(down)}   restore ${ms(restoreMs)}`)
     } finally {
-      machine.close()
-      laptop.close()
+      await machine.close()
+      await laptop.close()
     }
   }
 
@@ -107,7 +107,7 @@ try {
       await capture()
       turns.push(await sync.push("codex", source.ref.nativeId))
     }
-    store.close()
+    await store.close()
     const times = turns.map((report) => report.ms)
     console.log(`A turn's push (30 turns, ${kib(median(turns.map((report) => report.bytes)))} each): median ${ms(median(times))}, p90 ${ms(p90(times))}, ${median(turns.map((report) => report.requests))} requests`)
   }
@@ -144,8 +144,8 @@ try {
           const mbps = (report: SyncReport) => `${((report.bytes / 1024 / 1024) / Math.max(report.ms / 1000, 0.001)).toFixed(1)} MiB/s`.padStart(11)
           console.log(`  ${harness.name.padEnd(8)} ${(captured.newBytes / 1024 / 1024).toFixed(1).padStart(7)} MiB captured ${ms(captureMs)}   up ${line(up)} ${mbps(up)}   down ${line(down)} ${mbps(down)}`)
         } finally {
-          machine.close()
-          laptop.close()
+          await machine.close()
+          await laptop.close()
         }
       }
     }

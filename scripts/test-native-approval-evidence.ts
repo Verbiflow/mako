@@ -177,6 +177,6 @@ try {
       assert.equal(owner.snapshot(id)?.permissions.length, 0, "journal reopen retains external resolution without a local receipt")
 
       console.log(`PASS ${provider}: exact evidence, fresh callbacks, replacement connection, journal reopen, no replay, unanswered deduplication and correction`)
-    } finally { settle.resolve(); owner.stop() }
+    } finally { settle.resolve(); await owner.stop() }
   }
 } finally { rmSync(root, { recursive: true, force: true }) }

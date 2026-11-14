@@ -91,7 +91,9 @@ function fixture() {
     setMode: async () => {},
   }
   const journals = join(root, "conversations")
-  const host = () => new LiveConversations({
+  const owners = new Set<LiveConversations>()
+  const host = () => {
+    const owner = new LiveConversations({
     appPath: root,
     root: journals,
     driver: () => driver,
@@ -110,8 +112,14 @@ function fixture() {
     historyAsOf: async (at, asOf) => at === native.at ? native.captured.findLast((capture) => capture.at <= asOf)?.page ?? null : null,
     nativePath: (identity) => identity.harness === harness && identity.nativeId === "native-1" ? native.at : undefined,
     resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
-  })
-  return { root, path, journals, native, starts, sent, events, host, cleanup: () => rmSync(root, { recursive: true, force: true }) }
+    })
+    owners.add(owner)
+    return owner
+  }
+  return { root, path, journals, native, starts, sent, events, host, cleanup: async () => {
+    for (const owner of owners) await owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  } }
 }
 
 /** Imported, held, and opened again by the next host: the history comes from the session, the journal holds none of it. */
@@ -152,12 +160,12 @@ async function dropsAndReadsBack() {
     await second.stop()
     console.log("PASS: dropped on hold, read back on load, drain waits for it")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
 /** The page is written back the moment the live blocks move past what the session covered. */
-function materializesWhenPartial() {
+async function materializesWhenPartial() {
   const f = fixture()
   const id = randomUUID()
   try {
@@ -191,7 +199,7 @@ function materializesWhenPartial() {
     journal.close()
     console.log("PASS: written back when coverage goes partial or seeded, dropped when covered again")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -257,7 +265,7 @@ async function keepsRows() {
     await waitFor(() => rows() === grown.entries.length, "the rows are written ahead")
     // Let go by the host, the compaction drops them off its thread.
     const reclaims = new JournalReclaims()
-    reopened.close((path) => { void reclaims.reclaim(path) })
+    await reopened.close((path) => reclaims.reclaim(path))
     await reclaims.settled()
     assert.equal(rows(), 0, "the compaction drops rows the base row doesn't name")
 
@@ -284,7 +292,7 @@ async function keepsRows() {
     assert.deepEqual(new LiveJournal(f.journals, id).read()!.base, longest, "and reads back the same")
     console.log("PASS: the copy is kept an entry a row, written as it changes, ahead of a turn, and read from a whole copy too")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -313,7 +321,7 @@ async function staleViewThenRefresh() {
     await second.stop()
     console.log("PASS: stale view first, this build's read after")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -333,7 +341,7 @@ async function readsGrowth() {
     await second.stop()
     console.log("PASS: growth outside Mako is read back")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -363,7 +371,7 @@ async function followsMovedSession() {
     await second.stop()
     console.log("PASS: a session its harness moved is read where it is now")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -384,6 +392,7 @@ async function settlesMovedCopy() {
     f.native.hold = true
     const second = f.host()
     const settled = await second.settleHistoryCopies(0)
+    await second.journalsCompacted()
     assert.equal(settled.moved, 1, JSON.stringify(settled))
     assert.equal(f.native.holds.at(-1), f.native.at, "the session is held where it is now")
     assert.equal(copiedBaseBytes(f.journals, id), 0)
@@ -394,7 +403,7 @@ async function settlesMovedCopy() {
     await third.stop()
     console.log("PASS: the sweep drops a copy whose session moved")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -452,7 +461,7 @@ async function sweepsAgain() {
     await host.stop()
     console.log("PASS: the sweep retries a refused hold, moves a conversation that went on in two sessions, and skips what keeps its copy for its own reason")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -493,7 +502,7 @@ async function remembersCopyOnly() {
     await host.stop()
     console.log("PASS: a copy-only session keeps its copy, and the sweep asks again only once its session changes")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -541,7 +550,7 @@ async function spansThroughRewording() {
     await host.stop()
     console.log("PASS: an event a newer decoder words otherwise doesn't keep a copy, and a copy kept for its session's turns is remembered until the session changes")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -566,7 +575,7 @@ async function unreadable() {
     await second.stop()
     console.log("PASS: unreadable history is shown and doesn't block messages")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -627,7 +636,7 @@ async function spansSessions() {
     await lost.stop()
     console.log("PASS: a conversation that went on in two sessions names a span of the first, proven when held, read back while the session begins so, else from Mako's records")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -648,12 +657,12 @@ async function keepsWithoutHold() {
     await second.stop()
     console.log("PASS: a session the record store doesn't hold keeps its copy")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
 await dropsAndReadsBack()
-materializesWhenPartial()
+await materializesWhenPartial()
 await keepsRows()
 await staleViewThenRefresh()
 await readsGrowth()

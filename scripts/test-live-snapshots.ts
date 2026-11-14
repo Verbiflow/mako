@@ -206,7 +206,7 @@ try {
     "PASS: repeated command receipt and real fork-journal failure preserve current files"
   )
 
-  owner.stop()
+  await owner.stop()
   owner = new LiveConversations(dependencies)
   assert.equal(
     owner.snapshot(id)?.requests[0].snapshots?.after?.kind,
@@ -275,7 +275,7 @@ try {
 
   // A checkpoint held past the deadline: the turn goes without it, says so, and takes it when it lands.
   {
-    owner.stop()
+    await owner.stop()
     owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200 })
     const lateId = randomUUID(), lateRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: lateId })
@@ -307,7 +307,7 @@ try {
     console.log("PASS: a checkpoint held past the deadline lets the turn go; held late, it is never the turn's before, and a rewind to it refuses")
   }
 } finally {
-  owner.stop()
+  await owner.stop()
   snapshots.close()
   rmSync(root, { recursive: true, force: true })
 }

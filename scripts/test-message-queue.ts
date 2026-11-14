@@ -168,7 +168,7 @@ try {
     "Live queue: pause across completion, edited dispatch, stale-edit and dispatch races, durable removal and journal rollback passed"
   )
 } finally {
-  owner.stop()
+  await owner.stop()
 }
 
 let externallyBusy = true

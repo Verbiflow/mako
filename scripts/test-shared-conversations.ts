@@ -385,7 +385,7 @@ await import(${JSON.stringify(import.meta.resolve("./fixtures/shared-conversatio
   router.dispose()
   desktopHost?.close()
   ownerHost?.close()
-  owner.stop()
+  await owner.stop()
   ownerMemory.close()
   desktopMemory.close()
   rmSync(root, { recursive: true, force: true })

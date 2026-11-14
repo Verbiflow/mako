@@ -83,9 +83,9 @@ async function run() {
     console.error(error)
     process.exitCode = 1
   } finally {
-    owner.stop()
+    await owner.stop()
     threads.stop()
-    git.close()
+    await git.close()
     await writeFile(join(root, 'result.json'), JSON.stringify(report, null, 2))
     console.log(`Catalog capture evidence: ${root}/result.json`)
   }
