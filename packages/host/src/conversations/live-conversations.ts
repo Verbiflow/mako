@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import { statSync } from "node:fs"
 import { join } from "node:path"
 import { Admission } from "../base/admission.js"
+import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { disconnectedContext } from "../base/execution-context.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -856,6 +857,9 @@ export class LiveConversations {
     actor?: Actor,
     marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants" | "notification"> = {}
   ): LiveRequest {
+    // Settings may finish resolving after stop cleared the residents. A replay's earlier admission may be durable;
+    // callers must read its receipt from the next host under the same ID, not treat this as a definitive refusal.
+    if (this.records.stopping()) throw new RuntimeDisconnectedError(true, id)
     this.admission.assert()
     const resident = this.records.require(id)
     if (resident.rewinding)
