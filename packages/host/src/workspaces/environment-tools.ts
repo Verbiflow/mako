@@ -161,6 +161,12 @@ interface Deps {
   history?: FileHistory
   freeMemory?: () => Promise<{ freeBytes: number; totalBytes: number } | undefined>
   settleMs?: number
+  /**
+   * How long app_status waits for the file system's history before it says nothing of writes through links
+   * (`LINK_WRITES_WAIT_MS`). A test that asserts on what the history says gives it room, so a loaded machine's slow
+   * read isn't read as "nothing to say".
+   */
+  linkWritesWaitMs?: number
   lineMs?: number
   leaveMs?: number
   now?: () => number
@@ -660,7 +666,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const writtenText = (paths: string[]) => (paths.length > 8 ? `${paths.slice(0, 8).join(", ")} and ${paths.length - 8} more` : paths.join(", "))
   const linkWritesSummary = async (app: AppKey, read: Read, checkout: string) => {
     if (read.kind !== "ready" || !linkMarks.has(app) || !(await appUp(app))) return undefined
-    const written = await Promise.race([linkWrites(app), new Promise<undefined>((settle) => setTimeout(() => settle(undefined), LINK_WRITES_WAIT_MS).unref())])
+    const written = await Promise.race([linkWrites(app), new Promise<undefined>((settle) => setTimeout(() => settle(undefined), deps.linkWritesWaitMs ?? LINK_WRITES_WAIT_MS).unref())])
     if (written?.lost && !written.paths.length) return `Since this app came up, macOS's file-change history lost events in the main checkout (${written.root}), so whether anything wrote through the links isn't known.`
     if (!written?.paths.length) return undefined
     const here = written.root === checkout
