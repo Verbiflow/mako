@@ -135,7 +135,7 @@ export interface WorktreeWanted {
   base?: string
 }
 /** A repository's recent pull requests, newest first; null when GitHub can't answer. */
-type PullsOf = (repoRoot: string) => Promise<WorktreeBranchPull[] | null>
+type PullsOf = (repoRoot: string, liveHeads?: readonly string[]) => Promise<WorktreeBranchPull[] | null>
 
 export interface PreparedWorktree {
   /** Where the conversation runs: the worktree, or the same subfolder in it the Thread was started from. */
@@ -402,6 +402,7 @@ export class ThreadWorktreeService {
     conversations?: CheckoutConversations,
     ledger: () => MoveLedger | undefined = () => undefined,
     workingFolders: () => Promise<string[]> = async () => [],
+    pullsVisible: () => boolean = () => true,
   ) {
     this.git = git
     this.root = root
@@ -413,6 +414,7 @@ export class ThreadWorktreeService {
     this.borrowing = setup?.borrowing ?? CheckoutBorrowing.inMemory(git)
     this.conversations = conversations
     this.ledger = ledger
+    this.pullsVisible = pullsVisible
     this.workingFolders = workingFolders
     this.starts = new WorktreeStarts(git)
     this.spares = new WorktreeSpares(git, root, (repoRoot) => this.projectFolder(repoRoot), setup)
@@ -958,7 +960,11 @@ export class ThreadWorktreeService {
     const now = Date.now()
     // Pull requests are read at most once a minute a repository (`pullsIn`); one that changed is the worktree's event too.
     const pulls = new Map<string, WorktreeBranchPull[] | null>()
-    for (const repoRoot of new Set(worktrees.map((worktree) => worktree.repoRoot))) pulls.set(repoRoot, await this.pullsIn(repoRoot, pullsOf))
+    for (const repoRoot of new Set(worktrees.map((worktree) => worktree.repoRoot))) {
+      const tips = (await factsOf(repoRoot)).tips
+      const heads = await Promise.all(worktrees.filter(worktree => worktree.repoRoot === repoRoot).map(worktree => worktreeHead(worktree.path, tips)))
+      pulls.set(repoRoot, await this.pullsIn(repoRoot, pullsOf, heads.filter((head): head is string => head !== undefined)))
+    }
     const current = async (worktree: ThreadWorktree) => {
       const held = this.heldSummaries.get(worktree.path)
       if (!held || this.staleSummaries.has(worktree.path) || now - held.at > SUMMARY_BACKSTOP_MS) return undefined
@@ -1048,11 +1054,15 @@ export class ThreadWorktreeService {
     return (this.pullsRead.get(repoRoot) ?? []).filter((pull) => pull.branch === branch)
   }
 
-  private pullsIn(repoRoot: string, pullsOf: PullsOf | undefined) {
+  private readonly pullsVisible: () => boolean
+
+  private pullsIn(repoRoot: string, pullsOf: PullsOf | undefined, liveHeads: readonly string[] = []) {
+    // Local file and Thread events still update summaries with no window; GitHub waits for a viewer.
+    if (!this.pullsVisible()) return Promise.resolve(this.pullsRead.get(repoRoot) ?? null)
     const now = Date.now()
     const cached = this.branchPulls.get(repoRoot)
     if (cached && now - cached.at < BRANCH_PULLS_EVERY_MS) return cached.pulls
-    const pulls = (pullsOf?.(repoRoot) ?? Promise.resolve(null)).catch(() => null)
+    const pulls = (pullsOf?.(repoRoot, liveHeads) ?? Promise.resolve(null)).catch(() => null)
     this.branchPulls.set(repoRoot, { at: now, pulls })
     void pulls.then((read) => {
       if (read) this.pullsRead.set(repoRoot, read)
@@ -1064,11 +1074,12 @@ export class ThreadWorktreeService {
     const { into, point } = facts
     const tip = facts.tips.get(worktree.branch) ?? ""
     const from = into ? facts.tips.get(into) : worktree.base
+    const currentHead = await worktreeHead(worktree.path, facts.tips)
     const [status, landing, pulls, head] = await Promise.all([
       this.statusOf(worktree.path, busy, idle),
       this.landing(worktree, facts, idle),
-      this.pullsIn(worktree.repoRoot, pullsOf),
-      worktreeHead(worktree.path, facts.tips),
+      this.pullsIn(worktree.repoRoot, pullsOf, currentHead ? [currentHead] : []),
+      currentHead,
     ])
     const count = (cwd: string, range: string) => (idle ? this.git.idleOutput(cwd, ["rev-list", "--count", range]) : this.git.readOutput(cwd, ["rev-list", "--count", range])).then(Number)
     const aheadRange = into ? `${into}..${worktree.branch}` : `${worktree.base}..${worktree.branch}`

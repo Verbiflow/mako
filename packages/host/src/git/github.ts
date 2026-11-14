@@ -1,7 +1,9 @@
 import { hostCommand } from "../base/host-command.js"
-import { hostFetch } from "../base/host-stopping.js"
+import { hostFetch, hostStopping, type HostStopping } from "../base/host-stopping.js"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { GitHubReads } from "./github-reads.js"
+import { hostLog } from "../base/host-log.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { resolveExecutable } from "../base/executable.js"
 import { MACHINE_GITHUB_ENV } from "../contracts/machine-agent.js"
@@ -37,7 +39,7 @@ async function githubExecutable(): Promise<string> {
 }
 
 /** `env`: added to `gh`'s environment, as on a cloud machine to open a pull request as Mako's App (`MACHINE_GITHUB_AS`). */
-async function gh(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
+async function directGh(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
   const { stdout } = await run(await githubExecutable(), args, {
     cwd,
     timeout: TIMEOUT,
@@ -45,6 +47,32 @@ async function gh(cwd: string, args: string[], env?: Readonly<Record<string, str
     ...env && { env: { ...process.env, ...env } },
   })
   return stdout
+}
+
+// Entries belong to the host that owns the key, not to the process; stopping a host releases its reader.
+const readers = new WeakMap<HostStopping, GitHubReads>()
+function gh(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
+  const host = hostStopping()
+  if (!host) return directGh(cwd, args, env)
+  host.signal.throwIfAborted()
+  let reader = readers.get(host)
+  if (!reader) {
+    reader = new GitHubReads({
+      run: directGh,
+      common: async cwd => (await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, timeout: TIMEOUT })).stdout.trim(),
+      branch: async cwd => (await run("git", ["symbolic-ref", "--short", "HEAD"], { cwd, timeout: TIMEOUT })).stdout.trim(),
+      now: Date.now,
+      trace: (event, kind) => { if (event !== "cached") hostLog("github", event, { kind }) },
+    })
+    readers.set(host, reader)
+  }
+  return reader.run(cwd, args, env)
+}
+
+/** A write needs a fresh preflight; forgetting readings cannot bypass the login's rate-limit gate. */
+export function forgetGitHubReads(): void {
+  const host = hostStopping()
+  if (host) readers.get(host)?.forget()
 }
 
 type GitHubParser<TResult> = (value: JsonValue) => TResult | null
@@ -129,7 +157,7 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
 
   const who = (await machineUser()) ?? (await ghJson(
     cwd,
-    ["api", "user", "--jq", "{login: .login, id: .id}"],
+    ["api", "user"],
     parseGitHubUser
   ))
   const login = who?.login
@@ -575,10 +603,10 @@ export async function listPullHeads(cwd: string): Promise<WorktreePull[] | null>
 }
 
 /** Recent pull requests in any state, newest first, with the head commit and one word for their checks. Null when `gh` can't answer here. */
-export async function listBranchPulls(cwd: string): Promise<WorktreeBranchPull[] | null> {
-  return ghJson(
+export async function listBranchPulls(cwd: string, liveHeads: readonly string[] = []): Promise<WorktreeBranchPull[] | null> {
+  const listed = await ghJson(
     cwd,
-    ["pr", "list", "--state", "all", "--limit", "60", "--json", "number,title,url,headRefName,headRefOid,state,isDraft,statusCheckRollup"],
+    ["pr", "list", "--state", "all", "--limit", "60", "--json", "number,title,url,headRefName,headRefOid,state,isDraft"],
     (value) => {
       if (!Array.isArray(value)) return null
       const pulls: WorktreeBranchPull[] = []
@@ -612,6 +640,20 @@ export async function listBranchPulls(cwd: string): Promise<WorktreeBranchPull[]
       return pulls
     }
   )
+  if (!listed) return null
+  const live = new Set(liveHeads)
+  return Promise.all(listed.map(async pull => {
+    if (!live.has(pull.head)) return pull
+    const reading = await ghJson(cwd, ["pr", "view", String(pull.number), "--json", "headRefOid,statusCheckRollup"], value => {
+      if (!isJsonObject(value)) return null
+      const head = stringValue(value.headRefOid)
+      const checks = withoutSuperseded(parseJsonArray(value.statusCheckRollup, parseRawCheck) ?? []).map(toCheck)
+      return { head, checks }
+    })
+    if (!reading || reading.head !== pull.head) return { ...pull, checks: null }
+    const checks = reading.checks
+    return { ...pull, checks: checks.length === 0 ? null : checks.some(check => check.state === "failed" || check.state === "cancelled") ? "failed" as const : checks.some(check => check.state === "running") ? "running" as const : "passed" as const }
+  }))
 }
 
 export async function listRemoteBranches(git: Git, cwd: string): Promise<string[]> {
@@ -814,9 +856,8 @@ export async function repoAvatar(
   }
 
   try {
-    const url = (
-      await gh(cwd, ["api", `repos/${repo}`, "--jq", ".owner.avatar_url"])
-    ).trim()
+    const url = await ghJson(cwd, ["api", `repos/${repo}`], value => isJsonObject(value) ? stringValue(objectValue(value.owner)?.avatar_url) ?? null : null)
+    if (!url) return undefined
     if (!url.startsWith("https://")) return undefined
     const response = await hostFetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
     if (!response.ok) return undefined
@@ -839,7 +880,7 @@ export async function repoAvatar(
  */
 export async function userAvatar(cwd: string, dir: string): Promise<string | undefined> {
   try {
-    const login = (await gh(cwd, ["api", "user", "--jq", ".login"])).trim()
+    const login = await ghJson(cwd, ["api", "user"], value => isJsonObject(value) ? stringValue(value.login) ?? null : null)
     if (!login) return undefined
     const file = join(dir, `user-${login.replace(/[^\w.-]/g, "-")}.png`)
     try {
@@ -847,7 +888,8 @@ export async function userAvatar(cwd: string, dir: string): Promise<string | und
     } catch {
       // Not cached yet.
     }
-    const url = (await gh(cwd, ["api", "user", "--jq", ".avatar_url"])).trim()
+    const url = await ghJson(cwd, ["api", "user"], value => isJsonObject(value) ? stringValue(value.avatar_url) ?? null : null)
+    if (!url) return undefined
     if (!url.startsWith("https://")) return undefined
     const response = await hostFetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
     if (!response.ok) return undefined

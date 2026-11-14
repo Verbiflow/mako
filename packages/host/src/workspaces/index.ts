@@ -47,7 +47,7 @@ import { declareMoveMethods } from "./move-methods.js"
 import { declarePlanBuildMethods } from "./plan-build-methods.js"
 import { declareCheckoutHeadMethods } from "./checkout-head-methods.js"
 import { declareThreadAppMethods } from "./app-methods.js"
-import { listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "../git/index.js"
+import { forgetGitHubReads, listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "../git/index.js"
 import type { MakoTools } from "../tools/index.js"
 import type { WorkspaceConversations } from "./conversations.js"
 import type { AgentHost } from "./agent-host.js"
@@ -224,7 +224,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
           recipe: (checkout) => projectRecipe(git, checkout, recipes),
           env: (values) => ({ ...commandEnvironment(), ...values }),
         }),
-      } : undefined, deps.conversations, deps.ledger, deps.workingFolders)
+      } : undefined, deps.conversations, deps.ledger, deps.workingFolders, () => deps.subscribed?.on ?? true)
     : null
   // Windows hear the summaries as they change, rather than each asking every half minute. What no event of its own
   // says (a pull request on GitHub, an edit outside a turn) a pass of the host's says, each worktree read only once
@@ -389,6 +389,7 @@ interface SamplerSlot {
 
 /** An agent's tool changed a branch or its pull request, or a worktree went: windows read both again at once. */
 function worktreesChanged(worktrees: Workspaces["worktrees"], emit: (event: HostEvent) => void): void {
+  forgetGitHubReads()
   worktrees?.forgetPulls()
   emit({ type: "worktrees-changed" })
   emit({ type: "github-changed" })
