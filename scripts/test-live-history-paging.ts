@@ -4,10 +4,11 @@ import { mock } from "node:test"
 import { z } from "zod"
 import { setImmediate as tick } from "node:timers/promises"
 import { LiveHistoryReader } from "@mako/host/conversations/live-history-reader"
+import { followHostLog, type HostLogLine } from "@mako/host/base/host-log"
 import { historyJsonChunks } from "@mako/host/contracts/history-pages"
 import type { Entry } from "@mako/sessions/entries"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
-import type { LiveHistoryRead, LiveHistoryPage } from "@mako/host/contracts/live-history"
+import { LiveHistoryReadSchema, type LiveHistoryRead, type LiveHistoryPage } from "@mako/host/contracts/live-history"
 import type { MakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { auditSnapshot, auditId } from "./performance-audit-fixtures"
 
@@ -43,6 +44,61 @@ async function read<T>(reader: LiveHistoryReader, source: LiveSnapshot, input: L
   }
   // SAFETY: this fixture reads the typed source supplied to this reader above.
   return JSON.parse(pieces.join("")) as T
+}
+
+// A rejected cursor must say which retained boundary it crossed, without
+// logging the view token, its entries, or the request body.
+{
+  const source = auditSnapshot(6)
+  source.epoch = "cursor-diagnostic"
+  source.baseCoveredBlocks = 6
+  source.base = { ref: { harness: "fixture", nativeId: "private-native-id", path: "private-path" },
+    start: 10, total: 13, hasEarlier: false,
+    entries: [0, 1, 2].map(n => ({ type: "user", id: `saved-${n}`, text: "private saved content" })) }
+  const reader = new LiveHistoryReader()
+  const view = reader.capture(source)
+  const token = view.history!.token
+  const said: HostLogLine[] = []
+  const stop = followHostLog(line => { if (line.scope === "history") said.push(line) })
+  try {
+    const controls = [
+      { before: { blocks: source.blocks.length + 1, base: 13 }, reason: "blocks-after-end" },
+      { before: { blocks: 5, base: 13 }, reason: "blocks-before-covered" },
+      { before: { blocks: 6, base: 9 }, reason: "base-before-start" },
+      { before: { blocks: 6, base: 14 }, reason: "base-after-end" },
+    ]
+    for (const { before, reason } of controls) {
+      said.length = 0
+      await assert.rejects(read(reader, source, { kind: "earlier", token, before }), /Invalid retained history cursor/)
+      assert.equal(said.length, 1, "one cursor rejection has one diagnostic")
+      assert.deepEqual(said[0]!.fields, {
+        conversation: source.session.id, kind: "earlier", reason,
+        beforeBlocks: before.blocks, beforeBase: before.base,
+        covered: 6, blocks: source.blocks.length, baseStart: 10, baseEnd: 13,
+        revision: source.revision, epoch: source.epoch,
+      })
+    }
+    said.length = 0
+    await assert.rejects(read(reader, source, { kind: "range", token,
+      from: { blocks: 6, base: 13 }, to: { blocks: source.blocks.length + 1, base: 13 } }), /Invalid retained history cursor/)
+    assert.equal(said[0]!.fields?.kind, "range", "a range reports its failing endpoint")
+    assert.equal(said[0]!.fields?.beforeBlocks, source.blocks.length + 1)
+    const serialized = JSON.stringify(said)
+    for (const privateValue of [token, "private saved content", "private-path", "private-native-id"])
+      assert.ok(!serialized.includes(privateValue), "cursor diagnostics contain no private content or view tokens")
+    said.length = 0
+    const valid = await read<LiveHistoryPage>(reader, source, { kind: "earlier", token, before: { blocks: 6, base: 13 } })
+    assert.deepEqual(valid.base!.entries, source.base.entries, "a valid continuation keeps every saved entry")
+    assert.equal(valid.history.before, null)
+    assert.equal(said.length, 0, "a valid continuation is quiet")
+    assert.throws(() => LiveHistoryReadSchema.parse({ kind: "earlier", token, before: { blocks: -1, base: 13 } }))
+    await assert.rejects(reader.read("another-conversation", { kind: "earlier", token, before: { blocks: 6, base: 13 } }, async () => source), /expired/)
+    assert.equal(said[0]!.fields?.why, "it belongs to another conversation", "a foreign view retains its own refusal")
+    reader.released(source.session.id)
+    await assert.rejects(read(reader, source, { kind: "earlier", token, before: { blocks: 6, base: 13 } }), /expired/)
+    assert.equal(said.at(-1)!.fields?.why, "its conversation was let go", "an expired view retains its own refusal")
+  } finally { stop() }
+  console.log("PASS: rejected history cursors name their boundary and read kind without logging content or tokens")
 }
 
 for (const [index, provider] of registeredHarnessIds().entries()) {
