@@ -1039,6 +1039,8 @@ export function installMockBridge() {
       ]
     },
     worktreeAhead: async () => null,
+    snapshotBudget: async () => ({ settings: { mode: "preview", maxBytes: 8 * 1024 ** 3 }, at: Date.now(), payloadBytes: 0, selectedBytes: 0, remainingBytes: 0, untrackedBytes: 0, inventoryKnown: true, entries: [] }),
+    setSnapshotBudget: async settings => ({ settings, at: Date.now(), payloadBytes: 0, selectedBytes: 0, remainingBytes: 0, untrackedBytes: 0, inventoryKnown: true, entries: [] }),
     threadScratch: async () => ({ settings: { mode: "preview", idleDays: 7, kept: [] }, at: Date.now(), everyMs: 3_600_000, entries: [] }),
     setThreadScratch: async (settings) => ({ settings, at: Date.now(), everyMs: 3_600_000, entries: [] }),
     worktreeRetention: async () => ({ settings: { mode: "preview", days: 7, kept: [] }, everyMs: 3_600_000, minimumPassMs: 600_000, repositoryFetches: 0, at: Date.now(), checkouts: [] }),

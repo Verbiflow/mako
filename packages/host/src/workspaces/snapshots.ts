@@ -1,3 +1,5 @@
+import { SnapshotBudget } from "./snapshot-budget.js"
+import type { SnapshotSettlement } from "../contracts/snapshot-budget.js"
 import { createHash, randomUUID } from "node:crypto"
 import {
   existsSync,
@@ -11,6 +13,7 @@ import {
   readFile,
   realpath,
   readdir,
+  rename,
   rm,
 } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -121,6 +124,45 @@ function partId(forkId: string, part: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${"89ab"[Number.parseInt(hex[16]!, 16) % 4]}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
 }
 
+export function expandBudgetSnapshotIds(db: DatabaseSync, ids: readonly string[]): Set<string> {
+  const expanded = new Set(ids)
+  for (const id of ids) {
+    const row = db.prepare("SELECT value FROM groups WHERE id=?").get(id)
+    if (!row) continue
+    for (const part of GroupSchema.parse(JSON.parse(RowSchema.parse(row).value)).parts) expanded.add(part.id)
+  }
+  return expanded
+}
+
+/** The same durable holds used by the host and its read-only storage preview. */
+export function protectedBudgetSnapshots(db: DatabaseSync, activeScopes: readonly string[] = []): Set<string> {
+  const records = budgetSnapshotRecords(db), held = new Set<string>()
+  const groups = db.prepare("SELECT value FROM groups").all().map(row => GroupSchema.parse(JSON.parse(RowSchema.parse(row).value)))
+  for (const record of records) {
+    if (record.retiring || (record.retainUntil ?? 0) > Date.now() || activeScopes.some(scope => overlaps(scope, record.scope))) held.add(record.id)
+  }
+  for (const row of db.prepare("SELECT value FROM restores").iterate()) {
+    const operation = OperationSchema.parse(JSON.parse(RowSchema.parse(row).value))
+    if (operation.state === "applying") {
+      held.add(operation.plan.targetId); held.add(operation.plan.expectedId); held.add(operation.backupId)
+    }
+  }
+  const edges = new Map<string, string[][]>()
+  for (const group of groups) {
+    const parts = group.parts.map(part => part.id)
+    edges.set(group.id, [...edges.get(group.id) ?? [], parts])
+    for (const part of parts) edges.set(part, [...edges.get(part) ?? [], parts])
+  }
+  const queue = [...held]
+  for (let index = 0; index < queue.length; index++) for (const parts of edges.get(queue[index]!) ?? []) for (const part of parts) {
+    if (!held.has(part)) { held.add(part); queue.push(part) }
+  }
+  return held
+}
+export function budgetSnapshotRecords(db: DatabaseSync): SnapshotRecord[] {
+  return db.prepare("SELECT value FROM snapshots").all().map(row => RecordSchema.parse(JSON.parse(RowSchema.parse(row).value)))
+}
+
 /** Submodules nested this deep are taken; deeper ones are left to their own repository. */
 const SUBMODULE_DEPTH = 3
 
@@ -134,6 +176,8 @@ export class WorkspaceSnapshots {
   private readonly orphanBytes = new Map<string, number>()
   private readonly git: Git
   private readonly root: string
+  readonly budget: SnapshotBudget
+  private settlement: () => SnapshotSettlement | Promise<SnapshotSettlement> = () => ({ valid: false, settledIds: [], blockedScopes: [] })
   private readonly retention: SnapshotRetentionPolicy
   /** The watcher's history of file changes, once the workspaces are open: what lets a turn's checkpoint be the last one. */
   private history: FileHistory | undefined
@@ -159,10 +203,50 @@ export class WorkspaceSnapshots {
         ON snapshots (json_extract(value, '$.scope'), json_extract(value, '$.createdAt') DESC, id DESC);
       CREATE TABLE IF NOT EXISTS restores (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, value TEXT NOT NULL);`)
+    this.budget = new SnapshotBudget({
+      root,
+      records: () => this.budgetRecords(),
+      protectedIds: () => this.budgetProtectedIds(),
+      settlement: () => this.settlement(),
+      expand: ids => this.budgetIds(ids),
+      remove: (record, authorised, enabled) => this.removeBudgetRecord(record, authorised, enabled),
+    })
   }
 
   close(): void {
+    this.budget.close()
     this.db.close()
+  }
+
+  followSettlement(reader: () => SnapshotSettlement | Promise<SnapshotSettlement>): void { this.settlement = reader }
+
+  private budgetRecords(): SnapshotRecord[] {
+    return budgetSnapshotRecords(this.db)
+  }
+  private budgetIds(ids: readonly string[]): Set<string> { return expandBudgetSnapshotIds(this.db, ids) }
+  private budgetProtectedIds(): Set<string> {
+    return protectedBudgetSnapshots(this.db, [...[...this.runs.values()].map(run => run.scope), ...this.restoring])
+  }
+  private removeBudgetRecord(expected: SnapshotRecord, authorised: () => Promise<boolean>, enabled: () => boolean): Promise<boolean> {
+    return this.locked(expected.scope, async () => {
+      const record = this.get(expected.id)
+      if (JSON.stringify(record) !== JSON.stringify(expected) || !record.storage || this.budgetProtectedIds().has(record.id)) return false
+      await this.validateRepository(record)
+      const path = join(this.root, record.id), info = await lstat(path, { bigint: true })
+      if (!info.isDirectory() || info.isSymbolicLink() || await realpath(path) !== join(await realpath(this.root), record.id)) throw new Error("Checkpoint ownership changed; eviction was refused.")
+      if (!await authorised()) return false
+      // No await between current settings/record/holds and durable retirement admission.
+      if (!enabled() || JSON.stringify(this.get(record.id)) !== JSON.stringify(record) || this.budgetProtectedIds().has(record.id)) return false
+      this.db.prepare("UPDATE snapshots SET value=? WHERE id=?").run(JSON.stringify({ ...record, retiring: true }), record.id)
+      const retired = join(this.root, `.budget-retiring-${record.id}`)
+      await rename(path, retired)
+      const current = await lstat(retired, { bigint: true })
+      if (current.dev !== info.dev || current.ino !== info.ino || !current.isDirectory() || current.isSymbolicLink()) throw new Error("Checkpoint retirement is unconfirmed; it is retained for review.")
+      await rm(retired, { recursive: true, force: false })
+      this.db.prepare("DELETE FROM snapshots WHERE id=?").run(record.id)
+      for (const [scope, last] of this.lastTaken) if (last.id === record.id) this.lastTaken.delete(scope)
+      return true
+    })
   }
 
   /** Follows the watcher's history, so a turn whose workspace nothing changed in since the last checkpoint takes that one. */
@@ -287,6 +371,7 @@ export class WorkspaceSnapshots {
    */
   private async captureRepository(cwd: string, shared?: ReadonlySet<string>, reuse = false, frozen?: () => void): Promise<WorkspaceSnapshot> {
     const scope = await this.scope(cwd)
+    if ((await this.budget.settings()).mode === "evict" && !this.budget.admit(this.retention.maxSnapshotBytes, "")) await this.budget.run()
     try {
       return await this.locked(scope, async (gitDir) => {
         this.assertNoPending(scope)
@@ -476,6 +561,7 @@ export class WorkspaceSnapshots {
   }
 
   async preview(targetId: string): Promise<RewindPreview> {
+    await this.budget.settings()
     const group = this.group(targetId)
     if (group) return this.previewGroup(group)
     const target = this.get(targetId)
@@ -530,6 +616,7 @@ export class WorkspaceSnapshots {
   }
 
   async restore(input: RewindPlan, complete: () => void): Promise<void> {
+    await this.budget.settings()
     const plan = RewindPlanSchema.parse(input)
     const group = this.group(plan.targetId)
     if (group) return this.restoreGroup(plan, group, complete)
@@ -756,7 +843,9 @@ export class WorkspaceSnapshots {
       .get(id)
     if (!row)
       throw new Error("This workspace checkpoint is no longer available")
-    return RecordSchema.parse(JSON.parse(RowSchema.parse(row).value))
+    const record = RecordSchema.parse(JSON.parse(RowSchema.parse(row).value))
+    if (record.retiring) throw new Error("This checkpoint retirement is unconfirmed; it is retained for review.")
+    return record
   }
   private summary(record: SnapshotRecord): WorkspaceSnapshot {
     return WorkspaceSnapshotSchema.parse(record)
@@ -1136,6 +1225,7 @@ export class WorkspaceSnapshots {
         throw new Error(
           "Checkpoint storage is full. Active turns and recovery checkpoints were retained; no workspace files were changed."
         )
+      if (!this.budget.admit(payloadBytes, id)) throw new Error("The total rewind budget is full. Active, unproven and recovery checkpoints were retained.")
       this.db
         .prepare("INSERT INTO snapshots VALUES (?, ?)")
         .run(id, JSON.stringify(record))
