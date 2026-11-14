@@ -202,6 +202,6 @@ try {
   console.log("PASS: a move staged ahead arrives by proving its checkout unchanged and reading nothing more, lays the newest over what was staged, applies whole when never staged, and never trusts a clone that changed; a machine getting ready pulls the Thread's records, and the stage waits for that pull")
 } finally {
   server.close()
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 }

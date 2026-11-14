@@ -139,6 +139,6 @@ try {
   assert.equal((await discoverRepositories(root, { maxEntries: 1 })).limited, true)
   console.log("Repository discovery: nested roots, Git status, single-repo behavior, worktree markers, excluded trees, symlink cycles and limits passed")
 } finally {
-  gitRunner.close()
+  await gitRunner.close()
   await rm(root, { recursive: true, force: true })
 }

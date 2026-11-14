@@ -261,6 +261,6 @@ try {
 
   console.log("Update dependencies: what the upstream's or the checkout's lockfile lists is installed into Mako's own copy before the build, never the checkout (bumped version, new workspace package), a second build installs nothing, package files are never written, uncommitted changes to them are refused for the checkout as it is and don't stop the upstream's, a hang is stopped with its process group and is the Mac's, a failure says what to run, the CLI installs into the checkout it builds in place, and no install script the build needs is held back")
 } finally {
-  git.close()
+  await git.close()
   await rm(root, { recursive: true, force: true })
 }

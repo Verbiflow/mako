@@ -245,7 +245,7 @@ try {
   assert.equal(residency.asleep(binding), false)
   console.log(`Local Control hibernation: a kept tab, its lease and program state survive hibernate and wake (wake turn ${wakeMs} ms), the old grant is refused, and the sleep limit and close end the session`)
 } finally {
-  owner.stop()
+  await owner.stop()
   await sessions.close().catch(() => {})
   await workers.close().catch(() => {})
   control?.close()
