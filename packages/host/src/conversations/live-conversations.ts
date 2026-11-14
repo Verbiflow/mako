@@ -320,7 +320,7 @@ export class LiveConversations {
         this.autoContinue.schedule(resident, settled)
         this.autoContinue.continueFailed(resident, settled)
       },
-      declineAutoContinue: (resident, keepServiceRetry) => this.autoContinue.decline(resident, keepServiceRetry),
+      declineAutoContinue: (resident, keepProviderWait) => this.autoContinue.decline(resident, keepProviderWait),
       goalSettled: (resident, settled) => this.goals.settled(resident, settled),
       turnSettled: (resident, settled) => this.dependencies.agents?.()?.settled(resident.snapshot.session.id, settled),
       goalObserved: (resident, goal) => this.goals.observe(resident, goal),

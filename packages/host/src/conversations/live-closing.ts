@@ -367,7 +367,7 @@ export class LiveClosing {
         ))
         closing.push(revokeTools(dependencies, bindingId, resident.snapshot.session.id))
       }
-      // In-memory continuation promises go with this host. A service retry is already journaled with its due time,
+      // In-memory continuation promises go with this host. A provider wait is already journaled with its due time,
       // so the next host owns it; stopping this host must not silently cancel the pending work.
       this.access.declineAutoContinue(resident, true)
       const cut = this.cutForNextHost(resident)
