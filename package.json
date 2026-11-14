@@ -240,7 +240,7 @@
     "test:settings-build": "node scripts/test-local-build.mjs",
     "install:mac:local": "node scripts/install-local-mac.mjs",
     "update:local": "node scripts/update-local.mjs",
-    "test:update-local": "node scripts/test-update-local.mjs && node scripts/test-build-cleanup.mjs",
+    "test:update-local": "node scripts/test-pack-archive.mjs && node scripts/test-update-local.mjs && node scripts/test-build-cleanup.mjs",
     "release": "npm run package:mac",
     "test:control-cadence": "tsx --tsconfig tsconfig.app.json scripts/test-control-cadence.ts",
     "test:live-prompt-delivery": "tsx scripts/test-prompt-recovery.ts && tsx --tsconfig tsconfig.app.json scripts/test-request-recovery.ts && tsx scripts/test-live-prompt-delivery.ts && tsx scripts/test-cursor-delivery.ts",

@@ -4,7 +4,7 @@ import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { createPackage } from "@electron/asar"
+import { packArchive } from "./lib/pack-archive.mjs"
 import {
   localMacConfig,
   resolveLocalIdentity,
@@ -74,7 +74,7 @@ if (selected) {
       JSON.stringify(localMacConfig(release, selected).extraMetadata)
     )
     await mkdir(join(contents, "Resources"))
-    await createPackage(payload, join(contents, "Resources/app.asar"))
+    await packArchive(payload, join(contents, "Resources/app.asar"))
     await run("codesign", [
       "--force",
       "--sign",

@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process"
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createPackage, extractFile } from "@electron/asar"
+import { extractFile } from "@electron/asar"
+import { packArchive } from "./lib/pack-archive.mjs"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
 import { buildOf, prepareSource, readCheckoutUncommitted, selectLocalSigner, sweepLocalUpdates, updateLocal, useCheckoutSource } from "./update-local.mjs"
 
@@ -245,7 +246,7 @@ async function app(path, distribution, makoBuild) {
     JSON.stringify({ makoDistribution: distribution, ...(makoBuild && { makoBuild }) })
   )
   await mkdir(join(path, "Contents/Resources"), { recursive: true })
-  await createPackage(input, join(path, "Contents/Resources/app.asar"))
+  await packArchive(input, join(path, "Contents/Resources/app.asar"))
 }
 try {
   // The same updater inspects the old bundle, installs a new archive at that
@@ -257,7 +258,7 @@ try {
   const replacement = await mkdtemp(join(root, "replacement-"))
   await writeFile(join(replacement, "a-padding.txt"), "x".repeat(1000))
   await writeFile(join(replacement, "package.json"), JSON.stringify({ makoDistribution: "local", makoBuild: { id: "replacement" } }))
-  await createPackage(replacement, join(root, "replacement.asar"))
+  await packArchive(replacement, join(root, "replacement.asar"))
   await rename(join(root, "replacement.asar"), archive)
   assert.deepEqual(readLocalAppMetadata(swapped), { makoDistribution: "local", makoBuild: { id: "replacement" } })
   const installed = join(root, "installed.app")
