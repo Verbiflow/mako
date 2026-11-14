@@ -29,7 +29,7 @@ async function compose(root: string, conversation: string, launch: () => Promise
     return z.json().parse(channel === "mako:automations" ? service.list() : service.setEnabled(String(args[0]), Boolean(args[1]), z.string().optional().parse(args[2])))
   } })
   gate.runs.automation = (id, want, ask) => tool.allowed(id, want, ask)
-  return { world, service, gate, tool, close: async () => { service.stop(); git.close(); await world.close() } }
+  return { world, service, gate, tool, close: async () => { service.stop(); await git.close(); await world.close() } }
 }
 
 function fixture() {
@@ -143,7 +143,7 @@ if (process.argv[2] === "--child") {
         await unrecorded.watch(root)
         assert.equal((await unrecorded.fire("one", "manual", "no-ledger")).status, "not-run")
         assert.equal(launches, 1, "missing durable admission fails closed")
-      } finally { unrecorded.stop(); unrecordedGit.close() }
+      } finally { unrecorded.stop(); await unrecordedGit.close() }
     } finally { await current.close() }
     console.log("automation approval: known preflight refusal/restart/concurrent retry, duplicate success, distinct automation and durable admission passed")
   } finally { rmSync(root, { recursive: true, force: true }) }

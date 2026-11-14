@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { cpSync } from "node:fs"
+import { cpSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
@@ -22,10 +22,10 @@ import { longestHold, type LoopHold } from "./lib/loop-hold.ts"
  * then resumes as before.
  *
  * Eight Fins work under an Apex, half cut mid-turn by Mako's exit and half finished, their journals grown to a long
- * day's. The same left state is taken up twice by a fresh host: once at once, as the host did (the yardstick, in this
- * run and on this machine), once as the host does now. The loop's longest hold while resuming in slices must stay
- * under a quarter of the one at once (`TIMES`), and both must resume exactly the same: the same messages sent on, the
- * same turns continued, every Fin's requests in the same states.
+ * day's. Three interleaved pairs of fresh hosts take up copies of that same left state, at once and in slices.
+ * The median of the paired longest-hold ratios must stay under a quarter (`TIMES`), so one preemption cannot set
+ * the limit or alone fail the check. Every pair must resume exactly the same: the same messages sent on, the same
+ * turns continued, every Fin's requests in the same states. Every raw timing and the paired median are printed.
  *
  * And nothing the resume reads is read whole: every conversation it reads in from its journal (`LiveRecords.load` of
  * one not in memory) must have been read in first. A settled Apex whose Fin's report was kept but not yet heard when
@@ -40,6 +40,13 @@ const BLOCKS = 12_000
 const BLOCK_CHARS = 1_500
 /** How many times shorter than the hold at once the longest hold in slices must be. */
 const TIMES = 4
+const SAMPLES = 3
+
+function median(samples: readonly number[]): number {
+  assert.equal(samples.length, SAMPLES)
+  assert.ok(samples.every(sample => Number.isFinite(sample) && sample >= 0))
+  return [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!
+}
 
 const root = testScratch("mako-resume-holds-")
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -226,21 +233,35 @@ try {
   await unheardReport()
   const left = join(root, "left")
   const { fins } = await leftByTheLastHost(left)
-  cpSync(left, join(root, "at-once"), { recursive: true })
-  cpSync(left, join(root, "in-slices"), { recursive: true })
   cpSync(left, join(root, "stopped"), { recursive: true })
-  const atOnce = await takeUp(join(root, "at-once"), fins, false)
-  const inSlices = await takeUp(join(root, "in-slices"), fins, true)
-
-  assert.deepEqual(inSlices.requests, atOnce.requests, "every Fin's requests stand as they did when resumed at once")
-  assert.deepEqual(inSlices.sent, atOnce.sent, "every Fin was sent what it was when resumed at once")
-  const continued = Object.values(atOnce.sent).filter((prompts) => prompts.length > 0).length
-  assert.ok(continued >= FINS / 2, `the Fins the exit cut went on: ${continued} of ${FINS} were sent a message`)
-  console.log("resume timing: " + JSON.stringify({ atOnce: { gap: atOnce.gap, constructedMs: atOnce.constructedMs, resumeMs: atOnce.resumeMs }, inSlices: { gap: inSlices.gap, constructedMs: inSlices.constructedMs, resumeMs: inSlices.resumeMs } }))
-  const limit = atOnce.holdMs / TIMES
-  console.log(`resumed ${FINS} Fins, ${continued} sent on: at once the loop held ${Math.round(atOnce.holdMs)} ms, in slices ${Math.round(inSlices.holdMs)} ms (limit ${Math.round(limit)} ms, a ${TIMES}th of at once)`)
-  assert.ok(inSlices.holdMs < limit, `resuming in slices held the loop ${Math.round(inSlices.holdMs)} ms, not under ${Math.round(limit)} ms, a ${TIMES}th of the ${Math.round(atOnce.holdMs)} ms at once`)
-  await stopMidRead(join(root, "stopped"), fins, atOnce, inSlices.resumeMs)
+  const readings: { atOnce: Taken; inSlices: Taken }[] = []
+  for (let sample = 0; sample < SAMPLES; sample++) {
+    const pair = join(root, `pair-${sample}`)
+    const whole = join(pair, "at-once"), sliced = join(pair, "in-slices")
+    cpSync(left, whole, { recursive: true })
+    cpSync(left, sliced, { recursive: true })
+    // Alternate which host resumes first; every invocation starts from the identical original state.
+    const first = sample % 2 ? await takeUp(sliced, fins, true) : await takeUp(whole, fins, false)
+    const second = sample % 2 ? await takeUp(whole, fins, false) : await takeUp(sliced, fins, true)
+    const atOnce = sample % 2 ? second : first
+    const inSlices = sample % 2 ? first : second
+    assert.deepEqual(inSlices.requests, atOnce.requests, "every Fin's requests stand as they did when resumed at once")
+    assert.deepEqual(inSlices.sent, atOnce.sent, "every Fin was sent what it was when resumed at once")
+    if (readings.length) {
+      assert.deepEqual(atOnce.requests, readings[0]!.atOnce.requests, "each pair takes up the same saved requests")
+      assert.deepEqual(atOnce.sent, readings[0]!.atOnce.sent, "each pair sends the same saved messages")
+    }
+    const continued = Object.values(atOnce.sent).filter((prompts) => prompts.length > 0).length
+    assert.ok(continued >= FINS / 2, `the Fins the exit cut went on: ${continued} of ${FINS} were sent a message`)
+    console.log("resume timing: " + JSON.stringify({ sample, atOnce: { gap: atOnce.gap, constructedMs: atOnce.constructedMs, resumeMs: atOnce.resumeMs }, inSlices: { gap: inSlices.gap, constructedMs: inSlices.constructedMs, resumeMs: inSlices.resumeMs } }))
+    readings.push({ atOnce, inSlices })
+    // takeUp joined both owners' shutdown before their private copies are removed.
+    rmSync(pair, { recursive: true, force: true })
+  }
+  const ratio = median(readings.map(({ atOnce, inSlices }) => inSlices.holdMs / atOnce.holdMs))
+  console.log(`resumed ${FINS} Fins: longest-hold medians ${Math.round(median(readings.map(each => each.atOnce.holdMs)))} / ${Math.round(median(readings.map(each => each.inSlices.holdMs)))} ms; paired median ${(ratio * 100).toFixed(1)}% (under ${100 / TIMES}%)`)
+  assert.ok(ratio < 1 / TIMES, `resuming in slices held the loop a paired median ${(ratio * 100).toFixed(1)}% of at once, not under ${100 / TIMES}%`)
+  await stopMidRead(join(root, "stopped"), fins, readings[0]!.atOnce, median(readings.map(each => each.inSlices.resumeMs)))
   console.log("resume holds: ok")
 } catch (error) {
   console.error(error)

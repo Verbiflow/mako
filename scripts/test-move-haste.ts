@@ -78,6 +78,6 @@ try {
   }
   console.log("PASS: a move with a handoff's deadline waits for the journal until then and reads nothing back; without one it waits for the whole settle and reads back")
 } finally {
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 }

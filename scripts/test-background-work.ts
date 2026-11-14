@@ -314,7 +314,7 @@ function replay(capture: Captured, stopAt?: (message: SDKMessage, index: number)
     assert.ok(stopped?.settledAt)
     console.log(`Roster progress: ${PROGRESS} observations in ${observeMs.toFixed(1)} ms, ${2} batches, ${(observeMs / PROGRESS * 1000).toFixed(0)} µs each`)
   } finally {
-    owner.stop()
+    await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
 }

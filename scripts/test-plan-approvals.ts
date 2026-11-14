@@ -93,7 +93,8 @@ try {
         assert.deepEqual(builds, [], `${scenario}: nothing is recorded built`)
       }
     } finally {
-      owner.close(id)
+      await owner.close(id)
+    await owner.stop()
     }
   }
   console.log("Plan approvals: first answer wins across windows, the loser is told, words reach the driver, and only a confirmed approve records the build")

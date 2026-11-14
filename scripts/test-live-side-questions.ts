@@ -100,8 +100,8 @@ function sideHost(kind: "native" | "fork" | "unavailable") {
       const path = join(root, "journals", String(name))
       try { return [readFileSync(path, "utf8")] } catch { return [] }
     }).join("\n"),
-    dispose() {
-      owner.stop()
+    async dispose() {
+      await owner.stop()
       rmSync(root, { recursive: true, force: true })
     },
   }
@@ -112,7 +112,7 @@ function sideHost(kind: "native" | "fork" | "unavailable") {
   const host = sideHost("native")
   await host.owner.start("test-provider", host.root, { conversationId: host.id })
   await assert.rejects(host.ask("Anything?"), /Send a message first, then ask a side question\./)
-  host.dispose()
+  await host.dispose()
 }
 
 {
@@ -168,7 +168,7 @@ function sideHost(kind: "native" | "fork" | "unavailable") {
   assert.equal(host.owner.snapshot(host.id)?.side, undefined, "close clears the side conversation")
   await waitFor(() => host.closed.length === 1, "the driver to close the side conversation")
   assert.equal(host.closed[0], host.asked[0]!.question.side)
-  host.dispose()
+  await host.dispose()
 }
 
 {
@@ -184,14 +184,14 @@ function sideHost(kind: "native" | "fork" | "unavailable") {
   assert.deepEqual(host.closed, [], "the copy isn't discarded while its call runs")
   host.asked[0]!.answer("400 lines.")
   await waitFor(() => host.closed.length === 1, "the copy discarded once its call ended")
-  host.dispose()
+  await host.dispose()
 }
 
 {
   const host = sideHost("unavailable")
   await host.start()
   await assert.rejects(host.ask("Anything?"), /This agent can't answer side questions\. It has none\./)
-  host.dispose()
+  await host.dispose()
 }
 
 console.log("Live side questions: streaming outside the transcript and journal, follow-ups, one at a time, Stop at once with the next question waiting, failures, close after the call, and the refusals")

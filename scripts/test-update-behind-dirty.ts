@@ -316,6 +316,6 @@ try {
 
   console.log("Behind and dirty: the update says what it builds (upstream commit, how far behind, each uncommitted file and who changed it), builds the upstream clean in its own copy by default with the person's checkout byte-for-byte untouched, runs UPDATE_CHECKS in order with the verdict variable seen by the performance check alone, and says plainly when the checkout's own code fails (build the upstream instead) or the Mac does")
 } finally {
-  git.close()
+  await git.close()
   await rm(root, { recursive: true, force: true })
 }

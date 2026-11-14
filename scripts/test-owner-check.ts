@@ -49,7 +49,7 @@ import { ranOut } from "./lib/ran-out.ts"
 const logged: string[] = []
 followHostLog(({ level, scope, message, fields }) => void logged.push(`${level} ${scope} ${message} ${JSON.stringify(fields ?? {})}`))
 /** What the case under way opened. */
-const opened: Array<() => void> = []
+const opened: Array<() => void | Promise<void>> = []
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-owner-check-")))
 const CWD = join(root, "worktrees", "webhooks")
 const git = new Git()
@@ -251,9 +251,9 @@ async function world(name: string, ownerCheckMs = { check: 10_000, most: 30_000 
     },
     newCloudThread: () => "t-unused",
   })
-  opened.push(() => {
+  opened.push(async () => {
     router.dispose()
-    self().stop()
+    await self().stop()
     threads.close()
   })
   await router.start()
@@ -283,12 +283,12 @@ function scenario(name: string, run: () => Promise<void>): void {
       console.error(logged.slice(from).join("\n"))
       throw error
     } finally {
-      for (const close of opened.splice(0)) close()
+      for (const close of opened.splice(0)) await close()
     }
   })
 }
-after(() => {
-  git.close()
+after(async () => {
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 })
 

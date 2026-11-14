@@ -299,7 +299,7 @@ try {
   assert.equal((await index.grep("hugeneedle", { limit: 100 })).files.some((file) => file.path === "small.txt"), true, "while a small untracked file still is")
   index.close()
 } finally {
-  git.close()
+  await git.close()
   rmSync(scratch, { recursive: true, force: true })
 }
 
