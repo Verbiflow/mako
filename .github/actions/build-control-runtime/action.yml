@@ -1,0 +1,53 @@
+name: Build the control runtime
+description: Run `npm run build:control-runtime` over the compiler's outputs of the newest build of these sources, restored from the cache, so it compiles only what changed since.
+inputs:
+  save:
+    description: Whether this job keeps its outputs for later runs, when no entry holds these exact sources. One job per runner OS saves; the rest only restore.
+    default: "false"
+runs:
+  using: composite
+  steps:
+    # What the outputs are built from: the sources, configurations and manifests of every project the build compiles
+    # (lazy, control, control-runtime, host, client, and what host and client reference), the compiler's version by the
+    # lockfile, and the build's own scripts. Git's tree hashes name them, so a key costs one `git ls-tree`.
+    - id: key
+      shell: bash
+      run: |
+        sources=$(git ls-tree -r HEAD -- package-lock.json scripts/prune-host-output.mjs $(for p in lazy control control-runtime host client sessions git protocol; do echo packages/$p/src packages/$p/tsconfig.json packages/$p/package.json; done) | sha256sum | cut -c1-40)
+        script=$(node -p 'require("./package.json").scripts["build:control-runtime"]' | sha256sum | cut -c1-12)
+        echo "key=control-runtime-${{ runner.os }}-${{ runner.arch }}-node-$(node -p process.versions.node)-${script}-${sources}" >> "$GITHUB_OUTPUT"
+        echo "prefix=control-runtime-${{ runner.os }}-${{ runner.arch }}-node-$(node -p process.versions.node)-${script}-" >> "$GITHUB_OUTPUT"
+    # Any earlier build will do: `tsgo -b` reads each project's build info, compiles the files whose contents changed
+    # (by hash, not by the checkout's new times) and what depends on them, and the prune removes outputs of sources gone.
+    # Cold, the build took 12 to 17 s on every gate shard; over a restored build it compiles what the change touched.
+    - id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          packages/lazy/dist
+          packages/control/dist
+          packages/control-runtime/dist
+          packages/host/dist
+          packages/client/dist
+          packages/sessions/dist
+          packages/git/dist
+          packages/protocol/dist
+          packages/*/tsconfig.tsbuildinfo
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+    - shell: bash
+      run: npm run build:control-runtime
+    - if: inputs.save == 'true' && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          packages/lazy/dist
+          packages/control/dist
+          packages/control-runtime/dist
+          packages/host/dist
+          packages/client/dist
+          packages/sessions/dist
+          packages/git/dist
+          packages/protocol/dist
+          packages/*/tsconfig.tsbuildinfo
+        key: ${{ steps.key.outputs.key }}
