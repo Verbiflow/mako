@@ -31,13 +31,16 @@ export function chunk<Module>(load: () => Promise<Module>) {
       return loaded
     })
     reading = started
-    whenSlow(started, (offline) => {
+    const stopWatching = whenSlow(started, (offline) => {
       // Only the read in hand speaks: one given up for a failure (below) says nothing more, though it still lands.
       if (module || reading !== started) return
       failed = offline
       slow = !offline
       // Offline, it's a failure and given up: the next read (Retry, or back online) starts a new load, not this one.
-      if (offline) reading = undefined
+      if (offline) {
+        reading = undefined
+        stopWatching()
+      }
       told()
     })
     // Not here (offline before the service worker kept it): asked again next time.
