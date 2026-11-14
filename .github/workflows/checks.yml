@@ -102,7 +102,7 @@ jobs:
           fi
           node scripts/ci-changes.mjs < "$RUNNER_TEMP/changed"
 
-  # The tests every pull request runs, on Linux, in 40 shards of about a minute and a half each (`scripts/ci-gate.mjs`, which
+  # The tests every pull request runs, on Linux, in 45 shards of about a minute and a half each (`scripts/ci-gate.mjs`, which
   # lists them with what each checks and how long it takes): the protocol and the cloud runtime, the renderer's and the
   # live state's own suites, orchestration, the decoders and spend, and the npm suites that need no window.
   gate:
@@ -111,7 +111,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -128,7 +128,7 @@ jobs:
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # A display for the suites that open Electron, and no XDG_CONFIG_HOME: the runner points it at its own home,
       # which a scratch-home test rightly refuses to write outside.
-      - run: env -u XDG_CONFIG_HOME xvfb-run -a node scripts/ci-gate.mjs ${{ matrix.shard }} 40
+      - run: env -u XDG_CONFIG_HOME xvfb-run -a node scripts/ci-gate.mjs ${{ matrix.shard }} 45
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
       - if: failure()
@@ -145,6 +145,11 @@ jobs:
     if: github.event_name != 'pull_request' || needs.changes.outputs.macHost == 'true'
     runs-on: macos-15
     timeout-minutes: 25
+    # Two Macs: one alone was the pull request gate's slowest job (3 min), its two lanes 82 s and 111 s of tests.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -155,13 +160,13 @@ jobs:
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
       - run: npm run build:control-runtime
-      - run: node scripts/ci-gate.mjs --mac 1 1
+      - run: node scripts/ci-gate.mjs --mac ${{ matrix.shard }} 2
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: mac-host-evidence
+          name: mac-host-${{ matrix.shard }}-evidence
           path: ${{ runner.temp }}/test-evidence
           if-no-files-found: ignore
 

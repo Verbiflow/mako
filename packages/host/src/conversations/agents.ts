@@ -3565,6 +3565,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A turn cut short continues, by Mako's continuation or the next host's (`LeftTurn.always`), or its Apex hears it didn't.
     if (ended.status === "interrupted" && ended.interruption?.reason !== "stopped") return this.watchCut(conversation)
     if (this.limitMove(edge, conversation, ended, reply)) return
+    if (this.deps.live.snapshot(conversation)?.requests.some(request => request.status === "held" && request.retry?.cause === "rate-limited" && request.continues?.auto && request.continues.requestId === ended.id)) {
+      this.awaiting.delete(edge.child)
+      return this.childMoved(edge, false)
+    }
     if (ended.status === "completed" && this.store()!.finTurn(edge.child)) this.store()!.clearFinTurn(edge.child)
     this.turnReported(edge, conversation, request, ended, reply)
   }
@@ -3732,9 +3736,17 @@ export class Agents implements AgentOperations, ConversationChildren {
         // An Apex with nowhere to go stays and says so: what waits for it waits, and goes when something can run.
         if (!edge && wait) this.noteMove(mover, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) })
         if (!edge || !wait) return
-        // Every step the person has is at its limit or was run on: the Fin stops saying so, rather than loop.
-        if (!order.spent.length && visited.length === 0) return
         if (stoppedSince() || !this.stillDecided(conversation, thread, wait.id, wait.id)) return
+        if (wait.retry?.cause === "rate-limited") {
+          // No available fallback does not cancel the queue's already-owned reset recovery.
+          moved = store.finishFinMove(thread, this.generation, "retired")
+          this.awaiting.delete(edge.child)
+          this.childMoved(edge, false)
+          hostLog("agents", "a Fin's fallback steps are exhausted; its usage-limit wait stays pending", { op: edge.op, harness })
+          return
+        }
+        // Without a timed retry, existing exhausted-turn reporting still applies.
+        if (!order.spent.length && visited.length === 0) return
         const line = outOfAccountsLine({ harness, ...(from && { account: from.label }) }, order.spent, label, until, now)
         store.rerouteEdge(edge.child, { ...(store.edges().of(edge.child)?.tuned?.rerouted ?? { from: harness }), line })
         moved = store.finishFinMove(edge.child, this.generation, { visited: [placeKey(place)] })
@@ -4332,8 +4344,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const messageHold = !busy && this.messageHold(conversation)
     const waiting = this.personWaiting(conversation) ?? (messageHold ? { for: "needs-you" as const, line: messageHold } : undefined)
     const last = held?.requests.filter((request) => request.status !== "queued" && request.status !== "held").at(-1)
+    // A provider reset keeps logical work pending without taking an execution place.
+    const reset = !busy && !waiting ? held?.requests.find(request => request.status === "held" && request.pause !== "stop" && request.retry?.cause === "rate-limited" && request.continues?.auto) : undefined
+    const resetWait = reset?.retry && `${this.deps.harnessLabel(session.harness)}'s usage limit to reset at ${resetWords(reset.retry.until ?? reset.retry.at, this.now())}`
     // A turn that ended on its own Fins' work or its move is still at work, on that.
-    const waits = !busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined
+    const waits = resetWait || (!busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined)
     const working = busy || waits !== undefined
     const workSince = waits ? held?.activityAt : last && (last.dispatchedAt ?? last.createdAt)
     const thread = this.store()?.thread(edge.child)
