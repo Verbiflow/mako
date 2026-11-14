@@ -397,10 +397,13 @@ export function units(steps, mac = false) {
  */
 const MEASURED = JSON.parse(readFileSync(new URL("./ci-gate-times.json", import.meta.url), "utf8"))
 
-/** `steps` in `count` shards, longest first onto the shard with the least so far, each shard in the steps' own order. */
-export function shards(steps, count) {
+/**
+ * `steps` in `count` shards, longest first onto the shard with the least so far, each shard in the steps' own order;
+ * `start` is what each shard holds already.
+ */
+export function shards(steps, count, start = []) {
   // A step is a part here: `[seconds, …]` first.
-  const load = Array.from({ length: count }, () => ({ seconds: 0, picked: [] }))
+  const load = Array.from({ length: count }, (_, at) => ({ seconds: start[at] ?? 0, picked: [] }))
   const order = steps.map((step, index) => ({ step, index })).sort((a, b) => (b.step.seconds || DEFAULT_SECONDS) - (a.step.seconds || DEFAULT_SECONDS) || a.index - b.index)
   for (const { step, index } of order) {
     const lightest = load.reduce((best, shard) => (shard.seconds < best.seconds ? shard : best))
@@ -424,7 +427,19 @@ const listed = mac ? MAC_STEPS : STEPS
  * so two at a time on a 2-vCPU runner take about half as long. A part's output is printed whole when it ends.
  */
 const LANES = Number(process.env.CI_GATE_LANES ?? 2)
-const lanesOf = (count) => shards(units(listed, mac), count * LANES)
+const isAlone = ({ command }) => ALONE.some((rule) => rule.test(command))
+/**
+ * A shard's `ALONE` parts run first, one after another, before either lane starts, and the plan charges their time to
+ * every lane of their shard: placed among the lanes, test-resume-holds waited 61 s for its neighbour to finish and then
+ * held that lane idle for its own 30 s, and its shard took 3 minutes where the plan said 83 s (run 43576192196).
+ * The first lane of each shard lists them, ahead of its own parts.
+ */
+function lanesOf(count) {
+  const all = units(listed, mac)
+  const solo = shards(all.filter(isAlone), count)
+  const lanes = shards(all.filter((unit) => !isAlone(unit)), count * LANES, solo.flatMap(({ seconds }) => Array(LANES).fill(seconds)))
+  return lanes.map((lane, at) => (at % LANES === 0 ? { ...lane, steps: [...solo[at / LANES].steps, ...lane.steps] } : lane))
+}
 if (args[0] === "--plan") {
   const count = Number(args[1])
   const lanes = lanesOf(count)
@@ -444,8 +459,10 @@ if (!Number.isInteger(shard) || !Number.isInteger(count) || shard < 1 || shard >
 /** What a part needs installed first (`NEEDS`), unless `NEEDS_NOTHING` says it needs nothing. */
 const needOf = ({ script, command }) => (NEEDS[script] && !NEEDS_NOTHING.some((rule) => rule.test(command)) ? NEEDS[script] : undefined)
 // A part that needs an install goes last in its lane, so the lane's other parts run while it installs.
-const lanes = lanesOf(count).slice((shard - 1) * LANES, shard * LANES).map((lane) => lane.steps.toSorted((a, b) => Number(Boolean(needOf(a))) - Number(Boolean(needOf(b)))))
-const picked = lanes.flat()
+const planned = lanesOf(count).slice((shard - 1) * LANES, shard * LANES).map((lane) => lane.steps)
+const first = planned.flat().filter(isAlone)
+const lanes = planned.map((steps) => steps.filter((step) => !isAlone(step)).toSorted((a, b) => Number(Boolean(needOf(a))) - Number(Boolean(needOf(b)))))
+const picked = [...first, ...lanes.flat()]
 /**
  * Each install starts at once, beside the parts, and only a part that needs it waits for it: awaited first, apt's
  * ffmpeg (17 to 45 s) held every test of the 20 shards that picked a recording part, and decided pr-gate's time
@@ -525,6 +542,8 @@ async function lane(steps) {
     results.push({ command, code, seconds })
   }
 }
+// The measuring parts first, alone, then the lanes side by side.
+await lane(first)
 await Promise.all(lanes.map(lane))
 
 const failed = results.filter(({ code }) => code !== 0)
