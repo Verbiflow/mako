@@ -49,7 +49,7 @@ import { declareMoveMethods } from "./move-methods.js"
 import { declarePlanBuildMethods } from "./plan-build-methods.js"
 import { declareCheckoutHeadMethods } from "./checkout-head-methods.js"
 import { declareThreadAppMethods } from "./app-methods.js"
-import { readBranchPull, listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "../git/index.js"
+import { listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "../git/index.js"
 import type { MakoTools } from "../tools/index.js"
 import type { WorkspaceConversations } from "./conversations.js"
 import type { AgentHost } from "./agent-host.js"
@@ -247,8 +247,13 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
       }
       return users
     },
-    repository: (worktree, lookup) => worktrees.retirementRepository(worktree, lookup),
-    pull: readBranchPull,
+    repository: (worktree, refresh) => worktrees.retirementRepository(worktree, refresh),
+    fetch: (common) => worktrees.retirementFetch(common),
+    openFiles: async () => {
+      const { stdout, stderr } = await reader.run("lsof", ["-nP", "-F0n", "-u", String(process.getuid?.())], { timeout: 10_000, maxBuffer: 32 * 1024 * 1024 })
+      if (stderr.trim()) throw new Error("Open-file inspection was incomplete.")
+      return stdout.split("\0").map(field => field.replace(/^\n/, "")).filter(field => field.startsWith("n/")).map(field => field.slice(1).replace(/ \(deleted\)$/, ""))
+    },
     remove: async (path) => {
       const member = store.worktrees().find((row) => worktreeCheckout(row) === path)
       if (!member) throw new Error("The checkout is no longer registered.")

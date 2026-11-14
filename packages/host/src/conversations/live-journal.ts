@@ -20,7 +20,7 @@ import {
   PromptAttachmentSchema,
   RequestRetrySchema,
 } from "../contracts/conversation-control.js"
-import { existsSync, mkdirSync, readdirSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
@@ -1464,6 +1464,28 @@ export function storedRequest(root: string, id: string, requestId: string): Live
   } finally {
     db.close()
   }
+}
+
+/** Retirement reads only metadata and pending request rows, never transcript blocks or a writable journal. */
+export function storedRetirementState(root: string, id: string): { finished: boolean; at: number } | undefined {
+  const path = join(root, `${id}.sqlite`)
+  if (!existsSync(path)) return undefined
+  const db = new DatabaseSync(path, { readOnly: true })
+  try {
+    const metadata = metadataRow(db)
+    if (!metadata) return undefined
+    const summary = journalSummary(metadata)
+    let pending = false
+    for (const row of db.prepare(`SELECT value FROM requests WHERE value LIKE '%"status":"queued"%' OR value LIKE '%"status":"held"%' OR value LIKE '%"status":"dispatching"%'`).all()) {
+      const request = LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value))
+      if (request.status === "queued" || request.status === "held" || request.status === "dispatching") pending = true
+    }
+    return {
+      finished: !pending && !summary.hasSessionQuestions && summary.transferWakeAt === undefined &&
+        (summary.session.status === "ready" || summary.session.status === "failed" || summary.session.status === "closed"),
+      at: Math.max(summary.createdAt, statSync(path).mtimeMs, existsSync(`${path}-wal`) ? statSync(`${path}-wal`).mtimeMs : 0),
+    }
+  } finally { db.close() }
 }
 
 /** The bytes of the copy of its history journal `id` keeps; 0 when it keeps none. */

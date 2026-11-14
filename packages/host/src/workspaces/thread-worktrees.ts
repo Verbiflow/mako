@@ -7,7 +7,7 @@ import type { ThreadStore } from "../threads/index.js"
 import type { ThreadId } from "../contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, PROJECT_CHECKOUT_FILE, worktreeCheckout, worktreeSlug } from "../contracts/thread-worktrees.js"
 import type { GitDiff } from "../contracts/git-workspace-search.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeBranchProof, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
+import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { previewDiffs, projectRepositories } from "../git/index.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
@@ -157,7 +157,7 @@ const COUNTED_UNTRACKED = 200
  * uncommitted files, a rebase or merge under way, or a detached HEAD on a
  * commit no branch or tag has. Anything committed on a branch stays with it.
  */
-async function removalBlocker(git: Git, path: string, status?: string): Promise<string | undefined> {
+async function removalBlocker(git: Git, path: string, status?: string, remoteProof = false): Promise<string | undefined> {
   const name = basename(path)
   let changes: string
   let gitDir: string
@@ -172,7 +172,7 @@ async function removalBlocker(git: Git, path: string, status?: string): Promise<
   if (changes) return `${name} has changes that aren't committed. Commit or discard them, then remove the worktree.`
   const underWay = UNDER_WAY.find(([marker]) => existsSync(join(gitDir, marker)))
   if (underWay) return `${name} is in the middle of a ${underWay[1]}. Finish or abort it, then remove the worktree.`
-  if (!(await git.succeeds(path, ["symbolic-ref", "-q", "HEAD"]))) {
+  if (!remoteProof && !(await git.succeeds(path, ["symbolic-ref", "-q", "HEAD"]))) {
     const kept = await git.output(path, ["for-each-ref", "--count=1", "--contains", "HEAD", "--format=%(refname)", "refs/heads", "refs/tags", "refs/remotes"]).catch(() => "")
     if (!kept) return `${name} is on a commit no branch has. Create a branch there, then remove the worktree.`
   }
@@ -1294,24 +1294,23 @@ export class ThreadWorktreeService {
   }
 
   /** Fresh retirement proof. The current worktree HEAD must still be its recorded branch tip. */
-  async retirementRepository(worktree: ThreadWorktree, readPull: (cwd: string, branch: string) => Promise<WorktreeBranchProof | null>): Promise<{ head: string; blocked: string | null; landed: boolean; ignored: string[] }> {
-    const [head, branch, blocked] = await Promise.all([
-      this.git.readOutput(worktree.path, ["rev-parse", "HEAD"]),
-      this.git.readOutput(worktree.path, ["symbolic-ref", "--short", "HEAD"]),
-      this.git.readOutput(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).then((status) => removalBlocker(this.git, worktree.path, status)),
-    ])
-    if (blocked) return { head, blocked, landed: false, ignored: [] }
-    if (branch !== worktree.branch) return { head, blocked: "The recorded branch changed.", landed: false, ignored: [] }
-    // Tracked dependency files are source, never expendable install outputs.
-    const tracked = await this.git.readOutput(worktree.path, ["ls-files", "--", "node_modules", ":(glob)**/node_modules/**"])
-    if (tracked) return { head, blocked: "The repository tracks files inside node_modules.", landed: false, ignored: [] }
-    const into = await this.git.readOutput(worktree.repoRoot, ["symbolic-ref", "--short", "HEAD"])
-    if (branch === into) return { head, blocked: "The checkout uses the project's current branch.", landed: false, ignored: [] }
-    const integrated = await this.git.succeeds(worktree.repoRoot, ["merge-base", "--is-ancestor", head, into])
-    const pull = integrated ? null : await readPull(worktree.repoRoot, branch)
+  /** One bounded, non-interactive fetch per common repository in a retirement pass. */
+  async retirementFetch(common: string): Promise<void> {
+    await fetchQuietly(this.git, common, ["--all", "--prune"])
+  }
+
+  /** Current HEAD is recoverable remotely, even when detached, switched or squash-merged. */
+  async retirementRepository(worktree: ThreadWorktree, refresh: (common: string) => Promise<void>): Promise<{ head: string; blocked: string | null; remote: boolean; ignored: string[] }> {
+    const head = await this.git.readOutput(worktree.path, ["rev-parse", "HEAD"])
+    const blocked = await removalBlocker(this.git, worktree.path, undefined, true)
+    if (blocked) return { head, blocked, remote: false, ignored: [] }
+    const common = await this.git.readOutput(worktree.path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+    await refresh(common)
+    const remotes = (await this.git.readOutput(worktree.path, ["remote"])).split("\n").filter(Boolean)
+    const refs = remotes.length ? await this.git.readOutput(worktree.path, ["for-each-ref", "--contains", head, "--format=%(refname)", ...remotes.map(remote => `refs/remotes/${remote}/`)]) : ""
     const ignored = (await this.git.readOutput(worktree.path, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]))
       .split("\0").slice(0, -1).filter((entry) => !entry.split("/").includes("node_modules"))
-    return { head, blocked: blocked ?? null, ignored, landed: integrated || (pull?.branch === branch && pull.head === head && (pull.state === "closed" || pull.state === "merged")) }
+    return { head, blocked: null, remote: Boolean(refs), ignored }
   }
 
   /** Why the checkout cannot go: live users or work a removal would lose. */

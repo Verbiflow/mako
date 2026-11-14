@@ -466,9 +466,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     subscribed: shell.subscribed,
     emit,
     inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
-    finished: (thread) => late.conversations?.agents?.finishedThreadAt(thread),
+    finished: (thread) => late.conversations?.finishedThreadAt(thread),
     retirementUsers: async (path) => [
-      ...conversationsIn(path, (status) => status !== "closed"),
+      ...(late.conversations?.live.listed() ?? [])
+        .filter(({ session }) => (session.connection === "connected" || session.connection === "starting" || session.status === "running" || session.status === "starting") && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
+        .map(() => "an open provider"),
       ...(await (await shell.terminals.load("worktree retirement")).runningShells())
         .filter((terminal) => terminal.cwd === path || terminal.cwd.startsWith(`${path}/`))
         .map(() => "an open terminal"),
