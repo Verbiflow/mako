@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { test } from "node:test"
+import { mock, test } from "node:test"
 import { MessageChannel } from "node:worker_threads"
 import { execFileSync } from "node:child_process"
 import { once } from "node:events"
@@ -50,6 +50,68 @@ async function follower(writer: AttributionWriter, deps: AttributionDeps) {
     follow() {}, log() {},
   })
 }
+
+test("a turn confirms every repository's journal baseline, shares waits and retries failed preparation", async () => {
+  const root = scratch()
+  const project = join(root, "project")
+  const repos = [join(project, "a"), join(project, "b")]
+  for (const repo of repos) {
+    mkdirSync(repo, { recursive: true })
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo })
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repo })
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repo })
+    writeFileSync(join(repo, "before.txt"), "before\n")
+    execFileSync("git", ["add", "."], { cwd: repo })
+    execFileSync("git", ["commit", "-qm", "base"], { cwd: repo })
+    writeFileSync(join(repo, "before.txt"), "already dirty\n")
+  }
+  const watches: string[] = []
+  let release = () => {}
+  const ready = new Promise<void>(resolve => { release = resolve })
+  const deps = dependencies(root, folder => {
+    if (!repos.includes(folder)) return { ready: Promise.resolve(), close() {} }
+    watches.push(folder)
+    return { ready, close() {} }
+  })
+  const journal = await openAttribution(deps)
+  try {
+    const run = deps.git.run.bind(deps.git)
+    const failed = mock.method(deps.git, "run", async (options: Parameters<Git["run"]>[0]) => {
+      if (options.cwd === project) throw new Error("repository lookup failed")
+      return run(options)
+    })
+    try { await assert.rejects(journal.prepareTurn(project), /repository lookup failed/) }
+    finally { failed.mock.restore() }
+    let acknowledged = false
+    const first = journal.prepareTurn(project).then(result => { acknowledged = true; return result })
+    const second = journal.prepareTurn(project)
+    await until(() => watches.length === 1)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(acknowledged, false, "watch readiness and the baseline hold the acknowledgement")
+    release()
+    assert.deepEqual(await Promise.all([first, second]), ["tracked", "tracked"])
+    await journal.settled()
+    for (const repo of repos) assert.equal(journal.head(repo), execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim())
+    assert.deepEqual(watches, repos, "parallel turns do not install duplicate watchers")
+    assert.equal(journal.status().roots.reduce((sum, item) => sum + item.files, 0), 2, "both repositories' content baselines are committed")
+    assert.equal(await journal.prepareTurn(repos[0]!), "tracked", "a later turn confirms tracking again")
+    const outside = join(root, "outside")
+    mkdirSync(outside)
+    assert.equal(await journal.prepareTurn(outside), "outside", "a non-Git conversation remains supported")
+    const large = join(root, "large-project")
+    for (let i = 0; i < 13; i++) {
+      const repo = join(large, String(i))
+      mkdirSync(repo, { recursive: true })
+      execFileSync("git", ["init", "-q", repo])
+    }
+    await assert.rejects(journal.prepareTurn(large), /holds 13 repositories/, "a refused Git project cannot masquerade as a non-Git folder")
+  } finally {
+    release()
+    await journal.close()
+    deps.jobs.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test("the host opens only committed read connections, even when it owns the journal", async () => {
   const root = scratch()

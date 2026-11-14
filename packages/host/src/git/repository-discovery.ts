@@ -50,7 +50,7 @@ export async function discoverRepositories(root: string, options: { maxDirectori
   return { roots: roots.sort(), limited }
 }
 
-export type ProjectRepositories = { roots: string[] } | { refusal: string }
+export type ProjectRepositories = { roots: string[] } | { refusal: string; reason: "outside" | "limited" }
 
 /**
  * The repositories a project folder that isn't one holds, as its Threads'
@@ -64,9 +64,9 @@ export async function projectRepositories(git: Git, source: string): Promise<Pro
   const found = await discoverRepositories(source)
   const name = basename(source)
   if (!found.roots.length)
-    return { refusal: `${name} isn't in a Git repository and holds none, so it can't have a worktree. Choose Project folder to work in the folder itself.` }
+    return { refusal: `${name} isn't in a Git repository and holds none, so it can't have a worktree. Choose Project folder to work in the folder itself.`, reason: found.limited ? "limited" : "outside" }
   if (found.limited)
-    return { refusal: `${name} holds more folders than Mako looks through, so it reads as a folder of projects. Add the repository you mean as its own project, or choose Project folder.` }
+    return { refusal: `${name} holds more folders than Mako looks through, so it reads as a folder of projects. Add the repository you mean as its own project, or choose Project folder.`, reason: "limited" }
   const kept = new Map<string, { root: string; main: boolean }>()
   for (const root of found.roots) {
     const common = await git.output(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => root)
@@ -76,6 +76,6 @@ export async function projectRepositories(git: Git, source: string): Promise<Pro
   }
   const roots = [...kept.values()].map(({ root }) => root).sort()
   if (roots.length > MAX_PROJECT_REPOSITORIES)
-    return { refusal: `${name} holds ${roots.length} repositories, so it reads as a folder of projects. Add the repository you mean as its own project, or choose Project folder.` }
+    return { refusal: `${name} holds ${roots.length} repositories, so it reads as a folder of projects. Add the repository you mean as its own project, or choose Project folder.`, reason: "limited" }
   return { roots }
 }

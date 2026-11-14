@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
+import { execFileSync, type spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import {
   mkdtempSync,
@@ -17,6 +17,8 @@ import { mock } from "node:test"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
+import { GitHelper } from "@mako/host/git/git-helper"
+import { hostSpawn, closeHostChild } from "@mako/host/base/host-command"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
@@ -24,7 +26,17 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
-const gitRunner = new Git()
+const directGit: string[] = []
+// SAFETY: forwards every overload unchanged, noting only the executable before calling the same host spawner.
+const notingSpawn = ((...args: Parameters<typeof hostSpawn>) => {
+  if (basename(args[0]) === "git") directGit.push(args[0])
+  return hostSpawn(...args)
+}) as typeof spawn
+const helper = new GitHelper({
+  spawn: notingSpawn,
+  close: closeHostChild,
+})
+const gitRunner = new Git({ processes: helper.runner() })
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-snapshots-"))
 const cwd = join(root, "workspace")
@@ -273,6 +285,133 @@ try {
     "PASS: cancellation during baseline capture never dispatches the prompt"
   )
 
+  // A tracked checkout cannot spend its first tool before tracking and a saved content baseline.
+  {
+    owner.stop()
+    const directBefore = directGit.length
+    let tracked = () => {}, save = () => {}
+    const tracking = new Promise<void>(resolve => { tracked = resolve })
+    const saving = new Promise<void>(resolve => { save = resolve })
+    let enteredTracking = false, enteredCapture = false
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 20, prepareTurn: async () => {
+      enteredTracking = true
+      await tracking
+      return "tracked" as const
+    } })
+    const trackedId = randomUUID(), trackedRequest = randomUUID()
+    await owner.start("test", cwd, { conversationId: trackedId })
+    const original = snapshots.beginRun.bind(snapshots)
+    const beginRun = mock.method(snapshots, "beginRun", async (id: string, folder: string, frozen?: () => void) => {
+      enteredCapture = true
+      // Even a frozen callback is insufficient when saving the baseline later fails.
+      frozen?.()
+      await saving
+      return original(id, folder)
+    })
+    const before = sent.length
+    try {
+      owner.submit(trackedId, trackedRequest, "first tool in a new checkout")
+      await new Promise(resolve => setTimeout(resolve, 80))
+      assert.equal(enteredTracking, true, "dispatch asks for confirmed tracking")
+      assert.equal(enteredCapture, false, "the baseline follows the tracking acknowledgement")
+      assert.equal(sent.length, before, "tracking holds provider dispatch")
+      tracked()
+      await until(() => enteredCapture)
+      await new Promise(resolve => setTimeout(resolve, 80))
+      assert.equal(sent.length, before, "neither a frozen callback nor the old deadline bypasses a saved baseline")
+      writeFileSync(file, "already dirty before dispatch")
+      save()
+      await until(() => sent.length === before + 1)
+      const baseline = owner.snapshot(trackedId)?.requests[0].snapshots?.before
+      assert.equal(baseline?.kind, "ready")
+      writeFileSync(file, "first tool changed it")
+      finish(trackedId, "tracked answer")
+      await until(() => owner.snapshot(trackedId)?.requests[0].snapshots?.after?.kind === "ready")
+      assert.equal(directGit.length - directBefore, 0, "turn preparation and capture spawn Git through the helper")
+      const after = owner.snapshot(trackedId)?.requests[0].snapshots?.after
+      assert.ok(baseline?.kind === "ready" && after?.kind === "ready")
+      const comparison = snapshots.compare(snapshots.trees(baseline.snapshot.id, after.snapshot.id))
+      try {
+        const preview = await comparison.preview(basename(file))
+        assert.ok(preview.kind === "files")
+        assert.equal(preview.before, "already dirty before dispatch")
+        assert.equal(preview.after, "first tool changed it")
+      } finally { comparison.close() }
+    } finally {
+      tracked()
+      save()
+      beginRun.mock.restore()
+    }
+    console.log("PASS: confirmed tracking and a saved content baseline precede the first tool")
+  }
+
+  for (const failure of ["tracking", "baseline", "missing-baseline"] as const) {
+    owner.stop()
+    owner = new LiveConversations({ ...dependencies, workspaceSnapshots: failure === "missing-baseline" ? undefined : snapshots, prepareTurn: async () => {
+      if (failure === "tracking") throw new Error("tracking acknowledgement failed")
+      return "tracked" as const
+    } })
+    const failedId = randomUUID(), failedRequest = randomUUID()
+    await owner.start("test", cwd, { conversationId: failedId })
+    const beginRun = failure === "baseline" ? mock.method(snapshots, "beginRun", async () => { throw new Error("baseline failed") }) : undefined
+    const before: number = sent.length
+    try {
+      owner.submit(failedId, failedRequest, "cannot start without coverage")
+      await until(() => owner.snapshot(failedId)?.requests[0].status === "failed")
+      assert.equal(sent.length, before, `${failure} failure never dispatches`)
+      assert.match(owner.snapshot(failedId)?.requests[0].error ?? "", failure === "missing-baseline" ? /baseline service is unavailable/ : new RegExp(`${failure}.*failed`))
+    } finally { beginRun?.mock.restore() }
+  }
+  console.log("PASS: tracking and baseline failures never dispatch a tracked turn")
+
+  {
+    owner.stop()
+    owner = new LiveConversations({ ...dependencies, prepareTurn: async () => "tracked" as const })
+    const stoppedId = randomUUID(), stoppedRequest = randomUUID()
+    await owner.start("test", cwd, { conversationId: stoppedId })
+    let release = () => {}, entered = false
+    const saving = new Promise<void>(resolve => { release = resolve })
+    const original = snapshots.beginRun.bind(snapshots)
+    const beginRun = mock.method(snapshots, "beginRun", async (id: string, folder: string) => {
+      entered = true
+      await saving
+      return original(id, folder)
+    })
+    const before = sent.length
+    try {
+      owner.submit(stoppedId, stoppedRequest, "stop before the baseline saves")
+      await until(() => entered)
+      await owner.cancelRequest(stoppedId, stoppedRequest)
+      release()
+      await until(() => owner.snapshot(stoppedId)?.requests[0].snapshots?.before.kind === "ready")
+      assert.equal(sent.length, before, "saving a stopped turn's baseline cannot dispatch it")
+      assert.equal(owner.snapshot(stoppedId)?.requests[0].status, "interrupted")
+    } finally { release(); beginRun.mock.restore() }
+    console.log("PASS: Stop during a required baseline never sends after it saves")
+  }
+
+  {
+    owner.stop()
+    let release = () => {}, entered = false
+    const tracking = new Promise<void>(resolve => { release = resolve })
+    owner = new LiveConversations({ ...dependencies, prepareTurn: async () => {
+      entered = true
+      await tracking
+      return "tracked" as const
+    } })
+    const stoppedId = randomUUID(), stoppedRequest = randomUUID()
+    await owner.start("test", cwd, { conversationId: stoppedId })
+    const before = sent.length
+    owner.submit(stoppedId, stoppedRequest, "stop before tracking completes")
+    await until(() => entered)
+    await owner.cancelRequest(stoppedId, stoppedRequest)
+    release()
+    await new Promise(resolve => setTimeout(resolve, 80))
+    assert.equal(sent.length, before, "a late tracking acknowledgement cannot resurrect stopped input")
+    assert.equal(owner.snapshot(stoppedId)?.requests[0].status, "interrupted")
+    console.log("PASS: Stop during tracking never sends after its acknowledgement")
+  }
+
   // A checkpoint held past the deadline: the turn goes without it, says so, and takes it when it lands.
   {
     owner.stop()
@@ -308,6 +447,8 @@ try {
   }
 } finally {
   owner.stop()
+  await gitRunner.close()
+  await helper.stop()
   snapshots.close()
   rmSync(root, { recursive: true, force: true })
 }

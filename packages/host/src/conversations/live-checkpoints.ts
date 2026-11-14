@@ -15,7 +15,7 @@ import { join } from "node:path"
 import type { LiveTurnChanges } from "./live-turn-changes.js"
 
 /**
- * How long a turn waits for its checkpoint to hold the workspace before it goes without one. Behind a slow save of the
+ * How long an untracked/non-Git turn waits for its optional checkpoint before it goes without one. Behind a slow save of the
  * last turn's checkpoint, in a checkout under constant builds, a send once waited 127 s. The capture still runs (its run
  * is what the turn's end checkpoints against), but what it holds after the turn went is never the turn's `before`.
  */
@@ -51,7 +51,7 @@ export class LiveCheckpoints {
     run: () => Promise<void>
   ): Promise<void> {
     const snapshots = this.host.dependencies.workspaceSnapshots
-    if (!snapshots) return run()
+    if (!snapshots && !this.host.dependencies.prepareTurn) return run()
     const generation = resident.generation
     return this.prepare(resident, request).then(() => {
       if (
@@ -59,7 +59,7 @@ export class LiveCheckpoints {
         resident.snapshot.requests.find((item) => item.id === request.id)
           ?.status !== "dispatching"
       ) {
-        snapshots.abandonRun(request.id)
+        snapshots?.abandonRun(request.id)
         this.host.drain(resident)
         this.host.residencyChanged(resident)
         return
@@ -87,18 +87,37 @@ export class LiveCheckpoints {
   }
 
   /**
-   * The turn's checkpoint: resolves once it holds the workspace as the turn starts, when its agent may be told, which
-   * for a turn from the last checkpoint is before it's saved (`WorkspaceSnapshots.beginRun`'s `frozen`). The request
-   * says it once it's saved; the agent never waits on that.
+   * Confirm tracking before capturing a Git turn's baseline. Those turns wait until content is saved; outside Git,
+   * the optional checkpoint can still release once frozen or after its deadline.
    */
   private async prepare(
     resident: Resident,
     request: LiveRequest
   ): Promise<void> {
-    const snapshots = this.host.dependencies.workspaceSnapshots
-    if (!snapshots) return
     const release = this.hold(resident)
+    const generation = resident.generation
     this.preparing.add(request.id)
+    try {
+      const tracking = await this.host.dependencies.prepareTurn?.(resident.snapshot.session.cwd)
+      if (tracking !== undefined && (generation !== resident.generation || resident.snapshot.requests.find(item => item.id === request.id)?.status !== "dispatching")) return
+      await this.capture(resident, request, tracking === "tracked")
+    } finally {
+      this.preparing.delete(request.id)
+      release()
+    }
+  }
+
+  private async capture(
+    resident: Resident,
+    request: LiveRequest,
+    required: boolean
+  ): Promise<void> {
+    const snapshots = this.host.dependencies.workspaceSnapshots
+    if (!snapshots) {
+      if (required) throw new Error("The turn's content baseline service is unavailable")
+      return
+    }
+    const release = this.hold(resident)
     const generation = resident.generation
     const conversation = resident.snapshot.session.id
     const began = Date.now()
@@ -148,7 +167,12 @@ export class LiveCheckpoints {
       timer = setTimeout(() => resolve("late"), this.host.dependencies.checkpointWaitMs ?? BEFORE_CHECKPOINT_WAIT_MS)
     })
     try {
-      const outcome = await Promise.race([held, saved, waited])
+      // A tracked turn needs durable content from before its first tool. A frozen callback or a deadline cannot prove it.
+      const outcome = required ? await saved : await Promise.race([held, saved, waited])
+      if (required && generation === resident.generation) {
+        const before = resident.snapshot.requests.find(item => item.id === request.id)?.snapshots?.before
+        if (before?.kind !== "ready") throw new Error(before?.reason ?? "The turn's content baseline was not saved")
+      }
       if (outcome === "late" && heldAt === undefined) {
         // Never a send waiting minutes on its checkpoint: the turn goes, said so, and the capture lands on it if it ends.
         wentAt = Date.now()
@@ -166,7 +190,6 @@ export class LiveCheckpoints {
       }
     } finally {
       clearTimeout(timer)
-      this.preparing.delete(request.id)
       // The turn goes on, steered and stopped as any: what the checkpoint still saves holds only the workspace's own
       // lock, which the turn's end and the next turn's checkpoint wait behind.
       release()

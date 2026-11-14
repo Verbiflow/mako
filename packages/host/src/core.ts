@@ -519,7 +519,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }
     return catalogued
   }
-  if (!fixtureDesk) void openAttribution({
+  const attributionReady = fixtureDesk ? undefined : openAttribution({
     dataRoot: environment.dataRoot,
     userRoot: environment.userRoot,
     defaultDataRoot: environment.defaultDataRoot,
@@ -544,12 +544,19 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       return session && { cwd: session.cwd, harness: session.harness, record: (live?.held(conversation) ?? live?.snapshot(conversation))?.threadPath ?? undefined }
     },
   }).then((attribution) => {
-    if (shell.closing()) void attribution.close()
-    else {
-      late.attribution = attribution
-      late.conversations?.live.journalOpened()
+    if (shell.closing()) {
+      void attribution.close()
+      throw new Error("The host stopped before the record of changes opened")
     }
-  }, (error: Error) => hostWarn("attribution", "the journal could not open; changes aren't attributed this run", { error: error.message }))
+    late.attribution = attribution
+    late.conversations?.live.journalOpened()
+    return attribution
+  }, (error: Error) => {
+    hostWarn("attribution", "the journal could not open; Git turns cannot start untracked", { error: error.message })
+    throw error
+  })
+  // Startup may finish before any turn asks; that turn still receives the failure rather than starting untracked.
+  void attributionReady?.catch(() => {})
   const wake = watchWake(shell.jobs, (source) => {
     hostLog("host", "woke", { source })
     fileEvents.woke()
@@ -1130,6 +1137,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }),
     revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
     rewindWriters: (paths, since) => late.attribution?.rewindWriters(paths, since),
+    prepareTurn: async (cwd) => attributionReady ? (await attributionReady).prepareTurn(cwd) : "outside",
     suspendTools: (bindingId, conversationId) => residency.suspend(bindingId, conversationId),
     settled: (id) => {
       late.readiness?.settled(id)

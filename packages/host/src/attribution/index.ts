@@ -247,6 +247,8 @@ export interface Attribution {
    * divide it; what it holds uncommitted then is journaled as before tracking.
    */
   track(checkout: string): Promise<void>
+  /** Confirm the journal's baseline before a Git turn may run; non-Git folders need no Git baseline. */
+  prepareTurn(checkout: string): Promise<"tracked" | "outside">
   /** The commit the journal measures a repository from; undefined when it isn't tracked. */
   head(repository: string): string | null | undefined
   /** A version the journal keeps. */
@@ -443,6 +445,8 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
   const checkouts = new Map<string, string | null>()
   const repositories = new Map<string, readonly string[]>()
   const resolving = new Map<string, Promise<void>>()
+  /** Simultaneous turns in one checkout share the acknowledgement, never a cached promise from an earlier turn. */
+  const preparing = new Map<string, Promise<"tracked" | "outside">>()
   /** When each repository was last asked to be tracked. */
   const asked = new Map<string, number>()
   const ensure = (root: string) => {
@@ -569,6 +573,25 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
         await journal.writes.track(root)
         asked.set(root, Date.now())
       }
+    },
+    prepareTurn(checkout) {
+      const waiting = preparing.get(checkout)
+      if (waiting) return waiting
+      const prepared = (async (): Promise<"tracked" | "outside"> => {
+        const found = await locate(deps.git, checkout)
+        const project = found ? { roots: [found.root] } : await projectRepositories(deps.git, checkout)
+        if ("refusal" in project && project.reason !== "outside") throw new Error(project.refusal)
+        const roots = "roots" in project ? project.roots : []
+        for (const root of roots) {
+          await journal.writes.track(root)
+          asked.set(root, Date.now())
+        }
+        checkouts.set(checkout, found ? found.root : roots.length ? checkout : null)
+        repositories.set(checkout, roots)
+        return roots.length ? "tracked" : "outside"
+      })().finally(() => preparing.delete(checkout))
+      preparing.set(checkout, prepared)
+      return prepared
     },
     readBack: (checkout, budgetMs) => journal.writes.readBack(checkout, budgetMs),
     head: (repository) => [...view().roots()].find((state) => state.root.path === repository)?.root.head,
