@@ -469,12 +469,19 @@ function leave() {
 const results = []
 async function lane(steps) {
   for (const { command, builds, script } of steps) {
-    const began = Date.now()
+    // A part's seconds are its builds' and its own, not a wait for the shard to itself (`ALONE`), which counted once made
+    // test-git-helper read 116 s where it takes 37: `--learn` reads them, and the plan would size shards by the wait.
+    let busy = 0
+    let at = Date.now()
     let code = 0
     for (const each of builds) if ((code = await build(each)) !== 0) break
     let output = ""
     const write = (text) => { output += text }
+    busy += Date.now() - at
+    const waiting = Date.now()
     await enter(ALONE.some((rule) => rule.test(command)))
+    const waited = Math.round((Date.now() - waiting) / 1000)
+    at = Date.now()
     try {
       if (code === 0) code = await runSuite("bash", ["-c", command], { limitMs: STEP_MS, quietMs: QUIET_MS, write })
     } finally {
@@ -482,8 +489,8 @@ async function lane(steps) {
     }
     const evidence = code !== 0 ? ON_FAILURE[script] : undefined
     if (evidence) await runSuite("bash", ["-c", evidence], { limitMs: 3 * 60_000, quietMs: 3 * 60_000, write })
-    const seconds = Math.round((Date.now() - began) / 1000)
-    console.log(`::group::${command}\n${output}::endgroup::\n${code === 0 ? "passed" : "FAILED"}: ${command} in ${seconds} s`)
+    const seconds = Math.round((busy + Date.now() - at) / 1000)
+    console.log(`::group::${command}\n${output}::endgroup::\n${code === 0 ? "passed" : "FAILED"}: ${command} in ${seconds} s${waited ? `\n(it waited ${waited} s for its shard to itself)` : ""}`)
     results.push({ command, code, seconds })
   }
 }
