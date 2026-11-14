@@ -272,6 +272,11 @@ const NEEDS = {
   "test:control-packages": "ffmpeg",
   "test:control-recording-continuous": "ffmpeg",
 }
+/**
+ * Parts of a script `NEEDS` names that don't need it themselves, so a shard that picks only them installs nothing:
+ * test:mcp's parts on the Mac read MCP configurations and computer use, and record nothing (ffmpeg took 31 s there).
+ */
+const NEEDS_NOTHING = [/scripts\/test-mcp\.ts\b/, /scripts\/test-computer-tools\.ts\b/]
 const INSTALL = {
   // Recording reads ffmpeg and ffprobe on PATH; the runner's image has neither.
   ffmpeg: process.platform === "darwin" ? "command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg" : "command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg)",
@@ -423,7 +428,7 @@ if (!Number.isInteger(shard) || !Number.isInteger(count) || shard < 1 || shard >
 
 const lanes = lanesOf(count).slice((shard - 1) * LANES, shard * LANES).map((lane) => lane.steps)
 const picked = lanes.flat()
-for (const need of new Set(picked.flatMap(({ script }) => (NEEDS[script] ? [NEEDS[script]] : [])))) {
+for (const need of new Set(picked.flatMap(({ script, command }) => (NEEDS[script] && !NEEDS_NOTHING.some((rule) => rule.test(command)) ? [NEEDS[script]] : [])))) {
   console.log(`::group::install ${need}`)
   await runSuite("bash", ["-c", INSTALL[need]], { limitMs: 5 * 60_000, quietMs: 5 * 60_000 })
   console.log("::endgroup::")
