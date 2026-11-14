@@ -77,17 +77,36 @@ if (existing) {
   issue = Number(url.split("/").at(-1))
 }
 
-// The revert, ready: a branch with it, and its pull request where Actions may open one.
+// The revert, ready: a branch with it, and its pull request where Actions may open one. The commit is written as
+// the workflow's env names its author and committer (GIT_AUTHOR_*, GIT_COMMITTER_*), and says it's the watch's own,
+// so a rerun replaces only its own branch, never commits a person pushed there.
+const branch = `revert/${short}`
+const own = `Main-watch: revert of ${sha}`
+const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim()
 let revert
 try {
-  execFileSync("git", ["fetch", "--quiet", "origin", "main"], { stdio: "inherit" })
-  execFileSync("git", ["checkout", "--quiet", "-B", `revert/${short}`, "origin/main"], { stdio: "inherit" })
-  execFileSync("git", ["-c", "user.name=mako-main-watch", "-c", "user.email=actions@github.com", "revert", "--no-edit", sha], { stdio: "inherit" })
-  execFileSync("git", ["push", "--quiet", "--force", "origin", `revert/${short}`], { stdio: "inherit" })
-  try {
-    revert = gh("pr", "create", "--repo", repo, "--draft", "--base", "main", "--head", `revert/${short}`, "--title", `Revert ${short}: ${title}`, "--body", `Reverts ${sha}, which turned main red (#${issue}). Merge it, or close it once a fix lands.`).trim()
-  } catch {
-    revert = `https://github.com/${repo}/compare/main...revert/${short}?expand=1 (Actions may not open pull requests here: open it from this link)`
+  git("fetch", "--quiet", "origin", "main")
+  const existing = git("ls-remote", "--heads", "origin", branch).split(/\s+/)[0]
+  let ours = true
+  if (existing) {
+    git("fetch", "--quiet", "origin", branch)
+    ours = git("log", "-1", "--format=%B", existing).includes(own) && git("rev-list", "--count", `origin/main..${existing}`) === "1"
+  }
+  if (!ours) revert = `\`${branch}\` already holds commits that aren't the watch's; it was left as it is`
+  else {
+    git("checkout", "--quiet", "-B", branch, "origin/main")
+    git("revert", "--no-commit", sha)
+    git("commit", "--quiet", "-m", `Revert ${short}: ${title}`, "-m", `${sha} turned main red (#${issue}).`, "-m", own)
+    git("push", "--quiet", "--force", "origin", branch)
+    try {
+      revert = gh("pr", "create", "--repo", repo, "--draft", "--base", "main", "--head", branch, "--title", `Revert ${short}: ${title}`, "--body", [
+        `Reverts ${sha}, which turned main red (#${issue}). Merge it, or close it once a fix lands.`,
+        "",
+        "This pull request was opened with the workflow's token, which starts no CI. Close and reopen it to run its checks.",
+      ].join("\n")).trim()
+    } catch {
+      revert = `https://github.com/${repo}/compare/main...${branch}?expand=1 (Actions may not open pull requests here: open it from this link)`
+    }
   }
 } catch (error) {
   revert = `no revert branch: ${error instanceof Error ? error.message.split("\n")[0] : String(error)} (a later commit may touch the same lines)`
