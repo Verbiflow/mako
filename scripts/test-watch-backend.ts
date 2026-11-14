@@ -7,6 +7,7 @@ import type { WatchEvent } from "@mako/host/contracts/watcher-child"
 import { childBackend, childHistory, probeDelivery, type FileHistory, type WatchListener } from "@mako/host/workspaces/watch-backend"
 import { WatchReadings } from "@mako/host/workspaces/watch-readings"
 import { FileEventsServiceWatch } from "@mako/host/workspaces/file-events-service"
+import { runCases } from "./lib/cases.ts"
 import { ranOut } from "./lib/ran-out.ts"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-backend-")))
@@ -69,9 +70,18 @@ async function drained(folder: string, watch: ReturnType<typeof recorder>): Prom
   return watch.dropped() > before
 }
 
-try {
-  const kept = join(root, "kept")
-  const removed = join(root, "removed")
+/** A folder of a case's own under this run's root. */
+function caseFolder(name: string): string {
+  const folder = join(root, name)
+  mkdirSync(folder)
+  return folder
+}
+
+/** One child for every watch, ignores applied there, a crash restarts it, unsubscribe is final, a missing root is refused, a dying child is given up. */
+async function sharedChildAndCrash(): Promise<void> {
+  const home = caseFolder("crash")
+  const kept = join(home, "kept")
+  const removed = join(home, "removed")
   mkdirSync(kept)
   mkdirSync(removed)
   const backend = childBackend()
@@ -111,19 +121,26 @@ try {
   await wait(1500)
   assert.equal(a.heard.length, after, "nothing arrives after unsubscribing")
 
-  await assert.rejects(backend(join(root, "missing"), [], recorder().listener), "a root that doesn't exist is refused")
+  await assert.rejects(backend(join(home, "missing"), [], recorder().listener), "a root that doesn't exist is refused")
 
   // A child that dies every time is given up after five tries.
-  const dying = join(root, "dying.mjs")
+  const dying = join(home, "dying.mjs")
   writeFileSync(dying, "process.on('message', () => process.exit(1))\n")
   // Within the backoff, by the waits it took rather than the runner's clock: each restart twice the last, then given up.
   const { waits } = await ranOut(() => assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/))
   assert.deepEqual(waits.filter((ms) => ms >= 250), [250, 500, 1_000, 2_000], "within the backoff, not forever")
 
+}
+
+/** A canary heard late mutes nothing and restarts nothing, and the watch is told it's late. */
+async function lateCanary(): Promise<void> {
   // Late isn't silent: a canary heard 8 s late, as a degraded fseventsd
   // delivers, mutes nothing and restarts nothing, and its lag is read and
   // logged. The watch is told it's late.
-  const deaf = join(root, "deaf")
+  const home = caseFolder("late")
+  const kept = join(home, "kept")
+  mkdirSync(kept)
+  const deaf = join(home, "deaf")
   process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1200, deafWhile: deaf })
   const lines: string[] = []
   const lateReadings = new WatchReadings((message) => lines.push(message))
@@ -140,12 +157,21 @@ try {
   assert.deepEqual(lateReadings.reading().starts, { first: 1, crash: 0, silence: 0, recovery: 0 })
   assert.ok(lines.includes("file events arrive late"), lines.join(", "))
   assert.equal(late.lates[0], true, "the watch hears it's late")
-  const earlier = [second, lateReadings.reading().child?.pid]
   await lateWatch.unsubscribe()
+  delete process.env.MAKO_WATCHER_CANARY_TEST
+}
 
+/** A canary unheard mutes every watch and restarts the child once; a silence soon after doesn't restart it again. */
+async function silentCanary(): Promise<void> {
   // A child whose own canary goes unheard: every watch is told, the child is
   // restarted once, and the watches hear delivery come back. The window is
   // longer than a degraded fseventsd was seen taking to deliver at all, 15 s.
+  const home = caseFolder("silent")
+  const kept = join(home, "kept")
+  mkdirSync(kept)
+  const deaf = join(home, "deaf")
+  // Children of the cases before this one, when they run in one process: only this case's are counted.
+  const earlier = watcherChildren()
   process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1200, withinMs: 20_000, deafWhile: deaf })
   const readings = new WatchReadings()
   const canaried = childBackend(undefined, readings)
@@ -182,12 +208,19 @@ try {
   delete process.env.MAKO_WATCHER_CANARY_TEST
   console.log(`watch backend canary: silence detected in ${detected} ms at a 1.2 s beat and a 20 s window`)
 
+}
+
+/** A degraded fseventsd, simulated, is read and restarted over, and every watch hears dropped and rescans. */
+async function degradedFseventsd(): Promise<void> {
   // A degraded fseventsd, simulated: every beat heard 1.2 s late, short of the
   // 5 s that makes watches poll. The host's read of the daemon says so once
   // 18 beats are in; the restart, through a stand-in for the privileged step (nothing
   // here touches the real daemon), starts the watcher child over, so every watch
   // hears dropped and rescans; delivery is measured again, and a read of history
   // from before the restart says every root is lost.
+  const home = caseFolder("degraded")
+  const kept = join(home, "kept")
+  mkdirSync(kept)
   process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1_500, lagMs: 1_200 })
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-restart-")))
   const daemon = { pid: 338, residentBytes: 9 * 1024 ** 2 }
@@ -249,6 +282,11 @@ try {
   rmSync(scratch, { recursive: true, force: true })
   console.log(`watch backend fseventsd: a canary 1.2 s late read degraded in ${degradedIn} ms at a 1.5 s beat; the restart rescanned every watch and measured ${restarted.restart?.after?.lagMs} ms after`)
 
+}
+
+// Each case on its own folders and children, so CI can run them on separate shards (`CASES`, scripts/lib/cases.ts).
+try {
+  await runCases([sharedChildAndCrash, lateCanary, silentCanary, degradedFseventsd])
   // Only something else holding this process open lets an unref'd timer fire.
   setTimeout(() => {
     console.error("the watcher child still holds the process open with no watch left")
