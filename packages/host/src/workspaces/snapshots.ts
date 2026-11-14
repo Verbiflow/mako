@@ -422,7 +422,7 @@ export class WorkspaceSnapshots {
       told = true
       frozen?.()
     }
-    if ((await this.budget.settings()).mode === "evict" && !this.budget.admit(this.retention.maxSnapshotBytes, "")) await this.budget.run()
+    if ((await this.budget.settings()).mode === "evict" && !this.budget.admit(this.retention.maxSnapshotBytes, "")) await this.budget.run(this.retention.maxSnapshotBytes)
     try {
       return await this.capturing(scope, async (gitDir, copied, fixed, finished) => {
         this.assertNoPending(scope)

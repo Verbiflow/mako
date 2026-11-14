@@ -28,6 +28,7 @@ export class SnapshotBudget {
   #legacyBytes = new Map<string, number>()
   #writes: Promise<void> = Promise.resolve()
   #pass: Promise<SnapshotBudgetReport> | undefined
+  #reservedBytes = 0
   #closed = false
   #timer: NodeJS.Timeout | undefined
   constructor(deps: Deps) { this.#deps = deps }
@@ -86,7 +87,8 @@ export class SnapshotBudget {
     if (proof.blockedScopes.some(scope => overlaps(scope, record.scope))) return "A conversation in this workspace has pending or active work."
     return undefined
   }
-  async preview(): Promise<SnapshotBudgetReport> {
+  preview(): Promise<SnapshotBudgetReport> { return this.#plan(0) }
+  async #plan(reservedBytes: number): Promise<SnapshotBudgetReport> {
     const settings = await this.settings()
     await this.#inventory()
     const records = this.#deps.records(), proof = await this.#deps.settlement()
@@ -98,18 +100,22 @@ export class SnapshotBudget {
     const untrackedBytes = this.#untrackedBytes(), payloadBytes = untrackedBytes + entries.reduce((sum, row) => sum + row.bytes, 0)
     let remainingBytes = payloadBytes, selectedBytes = 0
     for (const entry of entries) {
-      if (remainingBytes <= settings.maxBytes) break
+      if (remainingBytes <= Math.max(0, settings.maxBytes - reservedBytes)) break
       if (!entry.eligible) continue
       entry.selected = true; selectedBytes += entry.bytes; remainingBytes -= entry.bytes
     }
     return { settings, at: Date.now(), payloadBytes, untrackedBytes, inventoryKnown: this.#inventoryKnown, remainingBytes, selectedBytes, entries }
   }
-  run(): Promise<SnapshotBudgetReport> {
-    this.#pass ??= this.#run().finally(() => { this.#pass = undefined })
+  run(reservedBytes = 0): Promise<SnapshotBudgetReport> {
+    if (!Number.isSafeInteger(reservedBytes) || reservedBytes < 0) throw new Error("Invalid checkpoint reservation.")
+    this.#reservedBytes = Math.max(this.#reservedBytes, reservedBytes)
+    this.#pass ??= this.#run().finally(() => { this.#pass = undefined; this.#reservedBytes = 0 })
     return this.#pass
   }
   async #run(): Promise<SnapshotBudgetReport> {
-    const report = await this.preview()
+    const reserved = this.#reservedBytes
+    let report = await this.#plan(reserved)
+    if (this.#reservedBytes > reserved) report = await this.#plan(this.#reservedBytes)
     if (report.settings.mode !== "evict" || this.#closed) return report
     for (const entry of report.entries.filter(row => row.selected).slice(0, 64)) {
       const record = this.#deps.records().find(row => row.id === entry.id)
@@ -117,7 +123,7 @@ export class SnapshotBudget {
       const authorised = async () => {
         const proof = await this.#deps.settlement()
         return this.#settings.mode === "evict" && !this.#configuring && !this.#eligible(record, proof, this.#deps.expand(proof.settledIds), this.#deps.protectedIds()) &&
-          this.#deps.records().reduce((sum, row) => sum + (row.storage?.bytes ?? this.#legacyBytes.get(row.id) ?? 0), 0) + this.#untrackedBytes() > this.#settings.maxBytes
+          this.#deps.records().reduce((sum, row) => sum + (row.storage?.bytes ?? this.#legacyBytes.get(row.id) ?? 0), 0) + this.#untrackedBytes() > Math.max(0, this.#settings.maxBytes - this.#reservedBytes)
       }
       try {
         entry.removed = await this.#deps.remove(record, authorised, () => !this.#closed && !this.#configuring && this.#settings.mode === "evict")

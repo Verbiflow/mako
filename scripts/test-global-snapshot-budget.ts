@@ -135,6 +135,31 @@ try {
     assert.ok((await concurrent.budget.preview()).payloadBytes <= 1024 ** 2)
     assert.equal((await readFile(join(orphan, "payload"))).length, 100 * 1024)
   } finally { concurrent.close() }
+  const headroomStorage = join(root, "headroom-store")
+  const headroom = new WorkspaceSnapshots(git, headroomStorage, { ...policy, maxSnapshotBytes: 384 * 1024 })
+  headroom.followSettlement(() => readSnapshotSettlement(journals))
+  try {
+    await headroom.budget.configure({ mode: "evict", maxBytes: 1024 ** 2 })
+    const resident = residents[1]!, captured: WorkspaceSnapshot[] = []
+    for (let index = 0; index < 4; index++) {
+      if (index === 3) {
+        const ordinary = headroom.budget.run(), reserved = headroom.budget.run(384 * 1024)
+        assert.equal(ordinary, reserved, "a capture joins the same pass while increasing its reservation")
+        await reserved
+      }
+      await writeFile(join(resident.cwd, "payload"), randomBytes(300 * 1024)); mock.timers.tick(1)
+      const snapshot = await headroom.capture(resident.cwd); captured.push(snapshot)
+      const previous = resident.snapshot
+      resident.snapshot = { ...previous, revision: previous.revision + 1, requests: [...previous.requests, {
+        id: randomUUID(), createdAt: Date.now(), status: "completed", text: "synthetic settled headroom turn", attachments: [],
+        snapshots: { before: { kind: "ready", snapshot }, after: { kind: "ready", snapshot } },
+      }] }
+      resident.journal.commit(resident.snapshot, previous)
+    }
+    await assert.rejects(readFile(join(headroomStorage, captured[0]!.id, "capture-owner.json")), { code: "ENOENT" })
+    assert.equal((await headroom.budget.preview()).entries.length, 3, "preflight reserves one bounded capture rather than rescanning at the ceiling or evicting everything")
+    assert.ok((await headroom.budget.preview()).payloadBytes <= 1024 ** 2)
+  } finally { headroom.close() }
   console.log("Global rewind budget: real Git checkpoints + settled/queued/cloud/unknown journals, cross-repository oldest-first preview, real comparison lease, exact locked retirement, falsey failure/reconstruction and global admission passed")
 } finally {
   mock.restoreAll(); syncBuiltinESMExports(); mock.timers.reset()
