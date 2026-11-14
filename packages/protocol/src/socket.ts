@@ -201,6 +201,10 @@ type Connection = {
   /** SSH streams, whose bytes arrive in `media` too: their sending, and how each hears it opened or ended. */
   sshes: Map<MediaStreamId, { outgoing: SshOutgoing; open(): void; refuse(reason?: Problem): void }>
   heartbeat: ReturnType<typeof setInterval> | undefined
+  /** Looks every `quietCheckMs` for a connection gone quiet, and probes it (`quietProbeMs`). */
+  quiet: ReturnType<typeof setInterval> | undefined
+  /** The quiet probe under way: one at a time. */
+  probing: ReturnType<typeof setTimeout> | undefined
   renewal: Renewal | undefined
 }
 
@@ -229,6 +233,17 @@ export type ClientSessionOptions = {
   silentMs?: number
   /** After a wake, how long a connection heard just before the sleep has to answer a ping before it's ended. */
   wakeProbeMs?: number
+  /**
+   * How often a connection is looked at for having gone quiet: nothing heard for a heartbeat and five seconds, though
+   * the gateway answers every ping. A quiet one is pinged at once, as a wake pings, and ended only if that goes
+   * unanswered for `quietProbeMs`. A slow link answers, late, and stays; a half-open one, which closes nothing and says
+   * nothing, is ended about half a minute after it was last heard instead of `silentMs`. Five seconds unless given.
+   */
+  quietCheckMs?: number
+  /** Nothing heard for this long and a connection is quiet: a heartbeat and five seconds unless given. */
+  quietMs?: number
+  /** How long a quiet connection has to answer its probe: a phone's network can take seconds. Five unless given. */
+  quietProbeMs?: number
   /** Renews each connection's token in the socket before it's due, so it's never torn down to renew. */
   credential?: ConnectionCredential
   /**
@@ -252,6 +267,9 @@ export function clientSessionOverSockets(
   const connections = new Map<string, Connection>()
   const heartbeatMs = options.heartbeatMs
   const silentMs = options.silentMs ?? (heartbeatMs ? heartbeatMs * 2 + 10_000 : undefined)
+  const quietMs = options.quietMs ?? (heartbeatMs ? heartbeatMs + 5_000 : undefined)
+  const quietCheckMs = options.quietCheckMs ?? 5_000
+  const quietProbeMs = options.quietProbeMs ?? 5_000
 
   const connect = (endpoint: ClientEndpoint): Connection => {
     const key = endpointKey(endpoint)
@@ -270,6 +288,8 @@ export function clientSessionOverSockets(
       media: new Map(),
       sshes: new Map(),
       heartbeat: undefined,
+      quiet: undefined,
+      probing: undefined,
       renewal: undefined,
     }
     connections.set(key, connection)
@@ -277,6 +297,8 @@ export function clientSessionOverSockets(
       if (connections.get(key) !== connection) return
       connections.delete(key)
       clearInterval(connection.heartbeat)
+      clearInterval(connection.quiet)
+      clearTimeout(connection.probing)
       connection.renewal?.stop()
       for (const [id, waiting] of connection.calls) {
         const reply: Reply = {
@@ -377,6 +399,17 @@ export function clientSessionOverSockets(
             if (silentMs !== undefined && Date.now() - connection.heard > silentMs) return connection.drop()
             if (socket.readyState === OPEN) socket.send(PING)
           }, heartbeatMs)
+        // `silentMs` is the backstop; a connection quiet past a heartbeat is asked at once whether it's alive.
+        if (quietMs !== undefined)
+          connection.quiet = setInterval(() => {
+            if (connection.probing || Date.now() - connection.heard <= quietMs || socket.readyState !== OPEN) return
+            const asked = Date.now()
+            socket.send(PING)
+            connection.probing = setTimeout(() => {
+              connection.probing = undefined
+              if (connection.heard < asked) connection.drop()
+            }, quietProbeMs)
+          }, quietCheckMs)
       },
       () => lost()
     )
@@ -521,6 +554,8 @@ export function clientSessionOverSockets(
     close() {
       for (const connection of connections.values()) {
         clearInterval(connection.heartbeat)
+        clearInterval(connection.quiet)
+        clearTimeout(connection.probing)
         connection.renewal?.stop()
         void connection.socket.then((socket) => socket.close(1000, "done"))
       }
