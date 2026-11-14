@@ -781,6 +781,58 @@ async function check() {
     assert.ok(Math.abs(crossing.step) <= fastest * crossing.ms + 2, `${form}: at the crossing, what's read moved ${crossing.step} px in ${crossing.ms} ms, past the gesture's ${Math.round(fastest * 1000)} px/s`)
   }
 
+  // Only a crossing waits for the reader's input: a Thread opened while a finger still moves another draws nothing
+  // unwindowed first, and one rewound below the window as it waits stops waiting rather than rendering on and on.
+  const gesturing = async (at) => {
+    let going = true
+    const mover = (async () => {
+      for (let step = 0; going; step += 1) {
+        // One slow drag of over a second at a time: the finger stays down while the turns arrive.
+        await page.debugger.sendCommand("Input.synthesizeScrollGesture", { x: at.x, y: at.y + 200, yDistance: step % 2 ? -1200 : 1200, gestureSourceType: "touch", speed: 800, preventFling: true }).catch(() => undefined)
+      }
+    })()
+    await wait(300)
+    return async () => { going = false; await mover }
+  }
+  const phoneFixture = async (turns) => {
+    await window.loadURL("about:blank")
+    await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+    await window.loadURL(`${base}/scripts/transcript-scroll-browser.html?turns=${turns}`).catch((error) => {
+      if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
+    })
+    await until("document.querySelectorAll('[data-transcript-viewport] [data-exchange]').length > 2", `${turns} turns: the fixture`)
+    await wait(900)
+    return evaluate("(() => { const box = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + 80 } })()")
+  }
+  {
+    guard.at("a long Thread opened under a moving finger")
+    const stop = await gesturing(await phoneFixture(20))
+    await evaluate("window.probe.open('opened', 90)")
+    await until("window.__commits.some((commit) => commit.identity === 'opened')", "the opened Thread commits")
+    await stop()
+    const first = await evaluate("window.__commits.find((commit) => commit.identity === 'opened')")
+    console.log(`a long Thread opened under a moving finger: its first commit ${first.virtualized ? "windowed" : "unwindowed"}, ${first.rows} turns mounted`)
+    assert.ok(first.virtualized && first.rows < 90, `a long Thread opened under a moving finger windows on its first commit: ${JSON.stringify(first)}`)
+  }
+  {
+    guard.at("a crossing waiting on a finger, rewound below the window")
+    const at = await phoneFixture(20)
+    assert.equal(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"), false, "20 turns start short of a window")
+    const stop = await gesturing(at)
+    // Each streamed turn holds 11 items: 8 of them take 20 turns' 80 or so past the window's 120.
+    for (let turn = 0; turn < 8; turn += 1) await evaluate("(async () => { window.probe.startTurn(); await new Promise(requestAnimationFrame); window.probe.finishTurn(); await new Promise(requestAnimationFrame); return true })()")
+    const waiting = !(await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"))
+    await evaluate("window.probe.rewind(20)")
+    await stop()
+    await wait(2600)
+    const settled = await evaluate("window.__commits.length")
+    await wait(2000)
+    const later = (await evaluate("window.__commits.length")) - settled
+    console.log(`a crossing waiting on a finger, rewound below the window: waited ${waiting}, ${later} commits in the 2 s after it settled`)
+    assert.ok(waiting, "the crossing waited for the finger")
+    assert.equal(later, 0, "a crossing rewound below the window as it waits stops waiting, and renders nothing more")
+  }
+
   console.log("Transcript rows: held apart in every frame on the desk, in a laptop's browser and on a phone, with and without the observer")
   app.exit(0)
 }
