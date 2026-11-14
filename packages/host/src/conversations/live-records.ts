@@ -1,3 +1,4 @@
+import type { Reclaimed } from "./journal-reclaim.js"
 import { join } from "node:path"
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
@@ -76,7 +77,7 @@ export interface RecordHooks {
   /** The conversation was let go: what still holds its entries (a window's view) lets them go too. */
   released?(id: string): void
   /** A closed journal much of which is free, to compact (`JournalReclaims`). */
-  compact(path: string): void
+  compact(path: string): void | Promise<Reclaimed | void>
 }
 
 /**
@@ -585,10 +586,8 @@ export class LiveRecords {
     this.released.add(resident)
     const { journal } = resident
     journal.close((path) => this.hooks.compact(path))
-    if (journal.pagedCount()) {
-      this.releasing.set(id, journal)
-      void journal.released().finally(() => { if (this.releasing.get(id) === journal) this.releasing.delete(id) })
-    }
+    this.releasing.set(id, journal)
+    void journal.released().finally(() => { if (this.releasing.get(id) === journal) this.releasing.delete(id) })
     this.hooks.released?.(id)
     return true
   }
@@ -599,11 +598,20 @@ export class LiveRecords {
     return this.stopped || Boolean(this.dependencies.stopping?.())
   }
 
-  stop(): void {
+  stop(): Promise<void> {
     this.stopped = true
+    // Old unloaded journals can still be waiting on pages or checkpoint connections. None may start tidying after
+    // this owner has stopped; its next open/close can reclaim the space instead.
+    for (const journal of this.releasing.values()) journal.keepFile()
     clearTimeout(this.sweepTimer)
     this.sweepTimer = undefined
-    void this.readers.stop()
+    return this.readers.stop()
+  }
+
+  /** Already closed journals may still be releasing checkpoints before they can queue their compaction. */
+  async releasesSettled(): Promise<void> {
+    if (this.stopped) return
+    await Promise.all([...this.releasing.values()].map(journal => journal.released()))
   }
 
   /** All resident journals closed: join their checkpoint handles before the host releases its data root. */

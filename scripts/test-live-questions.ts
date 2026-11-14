@@ -129,7 +129,7 @@ try {
       assert.equal(owner.snapshot(id)!.requests.some(request=>request.id===external.id),false,"Answer observed during refused steering must not be queued again")
       beforeRefusal=undefined
       const pending=ask("turn-4","item-4")
-      owner.stop();owner=new LiveConversations(deps)
+      await owner.stop();owner=new LiveConversations(deps)
       assert.equal(owner.summaries().find(summary=>summary.session.id===id)?.hasSessionQuestions,true,"Restart summaries retain question availability")
       const restored=owner.snapshot(id)!
       assert.equal(latestPendingQuestion(restored.control!,restored.requests)?.id,pending.id)
@@ -144,7 +144,7 @@ try {
       await owner.permission(id,first.id,response)
       await owner.permission(id,second.id,secondResponse)
       assert.equal(prompts,2);assert.equal(steers,3)
-    } finally {owner.stop()}
+    } finally {await owner.stop()}
   }
   console.log("Session questions: all-six + future fixtures preserve lifetime, durable one-write answers, lost-reply fences, stale evidence and dismissal/reopen")
 } finally {rmSync(root,{recursive:true,force:true})}

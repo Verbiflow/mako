@@ -102,7 +102,7 @@ try {
   console.log("automation workspace: run/on/off bind original owner before approval, reject same-ID B before admission and after known refusal/restart, preserve same-owner concurrent retry, refuse legacy ownerless asks and full-access read/action races")
 } finally {
   service.stop()
-  git.close()
+  await git.close()
   await world.close()
   rmSync(root, { recursive: true, force: true })
 }

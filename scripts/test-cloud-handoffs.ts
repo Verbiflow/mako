@@ -380,6 +380,6 @@ try {
   }
   console.log("PASS: agents at work are handed off one move per Thread, named by the handoff; the sleep is held until the handoff answers or its deadline; Threads at work stand by in the cloud with only what changed, taken once by their move")
 } finally {
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 }

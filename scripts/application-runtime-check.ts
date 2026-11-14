@@ -245,7 +245,7 @@ async function checkRuntime() {
     unsubscribers.forEach((off) => off())
     application.dispose()
     host.close()
-    live.stop()
+    await live.stop()
     native.stop()
     app.exit(process.exitCode === undefined ? 0 : Number(process.exitCode))
   }

@@ -21,3 +21,8 @@ server.on("connection", (socket) => {
   })
 })
 process.on("SIGTERM", () => process.exit(0))
+// SIGUSR1: DevTools goes away while the process lives on, as a killed Chromium's socket closes before its exit is heard.
+process.on("SIGUSR1", () => {
+  for (const socket of server.clients) socket.terminate()
+  server.close()
+})

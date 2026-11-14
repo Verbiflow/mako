@@ -35,7 +35,7 @@ if (!report) {
     process.exit(2)
   }
   report = { held: false, diagnosis: await repository.diagnose(), activity: git.activity(), open: git.repositories().open }
-  git.close()
+  await git.close()
 }
 
 const { held, diagnosis: d, activity, open: opened } = report
