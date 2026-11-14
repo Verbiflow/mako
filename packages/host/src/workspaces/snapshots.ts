@@ -257,14 +257,15 @@ export class WorkspaceSnapshots {
    */
   async capture(cwd: string, shared?: ReadonlySet<string>, reuse = false, frozen?: () => void): Promise<WorkspaceSnapshot> {
     const workspace = await this.workspace(cwd)
-    // Only a workspace no other run shares: a checkpoint names the runs that shared it, and reusing one would name others.
+    // A single-repository record carries sharing; reusing that record would name another turn's peers.
     const unshared = reuse && !shared?.size
     if (workspace.repositories.length === 1 && workspace.repositories[0] === workspace.scope) return this.captureRepository(workspace.scope, shared, unshared, frozen)
     // Each repository is its own lock: they're taken side by side, and the workspace is held once all of them are.
     let held = 0
     const each = workspace.repositories.map((repository) => {
       let once = false
-      return this.captureRepository(repository, undefined, unshared, () => {
+      // Parts carry no run metadata; the fresh group below records sharing separately.
+      return this.captureRepository(repository, undefined, reuse, () => {
         if (once) return
         once = true
         if (++held === workspace.repositories.length) frozen?.()
@@ -1034,7 +1035,7 @@ export class WorkspaceSnapshots {
         if (!since) await copyGitIndex(userIndex, index)
         // Expand split indexes so retained snapshots do not depend on sharedindex GC.
         await captureGit(["update-index", "--no-split-index"], index)
-      } else {
+      } else if (!since) {
         await captureGit(["read-tree", "--empty"], workingIndex)
       }
       // The live index can move on immediately. Keep its saved tree reachable
