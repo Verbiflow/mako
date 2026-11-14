@@ -1,4 +1,3 @@
-import { mkdirSync, watch, type FSWatcher } from "node:fs"
 import {
   mkdir,
   readFile,
@@ -95,20 +94,38 @@ export async function deletePlugin(dir: string, id: string) {
  * re-evaluates that plugin a moment later. Debounced because an editor or an
  * agent writing a file commonly produces several events for one save.
  */
-export function watchPlugins(dir: string, onChange: () => void): FSWatcher | null {
-  try {
-    // Created before watching, not after. `fs.watch` on a missing directory
-    // throws, and the first run is exactly when the directory is missing — so
-    // arming the watcher first meant the feature never worked until the second
-    // launch, silently.
-    mkdirSync(dir, { recursive: true })
+export interface PluginWatch {
+  readonly ready: Promise<void>
+  close(): Promise<void>
+}
 
-    let timer: NodeJS.Timeout | undefined
-    return watch(dir, () => {
+/** Composition supplies the existing watcher child; tools neither start a process nor own native handles. */
+export type PluginWatchPort = (dir: string, changed: () => void) => Promise<{ unsubscribe(): Promise<void> }>
+
+export function watchPlugins(dir: string, onChange: () => void, watch: PluginWatchPort): PluginWatch {
+  let closed = false
+  let timer: NodeJS.Timeout | undefined
+  let subscription: Awaited<ReturnType<PluginWatchPort>> | undefined
+  let releasing: Promise<void> | undefined
+  let closing: Promise<void> | undefined
+  const release = () => releasing ??= subscription?.unsubscribe() ?? Promise.resolve()
+  const changed = () => {
+    if (closed) return
+    clearTimeout(timer)
+    timer = setTimeout(() => { if (!closed) onChange() }, 80)
+  }
+  const ready = (async () => {
+    await mkdir(dir, { recursive: true })
+    if (closed) return
+    subscription = await watch(dir, changed)
+    if (closed) await release()
+  })()
+  return {
+    ready,
+    close() {
+      closed = true
       clearTimeout(timer)
-      timer = setTimeout(onChange, 80)
-    })
-  } catch {
-    return null
+      return closing ??= ready.then(release, (error) => { if (subscription) throw error })
+    },
   }
 }
