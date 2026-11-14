@@ -10,6 +10,7 @@ import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableReq
 import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
 import { failureAfterRetry, GIVE_UP_MS, nextRetry } from "@mako/host/contracts/delivery-retry"
+import { resetWords } from "@mako/host/contracts/account-usage"
 import { FailureRow } from "../src/components/transcript/failure-row"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
@@ -510,6 +511,23 @@ console.log("PASS: a message waiting for this Mac to hear its account is the one
   assert.doesNotMatch(ended, /data-recovery-primary|Sign in|Continue turn/)
 }
 console.log("PASS: a gateway outage shows its automatic retry time and reason, without a sign-in or Resume button")
+
+{
+  const conversationId = "d6860000-0000-4000-8000-000000000001"
+  const reset = Date.now() + 3_600_000
+  const retry = nextRetry(undefined, "rate-limited", "Usage limit reached", Date.now(), reset)!
+  const failed: LiveRequest = { ...request, status: "failed", failure: "rate-limited", error: retry.reason, retry }
+  const continuation: LiveRequest = { ...second, status: "held", retry, continues: { requestId: failed.id, reason: "connection-lost", auto: true } }
+  acpStore.set({ activeKey: conversationId })
+  applyLiveSnapshot({ ...snapshot, revision: 1, session: { ...snapshot.session, id: conversationId }, requests: [failed, continuation] })
+  const queue = renderToStaticMarkup(<PromptQueue />)
+  assert.match(queue, /data-queue-retry="rate-limited"/)
+  assert.match(queue, /usage limit until/)
+  assert.ok(queue.includes(resetWords(reset, Date.now())), "the native reset is shown")
+  const ended = renderToStaticMarkup(<FailureRow conversationId={conversationId} request={failed} />)
+  assert.match(ended, /Continues by itself/)
+  assert.doesNotMatch(ended, /data-recovery-primary|Sign in|Continue turn/)
+}
 
 {
   const conversationId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"

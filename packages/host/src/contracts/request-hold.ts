@@ -12,7 +12,7 @@ import type { LiveRequest, RequestWake, SignInHold } from "./live-conversations.
  * - `sign-in`: its account signed out. The session's work waits together for
  *   their Resume, in order.
  * - `retry`: its harness couldn't take it for now (`RetryCause`). It goes again
- *   at `at`, first: nothing goes ahead of it, and a new message makes it due now.
+ *   at `at`, first: nothing goes ahead of it. New input keeps provider waits; other retries become due now.
  * - `resting`: a digest no model heard, past what Mako retries. It goes with the next turn that can run, first: a new
  *   message, a switch or a Resume, and where a limit holds it, by itself once an hour (`at`). Its limit outlasting the
  *   retries is no proof it was heard.
@@ -45,9 +45,14 @@ export function holdOf(request: Pick<LiveRequest, "status" | "signIn" | "editing
   return { kind: "paused", by: "mako" }
 }
 
-/** Whether new input releases a retry/resting digest. An outage still waits for its time; an explicit move can go now. */
-export function goesNext(request: Parameters<typeof holdOf>[0], keepServiceRetry = false): boolean {
-  if (keepServiceRetry && request.retry?.cause === "provider-unavailable") return false
+/** Capacity and service waits belong to the provider; new messages cannot make either clear sooner. */
+export function waitsForProvider(request: Pick<LiveRequest, "retry">): boolean {
+  return request.retry?.cause === "provider-unavailable" || request.retry?.cause === "rate-limited"
+}
+
+/** Whether new input releases a retry/resting digest. Provider waits keep their time; an explicit move can go now. */
+export function goesNext(request: Parameters<typeof holdOf>[0], keepProviderWait = false): boolean {
+  if (keepProviderWait && waitsForProvider(request)) return false
   const kind = holdOf(request)?.kind
   return kind === "retry" || kind === "resting"
 }
