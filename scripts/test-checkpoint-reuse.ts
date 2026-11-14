@@ -52,7 +52,8 @@ const edit = (path: string, content: string, told = true) => {
 
 let openedMonitors = 0, closedMonitors = 0
 let invalidateMonitor = () => {}
-const store = new WorkspaceSnapshots(new Git(), join(root, "store"))
+const snapshotGit = new Git()
+const store = new WorkspaceSnapshots(snapshotGit, join(root, "store"))
 store.followHistory(history)
 const turn = async () => {
   const id = randomUUID()
@@ -217,7 +218,11 @@ try {
   const unavailableId = randomUUID()
   assert.equal(store.beginPreparedRun(unavailableId, cwd).kind, "unavailable")
   store.abandonRun(unavailableId)
-  await store.prepare(cwd)
+  const commands = mock.method(snapshotGit, "run", snapshotGit.run.bind(snapshotGit))
+  try {
+    await store.prepare(cwd)
+    assert.equal(commands.mock.calls.some(call => call.arguments[0].args.includes("ls-files") && call.arguments[0].args.includes("-v")), false, "background recapture must reuse changed paths instead of the full capture listing")
+  } finally { commands.mock.restore() }
   const cleanId = randomUUID()
   const warmed = store.beginPreparedRun(cleanId, cwd)
   assert.ok(warmed.kind === "ready")
@@ -263,6 +268,44 @@ try {
     await assert.rejects(finishing, /Another turn started/)
   } finally { release(); store.abandonRun(later); capture.mock.restore() }
   console.log("prepared baselines: no foreground capture/history, invalidation, dirty content, previous-end reuse and nonblocking overlap")
+
+  // A background job queued before a send must not capture once that workspace is in use.
+  {
+    const queued = new WorkspaceSnapshots(new Git(), join(root, "queued-store"))
+    const folders = Array.from({ length: 5 }, (_, index) => join(root, `queued-${index}`))
+    for (const folder of folders) {
+      mkdirSync(folder)
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: folder })
+      writeFileSync(join(folder, "file.txt"), "content\n")
+    }
+    let release = () => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    const original = queued.capture.bind(queued)
+    const entered: string[] = []
+    const capture = mock.method(queued, "capture", async (...args: Parameters<typeof original>) => {
+      entered.push(args[0])
+      await held
+      return original(...args)
+    })
+    const working = folders.slice(0, 4).map(folder => queued.prepare(folder))
+    const request = randomUUID()
+    let waiting: Promise<void> | undefined
+    try {
+      for (const deadline = Date.now() + 2000; entered.length < 4; await new Promise(resolve => setTimeout(resolve, 5))) assert.ok(Date.now() < deadline)
+      waiting = queued.prepare(folders[4])
+      queued.beginPreparedRun(request, folders[4])
+      release()
+      await Promise.all([...working, waiting])
+      assert.equal(entered.includes(folders[4]), false, "queued preparation must recheck activity before it starts capture")
+    } finally {
+      release()
+      await Promise.allSettled([...working, waiting])
+      capture.mock.restore()
+      queued.abandonRun(request)
+      queued.close()
+    }
+  }
+  console.log("queued preparation: a send supersedes background work before it captures")
 
   console.log("checkpoint reuse: a quiet workspace's turn starts on its last checkpoint; a change, a staged path, a moved HEAD, a lost or unread history, or a shared workspace is captured")
 } finally {

@@ -68,7 +68,7 @@ const RULE_FILES = new Set([".gitignore", ".gitattributes", ".gitmodules"])
  * A capture from the last checkpoint: its record, the paths the watcher says changed since (relative to the
  * workspace), and what to call once the turn's files are read, after which the agent may write.
  */
-type Increment = { prev: SnapshotRecord; paths: string[]; frozen: () => void }
+type Increment = { prev: SnapshotRecord; paths: string[]; frozen?: () => void }
 
 async function changedBytes(scope: string, paths: readonly string[]): Promise<number> {
   let bytes = 0
@@ -224,7 +224,7 @@ export class WorkspaceSnapshots {
       const release = await this.enterPreparation()
       const enteredAt = Date.now()
       try {
-        if (this.closed) return
+        if (this.closed || this.busy(entry.scope) || entry.revision !== revision) return
         if (this.watchChanges) {
           const workspace = await this.workspace(cwd)
           entry.scope = workspace.scope
@@ -241,6 +241,7 @@ export class WorkspaceSnapshots {
           if (!held.watch.alive() || !held.watch.reliable()) throw new Error("The workspace monitor is unavailable or lost events")
         }
         const mark = await this.history?.mark()
+        if (this.closed || this.busy(entry.scope) || entry.revision !== revision) return
         captureStartedAt = Date.now()
         const snapshot = await this.capture(cwd, undefined, true)
         capturedAt = Date.now()
@@ -479,7 +480,8 @@ export class WorkspaceSnapshots {
         const last = reuse ? await this.sinceLast(scope) : undefined
         if (last?.kind === "same") return this.summary(last.record)
         const [staged, excludes] = mark ? await Promise.all([this.stagedDigest(scope), this.excludesStamp(scope)]) : []
-        const increment = last?.kind === "changed" && frozen ? { prev: last.record, paths: last.paths, frozen } : undefined
+        // Background captures can reuse changed paths too; the callback only releases a foreground wait.
+        const increment = last?.kind === "changed" ? { prev: last.record, paths: last.paths, frozen } : undefined
         const record = await this.captureLocked(scope, gitDir, "retained", shared, increment)
         if (mark && staged !== undefined && excludes !== undefined && (increment || this.plain.has(record.id)))
           this.lastTaken.set(scope, { id: record.id, mark, head: record.head, staged, excludes })
@@ -1214,7 +1216,7 @@ export class WorkspaceSnapshots {
         await captureGit(["read-tree", since.prev.tree], workingIndex)
         await this.takeChanged(scope, since.paths, workingIndex, objects)
         // Fixed: the agent may write from here on, and nothing the checkpoint still does reads the working tree.
-        since.frozen()
+        since.frozen?.()
       }
       if (hasIndex) {
         if (!since) await copyGitIndex(userIndex, index)
