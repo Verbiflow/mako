@@ -3297,6 +3297,19 @@ const inputs = {
   "mako:worktree-pulls": () => z.tuple([z.string()]),
   "mako:worktree-removal": () => z.tuple([z.string()]),
   "mako:worktree-remove": () => z.tuple([z.string()]),
+  "mako:worktree-retention": () => z.tuple([]),
+  "mako:worktree-retention-set": () =>
+    z.tuple([
+      z.object({
+        mode: z.union([
+          z.literal("checkout"),
+          z.literal("preview"),
+          z.literal("packages"),
+        ]),
+        days: z.number(),
+        kept: z.array(z.string()),
+      }),
+    ]),
   "mako:worktree-review": () => z.tuple([z.string()]),
   "mako:worktree-review-diffs": () => z.tuple([z.string()]),
   "mako:worktree-skip": () => z.tuple([z.string()]),
@@ -3749,6 +3762,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:worktree-pulls", "workspaces"],
   ["mako:worktree-removal", "workspaces"],
   ["mako:worktree-remove", "workspaces"],
+  ["mako:worktree-retention", "workspaces"],
+  ["mako:worktree-retention-set", "workspaces"],
   ["mako:worktree-review", "workspaces"],
   ["mako:worktree-review-diffs", "workspaces"],
   ["mako:worktree-skip", "workspaces"],

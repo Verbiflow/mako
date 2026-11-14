@@ -235,3 +235,32 @@ export interface WorktreeStartPoint {
   /** The last fetch of the upstream since Mako started, or null when none was tried. */
   fetched: { at: number; failed: string | null } | null
 }
+
+/** Preview is the default: the person must opt in before any automatic removal. */
+export interface WorktreeRetentionSettings {
+  mode: "preview" | "packages" | "checkout"
+  /** Leave a finished checkout untouched for this many days after its last change. */
+  days: number
+  /** Explicitly kept checkouts are never retired automatically. */
+  kept: string[]
+}
+
+export interface WorktreeRetirement {
+  path: string
+  thread: ThreadId
+  branch: string
+  /** All repository tips, so a changed branch cannot reuse a previous decision. */
+  heads: string[]
+  packages: string[]
+  /** The registry ownership captured with this decision, rechecked before removal. */
+  owners: Array<{ path: string; thread: ThreadId; createdAt: number }>
+  /** Null means it is eligible now; an unreadable guard always gives a reason. */
+  skip: string | null
+}
+
+export interface WorktreeRetentionReport {
+  settings: WorktreeRetentionSettings
+  everyMs: number
+  at: number
+  checkouts: WorktreeRetirement[]
+}

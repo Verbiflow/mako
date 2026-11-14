@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { FolderOpenIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
-import type { WorktreeInventory } from "@mako/host/contracts/thread-worktrees"
+import type { WorktreeRetentionReport, WorktreeRetentionSettings, WorktreeInventory } from "@mako/host/contracts/thread-worktrees"
 import { Action, Blank, Chip, IconAction, ListCard, ListCardRow, SettingRow, Toggle } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
 import { formatBytes, formatRelative } from "@/lib/format"
@@ -9,7 +9,7 @@ import { IfCanReveal } from "@/components/ui/machine-gate"
 import { togglePref, usePrefs } from "@/state/prefs"
 import { projectName, useWorkspaceMoves, workspaceMoves } from "@/state/workspace-moves"
 import { removable, worktreeCheckouts, type CheckoutDetail } from "@/lib/worktree-removal"
-import { leavingWorktrees, readWorktreeInventory, removeCheckout, removeLandedWorktrees, useLeavingWorktrees } from "@/state/worktrees"
+import { readWorktreeRetention, saveWorktreeRetention, leavingWorktrees, readWorktreeInventory, removeCheckout, removeLandedWorktrees, useLeavingWorktrees } from "@/state/worktrees"
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`
 const folderName = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path
@@ -111,6 +111,7 @@ export function WorktreesSection() {
   return (
     <div className="flex flex-col gap-6">
       <BranchSettings />
+      <RetentionSettings />
 
       <section>
         <h3 className="text-ui font-medium">On this Mac</h3>
@@ -201,4 +202,46 @@ function BranchSettings() {
       ))}
     </ListCard>
   )
+}
+
+/** Removal stays off until the person chooses it; previews use the host's exact retirement guards. */
+function RetentionSettings() {
+  const [report, setReport] = useState<WorktreeRetentionReport | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const read = useCallback(() => readWorktreeRetention().then(setReport, (reason) => setError(reason instanceof Error ? reason.message : String(reason))), [])
+  useEffect(() => { void read() }, [read])
+  const save = async (settings: WorktreeRetentionSettings) => {
+    setBusy(true)
+    try { setReport(await saveWorktreeRetention(settings)); setError(null) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setBusy(false) }
+  }
+  return <section>
+    <h3 className="text-ui font-medium">Finished Thread worktrees</h3>
+    <p className="mt-0.5 pb-3 text-label text-muted-foreground">Checked hourly and when a turn ends. Preview only by default, after seven quiet days. Only clean, unshared checkouts of finished Threads with merged work or a closed pull request qualify. Providers, terminals and running apps keep theirs.</p>
+    {report ? <ListCard>
+      <SettingRow title="Automatic retirement" description="Packages go first and can be installed again. Checkout removal keeps committed branches. Choosing removal enables it on the next pass.">
+        <select aria-label="Automatic retirement" value={report.settings.mode} disabled={busy} onChange={(event) => {
+          const mode = event.target.value
+          if (mode === "preview" || mode === "packages" || mode === "checkout") void save({ ...report.settings, mode })
+        }}>
+          <option value="preview">Preview only</option>
+          <option value="packages">Remove installed packages</option>
+          <option value="checkout">Retire the checkout</option>
+        </select>
+      </SettingRow>
+      <SettingRow title="Quiet days before retirement" description="A recent source edit or a new checkout restarts the wait.">
+        <input aria-label="Quiet days before retirement" type="number" min={0} max={3650} value={report.settings.days} disabled={busy} onChange={(event) => {
+          const days = event.target.valueAsNumber
+          if (Number.isInteger(days) && days >= 0 && days <= 3650) void save({ ...report.settings, days })
+        }} />
+      </SettingRow>
+      {report.checkouts.map((row) => <SettingRow key={row.path} title={row.branch} description={row.skip ?? `Eligible: ${plural(row.packages.length, "package folder")}. No files were removed by this preview.`}>
+        <Toggle label={`Keep ${row.branch}`} on={report.settings.kept.includes(row.path)} onChange={() => void save({ ...report.settings, kept: report.settings.kept.includes(row.path) ? report.settings.kept.filter((path) => path !== row.path) : [...report.settings.kept, row.path] })} />
+      </SettingRow>)}
+      <Action tone="outline" size="xs" disabled={busy} onClick={() => void read()}>Preview again</Action>
+    </ListCard> : null}
+    {error ? <p className="pt-2 text-label text-removed">{error}</p> : null}
+  </section>
 }

@@ -1039,6 +1039,8 @@ export function installMockBridge() {
       ]
     },
     worktreeAhead: async () => null,
+    worktreeRetention: async () => ({ settings: { mode: "preview", days: 7, kept: [] }, everyMs: 3_600_000, at: Date.now(), checkouts: [] }),
+    setWorktreeRetention: async (settings) => ({ settings, everyMs: 3_600_000, at: Date.now(), checkouts: [] }),
     worktreeInventory: async () => (scene === "rail" ? railInventory(removedWorktrees) : { worktrees: [], spares: { count: 0, bytes: null } }),
     ...mockStorage(),
     worktreeReview: async (path: string): Promise<WorktreeReview> => {

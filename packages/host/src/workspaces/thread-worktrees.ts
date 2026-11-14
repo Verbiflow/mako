@@ -1293,7 +1293,25 @@ export class ThreadWorktreeService {
     return { attached, receipts, repoRoot, checkout, home, together: [...together.values()] }
   }
 
-  /** Why the checkout can't go: something open anywhere in it, its own folder included, or work in one of its worktrees that a removal would lose. */
+  /** Fresh retirement proof. The current worktree HEAD must still be its recorded branch tip. */
+  async retirementRepository(worktree: ThreadWorktree, pulls: PullsOf): Promise<{ head: string; blocked: string | null; landed: boolean }> {
+    const [head, branch, blocked] = await Promise.all([
+      this.git.readOutput(worktree.path, ["rev-parse", "HEAD"]),
+      this.git.readOutput(worktree.path, ["symbolic-ref", "--short", "HEAD"]),
+      this.git.readOutput(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).then((status) => removalBlocker(this.git, worktree.path, status)),
+    ])
+    if (branch !== worktree.branch) return { head, blocked: "The recorded branch changed.", landed: false }
+    // Tracked dependency files are source, never expendable install outputs.
+    const tracked = await this.git.readOutput(worktree.path, ["ls-files", "--", "node_modules", ":(glob)**/node_modules/**"])
+    if (tracked) return { head, blocked: "The repository tracks files inside node_modules.", landed: false }
+    const into = await this.git.readOutput(worktree.repoRoot, ["symbolic-ref", "--short", "HEAD"])
+    if (branch === into) return { head, blocked: "The checkout uses the project's current branch.", landed: false }
+    const integrated = await this.git.succeeds(worktree.repoRoot, ["merge-base", "--is-ancestor", head, into])
+    const pull = integrated ? null : branchPull(await pulls(worktree.repoRoot) ?? [], branch)
+    return { head, blocked: blocked ?? null, landed: integrated || (pull?.head === head && (pull.state === "closed" || pull.state === "merged")) }
+  }
+
+  /** Why the checkout cannot go: live users or work a removal would lose. */
   private async held(checkout: string, worktrees: readonly { path: string }[], waitingFor?: string): Promise<string | null> {
     const users = await (this.conversations ? this.conversations.holding(checkout, waitingFor) : this.inUse(checkout))
     if (users.length) return inUseBy(checkout, users)
@@ -1328,13 +1346,13 @@ export class ThreadWorktreeService {
    * are moved aside at once and deleted in the background, so tens of
    * thousands of installed files don't hold the answer up.
    */
-  async remove(path: string): Promise<ThreadWorktreeList> {
+  async remove(path: string, retirement = false): Promise<ThreadWorktreeList> {
     const { attached, receipts, checkout, home, together } = await this.made(path)
     const held = await this.held(checkout, together)
     if (held) throw new Error(held)
     const stayed = await this.conversations?.leave(checkout, home) ?? []
     if (stayed.length) throw new Error(inUseBy(checkout, stayed))
-    if (attached) {
+    if (attached && !retirement) {
       await this.environment?.stop(attached.thread)
       if (existsSync(checkout)) await this.environment?.cleanup?.(attached.thread, checkout)
     }
@@ -1346,7 +1364,8 @@ export class ThreadWorktreeService {
     await this.borrowing.forget(checkout)
     if (attached) {
       for (const worktree of together) this.threads.detachWorktree(worktree.path)
-      await this.environment?.discard(attached.thread, checkout)
+      // Automatic worktree retirement never runs a project's arbitrary cleanup or deletes Thread data.
+      if (!retirement) await this.environment?.discard(attached.thread, checkout)
     }
     for (const { id } of receipts) {
       this.untold.delete(id)
