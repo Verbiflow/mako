@@ -884,8 +884,3 @@ try {
   rmSync(root, { recursive: true, force: true })
 }
 console.log("orch answer: ok")
-await import("./test-fin-obligations.ts")
-
-await import("./test-report-actions.ts")
-
-await import("./test-report-custody.ts")
