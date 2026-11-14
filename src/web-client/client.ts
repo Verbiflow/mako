@@ -80,6 +80,7 @@ export class WebClient {
         // less likely to end the page to free memory and bring it back black.
         hidden: () => {
           client.list.save()
+          client.list.park()
           client.#loaded?.releaseHidden()
         },
         returned: (kind, away) => client.#returned(kind, away),
@@ -111,15 +112,19 @@ export class WebClient {
   /**
    * Back in front. Every socket is asked whether it's alive, and one that stays silent for three seconds (or was already
    * quiet past its heartbeat, as a frozen page's is) is ended and opened again, while the list's next follow starts
-   * now rather than after its backoff. Away ten seconds or more, what's shown is stale: the list and the open
-   * conversation are read again over HTTP at once, which answers even while a dead socket is being replaced.
+   * now rather than after its backoff. The list was parked while hidden and replays what it missed from its stream's
+   * number. Away ten seconds or more, the open conversation is read again over HTTP at once, which answers even while a
+   * dead socket is being replaced, and so is the list if it wasn't parked.
    */
   #returned(kind: ReturnKind, away: number): void {
     this.gateway.wake()
+    // A list parked while hidden follows its stream again from where it stopped, and the account replays what it
+    // missed: reading it whole as well would only repeat that.
+    const replays = this.list.unpark()
     this.list.wake()
     this.#loaded?.wake()
     if (kind === "long") {
-      void this.list.refresh().catch(() => undefined)
+      if (!replays) void this.list.refresh().catch(() => undefined)
       this.#loaded?.resync()
     }
     window.dispatchEvent(new CustomEvent<Returned>(RETURNED_EVENT, { detail: { kind, away } }))
