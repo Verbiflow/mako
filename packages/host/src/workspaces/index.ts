@@ -49,7 +49,7 @@ import { declareMoveMethods } from "./move-methods.js"
 import { declarePlanBuildMethods } from "./plan-build-methods.js"
 import { declareCheckoutHeadMethods } from "./checkout-head-methods.js"
 import { declareThreadAppMethods } from "./app-methods.js"
-import { listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "../git/index.js"
+import { readBranchPull, listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "../git/index.js"
 import type { MakoTools } from "../tools/index.js"
 import type { WorkspaceConversations } from "./conversations.js"
 import type { AgentHost } from "./agent-host.js"
@@ -247,7 +247,8 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
       }
       return users
     },
-    repository: (worktree) => worktrees.retirementRepository(worktree, (cwd) => listBranchPulls(cwd)),
+    repository: (worktree, lookup) => worktrees.retirementRepository(worktree, lookup),
+    pull: readBranchPull,
     remove: async (path) => {
       const member = store.worktrees().find((row) => worktreeCheckout(row) === path)
       if (!member) throw new Error("The checkout is no longer registered.")

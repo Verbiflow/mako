@@ -3,10 +3,13 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, rm, rmdir, writeFile
 import { dirname, join, relative, sep } from "node:path"
 import { z } from "zod"
 import type { ThreadId } from "../contracts/thread-identity.js"
-import type { ThreadWorktree, WorktreeRetentionReport, WorktreeRetentionSettings, WorktreeRetirement } from "../contracts/thread-worktrees.js"
-import { worktreeCheckout } from "../contracts/thread-worktrees.js"
+import type { ThreadWorktree, WorktreeBranchProof, WorktreeRetentionReport, WorktreeRetentionSettings, WorktreeRetirement } from "../contracts/thread-worktrees.js"
+import { PROJECT_CHECKOUT_FILE, worktreeCheckout } from "../contracts/thread-worktrees.js"
 
 export const WORKTREE_RETENTION_MS = 60 * 60_000
+export const MIN_RETIREMENT_PASS_MS = 10 * 60_000
+export const MAX_RETIREMENT_PULL_LOOKUPS = 20
+type PullPass = { used: number; cache: Map<string, Promise<WorktreeBranchProof | null>> }
 export const WorktreeRetentionSettingsSchema = z.object({
   mode: z.enum(["preview", "packages", "checkout"]),
   days: z.number().int().min(0).max(3650),
@@ -23,7 +26,8 @@ interface Deps {
   /** A fresh read, including terminals and apps; unreadable state throws. */
   using(path: string): Promise<string[]>
   /** Clean Git state, branch tip and exact-head merged/closed-PR proof. */
-  repository(worktree: ThreadWorktree): Promise<{ head: string; blocked: string | null; landed: boolean }>
+  repository(worktree: ThreadWorktree, lookup: (cwd: string, branch: string) => Promise<WorktreeBranchProof | null>): Promise<{ head: string; blocked: string | null; landed: boolean; ignored: string[] }>
+  pull(cwd: string, branch: string): Promise<WorktreeBranchProof | null>
   remove(path: string): Promise<void>
   packagesRemoved(path: string): Promise<void>
   now?(): number
@@ -36,6 +40,8 @@ export class WorktreeRetention {
   #last: WorktreeRetentionReport | undefined
   #event: NodeJS.Timeout | undefined
   #closed = false
+  #lastStart: number | undefined
+  #offset = 0
 
   constructor(deps: Deps) { this.#deps = deps }
 
@@ -65,7 +71,7 @@ export class WorktreeRetention {
     this.#event = setTimeout(() => {
       this.#event = undefined
       void this.run().catch(() => { /* A failed guard leaves the checkout for the next scheduled pass. */ })
-    }, 60_000)
+    }, MIN_RETIREMENT_PASS_MS)
     this.#event.unref()
   }
 
@@ -73,7 +79,10 @@ export class WorktreeRetention {
 
   /** Settings and the audit CLI always use preview, regardless of the saved mode. */
   async preview(): Promise<WorktreeRetentionReport> {
-    const settings = await this.settings()
+    return this.#preview(await this.settings(), { used: 0, cache: new Map() })
+  }
+
+  async #preview(settings: WorktreeRetentionSettings, pulls: PullPass): Promise<WorktreeRetentionReport> {
     const rows = this.#deps.worktrees()
     const groups = new Map<string, ThreadWorktree[]>()
     for (const row of rows) {
@@ -81,8 +90,15 @@ export class WorktreeRetention {
       groups.set(checkout, [...groups.get(checkout) ?? [], row])
     }
     const checkouts: WorktreeRetirement[] = []
-    for (const [path, members] of groups) checkouts.push(await this.#inspect(path, members, rows, settings))
-    return { settings, everyMs: WORKTREE_RETENTION_MS, at: this.#now(), checkouts }
+    const entries = [...groups]
+    const offset = this.#offset % Math.max(1, entries.length)
+    this.#offset = offset + MAX_RETIREMENT_PULL_LOOKUPS
+    for (let i = 0; i < entries.length; i++) {
+      const [path, members] = entries[(offset + i) % entries.length]!
+      checkouts.push(await this.#inspect(path, members, rows, settings, pulls))
+    }
+    checkouts.sort((a, b) => a.path.localeCompare(b.path))
+    return { settings, everyMs: WORKTREE_RETENTION_MS, minimumPassMs: MIN_RETIREMENT_PASS_MS, githubLookups: pulls.used, githubLookupLimit: MAX_RETIREMENT_PULL_LOOKUPS, at: this.#now(), checkouts }
   }
 
   run(): Promise<WorktreeRetentionReport> {
@@ -91,8 +107,14 @@ export class WorktreeRetention {
   }
 
   async #run(): Promise<WorktreeRetentionReport> {
-    const report = await this.preview()
-    if (report.settings.mode === "preview" || this.#closed) { this.#last = report; return report }
+    const settings = await this.settings()
+    const empty: WorktreeRetentionReport = { settings, everyMs: WORKTREE_RETENTION_MS, minimumPassMs: MIN_RETIREMENT_PASS_MS, githubLookups: 0, githubLookupLimit: MAX_RETIREMENT_PULL_LOOKUPS, at: this.#now(), checkouts: [] }
+    // Preview-only never scans files or calls GitHub in the background.
+    if (settings.mode === "preview" || this.#closed) return empty
+    if (this.#lastStart !== undefined && this.#now() - this.#lastStart < MIN_RETIREMENT_PASS_MS) return this.#last ?? empty
+    this.#lastStart = this.#now()
+    const pulls: PullPass = { used: 0, cache: new Map() }
+    const report = await this.#preview(settings, pulls)
     // Profiles sharing the Thread store share this claim too. A crashed owner leaves it closed for review;
     // elapsed time or a numeric PID never authorizes stealing it.
     const lockPath = `${this.#deps.file}.lock`
@@ -116,7 +138,7 @@ export class WorktreeRetention {
         const settings = await this.settings()
         const rows = this.#deps.worktrees()
         const members = rows.filter((row) => worktreeCheckout(row) === planned.path)
-        const row = members.length ? await this.#inspect(planned.path, members, rows, settings) : undefined
+        const row = members.length ? await this.#inspect(planned.path, members, rows, settings, pulls) : undefined
         if (settings.mode !== report.settings.mode || !row || row.skip || JSON.stringify(row.owners) !== JSON.stringify(planned.owners) || JSON.stringify(row.heads) !== JSON.stringify(planned.heads))
           throw new Error("The checkout's retirement conditions changed; it was kept.")
         return row
@@ -132,7 +154,8 @@ export class WorktreeRetention {
           await rm(aside, { recursive: true })
         }
         if (report.settings.mode === "checkout") {
-          await current()
+          const row = await current()
+          if (row.checkoutSkip) throw new Error(row.checkoutSkip)
           await this.#deps.remove(planned.path)
         }
       } catch (error) {
@@ -142,25 +165,38 @@ export class WorktreeRetention {
     const current = await lstat(lockPath)
     if (current.dev !== identity.dev || current.ino !== identity.ino) throw new Error("The retirement claim changed; it was retained.")
     await rmdir(lockPath)
+    report.githubLookups = pulls.used
     this.#last = report
     return report
   }
 
-  async #inspect(path: string, members: ThreadWorktree[], rows: ThreadWorktree[], settings: WorktreeRetentionSettings): Promise<WorktreeRetirement> {
+  #pull(pass: PullPass, cwd: string, branch: string): Promise<WorktreeBranchProof | null> {
+    const key = JSON.stringify([cwd, branch])
+    const held = pass.cache.get(key)
+    if (held) return held
+    if (pass.used >= MAX_RETIREMENT_PULL_LOOKUPS) throw new Error("The GitHub lookup budget is used; this branch stays until a later pass.")
+    pass.used++
+    const lookup = this.#deps.pull(cwd, branch)
+    pass.cache.set(key, lookup)
+    return lookup
+  }
+
+  async #inspect(path: string, members: ThreadWorktree[], rows: ThreadWorktree[], settings: WorktreeRetentionSettings, pulls: PullPass): Promise<WorktreeRetirement> {
     const first = members[0]!
-    const result: WorktreeRetirement = { path, thread: first.thread, branch: first.branch, heads: [], packages: [], owners: members.map(({ path, thread, createdAt }) => ({ path, thread, createdAt })), skip: null }
+    const result: WorktreeRetirement = { path, thread: first.thread, branch: first.branch, heads: [], packages: [], checkoutSkip: null, owners: members.map(({ path, thread, createdAt }) => ({ path, thread, createdAt })), skip: null }
     try {
       if (!inside(this.#deps.root, path) || await realpath(path) !== path) throw new Error("The checkout is outside its owned root or uses a link.")
       if (settings.kept.some((kept) => kept === path || inside(kept, path))) throw new Error("Explicitly kept.")
       if (rows.some((row) => row.thread !== first.thread && (worktreeCheckout(row) === path || inside(path, row.path) || inside(worktreeCheckout(row), path)))) throw new Error("Shared with another Thread.")
-      if (this.#deps.finished(first.thread) === undefined) throw new Error("The Thread is active or its finished state is unknown.")
+      if (this.#deps.finished(first.thread) === undefined) throw new Error("Not a finished Fin, or its finished state is unknown.")
       if ((await this.#deps.using(path)).length) throw new Error("A provider, terminal or app still uses the checkout.")
       const cutoff = this.#now() - settings.days * 86_400_000
       for (const member of members) {
         if (!inside(path, member.path) && member.path !== path) throw new Error("A repository is outside its checkout.")
         if (await realpath(member.path) !== member.path) throw new Error("A repository uses a link.")
-        const facts = await this.#deps.repository(member)
+        const facts = await this.#deps.repository(member, (cwd, branch) => this.#pull(pulls, cwd, branch))
         result.heads.push(facts.head)
+        if (facts.ignored.length) result.checkoutSkip = "Ignored files or folders keep this checkout. Installed packages alone can be reclaimed."
         if (facts.blocked) throw new Error(facts.blocked)
         if (!facts.landed) throw new Error("Its current branch is not merged and has no closed pull request at this exact head.")
       }
@@ -173,6 +209,14 @@ export class WorktreeRetention {
           if (++visited > 50_000) throw new Error("The checkout is too large to inspect in one pass; it was kept.")
           if (entry.name === ".git") continue
           const file = join(folder, entry.name)
+          const inRepository = members.some((member) => inside(member.path, file) || (entry.isDirectory() && (member.path === file || inside(file, member.path))))
+          let generatedMarker = false
+          if (!inRepository && entry.isFile() && file === join(path, PROJECT_CHECKOUT_FILE)) {
+            const expected = `${JSON.stringify({ project: first.project })}\n`
+            generatedMarker = (await lstat(file)).size === Buffer.byteLength(expected) && await readFile(file, "utf8") === expected
+          }
+          if (!inRepository && !generatedMarker && entry.name !== "node_modules")
+            result.checkoutSkip = "Files outside the repositories keep this project checkout. Installed packages alone can be reclaimed."
           if (entry.name === "node_modules") {
             if (!entry.isDirectory() || await realpath(file) !== file) throw new Error("Installed packages use a shared or linked folder.")
             result.packages.push(file)
@@ -186,7 +230,8 @@ export class WorktreeRetention {
       }
       await walk(path)
       for (const [index, member] of members.entries()) {
-        const facts = await this.#deps.repository(member)
+        const facts = await this.#deps.repository(member, (cwd, branch) => this.#pull(pulls, cwd, branch))
+        if (facts.ignored.length) result.checkoutSkip = "Ignored files or folders keep this checkout. Installed packages alone can be reclaimed."
         if (facts.blocked || !facts.landed || facts.head !== result.heads[index]) throw new Error("The repository changed during inspection.")
       }
       if ((await this.#deps.using(path)).length || this.#deps.finished(first.thread) === undefined) throw new Error("The Thread resumed while its retirement was checked.")

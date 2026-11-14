@@ -92,6 +92,8 @@ export interface WorktreeBranchPull {
   checks: "passed" | "failed" | "running" | null
 }
 
+export type WorktreeBranchProof = Pick<WorktreeBranchPull, "branch" | "head" | "state">
+
 /** How a worktree's branch stands, for the rail's mark and its tip. */
 export interface WorktreeSummary {
   path: string
@@ -252,6 +254,8 @@ export interface WorktreeRetirement {
   /** All repository tips, so a changed branch cannot reuse a previous decision. */
   heads: string[]
   packages: string[]
+  /** Private ignored files keep the checkout even when its install can be reclaimed. */
+  checkoutSkip: string | null
   /** The registry ownership captured with this decision, rechecked before removal. */
   owners: Array<{ path: string; thread: ThreadId; createdAt: number }>
   /** Null means it is eligible now; an unreadable guard always gives a reason. */
@@ -261,6 +265,9 @@ export interface WorktreeRetirement {
 export interface WorktreeRetentionReport {
   settings: WorktreeRetentionSettings
   everyMs: number
+  minimumPassMs: number
+  githubLookups: number
+  githubLookupLimit: number
   at: number
   checkouts: WorktreeRetirement[]
 }

@@ -8,7 +8,7 @@ import { MACHINE_GITHUB_ENV } from "../contracts/machine-agent.js"
 import type { PullRequest, GitHubStatus, CheckSummary, ReviewSummary } from "../contracts/git-workspace-search.js"
 import type { PullRequestListing } from "../contracts/pull-request-search.js"
 import type { PullReading } from "../contracts/pull-waits.js"
-import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
+import type { WorktreeBranchProof, WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "../contracts/git-actions.js"
 import type { Git } from "@mako/git"
 
@@ -572,6 +572,19 @@ export async function listPullHeads(cwd: string): Promise<WorktreePull[] | null>
       return pulls
     }
   )
+}
+
+/** A branch's own PR, including one older than the repository's recent PR list. */
+export async function readBranchPull(cwd: string, branch: string, runner: GitHubRunner = gh): Promise<WorktreeBranchProof | null> {
+  let value: JsonValue
+  try { value = JSON.parse(await runner(cwd, ["pr", "view", "--json", "headRefName,headRefOid,state,isDraft", "--", branch])) }
+  catch { return null }
+  if (!isJsonObject(value)) return null
+  const name = stringValue(value.headRefName)
+  const head = stringValue(value.headRefOid)
+  const state = stringValue(value.state)
+  if (name !== branch || !head || (state !== "OPEN" && state !== "CLOSED" && state !== "MERGED")) return null
+  return { branch: name, head, state: state === "MERGED" ? "merged" : state === "CLOSED" ? "closed" : booleanValue(value.isDraft) ? "draft" : "open" }
 }
 
 /** Recent pull requests in any state, newest first, with the head commit and one word for their checks. Null when `gh` can't answer here. */

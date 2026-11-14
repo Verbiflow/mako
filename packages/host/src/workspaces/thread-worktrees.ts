@@ -7,7 +7,7 @@ import type { ThreadStore } from "../threads/index.js"
 import type { ThreadId } from "../contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, PROJECT_CHECKOUT_FILE, worktreeCheckout, worktreeSlug } from "../contracts/thread-worktrees.js"
 import type { GitDiff } from "../contracts/git-workspace-search.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
+import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeBranchProof, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { previewDiffs, projectRepositories } from "../git/index.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
@@ -1294,21 +1294,24 @@ export class ThreadWorktreeService {
   }
 
   /** Fresh retirement proof. The current worktree HEAD must still be its recorded branch tip. */
-  async retirementRepository(worktree: ThreadWorktree, pulls: PullsOf): Promise<{ head: string; blocked: string | null; landed: boolean }> {
+  async retirementRepository(worktree: ThreadWorktree, readPull: (cwd: string, branch: string) => Promise<WorktreeBranchProof | null>): Promise<{ head: string; blocked: string | null; landed: boolean; ignored: string[] }> {
     const [head, branch, blocked] = await Promise.all([
       this.git.readOutput(worktree.path, ["rev-parse", "HEAD"]),
       this.git.readOutput(worktree.path, ["symbolic-ref", "--short", "HEAD"]),
       this.git.readOutput(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).then((status) => removalBlocker(this.git, worktree.path, status)),
     ])
-    if (branch !== worktree.branch) return { head, blocked: "The recorded branch changed.", landed: false }
+    if (blocked) return { head, blocked, landed: false, ignored: [] }
+    if (branch !== worktree.branch) return { head, blocked: "The recorded branch changed.", landed: false, ignored: [] }
     // Tracked dependency files are source, never expendable install outputs.
     const tracked = await this.git.readOutput(worktree.path, ["ls-files", "--", "node_modules", ":(glob)**/node_modules/**"])
-    if (tracked) return { head, blocked: "The repository tracks files inside node_modules.", landed: false }
+    if (tracked) return { head, blocked: "The repository tracks files inside node_modules.", landed: false, ignored: [] }
     const into = await this.git.readOutput(worktree.repoRoot, ["symbolic-ref", "--short", "HEAD"])
-    if (branch === into) return { head, blocked: "The checkout uses the project's current branch.", landed: false }
+    if (branch === into) return { head, blocked: "The checkout uses the project's current branch.", landed: false, ignored: [] }
     const integrated = await this.git.succeeds(worktree.repoRoot, ["merge-base", "--is-ancestor", head, into])
-    const pull = integrated ? null : branchPull(await pulls(worktree.repoRoot) ?? [], branch)
-    return { head, blocked: blocked ?? null, landed: integrated || (pull?.head === head && (pull.state === "closed" || pull.state === "merged")) }
+    const pull = integrated ? null : await readPull(worktree.repoRoot, branch)
+    const ignored = (await this.git.readOutput(worktree.path, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]))
+      .split("\0").slice(0, -1).filter((entry) => !entry.split("/").includes("node_modules"))
+    return { head, blocked: blocked ?? null, ignored, landed: integrated || (pull?.branch === branch && pull.head === head && (pull.state === "closed" || pull.state === "merged")) }
   }
 
   /** Why the checkout cannot go: live users or work a removal would lose. */

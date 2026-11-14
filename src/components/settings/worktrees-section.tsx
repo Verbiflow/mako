@@ -219,7 +219,7 @@ function RetentionSettings() {
   }
   return <section>
     <h3 className="text-ui font-medium">Finished Thread worktrees</h3>
-    <p className="mt-0.5 pb-3 text-label text-muted-foreground">Checked hourly and when a turn ends. Preview only by default, after seven quiet days. Only clean, unshared checkouts of finished Threads with merged work or a closed pull request qualify. Providers, terminals and running apps keep theirs.</p>
+    <p className="mt-0.5 pb-3 text-label text-muted-foreground">Preview only by default, after seven quiet days. Preview mode makes no background passes. Enabled removal checks hourly and on events, at most once every ten minutes. Only clean, unshared checkouts of finished Fins with merged work or a closed pull request qualify. Ignored files keep the checkout; installed packages can still be reclaimed. Providers, terminals and running apps keep theirs.</p>
     {report ? <ListCard>
       <SettingRow title="Automatic retirement" description="Packages go first and can be installed again. Checkout removal keeps committed branches. Choosing removal enables it on the next pass.">
         <select aria-label="Automatic retirement" value={report.settings.mode} disabled={busy} onChange={(event) => {
@@ -237,9 +237,10 @@ function RetentionSettings() {
           if (Number.isInteger(days) && days >= 0 && days <= 3650) void save({ ...report.settings, days })
         }} />
       </SettingRow>
-      {report.checkouts.map((row) => <SettingRow key={row.path} title={row.branch} description={row.skip ?? `Eligible: ${plural(row.packages.length, "package folder")}. No files were removed by this preview.`}>
+      {report.checkouts.map((row) => <SettingRow key={row.path} title={row.branch} description={row.skip ?? `${plural(row.packages.length, "package folder")} can be reclaimed. ${row.checkoutSkip ?? "The checkout is eligible for retirement."} No files were removed by this preview.`}>
         <Toggle label={`Keep ${row.branch}`} on={report.settings.kept.includes(row.path)} onChange={() => void save({ ...report.settings, kept: report.settings.kept.includes(row.path) ? report.settings.kept.filter((path) => path !== row.path) : [...report.settings.kept, row.path] })} />
       </SettingRow>)}
+      <p className="text-label text-faint">GitHub lookups in this preview: {report.githubLookups} of {report.githubLookupLimit}.</p>
       <Action tone="outline" size="xs" disabled={busy} onClick={() => void read()}>Preview again</Action>
     </ListCard> : null}
     {error ? <p className="pt-2 text-label text-removed">{error}</p> : null}
