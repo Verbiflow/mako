@@ -354,7 +354,7 @@ export class ThreadWorktreeService {
   private readonly spares: WorktreeSpares
   private readonly starts: WorktreeStarts
   private readonly skips = new Map<string, () => void>()
-  private readonly branchPulls = new Map<string, { at: number; pulls: Promise<WorktreeBranchPull[] | null> }>()
+  private readonly branchPulls = new Map<string, { at: number; heads: ReadonlySet<string>; branches: ReadonlyMap<string, string>; pulls: Promise<WorktreeBranchPull[] | null> }>()
   /** Each repository's pull requests as last read, kept past `forgetPulls`, for what a Fin's strip says (`heldPulls`). */
   private readonly pullsRead = new Map<string, WorktreeBranchPull[]>()
   /** Each receipt's `untold`, read without waiting, as a turn is sent. */
@@ -1107,9 +1107,12 @@ export class ThreadWorktreeService {
     if (!this.pullsVisible()) return Promise.resolve(this.pullsRead.get(repoRoot) ?? null)
     const now = Date.now()
     const cached = this.branchPulls.get(repoRoot)
-    if (cached && now - cached.at < BRANCH_PULLS_EVERY_MS) return cached.pulls
+    // A shell push can precede its file event. Changed local facts must reach the per-PR reader now,
+    // while an unchanged HEAD still shares the minute cache and the broad list keeps its five-minute TTL.
+    if (cached && now - cached.at < BRANCH_PULLS_EVERY_MS && liveHeads.every(head => cached.heads.has(head)) &&
+      [...liveBranches].every(([branch, head]) => cached.branches.get(branch) === head)) return cached.pulls
     const pulls = Promise.resolve(this.pullInvalidations.get(repoRoot)).then(() => pullsOf?.(repoRoot, liveHeads, liveBranches) ?? null).catch(() => null)
-    this.branchPulls.set(repoRoot, { at: now, pulls })
+    this.branchPulls.set(repoRoot, { at: now, heads: new Set(liveHeads), branches: new Map(liveBranches), pulls })
     void pulls.then((read) => {
       if (read && this.branchPulls.get(repoRoot)?.pulls === pulls) this.pullsRead.set(repoRoot, read)
     })
