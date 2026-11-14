@@ -47,9 +47,11 @@ function watcherChildren(): number[] {
 // consumers answer with a rescan: a fresh marker is then the barrier. A watch
 // that goes quiet without saying so still fails, with what it did say.
 let markers = 0
-async function drained(folder: string, watch: ReturnType<typeof recorder>): Promise<void> {
+/** Resolves once the watch is drained, saying whether it dropped events meanwhile: then what was written before may be lost. */
+async function drained(folder: string, watch: ReturnType<typeof recorder>): Promise<boolean> {
   const deadline = Date.now() + 90_000
-  let drops = watch.dropped()
+  const before = watch.dropped()
+  let drops = before
   let marker = join(folder, `marker-${++markers}`)
   writeFileSync(marker, "")
   while (!watch.heard.includes(marker)) {
@@ -62,6 +64,7 @@ async function drained(folder: string, watch: ReturnType<typeof recorder>): Prom
     }
     await wait(25)
   }
+  return watch.dropped() > before
 }
 
 try {
@@ -76,10 +79,14 @@ try {
   await backend(removed, [], b.listener)
   assert.equal(watcherChildren().length, 1, "every watch shares one child")
   await drained(kept, a)
-  mkdirSync(join(kept, "node_modules", "pkg"), { recursive: true })
-  writeFileSync(join(kept, "node_modules", "pkg", "index.js"), "")
-  writeFileSync(join(kept, "index.ts"), "")
-  await drained(kept, a)
+  // A drop during the drain may have taken these writes with it, as a consumer's rescan would find: they're made
+  // again, and drained again, until a drain passes without one.
+  for (let lost = true; lost;) {
+    mkdirSync(join(kept, "node_modules", "pkg"), { recursive: true })
+    writeFileSync(join(kept, "node_modules", "pkg", "index.js"), "")
+    writeFileSync(join(kept, "index.ts"), "")
+    lost = await drained(kept, a)
+  }
   assert.ok(a.heard.includes(join(kept, "index.ts")))
   assert.equal(a.heard.some((path) => path.includes("node_modules/pkg/")), false, "ignored folders stay in the child")
 
