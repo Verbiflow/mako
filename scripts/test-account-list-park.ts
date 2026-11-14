@@ -195,6 +195,24 @@ test("hidden and shown before the stream's end is heard, it's still a park, not 
   }
 })
 
+test("shown again after a while, the follow's read and the return's refresh are one request", async () => {
+  const { cloud, list, close } = browser()
+  try {
+    cloud.keep({ type: "sessions-listed", sessions: [row(1)] })
+    list.start()
+    await until("followed", () => cloud.following())
+    list.park()
+    cloud.keep({ type: "sessions-listed", sessions: [row(1, "working", 1)] })
+    // As the client returns from a long time away: the list unparked, then refreshed.
+    list.unpark()
+    await list.refresh()
+    await until("followed again", () => cloud.following() && shown().get(uuid(1)) === "working")
+    assert.equal(cloud.counts.reads, 2, "the first read and one more, shared by the follow and the refresh")
+  } finally {
+    close()
+  }
+})
+
 test("a stream that failed while shown is read whole, as before", async () => {
   const { cloud, list, close } = browser()
   try {

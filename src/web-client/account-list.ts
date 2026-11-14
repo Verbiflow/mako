@@ -117,6 +117,8 @@ export class AccountList {
   /** The subscription `park` closed: its end is ours, not a failure, even once shown again. */
   #letGo: Subscription | undefined
   #unpark: (() => void) | undefined
+  /** The list's read under way, which a follow and a refresh asked at once share. */
+  #reading: Promise<SessionListings> | undefined
   #saveTimer: ReturnType<typeof setTimeout> | undefined
   /** Whether this visit kept the list once already. */
   #saved = false
@@ -197,7 +199,7 @@ export class AccountList {
    */
   async refresh(): Promise<void> {
     this.#gateway.wake()
-    const listings = SessionListingsSchema.parse(await this.#gateway.rest("GET", "/v1/sessions"))
+    const listings = await this.#read()
     if (this.#list.seq === undefined || listings.seq >= this.#list.seq) this.#list.listed(listings)
     await this.refreshDevices().catch((error) => this.#failed({ error }))
     this.#publish("live")
@@ -236,7 +238,7 @@ export class AccountList {
         // The devices are asked beside the list on its first read, not after it: the list paints once both are here, a
         // round trip sooner on a phone's network.
         const devices = this.#devicesAsked ? undefined : this.refreshDevices().catch((error) => this.#failed({ error }))
-        const listings = SessionListingsSchema.parse(await this.#gateway.rest("GET", "/v1/sessions"))
+        const listings = await this.#read()
         this.#list.listed(listings)
         if (devices) await devices
         else if (this.#unnamedDevice()) await this.refreshDevices().catch((error) => this.#failed({ error }))
@@ -297,6 +299,20 @@ export class AccountList {
       }
       await this.#pause(followAgainInMs(failures++))
     }
+  }
+
+  /**
+   * `GET /v1/sessions`, shared while under way: shown again after a while, the follow reads the list as it starts and
+   * the return's refresh asks for it too, and one read answers both.
+   */
+  #read(): Promise<SessionListings> {
+    this.#reading ??= this.#gateway
+      .rest("GET", "/v1/sessions")
+      .then((answer) => SessionListingsSchema.parse(answer))
+      .finally(() => {
+        this.#reading = undefined
+      })
+    return this.#reading
   }
 
   /** A device a listed row runs on that the list hasn't named, if any. */
