@@ -133,6 +133,8 @@ export interface ScriptedModelOptions {
    * (a local cloud machine in Docker) reaches it at an address this computer has on its network.
    */
   host?: string
+  /** A caller-owned listening port; omitted to let the OS choose. */
+  port?: number
   /**
    * Milliseconds before each streamed delta of an OpenAI Responses or Anthropic Messages reply, so it arrives at a
    * model's pace rather than all at once (20 is 50 tokens a second): `npm run bench:sync-latency` times each word from
@@ -247,7 +249,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
     })
   })
   const host = options.host ?? "127.0.0.1"
-  await new Promise<void>((resolve) => server.listen(0, host, resolve))
+  await new Promise<void>((resolve) => server.listen(options.port ?? 0, host, resolve))
   // SAFETY: a server listening on a TCP port reports its address as an AddressInfo.
   const { port } = server.address() as AddressInfo
   return {
