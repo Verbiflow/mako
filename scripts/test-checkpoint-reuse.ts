@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
+import { mock } from "node:test"
 import { Git } from "@mako/git"
 import type { HistoryMark } from "@mako/host/contracts/watcher-child"
 import type { FileHistory, HistoryOptions } from "@mako/host/workspaces/watch-backend"
@@ -184,6 +185,66 @@ try {
   const again = await turn()
   assert.equal(again.before.id, settled.after.id)
   console.log(JSON.stringify({ captureMs: Math.round(settled.ms), reusedMs: Math.round(again.ms), historyReads: reads }))
+  // Each run has its own sharing metadata, while its repository parts can reuse unchanged content.
+  {
+    const folder = join(root, "shared-project")
+    const storeRoot = join(root, "shared-project-store")
+    const runner = new Git()
+    const grouped = new WorkspaceSnapshots(runner, storeRoot)
+    grouped.followHistory(history)
+    // App has no HEAD or user index; backend has tracked content. Both kinds must retain exact incremental content.
+    for (const name of ["app", "backend"]) {
+      const repository = join(folder, name)
+      mkdirSync(repository, { recursive: true })
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repository })
+      writeFileSync(join(repository, "file.txt"), `${name}\n`)
+      if (name === "backend") {
+        execFileSync("git", ["add", "file.txt"], { cwd: repository })
+        execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@localhost", "commit", "-qm", "first"], { cwd: repository })
+      }
+    }
+    const ids = [randomUUID(), randomUUID(), randomUUID()]
+    const original = runner.run.bind(runner)
+    const commands = mock.method(runner, "run", original)
+    const trees = (where: string, id: string) => {
+      const db = new DatabaseSync(join(where, "snapshots.sqlite"), { readOnly: true })
+      try {
+        const row = z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM groups WHERE id=?").get(id))
+        const group = z.object({ parts: z.array(z.object({ path: z.string(), id: z.string() })) }).parse(JSON.parse(row.value))
+        return Object.fromEntries(group.parts.map(part => {
+          const saved = z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM snapshots WHERE id=?").get(part.id))
+          return [part.path, z.object({ tree: z.string() }).parse(JSON.parse(saved.value)).tree]
+        }))
+      } finally { db.close() }
+    }
+    try {
+      const first = await grouped.beginRun(ids[0], folder)
+      commands.mock.resetCalls()
+      const second = await grouped.beginRun(ids[1], folder)
+      assert.notEqual(second.id, first.id, "sharing metadata is a fresh run boundary")
+      assert.deepEqual(second.shared, [ids[0]], "the group names the other run, not itself")
+      for (const name of ["app", "backend"]) {
+        const file = join(folder, name, "file.txt")
+        writeFileSync(file, "changed before the third turn\n")
+        heard.push({ at: ++count, path: file })
+      }
+      const third = await grouped.beginRun(ids[2], folder)
+      assert.deepEqual([...third.shared ?? []].sort(), ids.slice(0, 2).sort())
+      assert.equal(commands.mock.calls.some(call => call.arguments[0].args.includes("ls-files") && call.arguments[0].args.includes("-v")), false, "sharing a project folder must not force full repository-part captures")
+      const wholeRoot = join(root, "shared-project-whole")
+      const whole = new WorkspaceSnapshots(new Git(), wholeRoot)
+      try {
+        const expected = await whole.capture(folder)
+        assert.deepEqual(trees(storeRoot, third.id), trees(wholeRoot, expected.id), "shared incremental parts hold the full capture's exact content")
+      } finally { whole.close() }
+    } finally {
+      commands.mock.restore()
+      for (const id of ids) grouped.abandonRun(id)
+      grouped.close()
+    }
+  }
+  console.log("shared groups: distinct run metadata with reusable exact repository content")
+
   console.log("checkpoint reuse: a quiet workspace's turn starts on its last checkpoint; a change, a staged path, a moved HEAD, a lost or unread history, or a shared workspace is captured")
 } finally {
   store.close()
