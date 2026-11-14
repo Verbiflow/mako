@@ -48,18 +48,31 @@ async function waitForSocket(): Promise<void> {
   throw new Error("Terminal daemon socket did not appear")
 }
 
+/**
+ * Waits for `marker` in a session's output as the terminal shows it: the frames joined in order. A frame is one read of
+ * the PTY, so a marker printed after a long burst can straddle two of them (1 run in 300 under held acknowledgements);
+ * each session is joined apart, since another shell's frame may fall between two halves.
+ */
 function outputContaining(
   events: TerminalEvent[],
   marker: string
 ): Promise<void> {
+  const tails = new Map<string, string>()
+  let read = 0
+  const arrived = () => {
+    if (events.length < read) read = 0
+    for (; read < events.length; read += 1) {
+      const event = events[read]
+      if (event.type !== "output") continue
+      const joined = (tails.get(event.sessionId) ?? "") + event.data
+      if (joined.includes(marker)) return true
+      tails.set(event.sessionId, joined.slice(-(marker.length - 1)))
+    }
+    return false
+  }
   return new Promise((resolveOutput, rejectOutput) => {
     const interval = setInterval(() => {
-      if (
-        !events.some(
-          (event) => event.type === "output" && event.data.includes(marker)
-        )
-      )
-        return
+      if (!arrived()) return
       clearInterval(interval)
       clearTimeout(timer)
       resolveOutput()
@@ -70,6 +83,10 @@ function outputContaining(
     }, 5_000)
   })
 }
+
+// A marker split across two frames of its session, with another session's frame between them, is still found.
+const frame = (sessionId: string, sequence: number, data: string): TerminalEvent => ({ type: "output", sessionId, sequence, data })
+await outputContaining([frame("a", 1, "zzzzshared-ta"), frame("b", 1, "il-0 elsewhere"), frame("a", 2, "il-0\r\n")], "shared-tail-0")
 
 await waitForSocket()
 const events: TerminalEvent[] = []
@@ -310,14 +327,26 @@ for (let attempt = 0; attempt < 250; attempt += 1) {
     .filter((event) => event.type === "output")
     .map((event) => event.data)
     .join("")
-  childPid = Number(/MAKO_CHILD:(\d+)/.exec(childOutput)?.[1])
+  // The whole line: a frame can end inside the number.
+  childPid = Number(/MAKO_CHILD:(\d+)\r?\n/.exec(childOutput)?.[1])
   if (childPid > 1) break
   await new Promise((resolveWait) => setTimeout(resolveWait, 20))
 }
 assert.ok(childPid > 1)
 await second.kill(processSession.id)
-await new Promise((resolveWait) => setTimeout(resolveWait, 100))
-assert.throws(() => process.kill(childPid, 0))
+// The kill signals the shell's process groups; the child is gone once the kernel has delivered it, which a loaded
+// machine can take longer than a moment to do.
+const childAlive = () => {
+  try {
+    process.kill(childPid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+for (let attempt = 0; attempt < 250 && childAlive(); attempt += 1)
+  await new Promise((resolveWait) => setTimeout(resolveWait, 20))
+assert.equal(childAlive(), false, "killing a terminal ends its background children")
 
 await second.kill(session.id)
 assert.equal(
