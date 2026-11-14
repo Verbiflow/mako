@@ -44,7 +44,7 @@ runs:
         path: |
           node_modules
           packages/*/node_modules
-        key: node-modules-probe1-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.image }}-node-${{ steps.node.outputs.version }}-npm-${{ steps.node.outputs.npm }}-${{ steps.node.outputs.dependencies }}
+        key: node-modules-probe2-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.image }}-node-${{ steps.node.outputs.version }}-npm-${{ steps.node.outputs.npm }}-${{ steps.node.outputs.dependencies }}
     # A miss installs from npm's own cache of tarballs, restored for this lockfile or else the newest one kept: a changed
     # lockfile (a harness's version bumped) missed the tree in every job at once, and each of the gate's 45 shards
     # downloaded every package again, 75 s of `npm ci` on its 2-vCPU runner where the same install from a filled cache
