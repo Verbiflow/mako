@@ -314,8 +314,9 @@ export class LiveClosing {
     const { dependencies } = this.access
     const { records } = this.parts
     const closing: Promise<unknown>[] = []
+    const releases: Promise<void>[] = []
     const left: LeftTurn[] = []
-    records.stop()
+    releases.push(records.stop())
     this.parts.actions.stop()
     for (const resident of records.values()) {
       for (const pending of [resident.hibernating, resident.waking, resident.openingOperation, resident.transferOperation])
@@ -379,12 +380,14 @@ export class LiveClosing {
         hostWarn("live", "a conversation couldn't be saved as Mako stopped", { conversation: resident.snapshot.session.id, error: errorMessage({ error }) })
       }
       // Open questions keep a conversation loaded until the host stops, so its dropped copy's space is reclaimed here.
-      resident.journal.close((path) => { void this.access.reclaims.reclaim(path) }, true)
-      closing.push(resident.journal.released())
+      releases.push(resident.journal.close((path) => this.access.reclaims.reclaim(path), true))
     }
-    closing.push(records.stopCheckpoints())
+    releases.push(records.stopCheckpoints(), this.access.reclaims.stop())
     records.clear()
     this.parts.restarts.leave(left)
-    return this.shutdown = Promise.allSettled(closing).then(() => {})
+    return this.shutdown = Promise.all([Promise.allSettled(closing), Promise.allSettled(releases)]).then(([, released]) => {
+      const failed = released.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+      if (failed.length) throw new AggregateError(failed, "Journal ownership could not be released as Mako stopped")
+    })
   }
 }

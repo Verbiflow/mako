@@ -15,6 +15,15 @@ import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-question-retirement-"))
+async function stopped(owner: LiveConversations): Promise<void> {
+  const primer = owner["records"]["primer"]
+  const thread = primer["generation"]?.thread
+  await owner.stop()
+  if (thread) assert.equal(thread.threadId, -1, "question owner released its checkpoint worker before root reuse")
+  assert.equal(primer["leases"].size, 0)
+  assert.equal(primer["waiting"].size, 0)
+  assert.equal(primer["retiring"].size, 0)
+}
 try {
   for (const provider of [...registeredHarnessIds(), "future"]) {
     const id = randomUUID(), path = join(root, provider + ".native")
@@ -98,7 +107,7 @@ try {
       assert.ok(!snapshot().control!.questions!.some(q => q.native.itemId === "missed-old"), "A pre-input history read cannot introduce an older prompt afterward")
       assert.equal(current()?.id, afterReadStarted.id)
       delete asked.history
-      owner.stop(); owner = new LiveConversations(deps)
+      await stopped(owner); owner = new LiveConversations(deps)
       assert.ok(snapshot().control!.questions!.find(q => q.id === old.id)?.retired, "Retirement is journaled across owner restart")
       assert.equal(current()?.id, afterReadStarted.id)
       await owner.permission(id, afterReadStarted.id, { kind: "choice", optionId: null })
@@ -107,6 +116,6 @@ try {
       assert.equal(current(), undefined, "Dismissing current questions cannot uncover retired historical forms")
       assert.equal(snapshot().control!.questions!.find(q => q.id === old.id)?.answered, undefined, "Presentation retirement never fabricates a native answer")
       console.log(`${provider}: ordinary/queued input, dispatch, stale answer, replay, late cohort, answer exclusion and restart passed`)
-    } finally { owner.stop() }
+    } finally { await stopped(owner) }
   }
 } finally { await rm(root, { recursive: true, force: true }) }

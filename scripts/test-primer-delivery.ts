@@ -113,8 +113,8 @@ function primerHost(options: { idleMs?: number } = {}) {
       await waitFor(() => owner.snapshot(id)?.session.status === "failed", `"${text}" was never refused`)
     },
     observe: (event: Parameters<LiveConversations["observe"]>[0]) => owner.observe(event),
-    cleanup: () => {
-      owner.stop()
+    cleanup: async () => {
+      await owner.stop()
       rmSync(root, { recursive: true, force: true })
     },
   }
@@ -132,7 +132,7 @@ async function primerAfter(lose: (host: Host) => Promise<void>, options: { idleM
     await lose(host)
     assert.ok(carries(await host.send("Next")), "the next accepted prompt carries the primer again")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 

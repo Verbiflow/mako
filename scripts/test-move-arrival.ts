@@ -190,6 +190,6 @@ try {
   await assert.rejects(readyForMove({ workspaceSettled: async () => ({ path: "/Users/someone/else" }), warm: async () => {} }, { folder }), /not the move's/)
   console.log("PASS: a machine is ready for a move once its folder is cloned; an arriving Thread's sessions are written, then opened one at a time before the machine answers, filed first under the device's Thread and Sessions; one that can't start fails the arrival by name, with the sign-in setting when the cloud has none for it")
 } finally {
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 }

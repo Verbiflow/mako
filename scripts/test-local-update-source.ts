@@ -320,6 +320,6 @@ process.exit(1)
 
   console.log("Update source: fetches the upstream, recommends it clean in Mako's own copy when the checkout is behind or has only uncommitted work and never moves the checkout, builds the checkout as it is when asked (naming every uncommitted file it takes and handing packaging that list), never rebuilds the installed revision, and lets update:local fast-forward a clean checkout (files and index, never untracked work) while refusing stale readings")
 } finally {
-  git.close()
+  await git.close()
   await rm(root, { recursive: true, force: true })
 }

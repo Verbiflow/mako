@@ -199,7 +199,7 @@ try {
   }
   await measure(`${Math.round(fileCount / 1000)}k files`, scratch, git, true)
 } finally {
-  git.close()
+  await git.close()
   if (!keep && !reuse) rmSync(scratch, { recursive: true, force: true })
   else console.log(`kept ${scratch}`)
 }

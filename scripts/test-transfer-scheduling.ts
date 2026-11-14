@@ -204,7 +204,7 @@ if (!process.argv.includes("--fixture")) {
       )
     } finally {
       calls.mock.restore()
-      owner.stop()
+      await owner.stop()
     }
   }
 }
