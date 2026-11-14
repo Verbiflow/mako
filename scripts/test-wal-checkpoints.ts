@@ -197,6 +197,54 @@ test("close joins the compaction worker's termination promise before releasing t
   }
 })
 
+test("a rejected worker termination leaves later compactions runnable", async context => {
+  const root = mkdtempSync(join(tmpdir(), "mwc-reclaim-recovery-"))
+  const snapshot = auditSnapshot(0)
+  const firstJournal = new LiveJournal(join(root, "first"), snapshot.session.id)
+  const nextJournal = new LiveJournal(join(root, "next"), snapshot.session.id)
+  firstJournal.commit(snapshot)
+  nextJournal.commit(snapshot)
+  await firstJournal.close()
+  await nextJournal.close()
+  const reclaims = new JournalReclaims()
+  const failed = new Error("fixture termination failed after native exit")
+  const terminate = Worker.prototype.terminate
+  let terminations = 0
+  context.mock.method(Worker.prototype, "terminate", function (this: Worker) {
+    return terminate.call(this).then(code => {
+      if (++terminations === 1) throw failed
+      return code
+    })
+  })
+  const first = reclaims.reclaim(firstJournal.file)
+  const next = reclaims.reclaim(nextJournal.file).then(
+    result => ({ kind: "done" as const, result }),
+    error => ({ kind: "failed" as const, error }),
+  )
+  try {
+    await assert.rejects(first, error => error === failed, "the first caller retains its actual failure")
+    const outcome = await next
+    assert.ok(outcome.kind === "done", "a failed completion must not poison the next queued compaction")
+    assert.equal("error" in outcome.result, false)
+    assert.equal("skipped" in outcome.result, false)
+    assert.equal(terminations, 2, "the next worker really ran and was joined")
+    assert.equal(reclaims["pending"].size, 0)
+  } finally {
+    await Promise.allSettled([first, next, reclaims.stop()])
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a removed journal folder skips compaction without creating pending work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mwc-reclaim-gone-"))
+  const reclaims = new JournalReclaims()
+  rmSync(root, { recursive: true, force: true })
+  try {
+    assert.deepEqual(await reclaims.reclaim(join(root, "missing.sqlite")), { skipped: true })
+    assert.equal(reclaims["pending"].size, 0)
+  } finally { await reclaims.stop() }
+})
+
 test("a compaction queued before reopen cannot delete the new owner's staged history", async () => {
   const root = mkdtempSync(join(tmpdir(), "mwc-queued-tidy-"))
   const snapshot = auditSnapshot(0)
@@ -213,6 +261,7 @@ test("a compaction queued before reopen cannot delete the new owner's staged his
     reopened["db"].prepare("INSERT INTO base_entries(id,value) VALUES(1,?)").run(JSON.stringify({ type: "text", text: "new staged history" }))
     deliver()
     await closed
+    assert.equal(journal.tidyingCancelled, true, "an immediate close whose compaction was skipped cannot keep a settled-file stamp")
     assert.equal(reopened["db"].prepare("SELECT count(*) AS n FROM base_entries").get()?.n, 1,
       "a queued old compaction must not discard history staged after a new open")
   } finally {

@@ -31,7 +31,11 @@ export class JournalReclaims {
 
   reclaim(path: string): Promise<Reclaimed> {
     if (this.stopped) return Promise.resolve({ skipped: true })
-    const key = fileKey(path)
+    let key: string
+    try { key = fileKey(path) } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return Promise.resolve({ skipped: true })
+      throw error
+    }
     const cancellation = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)
     const flag = new Int32Array(cancellation)
     const unwatch = journalOpened.subscribe(opened => {
@@ -42,7 +46,7 @@ export class JournalReclaims {
       unwatch()
       this.pending.delete(flag)
     })
-    this.queue = run
+    this.queue = run.catch(() => {})
     return run
   }
 
