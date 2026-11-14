@@ -341,7 +341,11 @@ scenario("offline, a message waits as long as the check, then runs here once", a
   assert.equal(ran.length, 1, "once")
   assert.ok(ran[0]!.at - woke >= 290, `not before the check gave up (${Math.round(ran[0]!.at - woke)} ms)`)
   assert.equal(w.request(typed)?.ownerCheck, undefined, "sent, it no longer says it waits")
-  assert.match(describeOwnerChecks(w.readings.readings().list.ownerChecks) ?? "", /^not heard 3\d\d ms after this Mac woke, so what waited ran here$/)
+  const checks = w.readings.readings().list.ownerChecks
+  assert.equal(checks?.at(-1)?.why, "wake")
+  assert.equal(checks?.at(-1)?.outcome, "gave-up")
+  // Diagnostics report elapsed time: a 300 ms timer can read 299 ms, or seconds on a busy runner.
+  assert.match(describeOwnerChecks(checks) ?? "", /^not heard (?:\d+ ms|\d+\.\d s) after this Mac woke, so what waited ran here$/)
 })
 
 // 3. Still this Mac's: the message runs here as the list arrives, with no wait beyond it.
