@@ -1,6 +1,6 @@
-import { readdirSync, statSync, watch, type FSWatcher } from "node:fs"
 import { realpath } from "node:fs/promises"
-import { dirname, join, relative, sep } from "node:path"
+import { join, sep } from "node:path"
+import { childBackend, type WatchBackend, type WatchSubscription } from "./watch-backend.js"
 import { locateGitDir } from "../base/checkout-location.js"
 
 /** What moves on every commit, add, reset or checkout, and nothing else does. */
@@ -18,7 +18,7 @@ export const INDEX_MARKER = ["index"]
 export interface GitDirWatch {
   /** Settles once the markers are watched, or once it's clear there's nothing to watch. */
   readonly ready: Promise<void>
-  close(): void
+  close(): Promise<void>
 }
 
 /**
@@ -36,87 +36,47 @@ export interface GitDirWatch {
  * read schedule the next one, forever, so an event that leaves the file's
  * inode, size, mtime and ctime as they were is not a change.
  */
-export function watchOutsideGitDir(folder: string, changed: () => void): GitDirWatch {
+export function watchOutsideGitDir(folder: string, changed: () => void, backend: WatchBackend = childBackend()): GitDirWatch {
   let markers: GitDirWatch | undefined
   let closed = false
+  let closing: Promise<void> | undefined
   const ready = (async () => {
     const [gitDir, root] = await Promise.all([
       locateGitDir(folder).then((found) => found && realpath(found)).catch(() => null),
       realpath(folder).catch(() => null),
     ])
     if (closed || !gitDir || !root || gitDir.startsWith(root + sep)) return
-    markers = watchGitMarkers(gitDir, changed)
+    markers = watchGitMarkers(gitDir, () => { if (!closed) changed() }, MARKERS, backend)
+    await markers.ready
   })()
   return {
     ready,
     close() {
       closed = true
-      markers?.close()
+      return closing ??= ready.then(() => markers?.close())
     },
   }
 }
 
-/**
- * A Git directory's markers (`MARKERS`, or those given) watched as files, wherever the directory is: each event that
- * changed one moves the watch to the file now there, then says so. A read that only touched the index's access time
- * says nothing.
- */
-export function watchGitMarkers(gitDir: string, changed: () => void, markers: readonly string[] = MARKERS): GitDirWatch {
+/** Git markers use the same child as tree watches; dropped events invalidate the whole marker set. */
+export function watchGitMarkers(gitDir: string, changed: () => void, markers: readonly string[] = MARKERS, backend: WatchBackend = childBackend()): GitDirWatch {
   let closed = false
-  const watchers = new Map<string, FSWatcher>()
-  const arm = (path: string, previous?: string) => {
-    watchers.get(path)?.close()
-    watchers.delete(path)
-    if (closed) return
-    try {
-      const seen = stamp(path)
-      // A first push creates its remote ref (and sometimes its parent directories). Follow the nearest
-      // existing parent until that exact marker exists; unrelated index/lock events cannot invalidate PRs.
-      let watched = path
-      while (!stamp(watched) && watched !== gitDir) watched = dirname(watched)
-      const child = watched === path ? undefined : relative(watched, path).split(sep)[0]
-      const watcher = watch(watched, { persistent: false }, (_event, filename) => {
-        if (watchers.get(path) !== watcher || child && filename && filename.toString() !== child) return
-        const next = stamp(path)
-        if (next === seen && watched === path) return
-        arm(path, next)
-        if (next !== seen) changed()
-      })
-      watcher.on("error", () => {
-        if (watchers.get(path) !== watcher) return
-        watcher.close()
-        watchers.delete(path)
-      })
-      watchers.set(path, watcher)
-      // A first push can create the missing target after the callback's stamp, before rearming it.
-      if (previous !== undefined && seen !== previous) changed()
-    } catch {
-      // Not there yet (a checkout with no commits has no reflog) or no handles
-      // left: the tree watch and explicit refreshes still cover it.
-    }
-  }
-  for (const marker of markers) arm(join(gitDir, marker))
-  return {
-    ready: Promise.resolve(),
-    close() {
-      closed = true
-      for (const watcher of watchers.values()) watcher.close()
-      watchers.clear()
-    },
-  }
-}
-
-function stamp(path: string): string {
-  try {
-    const stats = statSync(path)
-    const own = `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`
-    // Ref contents can change without their directory changing. Compare direct entries too, while ignoring
-    // read-only access times and temporary Git locks; nested branches have their own directory marker.
-    return stats.isDirectory() ? `${own}:${readdirSync(path).filter(name => !name.endsWith(".lock")).sort().map(name => {
-      const entry = statSync(join(path, name))
-      return `${name}:${entry.ino}:${entry.size}:${entry.mtimeMs}:${entry.ctimeMs}`
-    }).join("|")}` : own
-  } catch {
-    return ""
-  }
+  let release: Promise<void> | undefined
+  let closing: Promise<void> | undefined
+  let subscription: WatchSubscription | undefined
+  const done = () => release ??= subscription?.unsubscribe() ?? Promise.resolve()
+  const notify = () => { if (!closed) changed() }
+  const ready = (async () => {
+    const found = await backend(gitDir, [], {
+      events: notify,
+      dropped: notify,
+      gone: notify,
+      muted: (muted) => { if (!muted) notify() },
+    }, { kind: "git-markers", markers: [...markers] })
+    subscription = found
+    if (closed) await done()
+  })()
+  // A missing/unwatchable Git directory is still covered by explicit refreshes, as before.
+  const settled = ready.catch(() => {})
+  return { ready: settled, close() { closed = true; return closing ??= settled.then(done) } }
 }

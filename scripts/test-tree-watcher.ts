@@ -71,9 +71,9 @@ try {
   const linked = join(root, "linked")
   await git(repo, "worktree", "add", "-q", "-b", "side", linked)
   let commits = 0
-  const outside = watchOutsideGitDir(linked, () => { commits += 1 })
+  const outside = watchOutsideGitDir(linked, () => { commits += 1 }, backend)
   let insideHeard = 0
-  const inside = watchOutsideGitDir(repo, () => { insideHeard += 1 })
+  const inside = watchOutsideGitDir(repo, () => { insideHeard += 1 }, backend)
   await Promise.all([outside.ready, inside.ready])
   const heardCommit = async () => {
     for (const deadline = Date.now() + 5000; commits === 0 && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 20))
@@ -94,8 +94,8 @@ try {
   assert.equal(commits, 0, "reading status, which touches the index's access time, is not a change")
   await git(repo, "commit", "-q", "--allow-empty", "-m", "c")
   assert.equal(insideHeard, 0, "a Git directory inside the folder is left to the tree watch")
-  outside.close()
-  inside.close()
+  await outside.close()
+  await inside.close()
   console.log("tree watcher: refuses / and home, excludes eight quiet folders, drops dependency writes, reports source writes; a worktree's commits are heard through its outside Git directory, and its reads are not")
 } finally {
   rmSync(root, { recursive: true, force: true })
