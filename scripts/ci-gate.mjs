@@ -368,10 +368,25 @@ function workspaceParts(seconds, command, name) {
 }
 
 /** Every step's parts, each part once: a part two chains share runs in the first. */
+/**
+ * Parts run as several, each with an environment its test reads (`CASES`, `MAKO_TEST_HARNESSES`), so one long test
+ * spreads over shards: test-watch-backend's four cases took 6, 14, 58 and 29 s, one part of 108 to 138 s.
+ */
+const SPLITS = {
+  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=sharedChildAndCrash,lateCanary"],
+}
+
+/** `unit` as the parts `SPLITS` makes of it; a test that doesn't read the variable runs once, as it is. */
+function split(unit) {
+  const ways = SPLITS[unit.command]
+  if (!ways) return [unit]
+  return ways.map((env) => ({ ...unit, command: `${scoped(`${env} `, unit.command)}${unit.command}`, seconds: Math.round(unit.seconds / ways.length) }))
+}
+
 export function units(steps, mac = false) {
   const seen = new Set()
   const own = (unit) => MAC_PARTS.some((rule) => rule.test(unit.command)) === mac
-  const linux = STEPS.flatMap((step) => parts(step))
+  const linux = STEPS.flatMap((step) => parts(step)).flatMap(split)
   return (mac ? [...MAC_STEPS.flatMap((step) => parts(step)), ...linux.filter(own)] : linux.filter(own)).filter((unit) => !seen.has(unit.command) && seen.add(unit.command))
     .map((unit) => (MEASURED[unit.command] === undefined ? unit : { ...unit, seconds: MEASURED[unit.command] }))
 }
