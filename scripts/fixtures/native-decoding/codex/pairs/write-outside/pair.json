@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.167.0"
+    "version": "0.167.2"
   },
   "about": "Run `echo hi > ../outside.txt` in the shell and tell me whether it worked. A command that writes outside the project, which a sandboxed harness refuses. Codex 0.159.3 sends no item for a command its sandbox refused; its rollout keeps the call.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/06/rollout-2026-11-06T14-19-57-01a1b13b-0522-7423-89b0-1c33d737f2b7.jsonl",
+      "path": ".codex/sessions/2026/11/12/rollout-2026-11-12T15-17-44-01a1d056-1300-74a1-b9ba-d7e5fc790d71.jsonl",
       "known": []
     }
   ]

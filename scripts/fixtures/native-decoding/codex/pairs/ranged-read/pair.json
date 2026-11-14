@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.167.0"
+    "version": "0.167.2"
   },
   "about": "Read only lines 10 to 20 of log.md with your file read tool, once, and tell me the last line you were shown. Don't run commands. A read of lines 10 to 20 of a long file, so a harness's own cut can be told from one the model asked for.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/06/rollout-2026-11-06T14-19-58-01a1b13b-0a31-7b30-a9a2-40449eea5392.jsonl",
+      "path": ".codex/sessions/2026/11/12/rollout-2026-11-12T15-17-45-01a1d056-17ab-75d1-83b8-c0d0a37a7eb6.jsonl",
       "known": []
     }
   ]
