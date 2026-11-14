@@ -200,6 +200,7 @@ export class LiveRecords {
 
   /** Keeps a new conversation, its journal already written. */
   add(resident: Resident): void {
+    resident.journal.checkpointWith(this.primer)
     this.residents.set(resident.snapshot.session.id, resident)
   }
 
@@ -323,7 +324,7 @@ export class LiveRecords {
     const snapshot = afterRestart(previous, this.dependencies.root, (provider) => this.dependencies.driver(provider)?.backgroundStop.kind === "ends-with-turn")
     journal.commit(snapshot, previous)
     const resident = residentOf(snapshot, journal, { usedAt: this.dependencies.now?.() ?? Date.now(), loadedBy: by })
-    this.residents.set(id, resident)
+    this.add(resident)
     this.recovered.delete(id)
     this.ownBindings(resident)
     this.scheduleSweep()
@@ -385,7 +386,7 @@ export class LiveRecords {
       usedAt: this.dependencies.now?.() ?? Date.now(),
       loadedBy: by,
     })
-    this.residents.set(id, resident)
+    this.add(resident)
     this.recovered.delete(id)
     this.unloaded.delete(id)
     this.ownBindings(resident)
@@ -600,10 +601,14 @@ export class LiveRecords {
 
   stop(): void {
     this.stopped = true
-    this.primer.stop()
     clearTimeout(this.sweepTimer)
     this.sweepTimer = undefined
     void this.readers.stop()
+  }
+
+  /** All resident journals closed: join their checkpoint handles before the host releases its data root. */
+  stopCheckpoints(): Promise<void> {
+    return this.primer.stop()
   }
 
   clear(): void {

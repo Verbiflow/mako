@@ -380,7 +380,9 @@ export class LiveClosing {
       }
       // Open questions keep a conversation loaded until the host stops, so its dropped copy's space is reclaimed here.
       resident.journal.close((path) => { void this.access.reclaims.reclaim(path) }, true)
+      closing.push(resident.journal.released())
     }
+    closing.push(records.stopCheckpoints())
     records.clear()
     this.parts.restarts.leave(left)
     return this.shutdown = Promise.allSettled(closing).then(() => {})
