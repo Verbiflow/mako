@@ -1265,6 +1265,26 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   assert.deepEqual(await shared.summaries(), [], "a failed pass keeps none after it from running")
 }
 
+// Retirement concerns the checkout alone: no recipe command, app stop or Thread-data deletion.
+{
+  const effects: string[] = []
+  const automatic = new ThreadWorktreeService(gitRunner, join(root, "worktrees"), threads, async () => [], async () => [], {
+    stop: async () => { effects.push("stop") },
+    cleanup: async () => { effects.push("cleanup") },
+    discard: async () => { effects.push("discard") },
+  })
+  const id = randomUUID()
+  started(id)
+  const source = repository("retirement-only")
+  const checkout = await automatic.prepare(id, source, "Finished work")
+  await automatic.attach(id)
+  await automatic.remove(checkout.path, true)
+  assert.deepEqual(effects, [], "retirement leaves apps, recipe cleanup and Thread data alone")
+  assert.equal(existsSync(checkout.path), false)
+  assert.equal(git(source, "branch", "--list", checkout.branch).trim(), checkout.branch, "retirement keeps the committed branch")
+  await automatic.settled()
+}
+
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })

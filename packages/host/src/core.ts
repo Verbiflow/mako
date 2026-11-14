@@ -466,6 +466,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     subscribed: shell.subscribed,
     emit,
     inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
+    finished: (thread) => late.conversations?.finishedThreadAt(thread),
+    retirementUsers: async (path) => [
+      ...(late.conversations?.live.listed() ?? [])
+        .filter(({ session }) => (session.connection === "connected" || session.connection === "starting" || session.status === "running" || session.status === "starting") && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
+        .map(() => "an open provider"),
+      ...(await (await shell.terminals.load("worktree retirement")).runningShells())
+        .filter((terminal) => terminal.cwd === path || terminal.cwd.startsWith(`${path}/`))
+        .map(() => "an open terminal"),
+    ],
     working: async (path) => conversationsIn(path, (status) => status === "running"),
     workingFolders: async () => (late.conversations?.live.listed() ?? []).filter(({ session }) => session.status === "running").map(({ session }) => session.cwd),
     conversations: checkoutConversations({
@@ -1138,7 +1147,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       late.threadMoves?.settled(id)
     },
     // What a turn left in its worktree is read again for the rail, as its own event rather than a window's poll.
-    turnEnded: (_id, cwd) => workspaces.worktrees?.turnEnded(cwd),
+    turnEnded: (_id, cwd) => {
+      workspaces.worktrees?.turnEnded(cwd)
+      workspaces.retention?.changed()
+    },
     // Its row in the account's list says whether it works: said as its work moves, checkpoint and close included.
     workMoved: (id) => late.sessions?.conversationMoved(id),
     movePending: (id) => {
@@ -1622,6 +1634,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     archivedThread: ({ conversationId, sessionId }) => {
       control.simulators.releaseThread({ ...(conversationId && { conversation: conversationId }), ...(sessionId && { session: sessionId }) })
       if (conversationId) void late.conversations?.agents?.archived(conversationId)
+      workspaces.retention?.changed()
     },
   })
   late.archivedHere = (conversationId) => lifecycle.archived({ kind: "live", id: conversationId })

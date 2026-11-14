@@ -27,6 +27,7 @@ import {
   ruleWords,
   childMode,
   childState,
+  childSince,
   decisionOn,
   decisionWords,
   finPullRequests,
@@ -1036,6 +1037,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     const agents = [...children.map((edge) => this.entryOf(edge)), ...queued]
     this.rosters.set(thread, agents)
     return agents
+  }
+
+  /** Uses the same current-state reading as the crew, never just its last done report. */
+  finishedThreadAt(thread: ThreadId): number | undefined {
+    this.sync()
+    const edge = this.store()?.edges().of(thread)
+    if (!edge) return undefined
+    const reading = this.childReading(edge)
+    const journal = this.journalOf(thread)
+    const state = childState(edge, reading, journal)
+    return state.kind === "ended" ? childSince(edge, reading, journal, state) : undefined
   }
 
   isApex(conversation: string): boolean {

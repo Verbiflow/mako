@@ -157,7 +157,7 @@ const COUNTED_UNTRACKED = 200
  * uncommitted files, a rebase or merge under way, or a detached HEAD on a
  * commit no branch or tag has. Anything committed on a branch stays with it.
  */
-async function removalBlocker(git: Git, path: string, status?: string): Promise<string | undefined> {
+async function removalBlocker(git: Git, path: string, status?: string, remoteProof = false): Promise<string | undefined> {
   const name = basename(path)
   let changes: string
   let gitDir: string
@@ -172,7 +172,7 @@ async function removalBlocker(git: Git, path: string, status?: string): Promise<
   if (changes) return `${name} has changes that aren't committed. Commit or discard them, then remove the worktree.`
   const underWay = UNDER_WAY.find(([marker]) => existsSync(join(gitDir, marker)))
   if (underWay) return `${name} is in the middle of a ${underWay[1]}. Finish or abort it, then remove the worktree.`
-  if (!(await git.succeeds(path, ["symbolic-ref", "-q", "HEAD"]))) {
+  if (!remoteProof && !(await git.succeeds(path, ["symbolic-ref", "-q", "HEAD"]))) {
     const kept = await git.output(path, ["for-each-ref", "--count=1", "--contains", "HEAD", "--format=%(refname)", "refs/heads", "refs/tags", "refs/remotes"]).catch(() => "")
     if (!kept) return `${name} is on a commit no branch has. Create a branch there, then remove the worktree.`
   }
@@ -1293,7 +1293,27 @@ export class ThreadWorktreeService {
     return { attached, receipts, repoRoot, checkout, home, together: [...together.values()] }
   }
 
-  /** Why the checkout can't go: something open anywhere in it, its own folder included, or work in one of its worktrees that a removal would lose. */
+  /** Fresh retirement proof. The current worktree HEAD must still be its recorded branch tip. */
+  /** One bounded, non-interactive fetch per common repository in a retirement pass. */
+  async retirementFetch(common: string): Promise<void> {
+    await fetchQuietly(this.git, common, ["--all", "--prune"])
+  }
+
+  /** Current HEAD is recoverable remotely, even when detached, switched or squash-merged. */
+  async retirementRepository(worktree: ThreadWorktree, refresh: (common: string) => Promise<void>): Promise<{ head: string; blocked: string | null; remote: boolean; ignored: string[] }> {
+    const head = await this.git.readOutput(worktree.path, ["rev-parse", "HEAD"])
+    const blocked = await removalBlocker(this.git, worktree.path, undefined, true)
+    if (blocked) return { head, blocked, remote: false, ignored: [] }
+    const common = await this.git.readOutput(worktree.path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+    await refresh(common)
+    const remotes = (await this.git.readOutput(worktree.path, ["remote"])).split("\n").filter(Boolean)
+    const refs = remotes.length ? await this.git.readOutput(worktree.path, ["for-each-ref", "--contains", head, "--format=%(refname)", ...remotes.map(remote => `refs/remotes/${remote}/`)]) : ""
+    const ignored = (await this.git.readOutput(worktree.path, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]))
+      .split("\0").slice(0, -1).filter((entry) => !entry.split("/").includes("node_modules"))
+    return { head, blocked: null, remote: Boolean(refs), ignored }
+  }
+
+  /** Why the checkout cannot go: live users or work a removal would lose. */
   private async held(checkout: string, worktrees: readonly { path: string }[], waitingFor?: string): Promise<string | null> {
     const users = await (this.conversations ? this.conversations.holding(checkout, waitingFor) : this.inUse(checkout))
     if (users.length) return inUseBy(checkout, users)
@@ -1328,13 +1348,13 @@ export class ThreadWorktreeService {
    * are moved aside at once and deleted in the background, so tens of
    * thousands of installed files don't hold the answer up.
    */
-  async remove(path: string): Promise<ThreadWorktreeList> {
+  async remove(path: string, retirement = false): Promise<ThreadWorktreeList> {
     const { attached, receipts, checkout, home, together } = await this.made(path)
     const held = await this.held(checkout, together)
     if (held) throw new Error(held)
     const stayed = await this.conversations?.leave(checkout, home) ?? []
     if (stayed.length) throw new Error(inUseBy(checkout, stayed))
-    if (attached) {
+    if (attached && !retirement) {
       await this.environment?.stop(attached.thread)
       if (existsSync(checkout)) await this.environment?.cleanup?.(attached.thread, checkout)
     }
@@ -1346,7 +1366,8 @@ export class ThreadWorktreeService {
     await this.borrowing.forget(checkout)
     if (attached) {
       for (const worktree of together) this.threads.detachWorktree(worktree.path)
-      await this.environment?.discard(attached.thread, checkout)
+      // Automatic worktree retirement never runs a project's arbitrary cleanup or deletes Thread data.
+      if (!retirement) await this.environment?.discard(attached.thread, checkout)
     }
     for (const { id } of receipts) {
       this.untold.delete(id)

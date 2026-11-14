@@ -9,6 +9,7 @@ import { basename, dirname, join } from "node:path"
 import { declareSessionMethods, type SessionMethodsDeps } from "./session-methods.js"
 import type { MethodTable } from "../base/methods.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
+import { WorktreeRetention, WORKTREE_RETENTION_MS } from "./worktree-retention.js"
 import { SUMMARY_PASS_MS } from "./thread-worktrees.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ThreadStore, ThreadLifecycle } from "../threads/index.js"
@@ -35,7 +36,8 @@ import { spareInstaller } from "./spare-install.js"
 import { isSpareCheckout } from "./worktree-carry.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
-import { ThreadIdSchema } from "../contracts/thread-identity.js"
+import { worktreeCheckout } from "../contracts/thread-worktrees.js"
+import { ThreadIdSchema, type ThreadId } from "../contracts/thread-identity.js"
 import { listExternalEditors, openInExternalEditor } from "./editors.js"
 import { revealAction } from "./reveal-policy.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
@@ -101,6 +103,8 @@ export interface Workspaces {
   processes: ThreadProcesses | null
   /** Beside the Thread store, so every profile sharing the store shares its worktrees. */
   worktrees: ThreadWorktreeService | null
+  /** Automatic retirement is off until the person enables it in Settings. */
+  retention: WorktreeRetention | null
   /** The recipe Mako keeps for each project, one file per repository, outside every checkout. */
   recipes: string | undefined
   /** Where recipes run here: this computer or a cloud machine. */
@@ -130,6 +134,9 @@ export interface WorkspacesDeps {
   emit(event: HostEvent): void
   /** What holds a worktree: its conversations and terminals, as a person would name them. */
   inUse(path: string): Promise<string[]>
+  /** Fail-closed terminal/provider reading for automatic retirement. */
+  retirementUsers?(path: string): Promise<string[]>
+  finished?(thread: ThreadId): number | undefined
   /** Conversations mid-turn in a worktree. */
   working(path: string): Promise<string[]>
   /** Every folder a conversation is mid-turn in. */
@@ -226,11 +233,46 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
         }),
       } : undefined, deps.conversations, deps.ledger, deps.workingFolders)
     : null
+  const retention = !deps.readOnly && store && shared && worktrees ? new WorktreeRetention({
+    file: join(shared, "worktree-retention.json"),
+    root: worktrees.root,
+    worktrees: () => store.worktrees(),
+    finished: (thread) => deps.finished?.(thread),
+    using: async (path) => {
+      if (!deps.retirementUsers || !processes) throw new Error("Live-use checks are unavailable.")
+      const users = await deps.retirementUsers(path)
+      for (const app of await processes.activeRead()) {
+        const checkout = processes.checkoutOf(app.app)
+        if (!checkout || checkout === path || checkout.startsWith(`${path}/`)) users.push("a running app")
+      }
+      return users
+    },
+    repository: (worktree, refresh) => worktrees.retirementRepository(worktree, refresh),
+    fetch: (common) => worktrees.retirementFetch(common),
+    openFiles: async () => {
+      const { stdout, stderr } = await reader.run("lsof", ["-nP", "-F0n", "-u", String(process.getuid?.())], { timeout: 10_000, maxBuffer: 32 * 1024 * 1024 })
+      if (stderr.trim()) throw new Error("Open-file inspection was incomplete.")
+      return stdout.split("\0").map(field => field.replace(/^\n/, "")).filter(field => field.startsWith("n/")).map(field => field.slice(1).replace(/ \(deleted\)$/, ""))
+    },
+    remove: async (path) => {
+      const member = store.worktrees().find((row) => worktreeCheckout(row) === path)
+      if (!member) throw new Error("The checkout is no longer registered.")
+      await worktrees.remove(member.path, true)
+    },
+    packagesRemoved: async (path) => {
+      await processes?.forgetPrepared(path)
+      for (const row of store.worktrees()) if (row.path.startsWith(`${path}/`)) await processes?.forgetPrepared(row.path)
+    },
+  }) : null
+  if (retention && !deps.readOnly) deps.jobs.every("retire finished Thread worktrees", WORKTREE_RETENTION_MS, async () => { await retention.run() })
   // Windows hear the summaries as they change, rather than each asking every half minute. What no event of its own
   // says (a pull request on GitHub, an edit outside a turn) a pass of the host's says, each worktree read only once
   // its index, pull request, status's freshness or age moved (`current`).
   if (worktrees) {
-    worktrees.followSummaries((summaries) => emit({ type: "worktree-summaries", summaries }))
+    worktrees.followSummaries((summaries) => {
+      emit({ type: "worktree-summaries", summaries })
+      retention?.changed()
+    })
     deps.jobs.every("say the worktrees' summaries as they change", SUMMARY_PASS_MS, () => void worktrees.summaries().catch(() => undefined), deps.subscribed ? { needs: [deps.subscribed] } : {})
   }
   if (worktrees) {
@@ -246,11 +288,13 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     processes,
     worktrees,
     recipes,
+    retention,
     where: deps.where,
     whoseApp,
     appOwner,
     fileHistory,
     close: () => {
+      retention?.close()
       checkoutHeads.close()
       worktrees?.closeSummaries()
     },
@@ -463,7 +507,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   methods.handle("mako:automation-enabled", (id: string, enabled: boolean, cwd?: string) => automations.setEnabled(id, enabled, cwd))
   methods.handle("mako:run-automation", (id: string, operation?: string, cwd?: string) => automations.fire(id, "manual", operation, cwd))
   methods.handle("mako:reload-automations", () => withHost((h) => automations.load(h.workspace)))
-  declareWorktreeMethods(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls })
+  declareWorktreeMethods(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls }, workspaces.retention)
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)
