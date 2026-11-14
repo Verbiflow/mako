@@ -22,6 +22,19 @@ import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+/** A stopped owner has joined its checkpoint worker before its root is reopened or removed. */
+async function stopped(owner: LiveConversations): Promise<void> {
+  const primer = owner["records"]["primer"]
+  const thread = primer["generation"]?.thread
+  await owner.stop()
+  if (thread) assert.equal(thread.threadId, -1, "the checkpoint worker exited before stop completed")
+  assert.equal(primer["generation"], undefined)
+  assert.equal(primer["leases"].size, 0)
+  assert.equal(primer["waiting"].size, 0)
+  assert.equal(primer["retiring"].size, 0)
+}
+
 // Shared-policy conformance labels; real native adapter evidence is tested separately.
 for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
   const root = mkdtempSync(join(tmpdir(), "mako-delivery-"))
@@ -226,7 +239,7 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
     }
     assert.equal(dispatched.size, 3, `${provider}: every dispatched prompt was checked`)
     if (provider === "seventh-fixture") {
-      owner.stop()
+      await stopped(owner)
       const legacyJournal = new LiveJournal(root, id)
       const saved = legacyJournal.read()
       assert.ok(saved)
@@ -252,7 +265,7 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
       }
     }
   } finally {
-    owner.stop()
+    await stopped(owner)
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -361,7 +374,7 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
     await tick()
     assert.equal(request(waiting)?.status, "completed")
   } finally {
-    owner.stop()
+    await stopped(owner)
     rmSync(root, { recursive: true, force: true })
   }
   console.log("Prompt delivery: a lost reply during a running turn settles with it; a refusal behind a running turn waits and is shown once")
@@ -433,7 +446,7 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
     assert.equal(accepted.interruption?.reason, "provider-exited")
     assert.equal(calls.length, 3, `${provider}: no handed-over prompt is sent again`)
   } finally {
-    owner.stop()
+    await stopped(owner)
     rmSync(root, { recursive: true, force: true })
   }
 }
