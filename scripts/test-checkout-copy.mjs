@@ -5,7 +5,7 @@ import { resolveLocalIdentity } from "./mac-local-signing.mjs"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import assert from "node:assert/strict"
-import { createPackage } from "@electron/asar"
+import { packArchive } from "./lib/pack-archive.mjs"
 import { copyBuildSource, verifyLocalCandidate } from "@mako/host/application/local-updates"
 import { physicalFiles } from "@mako/host/base/physical-files"
 import { testScratch } from "./lib/test-scratch.mjs"
@@ -56,7 +56,7 @@ if (process.versions.electron) {
     await writeFile(join(payload, "package.json"), JSON.stringify({ name: "archive-fixture" }))
     const resources = join(source, "node_modules/electron/dist/Electron.app/Contents/Resources")
     await mkdir(resources, { recursive: true })
-    await createPackage(payload, join(resources, "default_app.asar"))
+    await packArchive(payload, join(resources, "default_app.asar"))
     await mkdir(join(source, "packages/site"), { recursive: true })
     await writeFile(join(source, "packages/site/.env.local"), "fixture=not-for-build")
     for (const directory of [".next", ".eve", ".output"]) {

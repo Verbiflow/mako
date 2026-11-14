@@ -24,6 +24,7 @@ import { ranTexts, SCRIPT_LIMIT } from "@mako/host/attribution/scripts"
 import { countingTurn, fileGroups, partition, readingTurnChain, shares, side, storedView, turnChain, turnChanges, type JournalView } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { JournalStore } from "@mako/host/attribution/journal-store"
+import { JournalReader } from "@mako/host/attribution/journal-reader"
 import { contentRef } from "@mako/host/attribution/content"
 import { attribute, Evidence, reaches } from "@mako/host/attribution/evidence"
 
@@ -2305,6 +2306,10 @@ test("counting a long renamed file chain yields between bounded indexed reads", 
     for (const group of fileGroups(store.entriesOfTurn("T", "turn")).values())
       assert.deepEqual(withoutMaps(atOnce(readingTurnChain(view, group))), withoutMaps(turnChain(view, group)), "paged rename merge matches the original whole-chain read in all metadata and order")
     const expected = turnChanges(view, "T", "turn", "settled", 0)
+    const reader = new JournalReader(store.path)
+    try {
+      assert.deepEqual({ ...await reader.countTurn("T", "turn", "settled"), at: 0 }, expected, "the read worker preserves the full 2,048-entry renamed-chain count")
+    } finally { await reader.close() }
     const pages: number[] = []
     const readPage = store.chainPage.bind(store)
     store.chainPage = (...args) => {

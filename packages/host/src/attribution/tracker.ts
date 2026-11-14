@@ -318,6 +318,7 @@ export class LaptopTracker implements AttributionTracker {
   private resuming: Promise<void> = Promise.resolve()
   /** Set by `close`: no root starts resuming after it. */
   private closing = false
+  private closePromise: Promise<void> | undefined
   readonly evidence: Evidence
   private readonly pending = new Map<number, Pending>()
   private settleTimer?: ReturnType<typeof setTimeout>
@@ -2283,28 +2284,37 @@ export class LaptopTracker implements AttributionTracker {
     this.options.log?.(message, facts)
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    return this.closePromise ??= this.closeTracker()
+  }
+
+  private async closeTracker(): Promise<void> {
     if (this.closed) return
     // The root resuming now finishes; the rest resume when the journal next opens.
     this.closing = true
     await this.settled()
     this.closed = true
     this.footprints?.close()
-    this.reader.close()
-    clearTimeout(this.settleTimer)
-    for (const state of this.states.values()) this.unlisten(state)
-    await Promise.all([...this.states.values()].map((state) => state.chain))
-    this.settle(true)
-    this.store.transaction(() => {
-      for (const state of this.states.values()) {
-        // One asleep keeps when it fell asleep: its wake reads what changed since then.
-        if (state.asleep) continue
-        state.root.seenAt = this.now()
-        this.store.saveRoot(state.root)
-      }
-    })
-    this.states.clear()
-    this.store.close()
+    const failed: unknown[] = []
+    try { await this.reader.close() } catch (error) { failed.push(error) }
+    try {
+      clearTimeout(this.settleTimer)
+      for (const state of this.states.values()) this.unlisten(state)
+      await Promise.all([...this.states.values()].map((state) => state.chain))
+      this.settle(true)
+      this.store.transaction(() => {
+        for (const state of this.states.values()) {
+          // One asleep keeps when it fell asleep: its wake reads what changed since then.
+          if (state.asleep) continue
+          state.root.seenAt = this.now()
+          this.store.saveRoot(state.root)
+        }
+      })
+      this.states.clear()
+      this.store.close()
+    } catch (error) { failed.push(error) }
+    if (failed.length === 1) throw failed[0]
+    if (failed.length) throw new AggregateError(failed, "The record of changes did not close cleanly.", { cause: failed[0] })
   }
 }
 
