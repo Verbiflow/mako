@@ -720,8 +720,9 @@ export class LiveJournal {
     this.path = join(root, `${id}.sqlite`)
     this.db = new DatabaseSync(this.path)
     try {
+      // The checkpoint owner's final close may still hold the WAL lock. Install the existing wait before opening it.
       this.db
-        .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
+        .exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
       CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS progress (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
