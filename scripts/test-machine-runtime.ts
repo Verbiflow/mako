@@ -42,7 +42,7 @@ const CREDENTIAL = `mmc_${"k".repeat(43)}`
 const desktop: Actor = { kind: "client", client: "desktop", deviceId: "d-1" }
 
 /** The gateway's runtime route over a fake gateway: the machine credential checked at the upgrade, then frames carried both ways. */
-async function machineGateway(runtimeId = RUNTIME, options: FakeGatewayOptions = {}) {
+async function machineGateway(runtimeId = RUNTIME, options: FakeGatewayOptions = {}, beforeEnroll?: () => Promise<void>) {
   const gateway = createFakeGateway(options)
   /** The credentials the Machine object takes now. */
   const accepted = new Set([CREDENTIAL])
@@ -71,8 +71,10 @@ async function machineGateway(runtimeId = RUNTIME, options: FakeGatewayOptions =
           if (silent.has(ws)) return
           const text = String(data)
           if (text === PING) return ws.send(PONG)
-          decodeRuntimeFrame(text)
-          link.sendUnchecked(text)
+          const frame = decodeRuntimeFrame(text)
+          if (frame.type === "enroll" && beforeEnroll) {
+            void beforeEnroll().then(() => { if (ws.readyState === ws.OPEN) link.sendUnchecked(text) })
+          } else link.sendUnchecked(text)
         })
         ws.on("close", () => {
           sockets.delete(ws)
@@ -178,6 +180,11 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
   runtime.start()
   after(() => runtime.stop())
   const state = (): MachineRuntimeState | undefined => messages.findLast((message) => message.type === "state")?.state
+  /** A hang guard: what the host says comes within a tick or two of a second, or never. */
+  const until = async (what: string, check: () => boolean, ms = 30_000) => {
+    for (const deadline = Date.now() + ms; Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 10))) if (check()) return
+    assert.fail(`${what} within ${ms} ms; the host said ${JSON.stringify(state())}`)
+  }
   return {
     runtime,
     messages,
@@ -193,11 +200,9 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     tell: (message: AgentMessage) => agentEnd.write(`${JSON.stringify(message)}\n`),
     /** A line no agent of this version sends. */
     tellRaw: (line: string) => agentEnd.write(`${line}\n`),
-    /** A hang guard: what the host says comes within a tick or two of a second, or never. */
-    until: async (what: string, check: () => boolean, ms = 30_000) => {
-      for (const deadline = Date.now() + ms; Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 10))) if (check()) return
-      assert.fail(`${what} within ${ms} ms; the host said ${JSON.stringify(state())}`)
-    },
+    until,
+    // A fresh fixture must finish its first handshake before the gateway can push frames to it.
+    enrolled: () => until("enrolled", () => state()?.link === "connected" && state()?.enrolls === 1),
   }
 }
 
@@ -496,12 +501,39 @@ test("a credential the agent renewed keeps the connection, and the next connecti
   await agent.until("enrolled again on the renewed credential", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 2, 15_000)
 })
 
+test("a borrow push waits for runtime enrolment, not just an open socket", async () => {
+  const admission = Promise.withResolvers<void>()
+  let received = false
+  const cloud = await machineGateway(RUNTIME, {}, () => {
+    received = true
+    return admission.promise
+  })
+  const agent = machineAgent({ dataRoot: join(scratch, "borrow-enrolment") })
+  try {
+    agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
+    await agent.until("the enrolment request held by the gateway", () => received)
+    await agent.until("the socket open while enrolment waits", () => agent.state()?.link === "connected")
+    assert.equal(agent.state()?.enrolls, 0)
+    let ready = false
+    const waiting = agent.enrolled().then(() => { ready = true })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(ready, false, "socket-open must not permit a gateway push before the enrolment reply")
+    admission.resolve()
+    await waiting
+    const push = { push: "ended", lease: "l-1", why: "revoked" } as const
+    cloud.send({ type: "borrow", threadId: "th-1", seq: 4, push })
+    await agent.until("the push passed on after enrolment", () => agent.messages.some((message) => message.type === "borrow"))
+    assert.deepEqual(agent.messages.find((message) => message.type === "borrow"), { type: "borrow", threadId: "th-1", seq: 4, push })
+    assert.equal(agent.state()?.lastEnding, undefined, "there was no enrolment rejection and reconnect")
+  } finally { admission.resolve() }
+})
+
 test("what the machine's Thread borrows reaches the agent as the gateway pushes it, unchanged", async () => {
   const cloud = await machineGateway()
   const agent = machineAgent({ dataRoot: join(scratch, "borrow") })
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello" && message.protocol >= 10))
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
-  await agent.until("enrolled", () => agent.state()?.link === "connected")
+  await agent.enrolled()
   const push = { push: "ended", lease: "l-1", why: "revoked" } as const
   cloud.send({ type: "borrow", threadId: "th-1", seq: 4, push })
   await agent.until("the push passed on", () => agent.messages.some((message) => message.type === "borrow"))
