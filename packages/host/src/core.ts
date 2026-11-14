@@ -467,6 +467,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     emit,
     inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
     finished: (thread) => late.conversations?.finishedThreadAt(thread),
+    scratchOwner: (thread) => {
+      const quietAt = late.conversations?.scratchQuietSince(thread)
+      return quietAt === undefined ? undefined : { quietAt, finishedAt: late.conversations?.finishedThreadAt(thread) }
+    },
     retirementUsers: async (path) => [
       ...(late.conversations?.live.listed() ?? [])
         .filter(({ session }) => (session.connection === "connected" || session.connection === "starting" || session.status === "running" || session.status === "starting") && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
@@ -1152,6 +1156,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     turnEnded: (_id, cwd) => {
       workspaces.worktrees?.turnEnded(cwd)
       workspaces.retention?.changed()
+      workspaces.scratch?.changed()
     },
     // Its row in the account's list says whether it works: said as its work moves, checkpoint and close included.
     workMoved: (id) => late.sessions?.conversationMoved(id),
@@ -1637,6 +1642,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       control.simulators.releaseThread({ ...(conversationId && { conversation: conversationId }), ...(sessionId && { session: sessionId }) })
       if (conversationId) void late.conversations?.agents?.archived(conversationId)
       workspaces.retention?.changed()
+      workspaces.scratch?.changed()
     },
   })
   late.archivedHere = (conversationId) => lifecycle.archived({ kind: "live", id: conversationId })

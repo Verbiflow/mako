@@ -1039,6 +1039,8 @@ export function installMockBridge() {
       ]
     },
     worktreeAhead: async () => null,
+    threadScratch: async () => ({ settings: { mode: "preview", idleDays: 7, kept: [] }, at: Date.now(), everyMs: 3_600_000, entries: [] }),
+    setThreadScratch: async (settings) => ({ settings, at: Date.now(), everyMs: 3_600_000, entries: [] }),
     worktreeRetention: async () => ({ settings: { mode: "preview", days: 7, kept: [] }, everyMs: 3_600_000, minimumPassMs: 600_000, repositoryFetches: 0, at: Date.now(), checkouts: [] }),
     setWorktreeRetention: async (settings) => ({ settings, everyMs: 3_600_000, minimumPassMs: 600_000, repositoryFetches: 0, at: Date.now(), checkouts: [] }),
     worktreeInventory: async () => (scene === "rail" ? railInventory(removedWorktrees) : { worktrees: [], spares: { count: 0, bytes: null } }),

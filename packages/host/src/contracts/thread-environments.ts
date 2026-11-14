@@ -31,6 +31,8 @@ export interface ThreadEnvironment extends Omit<ThreadEnvironmentValues, "usedAt
   ports: number
   /** Private to the Thread and kept for its life; outside the checkout, so Git never sees it. */
   dataDir: string
+  /** Disposable, separately owned per Thread; never the shared app data folder. */
+  scratchDir?: string
   /** The project recipe's names for these values, such as `PORT`, resolved for this Thread. */
   values?: Record<string, string>
   recipe?: ThreadRecipeSummary
