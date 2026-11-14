@@ -75,7 +75,8 @@ try {
     const notice = mcpServerFailedEvent("search", "sign-in required")
     assert.equal(text.split(JSON.stringify(notice.detail)).length - 1, 1, "a setup notice said while waking reaches the transcript, once")
   } finally {
-    owner.close(id)
+    await owner.close(id)
+    await owner.stop()
   }
   console.log("Replay: waking drops replayed history and keeps this launch's setup notices")
 } finally {

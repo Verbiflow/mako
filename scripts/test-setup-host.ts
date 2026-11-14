@@ -93,6 +93,6 @@ try {
   assert.deepEqual((await checkouts.borrowing.leases()).map((lease) => lease.resource.ref), ["fixtures"], "the copy grant's lease ended with it")
   console.log("Setup on real brokers: the checkout grants and a worktree's lease in Files, a saved key by name, Stop revoking the grant")
 } finally {
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 }

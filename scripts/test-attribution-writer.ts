@@ -37,7 +37,7 @@ async function until(check: () => boolean): Promise<void> {
   const end = Date.now() + 10_000
   while (!check()) {
     assert.ok(Date.now() < end, "the worker reached its expected boundary")
-    await new Promise(resolve => setTimeout(resolve, 10))
+    await new Promise(resolve => realTimeout(resolve, 10))
   }
 }
 
@@ -450,7 +450,7 @@ test("closing during an owner restart rejects late recovery without a new connec
 })
 
 
-test("a wake that exceeds its command deadline completes in the same writing generation", { timeout: 15_000 }, async () => {
+test("a wake that exceeds its command deadline completes in the same writing generation", { timeout: 15_000 }, async context => {
   const root = scratch()
   const repo = join(root, "repo")
   mkdirSync(repo)
@@ -484,7 +484,9 @@ test("a wake that exceeds its command deadline completes in the same writing gen
     await import(${JSON.stringify(main)});
   `)
   const deps = dependencies(root)
-  const writer = new AttributionWriter(deps, settings(deps), { entry, timing: { askMs: 100 } })
+  const timing = { askMs: 100 }
+  context.mock.timers.enable({ apis: ["setTimeout"] })
+  const writer = new AttributionWriter(deps, settings(deps), { entry, timing })
   let client: SharedJournal | undefined
   try {
     client = await follower(writer, deps)
@@ -493,8 +495,15 @@ test("a wake that exceeds its command deadline completes in the same writing gen
     assert.deepEqual(await writer.command({ kind: "sleep" }), [repo], "the actual tracked root sleeps")
     writeFileSync(armed, "armed")
     const wake = writer.command({ kind: "wake", checkout: repo })
-    void wake.catch(() => {})
+    let answered = false
+    void wake.then(() => { answered = true }, () => { answered = true })
     await until(() => existsSync(entered))
+    // Only the deliberately blocked wake reaches its deadline. Setup, real worker/IPC replies and close
+    // never race the injected 100 ms command budget on a loaded runner.
+    context.mock.timers.tick(timing.askMs - 1)
+    await Promise.resolve()
+    assert.equal(answered, false, "the blocked wake is still waiting before its deadline")
+    context.mock.timers.tick(1)
     await assert.rejects(wake, /took too long/)
     assert.ok(writer.snapshot(), "a command deadline must not retire the writer")
     await writer.ensure()
@@ -506,9 +515,14 @@ test("a wake that exceeds its command deadline completes in the same writing gen
     assert.equal(readFileSync(starts, "utf8"), "start\n", "the late wake completed without any restart")
   } finally {
     writeFileSync(release, "release")
-    await client?.close()
-    await writer.close()
-    rmSync(root, { recursive: true, force: true })
+    try { await client?.close() }
+    finally {
+      try { await writer.close() }
+      finally {
+        context.mock.timers.reset()
+        rmSync(root, { recursive: true, force: true })
+      }
+    }
   }
 })
 

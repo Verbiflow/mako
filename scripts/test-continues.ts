@@ -318,6 +318,6 @@ try {
   console.log("PASS: a continue in the cloud is the device's own move composed by the account (host calls this host takes, its store's handoff, the host's IDs); a machine with no checkpoint starts from its clone and says so, once; a Mac back from sleep joins it at the account's generation and confirms the claim, takes a refusal back, and gives up nothing while it works or its generation differs")
   threads.close()
 } finally {
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 }

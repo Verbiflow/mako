@@ -179,7 +179,7 @@ try {
   const uncertain = steering(second)
   assert.equal((await owner.act(id, uncertain)).state.kind, "uncertain")
   assert.equal(steeringCalls, 2)
-  owner.stop()
+  await owner.stop()
   owner = new LiveConversations(dependencies)
   assert.equal((await owner.act(id, uncertain)).state.kind, "uncertain")
   assert.equal(steeringCalls, 2, "restart cannot resend an uncertain action")
@@ -196,7 +196,7 @@ try {
   assert.deepEqual(acknowledged.state.receipt.outcome, originalOutcome)
   await owner.acknowledgeAction(id, uncertain.id)
   assert.deepEqual(owner.snapshot(id)?.control?.actions?.at(-1), acknowledged, "duplicate acknowledgement preserves the first receipt")
-  owner.stop()
+  await owner.stop()
   owner = new LiveConversations(dependencies)
   assert.deepEqual(await owner.act(id, uncertain), acknowledged, "reopening retains the outcome and acknowledgement without replay")
   await owner.acknowledgeAction(id, uncertain.id)
@@ -213,7 +213,7 @@ try {
     ...dependencies,
     root: join(root, "compact-journals"),
   })
-  owner.stop()
+  await owner.stop()
   owner = compactOwner
   await owner.start("fixture", root, { conversationId: id })
   await connected(id)
@@ -286,7 +286,7 @@ try {
   const interruptedCompact: LiveActionInput = { kind: "compact", id: randomUUID() }
   await owner.act(id, interruptedCompact)
   const dispatched = compactionCalls
-  owner.stop()
+  await owner.stop()
   owner = new LiveConversations({ ...dependencies, root: join(root, "compact-journals") })
   assert.equal((await owner.act(id, interruptedCompact)).state.kind, "uncertain")
   assert.equal(compactionCalls, dispatched, "restart cannot repeat compaction")
@@ -300,14 +300,14 @@ try {
   assert.ok(compactAck?.state.kind === "acknowledged" && compactAck.state.receipt)
   assert.deepEqual(compactAck.state.receipt.outcome, compactOutcome)
   assert.equal(owner.snapshot(id)?.session.connection, "disconnected")
-  owner.stop()
+  await owner.stop()
   owner = new LiveConversations({ ...dependencies, root: join(root, "compact-journals") })
   assert.deepEqual(await owner.act(id, interruptedCompact), compactAck)
   assert.equal(compactionCalls, dispatched)
   console.log("PASS: concurrent compaction acknowledgement retains original uncertainty across reopen without replay")
 
 
-  owner.stop()
+  await owner.stop()
   owner = new LiveConversations({ ...dependencies, root: join(root, "ack-close-race") })
   await owner.start("fixture", root, { conversationId: id })
   await connected(id)
@@ -330,7 +330,7 @@ try {
     { status: "failed", connection: "connected", error: "Provider failed" },
     { status: "ready", connection: "disconnected" },
   ] as const) {
-    owner.stop()
+    await owner.stop()
     owner = new LiveConversations({ ...dependencies, root: join(root, randomUUID()) })
     await owner.start("fixture", root, { conversationId: id })
     await connected(id)
@@ -391,7 +391,7 @@ try {
   console.log(
     "PASS: steering preserves in-flight tool results and streamed message identity"
   )
-  owner.stop()
+  await owner.stop()
   const nativePath = join(root, "native.jsonl")
   writeFileSync(nativePath, "before shutdown")
   const exit = Promise.withResolvers<void>()
@@ -442,6 +442,6 @@ try {
     "PASS: owned shutdown waits for process exit before fingerprinting native resume"
   )
 } finally {
-  owner.stop()
+  await owner.stop()
   rmSync(root, { recursive: true, force: true })
 }

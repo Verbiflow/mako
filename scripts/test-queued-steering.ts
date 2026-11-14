@@ -106,7 +106,7 @@ try {
           journal.close()
           assert.equal(durable?.control?.actions?.at(-1)?.state.kind, "dispatching", "Failed receipt write leaves the durable intent")
           assert.equal(durable?.requests.find(r => r.id === queuedId)?.status, "canceled")
-          owner.stop() // Disk works again; graceful shutdown can now retain acceptance.
+          await owner.stop() // Disk works again; graceful shutdown can now retain acceptance.
           owner = new LiveConversations(dependencies)
           assert.equal(owner.snapshot(id)?.requests.find(r => r.id === queuedId)?.status, "canceled")
           assert.equal((await owner.act(id, input)).state.kind, "accepted")
@@ -115,7 +115,7 @@ try {
           continue
         }
         if (outcome === "restart") {
-          owner.stop()
+          await owner.stop()
           owner = new LiveConversations(dependencies)
           assert.equal(owner.snapshot(id)?.requests.find(r => r.id === queuedId)?.status, "canceled")
           assert.equal((await owner.act(id, input)).state.kind, "uncertain")
@@ -131,7 +131,7 @@ try {
           assert.equal(owner.snapshot(id)?.requests.find(r => r.id === queuedId)?.status, expected)
           assert.equal((await owner.act(id, input)).state.kind, receipt.state.kind)
           if (outcome === "accepted" || outcome === "lost-reply") {
-            owner.stop()
+            await owner.stop()
             owner = new LiveConversations(dependencies)
             assert.equal(owner.snapshot(id)?.requests.find(r => r.id === queuedId)?.status, "canceled")
             assert.equal((await owner.act(id, input)).state.kind, receipt.state.kind)
@@ -144,7 +144,7 @@ try {
         }
         assert.deepEqual(sent, outcome === "refused" ? ["first", "move this message"] : ["first"],
           "Only an authoritative refusal may return the message to normal queue execution")
-      } finally { response.resolve({ kind: "accepted" }); owner.stop() }
+      } finally { response.resolve({ kind: "accepted" }); await owner.stop() }
     }
   }
   console.log("PASS: six harness profiles plus future adapter; atomic intent/queue ownership, completion race, refusals, held queue, stale edits, lost reply, owner restart, duplicate ID and disk failure")
@@ -204,7 +204,7 @@ try {
       assert.deepEqual(sent, answersOnEnd ? ["first", "the code is the truth"] : ["first"],
         answersOnEnd ? "the words go as the next message" : "a harness that may never answer keeps them unknown")
       assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === queuedId)?.status, answersOnEnd ? "dispatching" : "canceled")
-    } finally { response.resolve({ kind: "accepted" }); owner.stop() }
+    } finally { response.resolve({ kind: "accepted" }); await owner.stop() }
   }
   console.log("PASS: a steer held when its turn is stopped goes as the next message once its harness answers it")
 } finally { rmSync(root, { recursive: true, force: true }) }

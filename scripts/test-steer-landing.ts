@@ -111,7 +111,7 @@ async function world(provider: string, landing: SteerLanding | undefined, name: 
       // The turn is in a command the agent won't see the end of before the steer.
       owner.observe({ type: "live-update", id, update: { kind: "tool", id: "build", title: "npm run build", status: "running" } })
     },
-    close() { answer.resolve({ kind: "accepted" }); owner.stop() },
+    async close() { answer.resolve({ kind: "accepted" }); await owner.stop() },
   }
 }
 
@@ -169,7 +169,7 @@ try {
       assert.equal((await w.owner.act(w.id, input)).state.kind, "accepted", "a retry finds the receipt")
       await delay(30)
       assert.equal(w.prompts.length, 2, "and sends nothing twice")
-    } finally { w.close() }
+    } finally { await w.close() }
   }
   console.log("PASS: restart: the person's steer stops the turn and goes next, with the stopped turn's account, within a second")
 
@@ -202,7 +202,7 @@ try {
       await delay(50)
       assert.equal(w.prompts.length, 2, "Cursor's late refusal sends nothing again")
       assert.equal(w.owner.snapshot(w.id)!.blocks.filter((block) => block.type === "user" && block.text === words).length, 1, "the words show once")
-    } finally { w.close() }
+    } finally { await w.close() }
   }
   console.log("PASS: confirm, held: a Cursor steer unconfirmed within a second stops the turn and goes next (the person's case)")
 
@@ -235,7 +235,7 @@ try {
       await until("the message reaching the machine's agent", () => w.prompts.length === 2)
       assert.equal(w.cancels, 1, "through the machine's stop, not at its turn's end")
       assert.ok(w.prompts[1]!.text.endsWith("the code is the truth"))
-    } finally { served.close(); w.close() }
+    } finally { served.close(); await w.close() }
   }
   console.log("PASS: cloud: the Mac's steer through the gateway lands on the machine's Cursor turn within a second")
 
@@ -250,7 +250,7 @@ try {
       await delay(50)
       assert.equal(w.cancels, 0, "a confirmed steer keeps the turn")
       assert.equal(w.prompts.length, 1)
-    } finally { w.close() }
+    } finally { await w.close() }
   }
   console.log("PASS: confirm, delivered: a steer Cursor confirms in time keeps the turn and its work")
 
@@ -264,7 +264,7 @@ try {
       assert.equal(receipt.state.kind, "accepted")
       assert.deepEqual(w.steers, ["also the docs"])
       assert.equal(w.cancels, 0)
-    } finally { w.close() }
+    } finally { await w.close() }
   }
   console.log("PASS: native: Codex's own steer, and an agent's steer on any harness")
 
@@ -287,7 +287,7 @@ try {
         await until(`${provider}'s steer reaching the agent`, () => w.prompts.length === 2)
         assert.ok(w.prompts[1]!.text.endsWith("into this turn"), `${provider}: the steer goes first, ahead of what was queued`)
       }
-    } finally { w.close() }
+    } finally { await w.close() }
   }
   console.log("PASS: mid-turn on all six harnesses, by each driver's own landing: a message queues and a steer lands within a second")
 } finally {

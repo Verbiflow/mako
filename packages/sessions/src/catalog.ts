@@ -153,17 +153,24 @@ async function forEachConcurrent<T>(
   limit: number,
   visit: (value: T) => Promise<void>
 ): Promise<void> {
-  const iterator = values.values()
+  // A failure starts nothing new and waits for what already started, then rejects with the first error, so nothing
+  // still runs once the caller hears of it (as @mako/host's mapLimit).
+  let next = 0
+  let failure: { error: unknown } | undefined
   const worker = async () => {
-    while (true) {
-      const item = iterator.next()
-      if (item.done) return
-      await visit(item.value)
+    while (!failure && next < values.length) {
+      const value = values[next++]!
+      try {
+        await visit(value)
+      } catch (error) {
+        failure ??= { error }
+      }
     }
   }
   await Promise.all(
     Array.from({ length: Math.min(limit, values.length) }, worker)
   )
+  if (failure) throw failure.error
 }
 
 /** The repository each folder is in, found once per catalog; a folder outside one is its own. */

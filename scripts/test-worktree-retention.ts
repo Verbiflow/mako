@@ -75,7 +75,7 @@ try {
       journal.commit({ ...snapshot, requests: [{ id: "queued", text: "fixture", createdAt: 1, status: "queued", attachments: [] }] }, previous)
       assert.equal(state.finished(placed.thread), undefined, "queued work keeps an otherwise closed Thread")
       assert.equal(state.finished(other), undefined, "missing records never become finished")
-    } finally { journal.close() }
+    } finally { await journal.close() }
   } finally { store.close() }
 
   const path = join(root, "checkouts", "finished")

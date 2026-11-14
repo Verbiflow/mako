@@ -1,8 +1,16 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
+import { Git } from "@mako/git"
+import { HostJobs } from "@mako/host/base/host-jobs"
+import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
+import { openAttribution } from "@mako/host/attribution/index"
+import { sharedJournalFolder } from "@mako/host/attribution/shared-journal"
+import { storedView, turnChanges } from "@mako/host/attribution/queries"
+import { LaptopTracker } from "@mako/host/attribution/tracker"
+import { nodeFileSystem } from "@mako/host/attribution/ports"
 import { contentRef } from "@mako/host/attribution/content"
 import { collectPlanOffThread, JournalReader } from "@mako/host/attribution/journal-reader"
 import { JournalStore, type StoredActivity } from "@mako/host/attribution/journal-store"
@@ -118,7 +126,104 @@ test("the activity a gap's changes are attributed from reads the same on the jou
     assert.equal(blobs.size, 0, "content the journal doesn't hold is missing, not an error")
     store.close()
   } finally {
-    reader.close()
+    await reader.close()
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+test("a reader counts complete turns from new commits, without reading their bodies on its caller's thread", async () => {
+  const folder = scratch()
+  const { store, refs } = journal(folder, Date.now())
+  const reader = new JournalReader(store.path)
+  const before = JournalStore.prototype.blob
+  const own = { certainty: "exact" as const, author: { thread: "t", session: "s", turn: "turn" }, effect: "modify" as const }
+  const write = (after: string, at: number) => store.insertEntry({ at, changedAt: at, root: "r", path: "count.ts", kind: "modify", before: refs.oldOnly[0]!, after, text: true, stored: true, observed: "event", author: own, settled: true })
+  try {
+    const now = Date.now()
+    write(refs.oldOnly[1]!, now)
+    store.saveActivity({ kind: "turn", id: "turn", session: "s", thread: "t", turn: "turn", checkout: folder, named: [], start: now, end: now + 1 })
+    const expected = turnChanges(storedView(store), "t", "turn", "settling", 0)
+    JournalStore.prototype.blob = () => { throw new Error("a turn's body must not be read on the caller") }
+    const counted = await reader.countTurn("t", "turn", "settling")
+    assert.deepEqual({ ...counted, at: 0 }, expected)
+    assert.equal(counted?.own.files, 1)
+    JournalStore.prototype.blob = before
+    write(refs.oldOnly[2]!, now + 1)
+    const next = turnChanges(storedView(store), "t", "turn", "settled", 0)
+    JournalStore.prototype.blob = () => { throw new Error("a fresh count must stay off the caller too") }
+    const [a, b] = await Promise.all([reader.countTurn("t", "turn", "settled"), reader.countTurn("t", "turn", "settled")])
+    assert.deepEqual({ ...a, at: 0 }, next)
+    assert.deepEqual({ ...b, at: 0 }, next)
+    assert.ok(a && counted && a.through > counted.through, "the worker reads the later commit rather than a cached view")
+    const pending = reader.countTurn("t", "turn", "settled")
+    const closing = reader.close()
+    await assert.rejects(pending, /closed/, "a pending read rejects at retirement before its reply can publish")
+    assert.equal(reader.close(), closing, "one completion joins the worker's exit")
+    await closing
+    await assert.rejects(reader.countTurn("t", "turn", "settled"), /closed/)
+  } finally {
+    JournalStore.prototype.blob = before
+    await reader.close()
+    store.close()
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+test("the composed attribution owner counts off-thread and discards an in-flight count at close", async () => {
+  const folder = scratch()
+  const storage = sharedJournalFolder(folder)
+  const { store, refs } = journal(storage, Date.now())
+  mkdirSync(join(storage, "root"), { recursive: true })
+  const now = Date.now()
+  store.insertEntry({ at: now, changedAt: now, root: "r", path: "own.ts", kind: "modify", before: refs.oldOnly[0]!, after: refs.oldOnly[1]!, text: true, stored: true, observed: "event", author: { certainty: "exact", author: { thread: "t", session: "s", turn: "turn" }, effect: "modify" }, settled: true })
+  store.saveActivity({ kind: "turn", id: "turn", session: "s", thread: "t", turn: "turn", checkout: storage, named: [], start: now, end: now + 1 })
+  store.close()
+  const owner = await openAttribution({ dataRoot: folder, userRoot: folder, label: "count-reader", git: new Git(), jobs: new HostJobs(), watch: () => ({ ready: Promise.resolve(), close() {} }), stores: () => [], placement: () => undefined, session: () => undefined })
+  const before = JournalStore.prototype.blob
+  let closed: Promise<void> | undefined
+  try {
+    assert.equal(owner.failure(), undefined, "the real writing owner must have opened before the read")
+    await owner.settled()
+    const source = JournalStore.open(join(storage, "journal.sqlite"), { device: "", readOnly: true })
+    const expected = turnChanges(storedView(source), "t", "turn", "settled", 0)
+    source.close()
+    JournalStore.prototype.blob = () => { throw new Error("the composed owner read a body on the host thread") }
+    const counted = await owner.countTurn("t", "turn", "settled")
+    assert.deepEqual({ ...counted, at: 0 }, expected)
+    const pending = owner.countTurn("t", "turn", "settled")
+    closed = owner.close()
+    assert.equal(owner.close(), closed, "repeated close joins the same release rather than returning early")
+    assert.equal(await pending, undefined, "a count from the retired source cannot publish after close")
+    await closed
+    assert.equal(await owner.countTurn("t", "turn", "settled"), undefined)
+  } finally {
+    JournalStore.prototype.blob = before
+    await (closed ?? owner.close())
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+test("a failed reader count rejects without a synchronous fallback, and releases before folder removal", async () => {
+  const folder = scratch()
+  const reader = new JournalReader(join(folder, "absent.sqlite"))
+  try {
+    await assert.rejects(reader.countTurn("t", "turn", "settled"))
+  } finally {
+    await reader.close()
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+test("a repeated tracker close joins the release even after the tracker is marked closed", async () => {
+  const folder = scratch()
+  const tracker = await LaptopTracker.open({ fs: nodeFileSystem(), events: new FakeEventSource(), clock: new FakeClock(), storage: folder, device: "close-reader" })
+  try {
+    const closed = tracker.close()
+    assert.equal(tracker.close(), closed)
+    await closed
+    assert.equal(tracker.close(), closed)
+  } finally {
+    await tracker.close()
     rmSync(folder, { recursive: true, force: true })
   }
 })

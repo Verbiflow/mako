@@ -92,7 +92,7 @@ for (const line of commits) {
   const diff = await git.text({ cwd: repository, args: ["show", "--format=", commit!, "--", "package.json", "packages/*/package.json"] })
   for (const match of diff.matchAll(/^\+\s*"@cursor\/sdk": "([^"]+)"/gm)) if (!pinned.has(match[1]!)) pinned.set(match[1]!, at!)
 }
-git.close()
+await git.close()
 assert.ok(pinned.size > 0, "the history pins the SDK")
 for (const [version, at] of pinned) assert.ok(MAKO_PINS.some((pin) => pin.package === "@cursor/sdk" && pin.version === version && Date.parse(pin.since) === Date.parse(at)), `MAKO_PINS names @cursor/sdk ${version}, pinned ${at}`)
 for (const pin of MAKO_PINS) assert.equal(pinned.get(pin.version) && Date.parse(pinned.get(pin.version)!), Date.parse(pin.since), `${pin.package} ${pin.version} was first pinned when MAKO_PINS says`)

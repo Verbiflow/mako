@@ -73,7 +73,7 @@ try {
   assert.equal(second.session.id, first.session.id, "Host capture cannot create a second journal for an account alias")
   assert.equal(owner.summaries().length, 1)
 } finally {
-  owner.stop()
+  await owner.stop()
   await rm(root, { recursive: true, force: true })
 }
 console.log("Session identity: account aliases, provider isolation, completed activity, one rail row (closed moves included), binding changes, and host capture verified")
