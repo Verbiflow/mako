@@ -54,6 +54,7 @@ export async function acquireHostLock(dataRoot: string, options: HostLockOptions
   const attempt = () => (platform === "darwin" ? fileLock(dataRoot, purpose) : nameLock(dataRoot, platform, purpose))
   const until = Date.now() + (options.waitMs ?? 30_000)
   const briefUntil = Date.now() + (options.brief?.ms ?? 0)
+  let recheckedAfterExit = false
   for (;;) {
     const lock = await attempt()
     if (lock.kind === "held") return lock
@@ -61,6 +62,12 @@ export async function acquireHostLock(dataRoot: string, options: HostLockOptions
     const predecessor = options.predecessor !== undefined && Date.now() < until && (lock.holder === options.predecessor || (lock.holder === null && running(options.predecessor)))
     if (predecessor) {
       await new Promise((done) => setTimeout(done, 50))
+      continue
+    }
+    // Refusal and holder lookup are separate: the predecessor can die between them, leaving a stale refusal. Try the
+    // kernel once more; only a successful lock may admit us, never the pid's disappearance.
+    if (options.predecessor !== undefined && lock.holder === null && Date.now() < until && !recheckedAfterExit) {
+      recheckedAfterExit = true
       continue
     }
     if (options.brief && Date.now() < briefUntil && !(await options.brief.listening())) {
