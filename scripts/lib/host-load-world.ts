@@ -188,7 +188,7 @@ export async function makeWorld(root: string, scale: WorldScale): Promise<World>
     for (let n = 0; n < count; n += 1) await make(apexes[index]!, `fin ${index}-${n}`, true)
   await worktrees.settled()
   store.close()
-  runner.close()
+  await runner.close()
 
   pastSessions(home, project, scale.sessions)
 

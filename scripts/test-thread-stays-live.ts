@@ -177,7 +177,7 @@ async function continuedAfterMove(catalog: boolean, poisoned: boolean): Promise<
   }
   world.continueTurn(id, { requestId: randomUUID(), reason: "host-crashed", continues: cut, actor: { kind: "service", name: "auto-continue" } })
   await until("the continued turn", () => sent.length === 4)
-  world.stop()
+  await world.stop()
   assert.equal(sent[3]!.provider, "claude")
   return sent[3]!.settings
 }
@@ -220,5 +220,5 @@ try {
   console.log("thread stays live: a steer that stopped Claude's turn reaches the agent once its after-snapshot ends, with no click")
 } finally {
   snapshots.release()
-  owner.stop()
+  await owner.stop()
 }

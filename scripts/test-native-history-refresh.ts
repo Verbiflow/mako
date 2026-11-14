@@ -124,7 +124,7 @@ for (const harness of registeredHarnessIds()) {
     assert.deepEqual(read.blocks, [notice], `${harness}: the notice stays, drawn after it`)
     assert.equal(read.baseCoveredBlocks ?? 0, 0)
     assert.equal((await owner.refreshedSnapshot(prompted))!.base, null, `${harness}: a turn the record doesn't cover yet holds the read back`)
-    owner.stop()
+    await owner.stop()
     // The next turn ends and is covered: its record now holds it after the history it continued.
     record = [...moved, { type: "user", id: "m3", text: "On the machine" }, { type: "text", id: "m4", text: "Answered in the cloud" }]
     const turned = randomUUID()
@@ -140,11 +140,11 @@ for (const harness of registeredHarnessIds()) {
       const users = projectLive(after).messages.filter((message) => message.role === "user")
       assert.equal(users.length, 2, `${harness}: each prompt once`)
     } finally {
-      later.stop()
+      await later.stop()
     }
     console.log(`PASS: ${harness} resumed with only opening notices live reads its history, holds back for an uncovered turn, and lines the next turn up after it`)
   } finally {
-    owner.stop()
+    await owner.stop()
     rmSync(resumedRoot, { recursive: true, force: true })
   }
 }
@@ -201,7 +201,7 @@ try {
       bytes++
       assert.deepEqual((await seededOwner.refreshedSnapshot(conversation))!.base!.entries, store, "a store the harness rewrote shows as the harness has it")
     } finally {
-      seededOwner.stop()
+      await seededOwner.stop()
     }
     console.log(`PASS: a seeded fork (its seed counted in ${unit}) keeps Mako's record of the seed ahead of the harness's turns, and yields to a store the harness rewrote`)
   }
@@ -262,7 +262,7 @@ for (const harness of registeredHarnessIds()) {
     assert.equal((await owner.refreshedSnapshot(conversation))?.revision, changed?.revision, "failure releases the coalesced read for retry")
     delayRead()
     const late = owner.refreshedSnapshot(conversation)
-    owner.stop()
+    await owner.stop()
     const stoppedBatches = batches
     finish({ ...page, entries: [{ type: "user", id: "question", text: "Arrived after shutdown" }] })
     await late
@@ -272,7 +272,7 @@ for (const harness of registeredHarnessIds()) {
     retained.close()
     console.log(`PASS: ${harness} delayed refresh, capture safety, coalescing, checkpoint-free changes, failure/retry and shutdown`)
   } finally {
-    owner.stop()
+    await owner.stop()
     rmSync(fixtureRoot, { recursive: true, force: true })
   }
 }
@@ -301,7 +301,7 @@ try {
   assert.equal(largeReads - reads, 100)
   console.log(`PASS: checkpoint-free 10,000-entry refresh: ${(performance.now() - started).toFixed(2)} ms, 100 pages, no journal revision`)
 } finally {
-  large.stop()
+  await large.stop()
   rmSync(largeRoot, { recursive: true, force: true })
 }
 

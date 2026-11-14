@@ -74,7 +74,7 @@ try {
     }
   }
 } finally {
-  catalog.stop()
+  await catalog.stop()
 }
 console.table(rows)
 console.log(failed ? `${failed} of ${rows.length + failed} transcripts lost content` : `${rows.length} transcripts read back whole`)

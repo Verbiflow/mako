@@ -95,7 +95,7 @@ for (const { provider, nativeSource } of cases) {
     else
       assert.notEqual(binding(id).path, source("second"), `${provider}: never left on the previous session's source`)
   } finally {
-    owner.stop()
+    await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
 }

@@ -126,6 +126,6 @@ try {
     "Permission memory: acknowledged per-provider preference, startup ordering, and no silent fallback from an unavailable mode verified"
   )
 } finally {
-  owner.stop()
+  await owner.stop()
   await rm(root, { recursive: true, force: true })
 }
