@@ -89,9 +89,14 @@ function lazyCode<T>(load: () => Promise<T>): ReviewCode<T> {
       const read = load().then((code) => codeStore.set({ code, failed: false, slow: false }))
       // Only the read in hand speaks: one given up for a failure (below) says nothing more, though it still lands.
       const current = () => codeStore.get().code === undefined && codeStore.get().reading === read
-      whenSlow(read, (offline) => {
-        // Offline, it's a failure: the next read (Retry, or back online) starts a new load, not this pending one.
-        if (current()) codeStore.set(offline ? { failed: true, slow: false, reading: undefined } : { failed: false, slow: true })
+      const stopWatching = whenSlow(read, (offline) => {
+        if (!current()) return
+        // Offline, it's a failure and given up: the next read (Retry, or back online) starts a new load, and this one's
+        // watch ends with it.
+        if (offline) {
+          codeStore.set({ failed: true, slow: false, reading: undefined })
+          stopWatching()
+        } else codeStore.set({ failed: false, slow: true })
       })
       // Not here (offline before the service worker kept it): asked again next time. `failed` stands until a read
       // succeeds, so Changes keeps saying so while it tries again.

@@ -141,7 +141,7 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
               // The composer's room while its code arrives, so the transcript above doesn't move when it does; a line
               // saying so with Retry if it can't.
               <div data-composer-pending="" aria-busy={!composerFailed} aria-label="Loading the composer" className="flex shrink-0 items-center bg-surface" style={{ height: DESK_COMPOSER_HEIGHT }}>
-                {composerFailed ? <CodeLine what="The composer" retry={readComposer} className="w-full" /> : composerSlow ? <CodeSlowLine what="the composer" slow className="px-4" /> : null}
+                {composerFailed ? <CodeLine what="The composer" retry={readComposer} className="w-full" /> : <CodeSlowLine what="the composer" slow={composerSlow} className="px-4" />}
               </div>
             )
           ) : null}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, FolderTreeIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, ServerIcon, XIcon } from "lucide-react"
 import { sessionStanding, type OpenedBy } from "@mako/host/contracts/session-choice"
 import { forkedFrom, sessionBrief, sessionDetail, sessionName } from "@/lib/session-words"
@@ -46,6 +46,7 @@ import { FinOfApexContext, OpenChildContext, childSession, placedSessionOf } fro
 import { PhoneFinCount } from "./apex-fins"
 import { transcriptChunk } from "./chunks"
 import { TranscriptLoading } from "./transcript-loading"
+import { CodeLine, CodeSlowLine } from "./code-unavailable"
 import { ApexMark } from "@/components/ui/apex-mark"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 
@@ -184,6 +185,9 @@ export function ThreadBody({ thread, session, desk = false, openedBy = "person",
   useThreadApp(client, session.row.conversation, owner, session.row.folder, live)
   // The renderer's live conversation (its transcript, approvals and questions, the desktop's own code), its own chunk.
   const transcript = transcriptChunk.use()
+  const transcriptFailed = transcriptChunk.useFailed()
+  const transcriptSlow = transcriptChunk.useSlow()
+  const readTranscript = useCallback(() => transcriptChunk.read().then(() => undefined), [])
   useEffect(() => {
     if (!transcript) void transcriptChunk.read().catch(() => undefined)
   }, [transcript])
@@ -214,7 +218,18 @@ export function ThreadBody({ thread, session, desk = false, openedBy = "person",
             <>
               {moving || session.quietSince ? null : <ServerCards session={session} />}
               <MoveDividersContext value>
-                {transcript ? <transcript.default key={session.row.conversation} session={session} desk={desk} thread={thread} openedBy={openedBy} onSession={onSession} /> : <TranscriptLoading />}
+                {transcript ? (
+                  <transcript.default key={session.row.conversation} session={session} desk={desk} thread={thread} openedBy={openedBy} onSession={onSession} />
+                ) : transcriptFailed ? (
+                  <div className="flex flex-1 items-center">
+                    <CodeLine what="The conversation" retry={readTranscript} className="w-full" />
+                  </div>
+                ) : (
+                  <>
+                    {transcriptSlow ? <CodeSlowLine what="the conversation" slow className="justify-center px-4 pt-4" /> : null}
+                    <TranscriptLoading />
+                  </>
+                )}
               </MoveDividersContext>
             </>
           )}
