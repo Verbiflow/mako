@@ -371,7 +371,7 @@ export class WorkspaceSnapshots {
    */
   private async captureRepository(cwd: string, shared?: ReadonlySet<string>, reuse = false, frozen?: () => void): Promise<WorkspaceSnapshot> {
     const scope = await this.scope(cwd)
-    if ((await this.budget.settings()).mode === "evict" && !this.budget.admit(this.retention.maxSnapshotBytes, "")) await this.budget.run()
+    if ((await this.budget.settings()).mode === "evict" && !this.budget.admit(this.retention.maxSnapshotBytes, "")) await this.budget.run(this.retention.maxSnapshotBytes)
     try {
       return await this.locked(scope, async (gitDir) => {
         this.assertNoPending(scope)
