@@ -3111,6 +3111,15 @@ const inputs = {
       z.object({ project: z.string().optional() }).optional(),
     ]),
   "mako:thread-run": () => z.tuple([z.string()]),
+  "mako:thread-scratch": () => z.tuple([]),
+  "mako:thread-scratch-set": () =>
+    z.tuple([
+      z.object({
+        mode: z.union([z.literal("remove"), z.literal("preview")]),
+        idleDays: z.number(),
+        kept: z.array(z.string()),
+      }),
+    ]),
   "mako:thread-stop": () =>
     z.tuple([
       z.union([
@@ -3728,6 +3737,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-restore-plan", "conversations"],
   ["mako:thread-return", "conversations"],
   ["mako:thread-run", "conversations"],
+  ["mako:thread-scratch", "workspaces"],
+  ["mako:thread-scratch-set", "workspaces"],
   ["mako:thread-stop", "threads"],
   ["mako:thread-titles", "threads"],
   ["mako:thread-titles-import", "threads"],

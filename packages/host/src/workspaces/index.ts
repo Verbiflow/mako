@@ -1,3 +1,5 @@
+import { ThreadScratch, SCRATCH_PASS_MS } from "./thread-scratch.js"
+import { declareThreadScratchMethods } from "./thread-scratch-methods.js"
 import type { BuildSlots } from "./build-slots.js"
 import { sessionAccessTier } from "../contracts/access.js"
 import type { GitHubPerson } from "../contracts/github-person.js"
@@ -105,6 +107,7 @@ export interface Workspaces {
   worktrees: ThreadWorktreeService | null
   /** Automatic retirement is off until the person enables it in Settings. */
   retention: WorktreeRetention | null
+  scratch: ThreadScratch | null
   /** The recipe Mako keeps for each project, one file per repository, outside every checkout. */
   recipes: string | undefined
   /** Where recipes run here: this computer or a cloud machine. */
@@ -136,6 +139,7 @@ export interface WorkspacesDeps {
   inUse(path: string): Promise<string[]>
   /** Fail-closed terminal/provider reading for automatic retirement. */
   retirementUsers?(path: string): Promise<string[]>
+  scratchOwner?(thread: ThreadId): { quietAt: number; finishedAt?: number } | undefined
   finished?(thread: ThreadId): number | undefined
   /** Conversations mid-turn in a worktree. */
   working(path: string): Promise<string[]>
@@ -165,8 +169,12 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   })
   const shared = store ? realpathSync(dirname(store.path)) : undefined
   const recipes = shared ? join(shared, "recipes") : undefined
+  let scratch: ThreadScratch | null = null
   const environments = store && shared
-    ? new ThreadEnvironments({ git, store, dataRoot: join(shared, "thread-data"), recipesRoot: recipes, where: deps.where, recipes: deps.recipes })
+    ? new ThreadEnvironments({ git, store, dataRoot: join(shared, "thread-data"), scratch: (thread) => {
+      if (!scratch) throw new Error("Thread scratch ownership is unavailable.")
+      return scratch.ensure(thread)
+    }, recipesRoot: recipes, where: deps.where, recipes: deps.recipes })
     : null
   const fileHistory = childHistory(undefined, deps.watchReadings, deps.daemonRestarts)
   const whoseApp = (app: AppKey): string | undefined => {
@@ -233,6 +241,22 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
         }),
       } : undefined, deps.conversations, deps.ledger, deps.workingFolders)
     : null
+  const openFiles = async (): Promise<string[]> => {
+    const { stdout, stderr } = await reader.run("lsof", ["-nP", "-F0n", "-u", String(process.getuid?.())], { timeout: 10_000, maxBuffer: 32 * 1024 * 1024 })
+    if (stderr.trim() || !stdout.trim()) throw new Error("Open-file inspection was incomplete.")
+    const paths: string[] = []
+    let processKnown = false
+    for (const raw of stdout.split("\0")) {
+      const field = raw.replace(/^\n/, "")
+      if (/^p[1-9]\d*$/.test(field)) processKnown = true
+      else if (field.startsWith("n") && processKnown) {
+        if (field.startsWith("n/")) paths.push(field.slice(1).replace(/ \(deleted\)$/, ""))
+      } else if (field.startsWith("f") && field !== "fNOFD") continue
+      else if (field.trim()) throw new Error("Open-file inspection was incomplete.")
+    }
+    return paths
+  }
+
   const retention = !deps.readOnly && store && shared && worktrees ? new WorktreeRetention({
     file: join(shared, "worktree-retention.json"),
     root: worktrees.root,
@@ -249,11 +273,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     },
     repository: (worktree, refresh) => worktrees.retirementRepository(worktree, refresh),
     fetch: (common) => worktrees.retirementFetch(common),
-    openFiles: async () => {
-      const { stdout, stderr } = await reader.run("lsof", ["-nP", "-F0n", "-u", String(process.getuid?.())], { timeout: 10_000, maxBuffer: 32 * 1024 * 1024 })
-      if (stderr.trim()) throw new Error("Open-file inspection was incomplete.")
-      return stdout.split("\0").map(field => field.replace(/^\n/, "")).filter(field => field.startsWith("n/")).map(field => field.slice(1).replace(/ \(deleted\)$/, ""))
-    },
+    openFiles,
     remove: async (path) => {
       const member = store.worktrees().find((row) => worktreeCheckout(row) === path)
       if (!member) throw new Error("The checkout is no longer registered.")
@@ -264,6 +284,19 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
       for (const row of store.worktrees()) if (row.path.startsWith(`${path}/`)) await processes?.forgetPrepared(row.path)
     },
   }) : null
+  scratch = !deps.readOnly && shared && store ? new ThreadScratch({
+    root: join(shared, "thread-data"), registry: join(shared, "scratch-owners"), settings: join(shared, "scratch-retention.json"),
+    owner: (thread) => deps.scratchOwner?.(thread),
+    title: (thread) => store.thread(thread)?.title,
+    using: (path) => {
+      if (!deps.retirementUsers) throw new Error("Live-use checks are unavailable.")
+      return deps.retirementUsers(path)
+    },
+    openFiles,
+    // Allocation totals overcount APFS clones. Unknown exclusive bytes stay unknown in the UI.
+    privateBytes: async () => null,
+  }) : null
+  if (scratch) deps.jobs.every("retire owned Thread scratch", SCRATCH_PASS_MS, async () => { await scratch?.run() })
   if (retention && !deps.readOnly) deps.jobs.every("retire finished Thread worktrees", WORKTREE_RETENTION_MS, async () => { await retention.run() })
   // Windows hear the summaries as they change, rather than each asking every half minute. What no event of its own
   // says (a pull request on GitHub, an edit outside a turn) a pass of the host's says, each worktree read only once
@@ -272,6 +305,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     worktrees.followSummaries((summaries) => {
       emit({ type: "worktree-summaries", summaries })
       retention?.changed()
+      scratch?.changed()
     })
     deps.jobs.every("say the worktrees' summaries as they change", SUMMARY_PASS_MS, () => void worktrees.summaries().catch(() => undefined), deps.subscribed ? { needs: [deps.subscribed] } : {})
   }
@@ -289,12 +323,14 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     worktrees,
     recipes,
     retention,
+    scratch,
     where: deps.where,
     whoseApp,
     appOwner,
     fileHistory,
     close: () => {
       retention?.close()
+      scratch?.close()
       checkoutHeads.close()
       worktrees?.closeSummaries()
     },
@@ -508,6 +544,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   methods.handle("mako:run-automation", (id: string, operation?: string, cwd?: string) => automations.fire(id, "manual", operation, cwd))
   methods.handle("mako:reload-automations", () => withHost((h) => automations.load(h.workspace)))
   declareWorktreeMethods(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls }, workspaces.retention)
+  declareThreadScratchMethods(methods, workspaces.scratch)
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)

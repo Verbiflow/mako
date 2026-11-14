@@ -21,7 +21,7 @@ import { checkoutOf, processPort, projectRoot, readRecipe, recipeValues } from "
 import { linkedCarry, linkedEntries, missingEntries, missingText } from "./worktree-carry.js"
 import type { Recipe, RecipeAccounts, RecipeWhere } from "./thread-recipe.js"
 
-const VARIABLES = ["MAKO_SESSION_ID", "MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_THREAD_VALUES"] as const
+const VARIABLES = ["MAKO_SESSION_ID", "MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_THREAD_SCRATCH_DIR", "MAKO_THREAD_VALUES"] as const
 /** Lists the recipe's names Mako set, so a Mako started inside a Thread can clear them. */
 const RECIPE_NAMES = "MAKO_THREAD_VALUES"
 /** A Thread unused this long gives its ports to a new one when every block is held. */
@@ -47,6 +47,7 @@ export function applyThreadEnvironment(env: NodeJS.ProcessEnv, environment?: Thr
   env.MAKO_THREAD_PORTS = String(environment.ports)
   env.MAKO_THREAD_URL = threadUrl(environment)
   env.MAKO_THREAD_DATA_DIR = environment.dataDir
+  if (environment.scratchDir) env.MAKO_THREAD_SCRATCH_DIR = environment.scratchDir
   const values = Object.entries(environment.values ?? {})
   for (const [name, value] of values) env[name] = value
   if (values.length) env[RECIPE_NAMES] = values.map(([name]) => name).join(",")
@@ -71,7 +72,8 @@ export function threadEnvironmentInstructions(environment: ThreadEnvironment, pl
     ? "This machine is this Thread's alone, but its agents share it: never stop a process you didn't start."
     : "Other Threads' agents share this machine: never stop a process you didn't start, and if the project needs a fixed port that is taken, say so instead."
   const values = `This Thread's own values, already in your shell's environment: ports ${environment.port}-${last} (MAKO_THREAD_PORT, MAKO_THREAD_PORTS), host ${environment.host} (${threadUrl(environment)} is MAKO_THREAD_URL; the name keeps this Thread's cookies apart), and a private data folder (MAKO_THREAD_DATA_DIR). Run anything you start for this Thread on those ports. ${sharing}`
-  return [values, WORKTREE_INSTRUCTIONS, missingInstructions(environment), recipeInstructions(environment)].filter(Boolean).join(" ")
+  const scratch = environment.scratchDir ? `Disposable clones, benchmark worlds and packaging scratch go in ${environment.scratchDir} (MAKO_THREAD_SCRATCH_DIR). This root belongs only to this Thread. It can be removed after the Thread ends or its idle limit once the person enables scratch cleanup; keep evidence elsewhere or put a .keep file in the root to retain it.` : undefined
+  return [values, scratch, WORKTREE_INSTRUCTIONS, missingInstructions(environment), recipeInstructions(environment)].filter(Boolean).join(" ")
 }
 
 function missingInstructions(environment: ThreadEnvironment): string | undefined {
@@ -121,6 +123,7 @@ export interface ThreadEnvironmentDependencies {
   /** Whether anything accepts connections on a local port. */
   listening?: (port: number) => Promise<boolean>
   now?: () => number
+  scratch?: (thread: ThreadId) => Promise<string>
 }
 
 /**
@@ -149,6 +152,7 @@ export class ThreadEnvironments {
    */
   async forLaunch(conversationId: string, title?: string, cwd?: string): Promise<ThreadEnvironment | undefined> {
     const environment = await this.forConversation(conversationId, title, cwd)
+    if (environment?.thread && this.dependencies.scratch) environment.scratchDir = await this.dependencies.scratch(environment.thread)
     if (environment) this.launched.set(conversationId, environment)
     else this.launched.delete(conversationId)
     return environment
@@ -170,6 +174,8 @@ export class ThreadEnvironments {
       ports: THREAD_PORT_COUNT,
       dataDir: this.dataDir(values.app),
     }
+    const launched = this.launched.get(conversationId)
+    if (launched?.thread === placed.thread && launched.scratchDir) environment.scratchDir = launched.scratchDir
     await mkdir(environment.dataDir, { recursive: true, mode: 0o700 })
     if (!checkout) return environment
     let read: Awaited<ReturnType<typeof readRecipe>>

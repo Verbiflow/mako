@@ -1,3 +1,4 @@
+import { ThreadScratchSection } from "./thread-scratch-section"
 import { useCallback, useEffect, useState } from "react"
 import { FolderOpenIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
 import type { WorktreeRetentionReport, WorktreeRetentionSettings, WorktreeInventory } from "@mako/host/contracts/thread-worktrees"
@@ -112,6 +113,7 @@ export function WorktreesSection() {
     <div className="flex flex-col gap-6">
       <BranchSettings />
       <RetentionSettings />
+      <ThreadScratchSection />
 
       <section>
         <h3 className="text-ui font-medium">On this Mac</h3>

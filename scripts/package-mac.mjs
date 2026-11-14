@@ -1,3 +1,4 @@
+import { ownedScratch } from "./lib/owned-scratch.mjs"
 import assert from "node:assert/strict"
 import { z } from "zod"
 import { execFileSync } from "node:child_process"
@@ -6,13 +7,10 @@ import { createHash } from "node:crypto"
 import {
   cp,
   mkdir,
-  mkdtemp,
   readdir,
   readFile,
-  rm,
   writeFile,
 } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { build, Platform, Arch } from "electron-builder"
@@ -39,7 +37,8 @@ const output = resolve(
   args.find((arg) => arg.startsWith("--output="))?.slice(9) ??
     join(project, "release", localIdentity ? "local" : ".")
 )
-const stage = await mkdtemp(join(tmpdir(), "mako-package-inputs-"))
+const stageOwner = ownedScratch("mako-package-inputs-")
+const stage = stageOwner.path
 const inputs = [
   "dist",
   "dist-electron",
@@ -106,6 +105,7 @@ async function manifest(root) {
   )
   return result
 }
+let failed = false, primary, cleanupFailed = false, cleanupError
 try {
   // The notification authorization helper ships beside the executable; see
   // electron/notification-authorization.ts for why it must live there.
@@ -131,13 +131,15 @@ try {
     assert.equal(await digest(join(mediaRoot, name)), mediaProvenance.binaries[name], `Unreviewed recording binary: ${name}`)
   }
   const before = await manifest(project)
-  await Promise.all(inputs.map(async (path) => {
+  const copied = await Promise.allSettled(inputs.map(async (path) => {
     await mkdir(dirname(join(stage, path)), { recursive: true })
     await cp(join(project, path), join(stage, path), {
       recursive: true,
       mode: constants.COPYFILE_FICLONE,
     })
   }))
+  const failedCopies = copied.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+  if (failedCopies.length) throw new AggregateError(failedCopies, "Packaging input copies failed after all copy tasks settled.")
   assert.deepEqual(
     await manifest(stage),
     before,
@@ -325,11 +327,15 @@ try {
     `Packaged ${verified.length} verified build files with ${imports} resolved host imports`
   )
   if (deferredRuntimeChecks) console.log("Runtime checks deferred: this package is not ready for installation until separate startup and integration acceptance passes")
-} finally {
-  await rm(stage, { recursive: true, force: true })
+} catch (error) { failed = true; primary = error } finally {
+  try { await stageOwner.dispose() } catch (cleanup) { cleanupFailed = true; cleanupError = cleanup }
   // Every package used to stay in release/ for good; 72 of them filled 42 GB.
   const { unregisterBundle } = await import("@mako/host/application/local-update-installer")
   await pruneReleaseBuilds({ project, output, unregister: unregisterBundle }).catch((error) =>
     console.warn(`Could not remove older packaged builds from release/: ${error instanceof Error ? error.message : error}`)
   )
 }
+
+if (failed && cleanupFailed) throw new AggregateError([primary, cleanupError], "Packaging and scratch cleanup failed.")
+if (failed) throw primary
+if (cleanupFailed) throw cleanupError
